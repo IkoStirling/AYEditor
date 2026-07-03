@@ -1,0 +1,54 @@
+{
+  "type": "VBox",
+  "id": "editor_root",
+  "size": { "w": 1280, "h": 720 },
+  "spacing": 4,
+  "children": [
+    {
+      "type": "HBox",
+      "id": "toolbar",
+      "size": { "h": 44 },
+      "spacing": 8,
+      "padding": { "left": 8, "top": 6, "right": 8, "bottom": 6 },
+      "children": [
+        { "type": "Button", "id": "btn_play",  "text": "Play",  "size": { "w": 72, "h": 32 }, "onClick": "play" },
+        { "type": "Button", "id": "btn_pause", "text": "Pause", "size": { "w": 72, "h": 32 }, "onClick": "pause" },
+        { "type": "Button", "id": "btn_step",  "text": "Step",  "size": { "w": 72, "h": 32 }, "onClick": "step" },
+        { "type": "Button", "id": "btn_stop",  "text": "Stop",  "size": { "w": 72, "h": 32 }, "onClick": "stop" },
+        { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 96, "h": 32 } }
+      ]
+    },
+    {
+      "type": "HBox",
+      "id": "main_row",
+      "spacing": 4,
+      "children": [
+        {
+          "type": "Window",
+          "id": "panel_hierarchy",
+          "text": "Hierarchy",
+          "size": { "w": 220, "h": 0 },
+          "children": [
+            { "type": "TextLabel", "id": "hierarchy_hint", "text": "(empty)", "size": { "w": 180, "h": 24 } },
+            { "type": "TextLabel", "id": "hierarchy_hint2", "text": "Scene root", "size": { "w": 180, "h": 24 } }
+          ]
+        },
+        {
+          "type": "Image",
+          "id": "panel_viewport",
+          "size": { "w": 0, "h": 0 },
+          "color": [0.08, 0.09, 0.11, 1.0]
+        },
+        {
+          "type": "Window",
+          "id": "panel_inspector",
+          "text": "Inspector",
+          "size": { "w": 280, "h": 0 },
+          "children": [
+            { "type": "TextLabel", "id": "inspector_hint", "text": "No selection", "size": { "w": 220, "h": 24 } }
+          ]
+        }
+      ]
+    }
+  ]
+}
