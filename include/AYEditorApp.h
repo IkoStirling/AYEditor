@@ -15,6 +15,7 @@ public:
     static std::unique_ptr<EditorApp> create(const ayt::app::GameDesc& desc,
                                              const ayt::app::AppCommandLine& cmdLine);
 
+    void registerSubSystems() override;
     void run() override;
 
     const ayt::app::GameDesc& getDesc() const override { return _desc; }

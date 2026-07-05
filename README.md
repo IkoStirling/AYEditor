@@ -2,7 +2,7 @@
 
 Minimal editor product layer for AY Engine — toolbar, panels, Edit/Play modes, and viewport composition.
 
-**Status:** E3 — `EditorApp` + AYDevice `WindowManager` host window; child viewport via `createChildWindow`
+**Status:** E2-composite — single-window bgfx UI + viewport sub-rect via `AYUIRenderBackend`
 
 ## Quick links
 
@@ -18,6 +18,6 @@ Minimal editor product layer for AY Engine — toolbar, panels, Edit/Play modes,
 
 ## Current milestone
 
-**E3 — `AYEditorShell_Demo`:** `EditorApp` drives `DeviceManager::pollEvents`; `WindowManager` owns host + child viewport HWND; GDI chrome unchanged from E2-interim.
+**E2-composite — `AYEditorShell_Demo`:** `EditorApp` + `DeviceManager`; `UIRenderBackend` draws chrome; 3D in viewport sub-rect on the same swap chain.
 
-**Next:** E2-composite (AYUI U2 single-window) or E4+ (Inspector / scene I/O).
+**Next:** E3 cleanup (`BuildType::Editor`, unified entry) or E4+ (Inspector / scene I/O).

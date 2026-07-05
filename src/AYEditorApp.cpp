@@ -1,9 +1,12 @@
 #include "AYEditorApp.h"
 
+#include "AYEditorHeapDebug.h"
 #include "AYEditorSession.h"
+#include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYDeviceManager.h"
-#include "GdiRenderBackend.h"
+#include "AYRendererSubSystem.h"
+#include "AYUIRenderBackend.h"
 
 #include <cstdio>
 #include <string>
@@ -23,20 +26,21 @@ namespace ayt::editor {
 
 namespace {
 
-constexpr UINT kTimerId = 1;
-constexpr UINT kTimerMs = 16;
-
-struct EditorHostState {
-    EditorSession* session = nullptr;
-    GdiRenderBackend* backend = nullptr;
-    int clientWidth = 0;
-    int clientHeight = 0;
-};
-
 bool fileExists(const std::string& path)
 {
     struct stat st;
     return !path.empty() && ::stat(path.c_str(), &st) == 0;
+}
+
+void attachDebugConsole()
+{
+    if (AllocConsole() == 0) {
+        return;
+    }
+    FILE* stream = nullptr;
+    freopen_s(&stream, "CONOUT$", "w", stdout);
+    freopen_s(&stream, "CONOUT$", "w", stderr);
+    std::fprintf(stdout, "[EditorApp] debug console attached\n");
 }
 
 std::string resolveLayoutPath()
@@ -56,63 +60,17 @@ std::string resolveLayoutPath()
     return candidates.front();
 }
 
-void paintEditorUi(HDC targetDc, EditorHostState* state)
-{
-    if (state == nullptr || state->session == nullptr || state->backend == nullptr
-        || targetDc == nullptr) {
-        return;
-    }
-
-    const int width  = state->clientWidth;
-    const int height = state->clientHeight;
-    if (width <= 0 || height <= 0) {
-        return;
-    }
-
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth       = width;
-    bmi.bmiHeader.biHeight      = -height;
-    bmi.bmiHeader.biPlanes      = 1;
-    bmi.bmiHeader.biBitCount    = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = nullptr;
-    HDC memDc = CreateCompatibleDC(targetDc);
-    HBITMAP memBitmap = CreateDIBSection(memDc, &bmi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (memBitmap == nullptr || bits == nullptr) {
-        DeleteDC(memDc);
-        return;
-    }
-
-    HGDIOBJ oldBitmap = SelectObject(memDc, memBitmap);
-
-    HBRUSH bgBrush = CreateSolidBrush(RGB(26, 26, 28));
-    RECT fillRect{0, 0, width, height};
-    FillRect(memDc, &fillRect, bgBrush);
-    DeleteObject(bgBrush);
-
-    state->backend->setDrawTarget(memDc, width, height);
-    state->session->render();
-    BitBlt(targetDc, 0, 0, width, height, memDc, 0, 0, SRCCOPY);
-
-    SelectObject(memDc, oldBitmap);
-    DeleteObject(memBitmap);
-    DeleteDC(memDc);
-}
-
-void requestEditorRepaint(HWND hwnd)
-{
-    if (hwnd != nullptr) {
-        InvalidateRect(hwnd, nullptr, FALSE);
-    }
-}
+struct EditorHostState {
+    EditorSession* session = nullptr;
+    int clientWidth = 0;
+    int clientHeight = 0;
+};
 
 std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
                                 std::uintptr_t wParam, std::intptr_t lParam, bool& handled)
 {
     handled = false;
-    if (hwnd == nullptr || state == nullptr) {
+    if (state == nullptr || state->session == nullptr) {
         return 0;
     }
 
@@ -120,62 +78,78 @@ std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
     case WM_SIZE:
         state->clientWidth  = LOWORD(lParam);
         state->clientHeight = HIWORD(lParam);
-        if (state->session != nullptr) {
-            state->session->setClientSize(static_cast<float>(state->clientWidth),
-                                        static_cast<float>(state->clientHeight));
-        }
-        requestEditorRepaint(hwnd);
+        state->session->setClientSize(static_cast<float>(state->clientWidth),
+                                      static_cast<float>(state->clientHeight));
         handled = true;
         return 0;
-    case WM_TIMER:
-        if (wParam == kTimerId && state->session != nullptr) {
-            state->session->update(0.016f);
-            requestEditorRepaint(hwnd);
+    case WM_MOUSEMOVE: {
+        TRACKMOUSEEVENT trackLeave{};
+        trackLeave.cbSize = sizeof(trackLeave);
+        trackLeave.dwFlags = TME_LEAVE;
+        trackLeave.hwndTrack = hwnd;
+        TrackMouseEvent(&trackLeave);
+
+        const float x = static_cast<float>(GET_X_LPARAM(lParam));
+        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        state->session->onMouseMove(x, y);
+        switch (state->session->getUiCursorHint()) {
+        case ayt::ui::UiCursorHint::Hand:
+            SetCursor(LoadCursor(nullptr, IDC_HAND));
+            break;
+        case ayt::ui::UiCursorHint::SizeHorizontal:
+            SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+            break;
+        case ayt::ui::UiCursorHint::Move:
+            SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+            break;
+        default:
+            SetCursor(LoadCursor(nullptr, IDC_ARROW));
+            break;
         }
         handled = true;
         return 0;
-    case WM_ERASEBKGND:
+    }
+    case WM_MOUSELEAVE:
+        if (GetCapture() != hwnd) {
+            state->session->onMouseLeave();
+            SetCursor(LoadCursor(nullptr, IDC_ARROW));
+        }
         handled = true;
-        return 1;
-    case WM_MOUSEMOVE:
-        if (state->session != nullptr) {
-            const float x = static_cast<float>(GET_X_LPARAM(lParam));
-            const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-            if (state->session->onMouseMove(x, y)) {
-                requestEditorRepaint(hwnd);
+        return 0;
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            switch (state->session->getUiCursorHint()) {
+            case ayt::ui::UiCursorHint::Hand:
+                SetCursor(LoadCursor(nullptr, IDC_HAND));
+                handled = true;
+                return TRUE;
+            case ayt::ui::UiCursorHint::SizeHorizontal:
+                SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
+                handled = true;
+                return TRUE;
+            case ayt::ui::UiCursorHint::Move:
+                SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
+                handled = true;
+                return TRUE;
+            default:
+                break;
             }
         }
-        handled = true;
-        return 0;
-    case WM_LBUTTONDOWN:
-        if (state->session != nullptr) {
-            const float x = static_cast<float>(GET_X_LPARAM(lParam));
-            const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-            if (state->session->onMouseButtonDown(x, y, 0)) {
-                SetCapture(hwnd);
-                requestEditorRepaint(hwnd);
-            }
+        break;
+    case WM_LBUTTONDOWN: {
+        const float x = static_cast<float>(GET_X_LPARAM(lParam));
+        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        if (state->session->onMouseButtonDown(x, y, 0)) {
+            SetCapture(hwnd);
         }
         handled = true;
         return 0;
-    case WM_LBUTTONUP:
-        if (state->session != nullptr) {
-            const float x = static_cast<float>(GET_X_LPARAM(lParam));
-            const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-            if (state->session->onMouseButtonUp(x, y, 0)) {
-                requestEditorRepaint(hwnd);
-            }
-            ReleaseCapture();
-        }
-        handled = true;
-        return 0;
-    case WM_PAINT: {
-        PAINTSTRUCT ps{};
-        HDC hdc = BeginPaint(hwnd, &ps);
-        if (hdc) {
-            paintEditorUi(hdc, state);
-            EndPaint(hwnd, &ps);
-        }
+    }
+    case WM_LBUTTONUP: {
+        const float x = static_cast<float>(GET_X_LPARAM(lParam));
+        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        state->session->onMouseButtonUp(x, y, 0);
+        ReleaseCapture();
         handled = true;
         return 0;
     }
@@ -220,7 +194,15 @@ ayt::game::GameLoop& EditorApp::getGameLoop()
     return ayt::game::GameLoop::instance();
 }
 
-void EditorApp::onInit() {}
+void EditorApp::registerSubSystems()
+{
+    ayt::entity::bootstrapModule();
+}
+
+void EditorApp::onInit()
+{
+    registerSubSystems();
+}
 
 void EditorApp::onPreShutdown() {}
 
@@ -228,6 +210,8 @@ void EditorApp::onShutdown() {}
 
 void EditorApp::run()
 {
+    attachDebugConsole();
+    AY_EDITOR_HEAP_DEBUG_INIT();
     onInit();
 
     ayt::device::DeviceManager devices;
@@ -253,17 +237,15 @@ void EditorApp::run()
     hostState.clientWidth  = static_cast<int>(_desc.width);
     hostState.clientHeight = static_cast<int>(_desc.height);
 
-    GdiRenderBackend backend(hwnd);
+    ayt::render::UIRenderBackend uiBackend;
     EditorSession session;
-    hostState.backend = &backend;
     hostState.session = &session;
 
     const std::string layoutPath = resolveLayoutPath();
     EditorSessionDesc sessionDesc{};
-    sessionDesc.uiBackend = &backend;
+    sessionDesc.uiBackend = &uiBackend;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.hostWindow = hwnd;
-    sessionDesc.windowManager = &window;
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
@@ -273,9 +255,33 @@ void EditorApp::run()
 
     session.setClientSize(static_cast<float>(hostState.clientWidth),
                           static_cast<float>(hostState.clientHeight));
-    session.setRepaintCallback([hwnd]() { requestEditorRepaint(hwnd); });
+
+    if (!session.ensurePresentationReady()) {
+        std::fprintf(stderr, "[EditorApp] presentation bootstrap failed\n");
+        session.shutdown();
+        devices.shutdown();
+        return;
+    }
+
+    ayt::render::RendererSubSystem* rendererSub = ayt::render::RendererSubSystem::findRegistered();
+    if (rendererSub == nullptr) {
+        std::fprintf(stderr, "[EditorApp] renderer subsystem unavailable\n");
+        session.shutdown();
+        devices.shutdown();
+        return;
+    }
+
+    if (!uiBackend.initialize(rendererSub->renderer())) {
+        std::fprintf(stderr, "[EditorApp] UIRenderBackend initialize failed\n");
+        uiBackend.shutdown();
+        session.shutdown();
+        devices.shutdown();
+        return;
+    }
+    AY_EDITOR_HEAP_CHECK("after_full_init");
 
     bool running = true;
+    bool loggedFirstFrameHeap = false;
     window.setWindowCloseCallback([&running]() { running = false; });
     window.setWindowMessageCallback(
         [hwnd, &hostState](unsigned msg, std::uintptr_t wParam, std::intptr_t lParam,
@@ -283,15 +289,37 @@ void EditorApp::run()
             return handleHostMessage(hwnd, &hostState, msg, wParam, lParam, handled);
         });
 
-    SetTimer(hwnd, kTimerId, kTimerMs, nullptr);
-    requestEditorRepaint(hwnd);
-
+    constexpr float kDeltaSeconds = 1.0f / 60.0f;
     while (running && window.isWindowValid()) {
         devices.pollEvents();
+        session.update(kDeltaSeconds);
+        session.syncViewportIfChanged();
+
+        if (rendererSub != nullptr) {
+            const bool renderScene = session.shouldCompositeViewport();
+            rendererSub->renderCompositeFrame(
+                renderScene, &uiBackend,
+                [&session](bool skipViewportPanel) { session.render(skipViewportPanel); });
+        }
+
+        if (!loggedFirstFrameHeap) {
+            AY_EDITOR_HEAP_CHECK("after_first_frame");
+            loggedFirstFrameHeap = true;
+        }
+
+        Sleep(1);
     }
 
-    KillTimer(hwnd, kTimerId);
     onPreShutdown();
+    hostState.session = nullptr;
+
+    AY_EDITOR_HEAP_CHECK("before_ui_shutdown");
+    session.ui().shutdown();
+    if (rendererSub != nullptr) {
+        rendererSub->renderer().shutdownUiRenderBackend(uiBackend);
+    } else {
+        uiBackend.shutdown();
+    }
     session.shutdown();
     devices.shutdown();
     ayt::game::GameLoop::instance().shutdown();

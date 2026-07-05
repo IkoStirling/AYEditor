@@ -12,13 +12,9 @@ namespace ayt::entity {
 class Entity;
 }
 
-namespace ayt::device {
-class WindowManager;
-}
-
 namespace ayt::editor {
 
-// Host-window GDI chrome + child HWND viewport for bgfx (avoids GDI/D3D blit conflicts).
+// Single-window composite presentation: bgfx on main AYDevice window.
 class EditorPlayRuntime {
 public:
     EditorPlayRuntime();
@@ -28,45 +24,42 @@ public:
     EditorPlayRuntime& operator=(const EditorPlayRuntime&) = delete;
 
     void setHostWindow(HWND hostWindow);
-    void setWindowManager(ayt::device::WindowManager* windowManager);
     void setClientSize(uint32_t width, uint32_t height);
 
+    bool ensurePresentationReady();
     bool startPlay();
     void enterEdit();
     void shutdownEngine();
     void tick();
 
+    bool isPresentationReady() const { return _presentationReady; }
     bool isEngineInitialized() const { return _engineInitialized; }
     bool isSimulationActive() const { return _simulationActive; }
     bool isPlaying() const { return _simulationActive; }
-    bool isViewportVisible() const { return _viewportVisible; }
 
     void syncViewportRect(const ayt::math::FRectangle& bounds);
     const ayt::math::FRectangle& viewportBounds() const { return _viewportBounds; }
 
 private:
     bool ensureAssets();
-    bool ensureViewportWindow();
-    void destroyViewportWindow();
     bool ensureEngineInitialized();
     void syncRendererBootstrap();
     void spawnCubeIfNeeded();
     void clearCube();
     void registerUpdateListener();
     void unregisterUpdateListener();
+    static void configureShaderToolchainOnce();
 
     static std::string resolvePersistentCacheRoot();
 
     HWND _hostWindow = nullptr;
-    HWND _viewportWindow = nullptr;
-    ayt::device::WindowManager* _windowManager = nullptr;
     uint32_t _clientWidth = 1280;
     uint32_t _clientHeight = 720;
     ayt::math::FRectangle _viewportBounds{};
 
+    bool _presentationReady = false;
     bool _engineInitialized = false;
     bool _simulationActive = false;
-    bool _viewportVisible = false;
     bool _assetsReady = false;
 
     std::string _cacheRoot;

@@ -2,7 +2,7 @@
 
 **Version:** v0.3  
 **Date:** 2026-07-03  
-**Status:** E3 — `EditorApp` + AYDevice host window; GDI chrome + child viewport HWND (see [§2.3](#23-viewport-presentation-interim-vs-target))
+**Status:** E2-composite — single-window bgfx UI + viewport sub-rect via `AYUIRenderBackend` on AYDevice host window (see [§2.3](#23-viewport-presentation-interim-vs-target))
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -89,12 +89,12 @@ v0 demo (E0) may use **UI-only window** with a gray `Image`/rect as viewport pla
 Editor logic (modes, GameLoop, viewport **geometry**) is independent of how pixels are composited.  
 Two presentation stacks exist in the roadmap; **only the demo/compositor layer differs**.
 
-| Layer | Interim (current, E2-interim) | Target (E2-composite + E3) |
-|-------|-------------------------------|------------------------------|
-| **Editor chrome** | GDI on **host** HWND via `GdiRenderBackend` + `EditorShellDemo` | `AYUIRenderBackend` (AYUI U2) composited in `RendererSubSystem::renderFrame` |
-| **3D viewport** | bgfx on **child** HWND (`EditorPlayRuntime::_viewportWindow`) | bgfx on **main** window with `RendererSubSystem` viewport sub-rect (`setViewRect`) |
-| **Native window owner** | Raw Win32 in demo + `EditorPlayRuntime` | **AYDevice** `WindowManager` (SDL2) → `getWindowHandle()` |
-| **Why interim** | GDI `BitBlt` onto a D3D/bgfx swap-chain **host** surface is unreliable on Windows; child HWND keeps GDI and GPU separate | Single present path, no Z-order / region hacks |
+| Layer | Interim (E2-interim, legacy demo) | Current (E2-composite) |
+|-------|-----------------------------------|------------------------|
+| **Editor chrome** | GDI on **host** HWND via `GdiRenderBackend` | `AYUIRenderBackend` composited in `RendererSubSystem::renderCompositeFrame` |
+| **3D viewport** | bgfx on **child** HWND | bgfx on **main** window with `RendererSubSystem` viewport sub-rect |
+| **Native window owner** | Raw Win32 in demo | **AYDevice** `WindowManager` → `getWindowHandle()` |
+| **Why interim existed** | GDI `BitBlt` onto a D3D/bgfx swap-chain **host** surface is unreliable on Windows | Single present path, no Z-order / region hacks |
 
 ```
 Interim (EditorShell_Demo today):

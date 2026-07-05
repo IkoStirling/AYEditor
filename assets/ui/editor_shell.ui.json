@@ -21,29 +21,48 @@
     {
       "type": "HBox",
       "id": "main_row",
-      "spacing": 4,
+      "spacing": 0,
       "children": [
         {
           "type": "Window",
           "id": "panel_hierarchy",
           "text": "Hierarchy",
           "size": { "w": 220, "h": 0 },
+          "minSize": { "w": 160, "h": 120 },
+          "movable": true,
+          "slot": {
+            "width": 220,
+            "minWidth": 160,
+            "maxWidthPercent": 45
+          },
           "children": [
             { "type": "TextLabel", "id": "hierarchy_hint", "text": "(empty)", "size": { "w": 180, "h": 24 } },
             { "type": "TextLabel", "id": "hierarchy_hint2", "text": "Scene root", "size": { "w": 180, "h": 24 } }
           ]
         },
+        { "type": "SplitterHandle", "id": "split_hierarchy_viewport" },
         {
           "type": "Image",
           "id": "panel_viewport",
           "size": { "w": 0, "h": 0 },
-          "color": [0.08, 0.09, 0.11, 1.0]
+          "color": [0.08, 0.09, 0.11, 1.0],
+          "slot": {
+            "minWidthPercent": 20
+          }
         },
+        { "type": "SplitterHandle", "id": "split_viewport_inspector" },
         {
           "type": "Window",
           "id": "panel_inspector",
           "text": "Inspector",
           "size": { "w": 280, "h": 0 },
+          "minSize": { "w": 180, "h": 120 },
+          "movable": true,
+          "slot": {
+            "width": 280,
+            "minWidth": 180,
+            "maxWidthPercent": 40
+          },
           "children": [
             { "type": "TextLabel", "id": "inspector_hint", "text": "No selection", "size": { "w": 220, "h": 24 } }
           ]

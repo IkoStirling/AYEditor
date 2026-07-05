@@ -1,10 +1,10 @@
 #include "AYEditorPlayRuntime.h"
 
-#include "AYWindowManager.h"
 #include "AYEntity.h"
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYRendererSubSystem.h"
+#include "AYShadercDriver.h"
 
 #include "assetsImpl/AYMaterial.h"
 #include "assetsImpl/AYMesh.h"
@@ -30,6 +30,10 @@
 
 #ifndef AY_SHADER_SHADERC_HINT
 #  define AY_SHADER_SHADERC_HINT ""
+#endif
+
+#ifndef AY_SHADER_BGFX_COMMON_HINT
+#  define AY_SHADER_BGFX_COMMON_HINT ""
 #endif
 
 namespace ayt::editor {
@@ -93,13 +97,48 @@ bool ensureAssetDirectory(const std::string& path)
     return GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+std::string resolveExistingPath(const char* hint, const char* const* fallbacks, size_t count)
+{
+    if (hint != nullptr && hint[0] != '\0' && fileExists(hint)) {
+        return hint;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (fileExists(fallbacks[i])) {
+            return fallbacks[i];
+        }
+    }
+    return hint != nullptr ? std::string(hint) : std::string{};
+}
+
 } // namespace
 
 EditorPlayRuntime::EditorPlayRuntime() = default;
 
-EditorPlayRuntime::~EditorPlayRuntime() {
+EditorPlayRuntime::~EditorPlayRuntime()
+{
     shutdownEngine();
-    destroyViewportWindow();
+}
+
+void EditorPlayRuntime::configureShaderToolchainOnce()
+{
+    static bool configured = false;
+    if (configured) {
+        return;
+    }
+
+    static const char* kShadercFallbacks[] = {
+        "AYRuntime/AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
+        "../AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
+        "../../AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
+    };
+    const std::string shadercPath =
+        resolveExistingPath(AY_SHADER_SHADERC_HINT, kShadercFallbacks,
+                            sizeof(kShadercFallbacks) / sizeof(kShadercFallbacks[0]));
+    if (!shadercPath.empty() && fileExists(shadercPath)) {
+        ayt::shader::AYShadercDriver::setDefaultExecutable(shadercPath);
+    }
+
+    configured = true;
 }
 
 std::string EditorPlayRuntime::resolvePersistentCacheRoot()
@@ -119,15 +158,13 @@ std::string EditorPlayRuntime::resolvePersistentCacheRoot()
     return root;
 }
 
-void EditorPlayRuntime::setHostWindow(HWND hostWindow) {
+void EditorPlayRuntime::setHostWindow(HWND hostWindow)
+{
     _hostWindow = hostWindow;
 }
 
-void EditorPlayRuntime::setWindowManager(ayt::device::WindowManager* windowManager) {
-    _windowManager = windowManager;
-}
-
-void EditorPlayRuntime::setClientSize(uint32_t width, uint32_t height) {
+void EditorPlayRuntime::setClientSize(uint32_t width, uint32_t height)
+{
     _clientWidth  = width > 0 ? width : _clientWidth;
     _clientHeight = height > 0 ? height : _clientHeight;
 }
@@ -204,72 +241,9 @@ bool EditorPlayRuntime::ensureAssets() {
     return true;
 }
 
-bool EditorPlayRuntime::ensureViewportWindow() {
-    if (_viewportWindow != nullptr) {
-        return true;
-    }
-
-    if (_hostWindow == nullptr || _windowManager == nullptr) {
-        return false;
-    }
-
-    ayt::device::ChildWindowDesc desc{};
-    desc.parentHandle = _hostWindow;
-    desc.x = 0;
-    desc.y = 0;
-    desc.width = 100;
-    desc.height = 100;
-
-    void* childHandle = nullptr;
-    if (!_windowManager->createChildWindow(desc, childHandle) || childHandle == nullptr) {
-        return false;
-    }
-
-    _viewportWindow = static_cast<HWND>(childHandle);
-    ShowWindow(_viewportWindow, SW_HIDE);
-    return true;
-}
-
-void EditorPlayRuntime::destroyViewportWindow() {
-    if (_viewportWindow != nullptr) {
-        if (_windowManager != nullptr) {
-            _windowManager->destroyChildWindow(_viewportWindow);
-        } else {
-            DestroyWindow(_viewportWindow);
-        }
-        _viewportWindow = nullptr;
-    }
-    _viewportVisible = false;
-}
-
-void EditorPlayRuntime::syncRendererBootstrap() {
-    if (_viewportWindow == nullptr) {
-        return;
-    }
-
-    const int w = static_cast<int>(_viewportBounds.maxX - _viewportBounds.minX);
-    const int h = static_cast<int>(_viewportBounds.maxY - _viewportBounds.minY);
-    if (w < 32 || h < 32) {
-        return;
-    }
-
-    const uint32_t uw = static_cast<uint32_t>(w);
-    const uint32_t uh = static_cast<uint32_t>(h);
-
-    ayt::render::RendererSubSystem::setBootstrapWindow(_viewportWindow, uw, uh);
-    ayt::render::RendererSubSystem::setBootstrapViewport(0, 0,
-        static_cast<uint16_t>(uw), static_cast<uint16_t>(uh));
-
-    if (_engineInitialized) {
-        if (auto* renderer = ayt::render::RendererSubSystem::findRegistered()) {
-            renderer->setClientSize(uw, uh);
-            renderer->setViewportRect(0, 0, static_cast<uint16_t>(uw), static_cast<uint16_t>(uh));
-        }
-    }
-}
-
-bool EditorPlayRuntime::ensureEngineInitialized() {
-    if (_engineInitialized) {
+bool EditorPlayRuntime::ensurePresentationReady()
+{
+    if (_presentationReady) {
         syncRendererBootstrap();
         return true;
     }
@@ -279,10 +253,7 @@ bool EditorPlayRuntime::ensureEngineInitialized() {
         return false;
     }
 
-    if (!ensureViewportWindow()) {
-        std::fprintf(stderr, "[EditorPlayRuntime] viewport window unavailable\n");
-        return false;
-    }
+    configureShaderToolchainOnce();
 
     if (!ensureAssets()) {
         std::fprintf(stderr, "[EditorPlayRuntime] asset bake failed\n");
@@ -299,6 +270,55 @@ bool EditorPlayRuntime::ensureEngineInitialized() {
 
     if (!loop.isPlaySessionActive() && !loop.preparePlaySession()) {
         std::fprintf(stderr, "[EditorPlayRuntime] preparePlaySession failed\n");
+        return false;
+    }
+
+    // EditorApp drives presentation via renderCompositeFrame; suppress GameLoop auto-render.
+    loop.setRenderCallback([]() {});
+
+    loop.pause();
+    _presentationReady = true;
+    return true;
+}
+
+void EditorPlayRuntime::syncRendererBootstrap()
+{
+    if (_hostWindow == nullptr) {
+        return;
+    }
+
+    ayt::render::RendererSubSystem::setBootstrapWindow(_hostWindow, _clientWidth, _clientHeight);
+
+    uint16_t vx = 0;
+    uint16_t vy = 0;
+    uint16_t vw = static_cast<uint16_t>(_clientWidth);
+    uint16_t vh = static_cast<uint16_t>(_clientHeight);
+
+    const int w = static_cast<int>(_viewportBounds.maxX - _viewportBounds.minX);
+    const int h = static_cast<int>(_viewportBounds.maxY - _viewportBounds.minY);
+    if (w >= 32 && h >= 32) {
+        vx = static_cast<uint16_t>(_viewportBounds.minX);
+        vy = static_cast<uint16_t>(_viewportBounds.minY);
+        vw = static_cast<uint16_t>(w);
+        vh = static_cast<uint16_t>(h);
+    }
+
+    ayt::render::RendererSubSystem::setBootstrapViewport(vx, vy, vw, vh);
+
+    if (auto* renderer = ayt::render::RendererSubSystem::findRegistered()) {
+        renderer->setClientSize(_clientWidth, _clientHeight);
+        renderer->setViewportRect(vx, vy, vw, vh);
+    }
+}
+
+bool EditorPlayRuntime::ensureEngineInitialized()
+{
+    if (_engineInitialized) {
+        syncRendererBootstrap();
+        return true;
+    }
+
+    if (!ensurePresentationReady()) {
         return false;
     }
 
@@ -342,28 +362,10 @@ void EditorPlayRuntime::unregisterUpdateListener() {
     _updateListenerId = 0;
 }
 
-void EditorPlayRuntime::syncViewportRect(const ayt::math::FRectangle& bounds) {
+void EditorPlayRuntime::syncViewportRect(const ayt::math::FRectangle& bounds)
+{
     _viewportBounds = bounds;
-
-    if (!ensureViewportWindow()) {
-        return;
-    }
-
-    const int x = static_cast<int>(bounds.minX);
-    const int y = static_cast<int>(bounds.minY);
-    const int w = static_cast<int>(bounds.maxX - bounds.minX);
-    const int h = static_cast<int>(bounds.maxY - bounds.minY);
-    if (w < 32 || h < 32) {
-        return;
-    }
-
-    MoveWindow(_viewportWindow, x, y, w, h, TRUE);
     syncRendererBootstrap();
-
-    if (_viewportVisible) {
-        SetWindowPos(_viewportWindow, HWND_TOP, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    }
 }
 
 void EditorPlayRuntime::spawnCubeIfNeeded() {
@@ -389,16 +391,10 @@ void EditorPlayRuntime::clearCube() {
     }
 }
 
-bool EditorPlayRuntime::startPlay() {
+bool EditorPlayRuntime::startPlay()
+{
     if (!ensureEngineInitialized()) {
         return false;
-    }
-
-    if (_viewportWindow != nullptr) {
-        ShowWindow(_viewportWindow, SW_SHOW);
-        SetWindowPos(_viewportWindow, HWND_TOP, 0, 0, 0, 0,
-                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-        _viewportVisible = true;
     }
 
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
@@ -411,24 +407,25 @@ bool EditorPlayRuntime::startPlay() {
     return true;
 }
 
-void EditorPlayRuntime::enterEdit() {
+void EditorPlayRuntime::enterEdit()
+{
     ayt::game::GameLoop::instance().pause();
     clearCube();
     _simulationActive = false;
-
-    if (_viewportWindow != nullptr) {
-        ShowWindow(_viewportWindow, SW_HIDE);
-        _viewportVisible = false;
-    }
 }
 
-void EditorPlayRuntime::shutdownEngine() {
+void EditorPlayRuntime::shutdownEngine()
+{
     enterEdit();
 
     if (_engineInitialized) {
         unregisterUpdateListener();
-        ayt::game::GameLoop::instance().endPlaySession();
         _engineInitialized = false;
+    }
+
+    if (_presentationReady) {
+        ayt::game::GameLoop::instance().endPlaySession();
+        _presentationReady = false;
     }
 }
 

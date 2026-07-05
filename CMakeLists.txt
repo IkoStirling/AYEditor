@@ -49,6 +49,37 @@ if(NOT DEFINED AY_SHADER_SHADERC_PATH)
         "${AY_SHADER_ROOT}/thirdParty/bgfx-install/debug/bin/${_ays_shaderc_name}")
 endif()
 
+if(NOT DEFINED AY_SHADER_BGFX_COMMON_DIR)
+    set(_ays_bgfx_search
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../thirdparty/bgfx/examples/common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../thirdparty/bgfx/examples/common"
+    )
+    set(AY_SHADER_BGFX_COMMON_DIR "")
+    foreach(_dir IN LISTS _ays_bgfx_search)
+        if(EXISTS "${_dir}/common.sh")
+            set(AY_SHADER_BGFX_COMMON_DIR "${_dir}")
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(NOT DEFINED AY_SHADER_BGFX_SRC_DIR AND AY_SHADER_BGFX_COMMON_DIR)
+    set(AY_SHADER_BGFX_SRC_DIR "${AY_SHADER_BGFX_COMMON_DIR}/../../src")
+endif()
+
+if(NOT DEFINED AY_BGFX_SHADER_INCLUDE_DIR)
+    set(_ays_bgfx_include_search
+        "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader/thirdParty/bgfx-install/debug/include/bgfx"
+    )
+    set(AY_BGFX_SHADER_INCLUDE_DIR "")
+    foreach(_dir IN LISTS _ays_bgfx_include_search)
+        if(EXISTS "${_dir}/bgfx_shader.sh")
+            set(AY_BGFX_SHADER_INCLUDE_DIR "${_dir}")
+            break()
+        endif()
+    endforeach()
+endif()
+
 add_executable(AYEditorShell_Demo WIN32
     demo/EditorShellDemo.cpp
     demo/GdiRenderBackend.cpp
@@ -61,8 +92,18 @@ target_include_directories(AYEditorShell_Demo PRIVATE
 
 target_link_libraries(AYEditorShell_Demo PRIVATE
     ${MODULE_NAME}
+    AYRenderer
+    AYEntity
+    AYGameLoop
+    AYResource
     AYUI
     AYDevice
+)
+
+target_include_directories(AYEditorShell_Demo PRIVATE
+    ${AY_RESOURCE_ROOT}/include/assetsImpl
+    ${AY_RESOURCE_ROOT}/interface
+    ${AY_RESOURCE_ROOT}/interface/assetsDefs
 )
 
 if(WIN32)
@@ -71,6 +112,9 @@ endif()
 
 target_compile_definitions(AYEditorShell_Demo PRIVATE
     AY_SHADER_SHADERC_HINT="${AY_SHADER_SHADERC_PATH}"
+    AY_SHADER_BGFX_COMMON_HINT="${AY_SHADER_BGFX_COMMON_DIR}"
+    AY_SHADER_BGFX_SRC_HINT="${AY_SHADER_BGFX_SRC_DIR}"
+    AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
 )
 
 add_custom_command(TARGET AYEditorShell_Demo POST_BUILD
@@ -78,6 +122,49 @@ add_custom_command(TARGET AYEditorShell_Demo POST_BUILD
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
         $<TARGET_FILE_DIR:AYEditorShell_Demo>/assets
     COMMENT "Copy AYEditor assets next to AYEditorShell_Demo"
+)
+
+add_executable(AYEditorShutdownRepro WIN32
+    demo/ShutdownRepro.cpp
+)
+
+target_include_directories(AYEditorShutdownRepro PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/demo
+)
+
+target_link_libraries(AYEditorShutdownRepro PRIVATE
+    ${MODULE_NAME}
+    AYRenderer
+    AYEntity
+    AYGameLoop
+    AYResource
+    AYUI
+    AYDevice
+)
+
+target_include_directories(AYEditorShutdownRepro PRIVATE
+    ${AY_RESOURCE_ROOT}/include/assetsImpl
+    ${AY_RESOURCE_ROOT}/interface
+    ${AY_RESOURCE_ROOT}/interface/assetsDefs
+)
+
+if(WIN32)
+    target_link_libraries(AYEditorShutdownRepro PRIVATE user32 gdi32)
+endif()
+
+target_compile_definitions(AYEditorShutdownRepro PRIVATE
+    AY_SHADER_SHADERC_HINT="${AY_SHADER_SHADERC_PATH}"
+    AY_SHADER_BGFX_COMMON_HINT="${AY_SHADER_BGFX_COMMON_DIR}"
+    AY_SHADER_BGFX_SRC_HINT="${AY_SHADER_BGFX_SRC_DIR}"
+    AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
+)
+
+add_custom_command(TARGET AYEditorShutdownRepro POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_CURRENT_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:AYEditorShutdownRepro>/assets
+    COMMENT "Copy AYEditor assets next to AYEditorShutdownRepro"
 )
 
 enable_testing()
