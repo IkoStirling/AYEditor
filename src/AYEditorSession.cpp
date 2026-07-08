@@ -30,9 +30,9 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _hostWindow = desc.hostWindow;
     _layoutPath = desc.layoutPath;
     _playRuntime.setHostWindow(_hostWindow);
-    // ED-02: forward the imported character (if any) — temporarily
-    // disabled to bisect heap corruption.
-    // _playRuntime.setImportedCharacter(desc.importedCharacter);
+    // ED-02: forward the imported character (if any) to the
+    // Play-runtime. Empty / invalid = cube fallback at startPlay.
+    _playRuntime.setImportedCharacter(desc.importedCharacter);
     AY_EDITOR_HEAP_CHECK("session_after_set_host");
 
     _ui.initialize(desc.uiBackend);
