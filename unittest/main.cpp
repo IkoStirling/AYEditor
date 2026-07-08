@@ -2,6 +2,7 @@
 #include "AYGameLoop.h"
 
 #include "Test_EditorShell.cpp"
+#include "Test_EditorImporter.cpp"
 
 void runTest()
 {

@@ -11,6 +11,8 @@ set(SRC_FILES
     src/AYEditorGameView.cpp
     src/AYEditorPlayRuntime.cpp
     src/AYEditorApp.cpp
+    src/AYImporter.cpp
+    src/AYImportDialog.cpp
 )
 
 set(HEAD_FILES
@@ -18,6 +20,8 @@ set(HEAD_FILES
     include/AYEditorGameView.h
     include/AYEditorPlayRuntime.h
     include/AYEditorApp.h
+    include/AYImporter.h
+    include/AYImportDialog.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
