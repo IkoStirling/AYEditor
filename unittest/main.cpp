@@ -3,6 +3,7 @@
 
 #include "Test_EditorShell.cpp"
 #include "Test_EditorImporter.cpp"
+#include "Test_EditorPlayRuntime.cpp"
 
 void runTest()
 {

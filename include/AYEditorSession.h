@@ -14,10 +14,15 @@ using HWND = HWND__*;
 
 namespace ayt::editor {
 
+// `ImportedCharacter` is defined in `AYEditorPlayRuntime.h` (included
+// above). The editor session forwards it straight through to the
+// Play runtime; no need to redeclare.
+
 struct EditorSessionDesc {
     ayt::ui::IRenderBackend* uiBackend = nullptr;
     std::string layoutPath;
     HWND hostWindow = nullptr;
+    ImportedCharacter importedCharacter;  // empty = fall back to cube
 };
 
 class EditorSession {

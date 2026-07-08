@@ -6,10 +6,12 @@ add_executable(${MODULE_NAME}
     main.cpp
 )
 
-target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource AYIO)
+target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource AYIO AYEntity)
 
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../AYEntity
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../AYEntity/include
 )
 
 # Editor unit tests do not load textures via the bimg pipeline, so

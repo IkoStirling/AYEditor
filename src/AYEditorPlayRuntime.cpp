@@ -1,5 +1,6 @@
 #include "AYEditorPlayRuntime.h"
 
+#include "AYCharacterEntity.h"  // ED-02 spawnCharacterFromPaths / destroyCharacter
 #include "AYEntity.h"
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
@@ -167,6 +168,16 @@ void EditorPlayRuntime::setClientSize(uint32_t width, uint32_t height)
 {
     _clientWidth  = width > 0 ? width : _clientWidth;
     _clientHeight = height > 0 ? height : _clientHeight;
+}
+
+// ED-02: stash the imported character paths. Applied lazily on the
+// next `startPlay()` call — changing the import while a simulation
+// is running is a Phase 2 / "live preview" feature. The default-ctor
+// ImportedCharacter has all empty strings, which `isValid()` reports
+// false; startPlay falls through to the cube path in that case.
+void EditorPlayRuntime::setImportedCharacter(const ImportedCharacter& character)
+{
+    _importedCharacter = character;
 }
 
 bool EditorPlayRuntime::ensureAssets() {
@@ -391,6 +402,42 @@ void EditorPlayRuntime::clearCube() {
     }
 }
 
+// ED-02: spawn the imported skinned character if the user has set
+// `setImportedCharacter(...)` with valid paths. Idempotent — won't
+// re-spawn if the entity already exists. Returns true when an
+// entity was successfully created, false when (a) no character was
+// configured, (b) an entity was already spawned, or (c) asset load
+// failed. The `startPlay()` caller falls back to the cube in (a)/(c).
+bool EditorPlayRuntime::trySpawnImportedCharacter() {
+    if (_characterEntity != nullptr) {
+        return false;
+    }
+    if (!_importedCharacter.isValid()) {
+        return false;
+    }
+
+    _characterEntity = ayt::entity::spawnCharacterFromPaths(
+        _importedCharacter.meshPath,
+        _importedCharacter.materialPath,
+        _importedCharacter.skeletonPath,
+        _importedCharacter.animationPath);
+
+    if (_characterEntity == nullptr) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] spawnCharacterFromPaths returned "
+            "nullptr (asset load failed) — falling back to cube\n");
+        return false;
+    }
+    return true;
+}
+
+void EditorPlayRuntime::clearCharacter() noexcept {
+    if (_characterEntity != nullptr) {
+        ayt::entity::destroyCharacter(_characterEntity);
+        _characterEntity = nullptr;
+    }
+}
+
 bool EditorPlayRuntime::startPlay()
 {
     if (!ensureEngineInitialized()) {
@@ -402,7 +449,13 @@ bool EditorPlayRuntime::startPlay()
     }
 
     ayt::game::GameLoop::instance().resume();
-    spawnCubeIfNeeded();
+    // ED-02: try the imported character first; fall back to the
+    // procedural cube when the import produced an invalid result or
+    // none was configured. Order matters — we always have something
+    // visible in the viewport.
+    if (!trySpawnImportedCharacter()) {
+        spawnCubeIfNeeded();
+    }
     _simulationActive = true;
     return true;
 }
@@ -410,6 +463,7 @@ bool EditorPlayRuntime::startPlay()
 void EditorPlayRuntime::enterEdit()
 {
     ayt::game::GameLoop::instance().pause();
+    clearCharacter();
     clearCube();
     _simulationActive = false;
 }
