@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AYInspectorOverrides.h"
 #include "AYMathTypes.h"
 
 #include <cstdint>
@@ -48,6 +49,25 @@ public:
     // pauses and re-runs resetDebugOverlayStats() - observable
     // jank. Safe at any time (Edit or Play mode).
     void replaceImportedCharacter(const ImportedCharacter& character);
+
+    // ED-03: Inspector override application. If a character is
+    // currently spawned, the runtime mutates SkeletonComponent::
+    // skeletonPath and AnimationComponent::clipPath in place to
+    // mirror the non-empty fields of `overrides`. If no character
+    // is spawned yet, the override is stashed in `_pendingOverrides`
+    // and re-applied on the next spawn (set by the Inspector
+    // before the user clicks Play). Validation log: missing files
+    // on disk produce a one-line stderr notice but do NOT clear
+    // the field - the entity keeps its previous path so the user
+    // can recover by picking a different file.
+    void applyComponentOverrides(const EntityInspectorOverrides& overrides);
+
+    // ED-03: read access to the pending overrides buffer. Tests
+    // use this to confirm Reset semantics.
+    const EntityInspectorOverrides& pendingOverrides() const
+    {
+        return _pendingOverrides;
+    }
 
     bool ensurePresentationReady();
     bool startPlay();
@@ -114,6 +134,14 @@ private:
     ayt::entity::Entity* _cubeEntity = nullptr;
     ayt::entity::Entity* _characterEntity = nullptr;
     uint64_t _updateListenerId = 0;
+
+    // ED-03: pending Inspector overrides. Populated by
+    // applyComponentOverrides when no character is currently
+    // spawned; consumed by trySpawnImportedCharacter right after
+    // spawnCharacterFromPaths returns. Survives replaceImported
+    // Character so the user's per-character clip/skel picks
+    // persist across hot-swap.
+    EntityInspectorOverrides _pendingOverrides;
 };
 
 } // namespace ayt::editor

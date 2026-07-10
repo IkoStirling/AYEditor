@@ -7,6 +7,10 @@
 #include "AYRendererSubSystem.h"
 #include "AYShadercDriver.h"
 
+#include <components/AYAnimationComponent.h>  // ED-03 override target
+#include <components/AYMeshComponent.h>
+#include <components/AYSkeletonComponent.h>   // ED-03 override target
+
 #include "assetsImpl/AYMaterial.h"
 #include "assetsImpl/AYMesh.h"
 #include "assetsImpl/AYTexture.h"
@@ -443,7 +447,79 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
             "nullptr (asset load failed) — falling back to cube\n");
         return false;
     }
+
+    // ED-03: if the Inspector stashed overrides earlier
+    // (before any character was spawned, or via a previous
+    // round), apply them to the freshly spawned entity now.
+    // Doing this here means the user can hot-swap an FBX, set
+    // new clip + skel paths in the Inspector, click Play, and
+    // see the animation bound to the entity on the very first
+    // tick.
+    if (!_pendingOverrides.isCleared()) {
+        applyComponentOverrides(_pendingOverrides);
+    }
     return true;
+}
+
+// ED-03: applyInspectorOverrides body. Mutates the spawned
+// entity's component paths in place when present. Always
+// updates _pendingOverrides so subsequent replaceImportedCharacter
+// calls re-apply the user's picks. Validation: missing files on
+// disk produce a one-line stderr notice but do NOT clear the
+// field (the entity keeps its current path so the user can
+// recover by picking a different file). Empty input struct is
+// the explicit "Reset" call - it clears _pendingOverrides and
+// does not touch the live entity's component paths.
+void EditorPlayRuntime::applyComponentOverrides(
+    const EntityInspectorOverrides& overrides)
+{
+    // The "Reset" button sends a default-constructed
+    // EntityInspectorOverrides (all fields empty). Treat that
+    // as a clear-pending; leave the live entity's existing
+    // component paths alone so the user can keep animating
+    // with whatever value is currently on the entity.
+    if (overrides.isCleared()) {
+        _pendingOverrides.clear();
+        return;
+    }
+
+    // Always update the pending buffer FIRST so a future
+    // replaceImportedCharacter re-applies the same picks even
+    // when no character is currently spawned.
+    _pendingOverrides = overrides;
+
+    if (_characterEntity == nullptr) {
+        // No live entity yet - overrides will be applied at
+        // the next spawn. Stderr is silent here because the
+        // Inspector caller is the only path that hits this
+        // branch and it always logs the click.
+        return;
+    }
+
+    if (!overrides.skeletonPathOverride.empty()) {
+        if (auto* skelComp = _characterEntity->getComponent<ayt::entity::SkeletonComponent>()) {
+            if (!ayt::io::File::exists(overrides.skeletonPathOverride)) {
+                std::fprintf(stderr,
+                    "[EditorPlayRuntime] skeleton override not found on disk: %s "
+                    "(keeping previous path)\n",
+                    overrides.skeletonPathOverride.c_str());
+            } else {
+                skelComp->skeletonPath = overrides.skeletonPathOverride;
+            }
+        }
+    }
+    if (!overrides.animationPathOverride.empty()) {
+        if (auto* animComp = _characterEntity->getComponent<ayt::entity::AnimationComponent>()) {
+            if (!ayt::io::File::exists(overrides.animationPathOverride)) {
+                std::fprintf(stderr,
+                    "[EditorPlayRuntime] animation override not found on disk: %s "
+                    "(keeping previous path)\n",
+                    overrides.animationPathOverride.c_str());
+            } else {
+                animComp->clipPath = overrides.animationPathOverride;
+            }
+        }
+    }
 }
 
 void EditorPlayRuntime::clearCharacter() noexcept {

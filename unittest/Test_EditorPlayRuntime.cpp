@@ -224,4 +224,121 @@ TEST_CASE(clear_cube_is_safe_when_no_cube_spawned)
     CHECK_NULL(rt.selectedCharacterEntity());
 }
 
+// ED-03: applying overrides to a live spawned entity must
+// mutate SkeletonComponent::skeletonPath and AnimationComponent
+// ::clipPath in place. We stub the file-existence check by
+// using real fixtures that ship in AYResource/test_output
+// (no I/O happens in ImportedCharacterOK::make() so we don't
+// rely on those paths; the override validation reads them
+// directly).
+TEST_CASE(inspector_overrides_apply_to_spawned_entity_components)
+{
+    World::instance().initialize();
+
+    EditorPlayRuntime rt;
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    Entity* e = rt.selectedCharacterEntity();
+    CHECK_NOT_NULL(e);
+
+    EntityInspectorOverrides ov;
+    ov.skeletonPathOverride =
+        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
+    ov.animationPathOverride =
+        "D:/Projects/AYRuntime/AYResource/test_output_animconv/animations/hero_run.ayanm";
+    rt.applyComponentOverrides(ov);
+
+    auto* skelComp = e->getComponent<SkeletonComponent>();
+    auto* animComp = e->getComponent<AnimationComponent>();
+    CHECK_NOT_NULL(skelComp);
+    CHECK_NOT_NULL(animComp);
+    CHECK_TRUE(skelComp->skeletonPath == ov.skeletonPathOverride);
+    CHECK_TRUE(animComp->clipPath == ov.animationPathOverride);
+
+    rt.clearCharacter();
+    rt.clearCube();
+    World::instance().shutdown();
+}
+
+// ED-03: pending overrides survive replaceImportedCharacter so
+// the user's clip/sk el picks stay applied when they hot-swap to
+// a different FBX. This is the test that pins the persistence
+// contract from the Foundation Plan prompt: "Persist
+// assignment in EditorSession for Play mode respawn."
+TEST_CASE(inspector_overrides_persist_across_replace)
+{
+    World::instance().initialize();
+
+    EditorPlayRuntime rt;
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    CHECK_TRUE(rt.selectedCharacterEntity() != nullptr);
+
+    EntityInspectorOverrides ov;
+    ov.skeletonPathOverride =
+        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
+    ov.animationPathOverride =
+        "D:/Projects/AYRuntime/AYResource/test_output_animconv/animations/hero_run.ayanm";
+    rt.applyComponentOverrides(ov);
+
+    // Hot-swap to another full character (same fixture - the
+    // specific paths don't matter for this test, only that the
+    // overrides re-apply).
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    Entity* e = rt.selectedCharacterEntity();
+    CHECK_NOT_NULL(e);
+
+    auto* skelComp = e->getComponent<SkeletonComponent>();
+    auto* animComp = e->getComponent<AnimationComponent>();
+    CHECK_TRUE(skelComp->skeletonPath == ov.skeletonPathOverride);
+    CHECK_TRUE(animComp->clipPath == ov.animationPathOverride);
+
+    rt.clearCharacter();
+    rt.clearCube();
+    World::instance().shutdown();
+}
+
+// ED-03: missing-file override must NOT clear the field.
+// Per the prompt: "Validation: log if .ayanm missing; do not
+// crash GameLoop." We choose to log AND keep the prior path,
+// which lets the user recover by picking a different file.
+TEST_CASE(inspector_overrides_logged_when_file_missing)
+{
+    World::instance().initialize();
+
+    EditorPlayRuntime rt;
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    Entity* e = rt.selectedCharacterEntity();
+    CHECK_NOT_NULL(e);
+    const std::string originalClip =
+        e->getComponent<AnimationComponent>()->clipPath;
+
+    EntityInspectorOverrides ov;
+    ov.animationPathOverride = "D:/no/such/path/does_not_exist.ayanm";
+    rt.applyComponentOverrides(ov);
+
+    // Field should still hold the original path (the override
+    // was rejected because the file is missing).
+    CHECK_TRUE(e->getComponent<AnimationComponent>()->clipPath == originalClip);
+
+    rt.clearCharacter();
+    rt.clearCube();
+    World::instance().shutdown();
+}
+
+// ED-03: empty overrides (= Reset button) clears the pending
+// buffer so the next spawn restores the original Imported
+// Character paths instead of the user's override.
+TEST_CASE(inspector_overrides_reset_clears_pending)
+{
+    EditorPlayRuntime rt;
+    EntityInspectorOverrides ov;
+    ov.skeletonPathOverride =
+        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
+    rt.applyComponentOverrides(ov);
+    CHECK_FALSE(rt.pendingOverrides().isCleared());
+
+    EntityInspectorOverrides emptyOv;
+    rt.applyComponentOverrides(emptyOv);
+    CHECK_TRUE(rt.pendingOverrides().isCleared());
+}
+
 TEST_SUITE_END
