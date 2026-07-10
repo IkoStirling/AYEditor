@@ -11,6 +11,7 @@
 #include "AYRendererSubSystem.h"
 #include "AYUIRenderBackend.h"
 
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -397,10 +398,24 @@ void EditorApp::run()
         });
 
     constexpr float kDeltaSeconds = 1.0f / 60.0f;
+    // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
+    // Reports ms for pollEvents / update / syncViewport / render per
+    // frame. Logged once a second (every ~60 frames at 60 FPS, less
+    // often at lower FPS) to keep stderr readable. Disabled by
+    // default. Set in the shell: set AY_EDITOR_FRAME_TIMING=1 before
+    // launching AYEditorShell_Demo.exe.
+    using Clock = std::chrono::high_resolution_clock;
+    const bool frameTiming =
+        std::getenv("AY_EDITOR_FRAME_TIMING") != nullptr;
+    uint64_t frameIndex = 0;
     while (running && window.isWindowValid()) {
+        const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
         devices.pollEvents();
+        const auto t1 = frameTiming ? Clock::now() : Clock::time_point{};
         session.update(kDeltaSeconds);
+        const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
         session.syncViewportIfChanged();
+        const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};
 
         if (rendererSub != nullptr) {
             const bool renderScene = session.shouldCompositeViewport();
@@ -408,6 +423,7 @@ void EditorApp::run()
                 renderScene, &uiBackend,
                 [&session](bool skipViewportPanel) { session.render(skipViewportPanel); });
         }
+        const auto t4 = frameTiming ? Clock::now() : Clock::time_point{};
 
         if (!loggedFirstFrameHeap) {
             AY_EDITOR_HEAP_CHECK("after_first_frame");
@@ -415,6 +431,20 @@ void EditorApp::run()
         }
 
         Sleep(1);
+        ++frameIndex;
+
+        if (frameTiming && (frameIndex % 60) == 0) {
+            using ms = std::chrono::duration<double, std::milli>;
+            std::fprintf(stderr,
+                "[EditorApp frame %llu] poll=%5.2fms update=%5.2fms "
+                "syncViewport=%5.2fms render=%6.2fms total=%6.2fms\n",
+                static_cast<unsigned long long>(frameIndex),
+                std::chrono::duration_cast<ms>(t1 - t0).count(),
+                std::chrono::duration_cast<ms>(t2 - t1).count(),
+                std::chrono::duration_cast<ms>(t3 - t2).count(),
+                std::chrono::duration_cast<ms>(t4 - t3).count(),
+                std::chrono::duration_cast<ms>(t4 - t0).count());
+        }
     }
 
     onPreShutdown();
