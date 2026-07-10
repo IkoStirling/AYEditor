@@ -63,6 +63,15 @@ public:
     void clearCharacter() noexcept;
     ayt::entity::Entity* selectedCharacterEntity() const { return _characterEntity; }
 
+    // G2: cache-root resolution promoted to public-static so
+    // EditorApp::run() (which lives outside this class) can derive
+    // the same root the runtime uses for ensureAssets(). Single
+    // source of truth - no risk of cache-root drift between
+    // EditorApp and EditorPlayRuntime. Returns
+    // "<exeDir>/ayeditor_cache\\" on Windows (single trailing '\\'),
+    // or the literal relative path on GetModuleFileNameA failure.
+    static std::string resolvePersistentCacheRoot();
+
 private:
     bool ensureAssets();
     bool ensureEngineInitialized();
@@ -73,7 +82,6 @@ private:
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
 
-    static std::string resolvePersistentCacheRoot();
 
     HWND _hostWindow = nullptr;
     uint32_t _clientWidth = 1280;

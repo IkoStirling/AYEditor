@@ -1,14 +1,18 @@
 #include "AYEditorApp.h"
 
 #include "AYEditorHeapDebug.h"
+#include "AYEditorPlayRuntime.h"
 #include "AYEditorSession.h"
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYDeviceManager.h"
+#include "AYImportedCharacterMapper.h"
+#include "AYImporter.h"
 #include "AYRendererSubSystem.h"
 #include "AYUIRenderBackend.h"
 
 #include <cstdio>
+#include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -160,6 +164,55 @@ std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
     return 0;
 }
 
+// G2: split the Win32 command line into whitespace-separated tokens.
+// Returns an empty vector on null input or all-whitespace input.
+// Phase 1 only: does NOT honor double-quoted strings. Use
+// `--import <path-without-spaces>` form. Quoted paths with spaces
+// fall back to the cube (logged as a parse failure).
+std::vector<std::string> tokenizeCommandLine(const char* cmdLine)
+{
+    std::vector<std::string> out;
+    if (cmdLine == nullptr) {
+        return out;
+    }
+    std::string token;
+    auto flush = [&]() {
+        if (!token.empty()) {
+            out.push_back(token);
+            token.clear();
+        }
+    };
+    for (const char* p = cmdLine; *p != '\0'; ++p) {
+        const unsigned char c = static_cast<unsigned char>(*p);
+        if (std::isspace(c) != 0) {
+            flush();
+        } else {
+            token.push_back(static_cast<char>(c));
+        }
+    }
+    flush();
+    return out;
+}
+
+// G2: scan tokens for the literal "--import" flag and return the
+// following token (if any). Returns an empty string when the flag is
+// absent or followed by nothing. Does not handle "--import=path" form
+// in Phase 1; that variant passes through and the unknownArgs path
+// would carry it (we don't read AppCommandLine here, so it's just
+// ignored).
+std::string findImportPath(const std::vector<std::string>& tokens)
+{
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (tokens[i] == "--import") {
+            if (i + 1 < tokens.size()) {
+                return tokens[i + 1];
+            }
+            return std::string{};
+        }
+    }
+    return std::string{};
+}
+
 } // namespace
 
 EditorApp::EditorApp(const ayt::app::GameDesc& desc) : _desc(desc) {}
@@ -196,6 +249,7 @@ ayt::game::GameLoop& EditorApp::getGameLoop()
 
 void EditorApp::registerSubSystems()
 {
+    // bootstrapModule registers Entity + Renderer subsystems (explicit, no static SIOF).
     ayt::entity::bootstrapModule();
 }
 
@@ -210,21 +264,20 @@ void EditorApp::onShutdown() {}
 
 void EditorApp::run()
 {
-    attachDebugConsole();
     AY_EDITOR_HEAP_DEBUG_INIT();
-    onInit();
+    AY_EDITOR_HEAP_CHECK("startup");
+    attachDebugConsole();
 
+    onInit();
     ayt::device::DeviceManager devices;
     ayt::device::DeviceConfig deviceConfig{};
     deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
     deviceConfig.window.width = static_cast<int>(_desc.width);
     deviceConfig.window.height = static_cast<int>(_desc.height);
-
     if (!devices.initialize(deviceConfig)) {
         std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
         return;
     }
-
     ayt::device::WindowManager& window = devices.window();
     HWND hwnd = static_cast<HWND>(window.getWindowHandle());
     if (hwnd == nullptr) {
@@ -242,8 +295,62 @@ void EditorApp::run()
     hostState.session = &session;
 
     const std::string layoutPath = resolveLayoutPath();
+
+    // ---- G2: --import <path> bootstrap ----------------------------------
+    // Parse argv for `--import <path.fbx>`. When present, run the ED-01
+    // importer into the editor cache, map the ConversionResult into an
+    // ImportedCharacter via the G1 helper, and stash it on
+    // sessionDesc.importedCharacter so EditorSession::initialize forwards
+    // it to EditorPlayRuntime. On any failure (parse error, missing file,
+    // extension unknown, FBX missing animation, etc.) we log and
+    // continue - the cube fallback path remains intact. G3 documents this
+    // policy on the startPlay() side.
+    ImportedCharacter importedCharacter;
+    {
+        const std::vector<std::string> tokens =
+            tokenizeCommandLine(::GetCommandLineA());
+        const std::string importPath = findImportPath(tokens);
+        if (!importPath.empty()) {
+            const std::string cacheRoot =
+                EditorPlayRuntime::resolvePersistentCacheRoot();
+            const std::string assetRoot = cacheRoot + "assets\\";
+
+            Importer::Result result =
+                Importer::importFile(importPath, assetRoot);
+            if (!result.success) {
+                std::fprintf(stderr,
+                             "[EditorApp] import failed: %s (falling back to cube)\n",
+                             result.errorMessage.c_str());
+            } else {
+                ImportedCharacterMapDiagnostics diag;
+                importedCharacter = mapConversionToImportedCharacter(
+                    result.conversion, cacheRoot, diag);
+                if (!diag.success) {
+                    std::string missing;
+                    for (size_t i = 0; i < diag.missing.size(); ++i) {
+                        if (i > 0) missing += ", ";
+                        missing += diag.missing[i];
+                    }
+                    std::fprintf(stderr,
+                                 "[EditorApp] import produced no skinned character: "
+                                 "missing [%s] (falling back to cube)\n",
+                                 missing.c_str());
+                    importedCharacter = ImportedCharacter{};
+                } else {
+                    std::fprintf(stderr,
+                                 "[EditorApp] imported character ready "
+                                 "(mesh=%s, skel=%s, anim=%s)\n",
+                                 importedCharacter.meshPath.c_str(),
+                                 importedCharacter.skeletonPath.c_str(),
+                                 importedCharacter.animationPath.c_str());
+                }
+            }
+        }
+    }
+    // ---------------------------------------------------------------------
     EditorSessionDesc sessionDesc{};
     sessionDesc.uiBackend = &uiBackend;
+    sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.hostWindow = hwnd;
 
