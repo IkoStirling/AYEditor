@@ -1,11 +1,16 @@
 #include "AYEditorSession.h"
 
 #include "AYEditorHeapDebug.h"
+#include "AYEntity.h"
 #include "AYSplitterHandle.h"
 #include "AYButton.h"
 #include "AYGameLoop.h"
 #include "AYTextLabel.h"
 #include "AYWidget.h"
+
+#include <components/AYAnimationComponent.h>
+#include <components/AYMeshComponent.h>
+#include <components/AYSkeletonComponent.h>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -267,6 +272,16 @@ void EditorSession::bindToolbar() {
     // for the --import argv path, then hands the result to
     // EditorPlayRuntime::replaceImportedCharacter for live swap.
     bindButton("btn_import", [this]() { importCharacterFromDialog(); });
+    // ED-03: Select button. Snapshots the live character's
+    // paths into the inspector labels; idempotent.
+    bindButton("btn_select", [this]() { selectCharacter(); });
+
+    // ED-03: Inspector body buttons. Each is a one-line
+    // lambda that delegates to the matching private handler.
+    bindButton("btn_inspector_skel",  [this]() { pickInspectorSkeleton(); });
+    bindButton("btn_inspector_anim",  [this]() { pickInspectorAnimation(); });
+    bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
+    bindButton("btn_inspector_reset", [this]() { resetInspectorOverrides(); });
 
     if (auto* widget = _ui.findById("lbl_mode")) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
@@ -348,6 +363,172 @@ void EditorSession::importCharacterFromDialog()
                  mapped.skeletonPath.c_str(),
                  mapped.animationPath.c_str());
 
+    // ED-03: a successful import auto-selects the new character
+    // for inspection, so the designer can immediately click
+    // [Pick Anim] and re-route to a different .ayanm. Without
+    // this the user has to click [Select] twice (once to
+    // populate the inspector, once after applying).
+    refreshInspectorLabels();
+
+    if (_repaintCallback) {
+        _repaintCallback();
+    }
+}
+
+// ED-03: walk the inspector's TextLabels and update them with
+// the currently-spawned character entity's path strings. Safe
+// to call from any time (refresh after spawn, refresh after
+// hot-swap, refresh after apply-overrides, refresh after
+// reset-overrides). When no character is spawned, sets the
+// title to "No selection".
+void EditorSession::refreshInspectorLabels()
+{
+    auto setUtf8 = [this](const char* id, const std::string& utf8) {
+        if (auto* w = _ui.findById(id)) {
+            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
+                label->setText(std::wstring(utf8.begin(), utf8.end()));
+            }
+        }
+    };
+
+    ayt::entity::Entity* e = _playRuntime.selectedCharacterEntity();
+    if (e == nullptr) {
+        setUtf8("inspector_hint", "No selection");
+        setUtf8("inspector_mesh", "mesh: -");
+        setUtf8("inspector_skel", "skel: -");
+        setUtf8("inspector_anim", "anim: -");
+        return;
+    }
+
+    setUtf8("inspector_hint", "Character");
+
+    if (auto* meshC = e->getComponent<ayt::entity::MeshComponent>()) {
+        setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
+    }
+    if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
+        setUtf8("inspector_skel", "skel: " + skelC->skeletonPath);
+    }
+    if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
+        setUtf8("inspector_anim", "anim: " + animC->clipPath);
+    }
+}
+
+// ED-03: [Select] handler. Snapshots the live character
+// entity's paths into the inspector labels and into the staged
+// pick state. Idempotent - clicking multiple times re-renders.
+// Phase 1 includes only the toolbar [Select] button as the
+// selection mechanism; ED-05 (Hierarchy panel) replaces it.
+void EditorSession::selectCharacter()
+{
+    if (_playRuntime.selectedCharacterEntity() == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] no character to select; click Import first\n");
+        refreshInspectorLabels();
+        return;
+    }
+
+    auto* e = _playRuntime.selectedCharacterEntity();
+    if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
+        _inspectorSkelPick = skelC->skeletonPath;
+    }
+    if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
+        _inspectorAnimPick = animC->clipPath;
+    }
+
+    refreshInspectorLabels();
+    if (_repaintCallback) {
+        _repaintCallback();
+    }
+}
+
+// ED-03: [Pick Skel] handler. Opens the Win32 dialog filtered
+// to .ayskel, stashes the chosen path into _inspectorSkelPick.
+// The path is NOT yet applied to the live entity - [Apply]
+// commits it. Cancel returns empty = no-op.
+void EditorSession::pickInspectorSkeleton()
+{
+    // We currently pass the empty filter straight through; the
+    // ImportDialog::showOpenFileDialog defaults to its built-in
+    // 3D-Model (.fbx/.gltf/.glb) filter, which is wider than
+    // .ayskel. To stay within Phase 1 scope we accept the wider
+    // filter (the user just types the path or picks any
+    // cache-resident file). A typed filter arg is a Phase 2
+    // refinement when picker infrastructure exists.
+    const std::string picked =
+        ayt::editor::ImportDialog::showOpenFileDialog(_hostWindow);
+    if (picked.empty()) {
+        return; // user cancelled
+    }
+    setInspectorSkeletonPath(picked);
+}
+
+// ED-03: [Pick Anim] handler, sibling of pickInspectorSkeleton.
+void EditorSession::pickInspectorAnimation()
+{
+    const std::string picked =
+        ayt::editor::ImportDialog::showOpenFileDialog(_hostWindow);
+    if (picked.empty()) {
+        return;
+    }
+    setInspectorAnimationPath(picked);
+}
+
+// ED-03: thin setters that stash the path and refresh the
+// corresponding inspector label so the user sees feedback
+// between [Pick ...] and [Apply].
+void EditorSession::setInspectorSkeletonPath(const std::string& path)
+{
+    _inspectorSkelPick = path;
+    if (auto* w = _ui.findById("inspector_skel")) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
+            label->setText(std::wstring(path.begin(), path.end()));
+        }
+    }
+}
+
+void EditorSession::setInspectorAnimationPath(const std::string& path)
+{
+    _inspectorAnimPick = path;
+    if (auto* w = _ui.findById("inspector_anim")) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
+            label->setText(std::wstring(path.begin(), path.end()));
+        }
+    }
+}
+
+// ED-03: [Apply] handler. Builds an EntityInspectorOverrides
+// from the staged picks and forwards to the runtime. Empty
+// pick on a field => leave that component path unchanged
+// (the runtime's applyComponentOverrides treats empty as
+// "keep").
+void EditorSession::applyInspectorOverrides()
+{
+    EntityInspectorOverrides ov;
+    ov.skeletonPathOverride  = _inspectorSkelPick;
+    ov.animationPathOverride = _inspectorAnimPick;
+    commitInspectorOverrides(ov);
+}
+
+// ED-03: [Reset] handler. Clear pending overrides back to
+// default (which the runtime interprets as "stop applying
+// user picks on the next spawn"). Does NOT clear the live
+// entity's component paths - the user keeps whatever is
+// animating now.
+void EditorSession::resetInspectorOverrides()
+{
+    _inspectorSkelPick.clear();
+    _inspectorAnimPick.clear();
+    EntityInspectorOverrides emptyOv;
+    commitInspectorOverrides(emptyOv);
+    std::fprintf(stderr, "[EditorSession] inspector overrides cleared\n");
+}
+
+// ED-03: shared work for both Apply and Reset. Forward the
+// override to the runtime, refresh labels, trigger redraw.
+void EditorSession::commitInspectorOverrides(const EntityInspectorOverrides& ov)
+{
+    _playRuntime.applyComponentOverrides(ov);
+    refreshInspectorLabels();
     if (_repaintCallback) {
         _repaintCallback();
     }

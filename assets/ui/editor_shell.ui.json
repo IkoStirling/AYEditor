@@ -16,6 +16,7 @@
         { "type": "Button", "id": "btn_step",  "text": "Step",  "size": { "w": 72, "h": 32 }, "onClick": "step" },
         { "type": "Button", "id": "btn_stop",  "text": "Stop",  "size": { "w": 72, "h": 32 }, "onClick": "stop" },
         { "type": "Button", "id": "btn_import", "text": "Import", "size": { "w": 80, "h": 32 }, "onClick": "import" },
+        { "type": "Button", "id": "btn_select", "text": "Select", "size": { "w": 80, "h": 32 }, "onClick": "select" },
         { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 96, "h": 32 } }
       ]
     },
@@ -65,7 +66,14 @@
             "maxWidthPercent": 40
           },
           "children": [
-            { "type": "TextLabel", "id": "inspector_hint", "text": "No selection", "size": { "w": 220, "h": 24 } }
+            { "type": "TextLabel", "id": "inspector_hint",      "text": "No selection", "size": { "w": 240, "h": 24 } },
+            { "type": "TextLabel", "id": "inspector_mesh",      "text": "mesh: -",       "size": { "w": 240, "h": 20 } },
+            { "type": "TextLabel", "id": "inspector_skel",      "text": "skel: -",       "size": { "w": 240, "h": 20 } },
+            { "type": "TextLabel", "id": "inspector_anim",      "text": "anim: -",       "size": { "w": 240, "h": 20 } },
+            { "type": "Button",    "id": "btn_inspector_skel",  "text": "Pick Skel",     "size": { "w": 120, "h": 24 }, "onClick": "pick_skel" },
+            { "type": "Button",    "id": "btn_inspector_anim",  "text": "Pick Anim",     "size": { "w": 120, "h": 24 }, "onClick": "pick_anim" },
+            { "type": "Button",    "id": "btn_inspector_apply", "text": "Apply",         "size": { "w": 80,  "h": 24 }, "onClick": "apply_overrides" },
+            { "type": "Button",    "id": "btn_inspector_reset", "text": "Reset",         "size": { "w": 80,  "h": 24 }, "onClick": "reset_overrides" }
           ]
         }
       ]

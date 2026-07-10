@@ -81,14 +81,12 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     session.shutdown();
 }
 
-// Phase 2a: the toolbar Import button must be present after
-// loading the shell JSON. We can't drive the Win32 modal dialog
-// from a CI unit test (it blocks), so this test only asserts the
-// button's presence + that findById returns a Button*. The actual
-// ImportDialog::showOpenFileDialog + importCharacterFromDialog
-// flow is covered by manual verification per the convention in
-// Test_EditorImporter.cpp:9-14 (Win32 UI is never auto-tested).
-TEST_CASE(toolbar_btn_import_is_present_after_layout_load) {
+// ED-03: the inspector panel must render the Phase-3 widget
+// IDs after the shell JSON loads. assert no id is missing
+// (otherwise the user clicks an inspector button that is not
+// bound). Manual verify only for the actual pick / apply flow
+// (Win32 file dialogs block inside CI).
+TEST_CASE(inspector_panel_renders_pick_apply_reset_widgets) {
     const std::string candidates[] = {
         "assets/ui/editor_shell.ui.json",
         "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
@@ -103,19 +101,31 @@ TEST_CASE(toolbar_btn_import_is_present_after_layout_load) {
     }
 
     if (layoutPath.empty()) {
-        // Same convention as test_editor_session_loads_shell_json:
-        // skip silently when the asset copy hasn't materialized.
-        return;
+        return; // same skip convention as the other layout-driven tests.
     }
 
     MockRenderer backend;
     EditorSession session;
     CHECK(session.initialize(&backend, layoutPath));
 
-    auto* widget = session.ui().findById("btn_import");
-    CHECK_NOT_NULL(widget);
-    auto* button = dynamic_cast<Button*>(widget);
-    CHECK_NOT_NULL(button);
+    // Inspector read-only labels (4)
+    CHECK_NOT_NULL(session.ui().findById("inspector_hint"));
+    CHECK_NOT_NULL(session.ui().findById("inspector_mesh"));
+    CHECK_NOT_NULL(session.ui().findById("inspector_skel"));
+    CHECK_NOT_NULL(session.ui().findById("inspector_anim"));
+
+    // Inspector action buttons (4). Cast to Button* to confirm
+    // the JSON parsed them as Buttons (vs TextLabels).
+    auto requireBtn = [&](const char* id) {
+        auto* w = session.ui().findById(id);
+        CHECK_NOT_NULL(w);
+        auto* b = dynamic_cast<Button*>(w);
+        CHECK_NOT_NULL(b);
+    };
+    requireBtn("btn_inspector_skel");
+    requireBtn("btn_inspector_anim");
+    requireBtn("btn_inspector_apply");
+    requireBtn("btn_inspector_reset");
 
     session.shutdown();
 }

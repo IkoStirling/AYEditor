@@ -5,6 +5,7 @@
 #include "AYImportedCharacterMapper.h"
 #include "AYImportDialog.h"
 #include "AYImporter.h"
+#include "AYInspectorOverrides.h"
 #include "AYUIManager.h"
 
 #include "AYMathTypes.h"
@@ -75,6 +76,48 @@ private:
     // and respects the startPlay cube-fallback policy). Empty
     // path from the dialog = user cancelled = no-op.
     void importCharacterFromDialog();
+
+    // ED-03: snapshot the current character entity's path
+    // strings into the inspector labels, for use after a
+    // hot-swap or pick-and-apply. No-op when no character is
+    // currently spawned (writes "No selection" to the title
+    // label).
+    void refreshInspectorLabels();
+
+    // ED-03: select the live character entity for inspection.
+    // Bound to the toolbar [Select] button. If no character is
+    // currently spawned, logs and continues (the inspector
+    // stays in "No selection" state). Triggers a label refresh
+    // so the inspector mirrors the just-selected entity.
+    void selectCharacter();
+
+    // ED-03: commit the picked paths to the live character
+    // (and to the runtime's pending-overrides buffer so a
+    // future spawn re-applies them). Bound to [Apply].
+    void applyInspectorOverrides();
+
+    // ED-03: clear pending overrides (= reset path picks back
+    // to the ImportedCharacter-derived defaults). Bound to
+    // [Reset]. Refreshes inspector labels after.
+    void resetInspectorOverrides();
+
+    // ED-03: pending paths picked via Pick Skel / Pick Anim
+    // buttons. Both empty = nothing to Apply. Apply wraps
+    // these into an EntityInspectorOverrides and forwards
+    // through selectCharacter / _playRuntime.
+    void pickInspectorSkeleton();
+    void pickInspectorAnimation();
+
+    // ED-03: thin setter for the inspector's staged override
+    // fields, called from pickInspector{Skel,Anim} after the
+    // Win32 dialog returns a path.
+    void setInspectorSkeletonPath(const std::string& path);
+    void setInspectorAnimationPath(const std::string& path);
+
+    // ED-03: shared work for [Apply] - build the override
+    // struct from staged fields and forward.
+    void commitInspectorOverrides(const EntityInspectorOverrides& ov);
+
     void setModeLabel(const std::wstring& text);
     void onModeChanged(EditorMode mode);
     void syncViewport();
@@ -90,6 +133,14 @@ private:
     ayt::math::FRectangle _cachedViewportBounds{};
     bool _viewportBoundsCached = false;
     bool _shutdown = false;
+
+    // ED-03: staged Inspector pick state. Populated by
+    // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
+    // applyInspectorOverrides to build the EntityInspector
+    // Overrides struct. Both empty = nothing staged = [Apply]
+    // is a no-op. Reset clears them.
+    std::string _inspectorSkelPick;
+    std::string _inspectorAnimPick;
 };
 
 } // namespace ayt::editor
