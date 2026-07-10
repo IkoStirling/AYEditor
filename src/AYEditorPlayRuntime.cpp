@@ -395,10 +395,25 @@ void EditorPlayRuntime::spawnCubeIfNeeded() {
     mesh->materialPath = _materialPath;
 }
 
-void EditorPlayRuntime::clearCube() {
+void EditorPlayRuntime::clearCube() noexcept {
     if (_cubeEntity != nullptr) {
         ayt::entity::World::instance().destroyEntity(_cubeEntity);
         _cubeEntity = nullptr;
+    }
+}
+
+// Phase 2a: hot-swap. Sequence mirrors the spawn policy documented
+// in startPlay() (G3) - clear whatever entity is currently spawned,
+// then attempt the character, falling back to the procedural cube
+// when the new character is invalid. The GameLoop keeps ticking
+// throughout (no enterEdit + startPlay jank).
+void EditorPlayRuntime::replaceImportedCharacter(const ImportedCharacter& character)
+{
+    setImportedCharacter(character);
+    clearCharacter();
+    clearCube();
+    if (!trySpawnImportedCharacter()) {
+        spawnCubeIfNeeded();
     }
 }
 

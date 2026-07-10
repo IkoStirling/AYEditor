@@ -40,6 +40,15 @@ public:
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
 
+    // Phase 2a: hot-swap. Replaces whatever entity is currently
+    // spawned (cube, previous character, or nothing) with the new
+    // imported character, falling back to the cube if the new
+    // character is invalid. The GameLoop keeps ticking throughout;
+    // we do NOT call enterEdit()/startPlay() because that path
+    // pauses and re-runs resetDebugOverlayStats() - observable
+    // jank. Safe at any time (Edit or Play mode).
+    void replaceImportedCharacter(const ImportedCharacter& character);
+
     bool ensurePresentationReady();
     bool startPlay();
     void enterEdit();
@@ -61,6 +70,10 @@ public:
     // up the full renderer + GameLoop session.
     bool trySpawnImportedCharacter();
     void clearCharacter() noexcept;
+    // Phase 2a: cube teardown helper promoted to public so the
+    // toolbar Import button can fully reset Play state for hot-
+    // swap. Safe to call with no cube spawned (no-op).
+    void clearCube() noexcept;
     ayt::entity::Entity* selectedCharacterEntity() const { return _characterEntity; }
 
     // G2: cache-root resolution promoted to public-static so
@@ -77,7 +90,6 @@ private:
     bool ensureEngineInitialized();
     void syncRendererBootstrap();
     void spawnCubeIfNeeded();
-    void clearCube();
     void registerUpdateListener();
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
