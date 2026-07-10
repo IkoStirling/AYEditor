@@ -449,10 +449,30 @@ bool EditorPlayRuntime::startPlay()
     }
 
     ayt::game::GameLoop::instance().resume();
-    // ED-02: try the imported character first; fall back to the
-    // procedural cube when the import produced an invalid result or
-    // none was configured. Order matters — we always have something
-    // visible in the viewport.
+    // Spawn-policy contract (G3):
+    //   1. trySpawnImportedCharacter() wins when EditorApp populated
+    //      sessionDesc.importedCharacter with a valid 4-tuple
+    //      (mesh + material + skeleton + animation) via the
+    //      `--import <path.fbx>` flag. See mapConversionToImportedCharacter
+    //      in AYImportedCharacterMapper.{h,cpp}; that helper enforces
+    //      Phase 1's "Animation is required" policy so a mesh-only
+    //      or mesh+skeleton-only conversion can never reach here with
+    //      a half-valid character.
+    //   2. The procedural cube is the fallback for every other path:
+    //      - no `--import` flag
+    //      - import failed (file missing / unsupported extension /
+    //        FBX parse error)
+    //      - import succeeded but produced no skinned character
+    //        (mapper returned success=false; cube still renders)
+    //      - trySpawnImportedCharacter was called but
+    //        spawnCharacterFromPaths returned nullptr at runtime
+    //        (resource adapter failure; cube replaces it)
+    //   3. Order is intentional: a designer passing a valid
+    //      `--import <character.fbx>` should always see that
+    //      character; the cube is the always-visible default when
+    //      nothing else resolves. Cube spawn is gated by
+    //      `_cubeEntity != nullptr` so it never doubles up with the
+    //      character entity.
     if (!trySpawnImportedCharacter()) {
         spawnCubeIfNeeded();
     }
