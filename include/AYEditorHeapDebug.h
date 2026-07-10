@@ -6,6 +6,7 @@
 #  include <crtdbg.h>
 
 // Set AY_EDITOR_HEAP_CHECK_ALWAYS=1 at compile time to break on every alloc/free (noisy).
+// Link demo/AYEditorDebugHeapEarly.cpp so the debug heap is active before static init.
 #  if defined(AY_EDITOR_HEAP_CHECK_ALWAYS)
 #    define AY_EDITOR_HEAP_DEBUG_INIT()                                                   \
         _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_CHECK_ALWAYS_DF)

@@ -13,6 +13,7 @@ set(SRC_FILES
     src/AYEditorApp.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
+    src/AYImportedCharacterMapper.cpp
 )
 
 set(HEAD_FILES
@@ -22,6 +23,7 @@ set(HEAD_FILES
     include/AYEditorApp.h
     include/AYImporter.h
     include/AYImportDialog.h
+    include/AYImportedCharacterMapper.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
@@ -85,6 +87,7 @@ if(NOT DEFINED AY_BGFX_SHADER_INCLUDE_DIR)
 endif()
 
 add_executable(AYEditorShell_Demo WIN32
+    demo/AYEditorDebugHeapEarly.cpp
     demo/EditorShellDemo.cpp
     demo/GdiRenderBackend.cpp
 )
@@ -129,6 +132,7 @@ add_custom_command(TARGET AYEditorShell_Demo POST_BUILD
 )
 
 add_executable(AYEditorShutdownRepro WIN32
+    demo/AYEditorDebugHeapEarly.cpp
     demo/ShutdownRepro.cpp
 )
 
