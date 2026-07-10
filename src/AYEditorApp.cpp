@@ -398,7 +398,6 @@ void EditorApp::run()
         });
 
     constexpr float kDeltaSeconds = 1.0f / 60.0f;
-    constexpr double kTargetFrameMs = 1000.0 / 60.0;  // 16.667 ms
     // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
     // Reports ms for pollEvents / update / syncViewport / render per
     // frame. Logged once a second (every ~60 frames at 60 FPS, less
@@ -431,21 +430,7 @@ void EditorApp::run()
             loggedFirstFrameHeap = true;
         }
 
-        // 60Hz cap. Sleep only the delta between what we spent
-        // and the 16.667-ms budget. Negatives (over-budget frame)
-        // produce zero sleep so we never compound the lag.
-        // This is the fix for symptom jank when renderCompositeFrame
-        // is slow on the local dev box. The root cause (bgfx
-        // transient-buffer growth) lives in AYRenderer and is
-        // out of scope here; this cap lets the UI stay responsive
-        // while render takes its time per frame.
-        const double totalMs = std::chrono::duration<double, std::milli>(
-            Clock::now() - t0).count();
-        const double remainingMs = kTargetFrameMs - totalMs;
-        if (remainingMs > 1.0) {
-            Sleep(static_cast<DWORD>(remainingMs));
-        }
-
+        Sleep(1);
         ++frameIndex;
 
         if (frameTiming && (frameIndex % 60) == 0) {
