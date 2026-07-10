@@ -581,6 +581,11 @@ void EditorPlayRuntime::enterEdit()
 
 void EditorPlayRuntime::shutdownEngine()
 {
+    if (_engineShutdown) {
+        return;
+    }
+    _engineShutdown = true;
+
     enterEdit();
 
     if (_engineInitialized) {

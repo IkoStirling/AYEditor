@@ -122,6 +122,7 @@ private:
 
     bool _presentationReady = false;
     bool _engineInitialized = false;
+    bool _engineShutdown = false;
     bool _simulationActive = false;
     bool _assetsReady = false;
 

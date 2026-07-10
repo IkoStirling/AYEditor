@@ -292,10 +292,13 @@ void EditorApp::run()
     hostState.clientHeight = static_cast<int>(_desc.height);
 
     ayt::render::UIRenderBackend uiBackend;
-    EditorSession session;
-    hostState.session = &session;
+    ayt::render::RendererSubSystem* rendererSub = nullptr;
 
-    const std::string layoutPath = resolveLayoutPath();
+    {
+        EditorSession session;
+        hostState.session = &session;
+
+        const std::string layoutPath = resolveLayoutPath();
 
     // ---- G2: --import <path> bootstrap ----------------------------------
     // Parse argv for `--import <path.fbx>`. When present, run the ED-01
@@ -371,8 +374,8 @@ void EditorApp::run()
         return;
     }
 
-    ayt::render::RendererSubSystem* rendererSub = ayt::render::RendererSubSystem::findRegistered();
-    if (rendererSub == nullptr) {
+        rendererSub = ayt::render::RendererSubSystem::findRegistered();
+        if (rendererSub == nullptr) {
         std::fprintf(stderr, "[EditorApp] renderer subsystem unavailable\n");
         session.shutdown();
         devices.shutdown();
@@ -477,17 +480,28 @@ void EditorApp::run()
     onPreShutdown();
     hostState.session = nullptr;
 
-    AY_EDITOR_HEAP_CHECK("before_ui_shutdown");
-    session.ui().shutdown();
+    // UI GPU resources (font atlas, UiGpuContext) must be released while bgfx is
+    // still alive. session.shutdown() calls endPlaySession() which shuts down
+    // RendererSubSystem and destroys bgfx — do that only after this step.
+    AY_EDITOR_HEAP_CHECK("before_ui_backend_shutdown");
     if (rendererSub != nullptr) {
         rendererSub->renderer().shutdownUiRenderBackend(uiBackend);
     } else {
         uiBackend.shutdown();
     }
+    AY_EDITOR_HEAP_CHECK("after_ui_backend_shutdown");
+
+    AY_EDITOR_HEAP_CHECK("before_session_shutdown");
     session.shutdown();
-    devices.shutdown();
+    AY_EDITOR_HEAP_CHECK("after_session_shutdown");
+    } // ~EditorSession — destroy before GameLoop/uiBackend stack teardown
+
     ayt::game::GameLoop::instance().shutdown();
+    AY_EDITOR_HEAP_CHECK("after_gameloop_shutdown");
+
+    devices.shutdown();
     onShutdown();
+    AY_EDITOR_HEAP_CHECK("before_ui_backend_dtor");
 }
 
 } // namespace ayt::editor

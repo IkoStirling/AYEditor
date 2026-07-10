@@ -120,15 +120,16 @@ int parseFrames(PWSTR cmdLine)
 void shutdownSession(ayt::editor::EditorSession& session, ayt::render::UIRenderBackend* uiBackend,
                      ayt::render::RendererSubSystem* rendererSub)
 {
-    AY_EDITOR_HEAP_CHECK("before_ui_shutdown");
-    session.ui().shutdown();
     if (uiBackend != nullptr) {
+        AY_EDITOR_HEAP_CHECK("before_ui_backend_shutdown");
         if (rendererSub != nullptr) {
             rendererSub->renderer().shutdownUiRenderBackend(*uiBackend);
         } else {
             uiBackend->shutdown();
         }
+        AY_EDITOR_HEAP_CHECK("after_ui_backend_shutdown");
     }
+    AY_EDITOR_HEAP_CHECK("before_session_shutdown");
     session.shutdown();
     AY_EDITOR_HEAP_CHECK("after_session_shutdown");
 }
