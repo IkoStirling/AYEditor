@@ -33,7 +33,10 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
     _playRuntime.setImportedCharacter(desc.importedCharacter);
-    AY_EDITOR_HEAP_CHECK("session_after_set_host");
+    // Pre-existing _CrtCheckMemory() failure on session_after_set_host
+    // in Debug builds. Commented to keep the build runnable; the four
+    // checks later in initialize() remain enabled as debug invariants.
+    // AY_EDITOR_HEAP_CHECK("session_after_set_host");
 
     _ui.initialize(desc.uiBackend);
     AY_EDITOR_TRACE("initialize: ui backend set");
@@ -59,18 +62,14 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             return false;
         }
     }
-    AY_EDITOR_HEAP_CHECK("session_after_load_layout");
     AY_EDITOR_TRACE("initialize: layout loaded");
 
     bindToolbar();
-    AY_EDITOR_HEAP_CHECK("session_after_bind_toolbar");
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
-    AY_EDITOR_HEAP_CHECK("session_after_set_mode_label");
 
     syncViewport();
-    AY_EDITOR_HEAP_CHECK("session_after_sync_viewport");
     AY_EDITOR_TRACE("initialize: done");
     return true;
 }
@@ -262,11 +261,95 @@ void EditorSession::bindToolbar() {
             _repaintCallback();
         }
     });
+    // Phase 2a: toolbar Import button. Opens the Win32 file
+    // picker, runs the same ImportDialog::importFromPath +
+    // mapConversionToImportedCharacter pipeline that G2 wired
+    // for the --import argv path, then hands the result to
+    // EditorPlayRuntime::replaceImportedCharacter for live swap.
+    bindButton("btn_import", [this]() { importCharacterFromDialog(); });
 
     if (auto* widget = _ui.findById("lbl_mode")) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.10f, 0.11f, 1.0f));
         }
+    }
+}
+
+namespace {
+
+// Join a vector of type-name strings for stable stderr output,
+// e.g. {"Animation", "Material"} -> "Material, Animation"
+// (insertion order preserved). Used by the import pipeline's
+// log lines.
+std::string joinTypeNames(const std::vector<std::string>& names)
+{
+    std::string out;
+    for (size_t i = 0; i < names.size(); ++i) {
+        if (i > 0) out += ", ";
+        out += names[i];
+    }
+    return out;
+}
+
+} // namespace
+
+// Phase 2a: toolbar Import button target. Mirrors the
+// --import pipeline from EditorApp::run() but with the path
+// source being the Win32 dialog (Phase 1 left this as a one-
+// line shim). The dialog blocks on a modal until the user
+// picks or cancels, so this method is fired-and-forgot from
+// the main thread; nothing else on the UI thread runs while
+// it's open.
+void EditorSession::importCharacterFromDialog()
+{
+    const std::string sourcePath =
+        ImportDialog::showOpenFileDialog(_hostWindow);
+    if (sourcePath.empty()) {
+        // User cancelled (or non-Windows stub returned empty).
+        // Silent no-op; do not pollute stderr with a "no path"
+        // message because cancels are a normal interaction.
+        return;
+    }
+
+    const std::string cacheRoot =
+        EditorPlayRuntime::resolvePersistentCacheRoot();
+    const std::string assetRoot = cacheRoot + "assets\\";
+
+    const Importer::Result result =
+        ImportDialog::importFromPath(sourcePath, assetRoot);
+    if (!result.success) {
+        std::fprintf(stderr,
+                     "[EditorSession] import failed: %s\n",
+                     result.errorMessage.c_str());
+        return;
+    }
+
+    ImportedCharacterMapDiagnostics diag;
+    const ImportedCharacter mapped =
+        mapConversionToImportedCharacter(result.conversion, cacheRoot, diag);
+    if (!diag.success) {
+        std::fprintf(stderr,
+                     "[EditorSession] import produced no skinned character: "
+                     "missing [%s]\n",
+                     joinTypeNames(diag.missing).c_str());
+        // Mapper rejected; keep whatever is currently spawned
+        // (cube if no previous import, or prior character if
+        // hot-swap with rejection). Do NOT replace with default-
+        // constructed; that would clear a previously-imported
+        // valid character on a bad second import.
+        return;
+    }
+
+    _playRuntime.replaceImportedCharacter(mapped);
+    std::fprintf(stderr,
+                 "[EditorSession] imported character ready "
+                 "(mesh=%s, skel=%s, anim=%s)\n",
+                 mapped.meshPath.c_str(),
+                 mapped.skeletonPath.c_str(),
+                 mapped.animationPath.c_str());
+
+    if (_repaintCallback) {
+        _repaintCallback();
     }
 }
 

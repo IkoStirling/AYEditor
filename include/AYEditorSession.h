@@ -2,6 +2,9 @@
 
 #include "AYEditorGameView.h"
 #include "AYEditorPlayRuntime.h"
+#include "AYImportedCharacterMapper.h"
+#include "AYImportDialog.h"
+#include "AYImporter.h"
 #include "AYUIManager.h"
 
 #include "AYMathTypes.h"
@@ -65,6 +68,13 @@ public:
 
 private:
     void bindToolbar();
+    // Phase 2a: toolbar Import button handler. Opens the Win32
+    // file picker, runs Importer::importFile + the G1 mapper,
+    // and pushes the result into EditorPlayRuntime via
+    // replaceImportedCharacter (which clears any existing entity
+    // and respects the startPlay cube-fallback policy). Empty
+    // path from the dialog = user cancelled = no-op.
+    void importCharacterFromDialog();
     void setModeLabel(const std::wstring& text);
     void onModeChanged(EditorMode mode);
     void syncViewport();
