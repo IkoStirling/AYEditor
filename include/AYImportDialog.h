@@ -21,6 +21,17 @@ public:
     // returned.
     static Importer::Result importFromPath(const std::string& sourcePath,
                                            const std::string& destinationDir);
+
+    // Phase 2a: Win32 file picker for the toolbar Import button.
+    // Opens a standard Win32 "Open file" dialog filtered to FBX /
+    // glTF / glTF-binary. `ownerWindowHandle` may be nullptr for a
+    // modeless dialog; usually it's the editor's host HWND.
+    // Returns the picked absolute path, or empty string when the
+    // user cancelled or the OS call failed. On non-Windows
+    // platforms the function returns empty (no-op stub) so the
+    // call site compiles cross-platform even though the toolbar
+    // button is wired unconditionally.
+    static std::string showOpenFileDialog(void* ownerWindowHandle);
 };
 
 } // namespace ayt::editor

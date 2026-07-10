@@ -41,6 +41,16 @@ target_include_directories(${MODULE_NAME} PRIVATE
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
     PRIVATE AYEntity AYRenderer AYResource AYIO)
 
+# Phase 2a: toolbar Import button uses the Win32 file picker
+# (AYImportDialog::showOpenFileDialog -> GetOpenFileNameA from
+# <commdlg.h>), which lives in the comdlg32.lib Windows SDK library.
+# Linux/macOS builds of AYEditor don't import this header (the
+# non-Windows branch returns empty), so the link is gated. The demo
+# and shutdown-repro targets inherit the link transitively.
+if(WIN32)
+    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32)
+endif()
+
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/demo
 )
