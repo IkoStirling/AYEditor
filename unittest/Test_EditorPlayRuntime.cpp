@@ -154,4 +154,74 @@ TEST_CASE(set_imported_character_after_init_takes_effect_on_next_spawn)
     World::instance().shutdown();
 }
 
+// Phase 2a: replaceImportedCharacter performs a one-shot hot-swap
+// — it clears the previously-spawned entity, accepts the new
+// ImportedCharacter, and re-spawns. The GameLoop keeps ticking
+// throughout (we do not test loops here; we just verify the entity
+// set swap). Calling twice with the same valid character yields
+// two distinct entities (which is what designers expect when
+// double-clicking the Import button): the second call clears the
+// first and spawns a fresh one.
+TEST_CASE(replace_imported_character_respawns_after_previous)
+{
+    World::instance().initialize();
+
+    EditorPlayRuntime rt;
+
+    // First import succeeds.
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    Entity* first = rt.selectedCharacterEntity();
+    CHECK_NOT_NULL(first);
+
+    // Second import with the same paths: replaces the first.
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    Entity* second = rt.selectedCharacterEntity();
+    CHECK_NOT_NULL(second);
+    CHECK_TRUE(second != first);  // distinct entity instance
+
+    rt.clearCharacter();
+    rt.clearCube();
+    World::instance().shutdown();
+}
+
+// Phase 2a: replaceImportedCharacter with an invalid (default-
+// constructed) ImportedCharacter falls back to the procedural
+// cube, mirroring startPlay's policy. Empty ImportedCharacter is
+// isValid()==false, so the cube is the only thing that ends up
+// spawned.
+TEST_CASE(replace_imported_character_with_invalid_falls_back_to_cube)
+{
+    World::instance().initialize();
+
+    EditorPlayRuntime rt;
+
+    // Spawn a character first so we can verify the swap clears it.
+    rt.replaceImportedCharacter(ImportedCharacterOK::make());
+    CHECK_NOT_NULL(rt.selectedCharacterEntity());
+
+    // Now replace with empty - should clear the character and
+    // spawn the cube (EditorPlayRuntime holds the cube entity as
+    // a private; we can only assert the character side via the
+    // public accessor).
+    rt.replaceImportedCharacter(makeEmpty());
+    CHECK_NULL(rt.selectedCharacterEntity());
+
+    rt.clearCharacter();
+    rt.clearCube();
+    World::instance().shutdown();
+}
+
+// Phase 2a: clearCube is a public no-op when no cube was spawned.
+// Before this iteration clearCube was private; promoting it was
+// the smallest API change to allow replaceImportedCharacter to
+// reset Play state.
+TEST_CASE(clear_cube_is_safe_when_no_cube_spawned)
+{
+    EditorPlayRuntime rt;
+    // No setup; _cubeEntity is nullptr. Calling clearCube must
+    // not crash and must remain a no-op.
+    rt.clearCube();
+    CHECK_NULL(rt.selectedCharacterEntity());
+}
+
 TEST_SUITE_END

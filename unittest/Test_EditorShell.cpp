@@ -81,6 +81,45 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     session.shutdown();
 }
 
+// Phase 2a: the toolbar Import button must be present after
+// loading the shell JSON. We can't drive the Win32 modal dialog
+// from a CI unit test (it blocks), so this test only asserts the
+// button's presence + that findById returns a Button*. The actual
+// ImportDialog::showOpenFileDialog + importCharacterFromDialog
+// flow is covered by manual verification per the convention in
+// Test_EditorImporter.cpp:9-14 (Win32 UI is never auto-tested).
+TEST_CASE(toolbar_btn_import_is_present_after_layout_load) {
+    const std::string candidates[] = {
+        "assets/ui/editor_shell.ui.json",
+        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
+    };
+
+    std::string layoutPath;
+    for (const std::string& path : candidates) {
+        if (fileExists(path)) {
+            layoutPath = path;
+            break;
+        }
+    }
+
+    if (layoutPath.empty()) {
+        // Same convention as test_editor_session_loads_shell_json:
+        // skip silently when the asset copy hasn't materialized.
+        return;
+    }
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+
+    auto* widget = session.ui().findById("btn_import");
+    CHECK_NOT_NULL(widget);
+    auto* button = dynamic_cast<Button*>(widget);
+    CHECK_NOT_NULL(button);
+
+    session.shutdown();
+}
+
 TEST_CASE(test_editor_session_play_mode_split_capture) {
     const std::string candidates[] = {
         "assets/ui/editor_shell.ui.json",
