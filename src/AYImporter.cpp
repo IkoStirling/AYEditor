@@ -7,6 +7,11 @@
 // the user gets a meaningful error ("unsupported source extension
 // 'foo'") before any converter runs.
 //
+// Cache layout: see AYEditor/docs/cache-path-convention.md.
+// Callers pass `<cacheRoot>/assets/` as `destinationDir`; FBXConverter
+// fans out into `<cacheRoot>/assets/{meshes,materials,skeletons,
+// animations,textures}/` plus a `<basename>.aydep.json` sidecar.
+//
 // Failure modes we surface (returned via `Result::errorMessage`):
 //   * Empty source path → "sourcePath is empty".
 //   * File missing → "source file does not exist: <path>".
