@@ -408,6 +408,8 @@ void EditorApp::run()
     const bool frameTiming =
         std::getenv("AY_EDITOR_FRAME_TIMING") != nullptr;
     uint64_t frameIndex = 0;
+    double compositeMs = 0.0;
+    double uiPassMs = 0.0;
     while (running && window.isWindowValid()) {
         const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
         devices.pollEvents();
@@ -419,9 +421,32 @@ void EditorApp::run()
 
         if (rendererSub != nullptr) {
             const bool renderScene = session.shouldCompositeViewport();
+            const auto tRenderBegin = frameTiming ? Clock::now() : Clock::time_point{};
+            // Inner timing: measure just the UI render pass (uiPass
+            // lambda). If this is near-zero ms while the outer
+            // render time is 60-80ms, the slow path is
+            // beginFrame/endFrame/pollShaderHotReload inside
+            // renderCompositeFrame (bgfx + shader pipeline), not
+            // the UI pass. Disabled by default; same env var as
+            // the outer diag.
             rendererSub->renderCompositeFrame(
                 renderScene, &uiBackend,
-                [&session](bool skipViewportPanel) { session.render(skipViewportPanel); });
+                [&session, frameTiming, &uiPassMs](bool skipViewportPanel) {
+                    if (frameTiming) {
+                        const auto tU0 = Clock::now();
+                        session.render(skipViewportPanel);
+                        const auto tU1 = Clock::now();
+                        uiPassMs = std::chrono::duration<double, std::milli>(
+                            tU1 - tU0).count();
+                    } else {
+                        session.render(skipViewportPanel);
+                    }
+                });
+            const auto tRenderEnd = frameTiming ? Clock::now() : Clock::time_point{};
+            if (frameTiming) {
+                compositeMs = std::chrono::duration<double, std::milli>(
+                    tRenderEnd - tRenderBegin).count();
+            }
         }
         const auto t4 = frameTiming ? Clock::now() : Clock::time_point{};
 
@@ -437,12 +462,14 @@ void EditorApp::run()
             using ms = std::chrono::duration<double, std::milli>;
             std::fprintf(stderr,
                 "[EditorApp frame %llu] poll=%5.2fms update=%5.2fms "
-                "syncViewport=%5.2fms render=%6.2fms total=%6.2fms\n",
+                "syncViewport=%5.2fms render=%6.2fms (uiPass=%5.2fms) "
+                "total=%6.2fms\n",
                 static_cast<unsigned long long>(frameIndex),
                 std::chrono::duration_cast<ms>(t1 - t0).count(),
                 std::chrono::duration_cast<ms>(t2 - t1).count(),
                 std::chrono::duration_cast<ms>(t3 - t2).count(),
-                std::chrono::duration_cast<ms>(t4 - t3).count(),
+                compositeMs,
+                uiPassMs,
                 std::chrono::duration_cast<ms>(t4 - t0).count());
         }
     }
