@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AYInspectorOverrides.h"
-#include "AYMathTypes.h"
+#include "aymath/MathTypes.h"
 
 #include <cstdint>
 #include <string>
@@ -114,6 +114,18 @@ private:
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
 
+    // INT-01 (2026-07-15): Logia end-to-end smoke — spawn a fresh
+    // Entity with the EditorPlayerController ScriptComponent, bind
+    // <assetRoot>/Scripts/PlayerController.logia via the registered
+    // ScriptSubSystem so the per-tick `entity.onUpdate(dt)` path
+    // flows Lua → AYReflect → C++ field mutation. Matches the
+    // canonical `examples/player_controller.logia` shape (self.position
+    // + self.speed + self.jump_force).
+    void spawnPlayerControllerIfNeeded();
+    bool bindPlayerScript();
+    void clearPlayerController() noexcept;
+    bool seedPlayerControllerLogia();
+
 
     HWND _hostWindow = nullptr;
     uint32_t _clientWidth = 1280;
@@ -134,6 +146,8 @@ private:
     ImportedCharacter _importedCharacter;
     ayt::entity::Entity* _cubeEntity = nullptr;
     ayt::entity::Entity* _characterEntity = nullptr;
+    ayt::entity::Entity* _playerEntity = nullptr;
+    bool _playerScriptBound = false;
     uint64_t _updateListenerId = 0;
 
     // ED-03: pending Inspector overrides. Populated by

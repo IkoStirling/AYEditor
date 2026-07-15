@@ -9,11 +9,13 @@
 #include "AYImportedCharacterMapper.h"
 #include "AYImporter.h"
 #include "AYRendererSubSystem.h"
+#include "AYScriptSubSystem.h"
 #include "AYUIRenderBackend.h"
 
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -250,8 +252,19 @@ ayt::game::GameLoop& EditorApp::getGameLoop()
 
 void EditorApp::registerSubSystems()
 {
-    // bootstrapModule registers Entity + Renderer subsystems (explicit, no static SIOF).
+    // Entity ECS + render systems (no RendererSubSystem — that lives in
+    // AYRenderer and must not be pulled through AYEntity bootstrap).
     ayt::entity::bootstrapModule();
+    ayt::render::RendererSubSystem::registerSubSystem();
+
+    // INT-01 (2026-07-15): ScriptSubSystem drives Logia tickAmbient /
+    // tickLogiaSystems / tickComponentHosts. Registered explicitly
+    // per AYScriptSubSystem.h's contract (auto-registration would
+    // NPE — IGameLoop::instance() may not be alive at static-init
+    // time). Editor enables hot reload separately on bind to make
+    // dev iteration on .logia files work without restarting Play.
+    ayt::game::GameLoop::instance().registerSubSystem(
+        new ayt::script::ScriptSubSystem());
 }
 
 void EditorApp::onInit()
@@ -291,7 +304,7 @@ void EditorApp::run()
     hostState.clientWidth  = static_cast<int>(_desc.width);
     hostState.clientHeight = static_cast<int>(_desc.height);
 
-    ayt::render::UIRenderBackend uiBackend;
+    auto uiBackend = std::make_unique<ayt::render::UIRenderBackend>();
     ayt::render::RendererSubSystem* rendererSub = nullptr;
 
     {
@@ -353,7 +366,7 @@ void EditorApp::run()
     }
     // ---------------------------------------------------------------------
     EditorSessionDesc sessionDesc{};
-    sessionDesc.uiBackend = &uiBackend;
+    sessionDesc.uiBackend = uiBackend.get();
     sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.hostWindow = hwnd;
@@ -382,9 +395,9 @@ void EditorApp::run()
         return;
     }
 
-    if (!uiBackend.initialize(rendererSub->renderer())) {
+    if (!uiBackend->initialize(rendererSub->renderer())) {
         std::fprintf(stderr, "[EditorApp] UIRenderBackend initialize failed\n");
-        uiBackend.shutdown();
+        uiBackend->shutdown();
         session.shutdown();
         devices.shutdown();
         return;
@@ -433,7 +446,7 @@ void EditorApp::run()
             // the UI pass. Disabled by default; same env var as
             // the outer diag.
             rendererSub->renderCompositeFrame(
-                renderScene, &uiBackend,
+                renderScene, uiBackend.get(),
                 [&session, frameTiming, &uiPassMs](bool skipViewportPanel) {
                     if (frameTiming) {
                         const auto tU0 = Clock::now();
@@ -485,23 +498,28 @@ void EditorApp::run()
     // RendererSubSystem and destroys bgfx — do that only after this step.
     AY_EDITOR_HEAP_CHECK("before_ui_backend_shutdown");
     if (rendererSub != nullptr) {
-        rendererSub->renderer().shutdownUiRenderBackend(uiBackend);
+        rendererSub->renderer().shutdownUiRenderBackend(*uiBackend);
     } else {
-        uiBackend.shutdown();
+        uiBackend->shutdown();
     }
     AY_EDITOR_HEAP_CHECK("after_ui_backend_shutdown");
 
     AY_EDITOR_HEAP_CHECK("before_session_shutdown");
     session.shutdown();
     AY_EDITOR_HEAP_CHECK("after_session_shutdown");
-    } // ~EditorSession — destroy before GameLoop/uiBackend stack teardown
+    } // ~EditorSession — destroy before GameLoop teardown
 
     ayt::game::GameLoop::instance().shutdown();
     AY_EDITOR_HEAP_CHECK("after_gameloop_shutdown");
 
     devices.shutdown();
     onShutdown();
-    AY_EDITOR_HEAP_CHECK("before_ui_backend_dtor");
+
+    // Release GPU-owned state while handles are still valid; heap object avoids
+    // MSVC stack-cookie trips on the run() stack frame when class layout drifts.
+    uiBackend->shutdown();
+    uiBackend.reset();
+    AY_EDITOR_HEAP_CHECK("after_ui_backend_destroyed");
 }
 
 } // namespace ayt::editor

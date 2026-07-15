@@ -14,6 +14,7 @@ set(SRC_FILES
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
+    src/EditorPlayerController.cpp  # INT-01 sample script host + AYReflect registration
 )
 
 set(HEAD_FILES
@@ -24,6 +25,7 @@ set(HEAD_FILES
     include/AYImporter.h
     include/AYImportDialog.h
     include/AYImportedCharacterMapper.h
+    include/EditorPlayerController.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
@@ -39,7 +41,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
-    PRIVATE AYEntity AYRenderer AYResource AYIO)
+    PRIVATE AYEntity AYRenderer AYResource AYIO AYScript)
 
 # Phase 2a: toolbar Import button uses the Win32 file picker
 # (AYImportDialog::showOpenFileDialog -> GetOpenFileNameA from

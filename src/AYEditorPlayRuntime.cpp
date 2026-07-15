@@ -5,17 +5,23 @@
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYRendererSubSystem.h"
+#include "AYScriptSubSystem.h"
 #include "AYShadercDriver.h"
 
 #include <components/AYAnimationComponent.h>  // ED-03 override target
 #include <components/AYMeshComponent.h>
+#include <components/AYScriptComponent.h>
 #include <components/AYSkeletonComponent.h>   // ED-03 override target
+
+#include "EditorPlayerController.h"  // INT-01 sample script host
 
 #include "assetsImpl/AYMaterial.h"
 #include "assetsImpl/AYMesh.h"
 #include "assetsImpl/AYTexture.h"
 
-#include "AYFile.h"
+#include "ayio/File.h"
+
+#include <logia/AYCompilerError.h>
 
 #include <cstdio>
 #include <string>
@@ -251,9 +257,54 @@ bool EditorPlayRuntime::ensureAssets() {
     ayt::render::RendererSubSystem::setBootstrapShaderDumpDirectory(shaderDumpDir);
     ayt::render::RendererSubSystem::setBootstrapShaderCacheDirectory(shaderCacheDir);
 
+    // INT-01 (2026-07-15): seed <assetRoot>/Scripts/PlayerController.logia
+    // from the canonical example bundled with AYScript so a fresh
+    // Editor Play session always has a Logia sample to bind. Mirror
+    // the meshPath/materialPath seeding above — only copy when the
+    // user hasn't supplied a path already. Hot-reload watch activates
+    // once bindPlayerScript() runs (S3.7b).
+    if (!seedPlayerControllerLogia()) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] PlayerController.logia seed skipped "
+            "(source not bundled; bind will no-op until the file exists)\n");
+    }
+
     std::fprintf(stderr, "[EditorPlayRuntime] assets ready in %s\n", _assetRoot.c_str());
     _assetsReady = true;
     return true;
+}
+
+bool EditorPlayRuntime::seedPlayerControllerLogia() {
+    const std::string destPath = _assetRoot + "Scripts\\PlayerController.logia";
+    if (ayt::io::File::exists(destPath)) {
+        return true;
+    }
+    ensureAssetDirectory(_assetRoot + "Scripts\\");
+
+    static const char* kRepoSourceCandidates[] = {
+        "AYRuntime\\AYScript\\examples\\player_controller.logia",
+        "..\\AYScript\\examples\\player_controller.logia",
+        "..\\..\\AYScript\\examples\\player_controller.logia",
+        "..\\..\\..\\AYScript\\examples\\player_controller.logia",
+    };
+    std::string sourcePath;
+    for (const char* c : kRepoSourceCandidates) {
+        if (fileExists(c)) { sourcePath = c; break; }
+    }
+    if (sourcePath.empty()) {
+        return false;
+    }
+    ayt::io::File src(sourcePath, ayt::io::File::Mode::Read);
+    if (!src.isOpen()) {
+        return false;
+    }
+    std::string contents;
+    contents.resize(static_cast<size_t>(src.size()));
+    if (contents.empty()) return true;  // zero-byte file is a valid seed
+    if (src.read(contents.data(), contents.size()) != static_cast<int64_t>(contents.size())) {
+        return false;
+    }
+    return writeText(destPath, contents);
 }
 
 bool EditorPlayRuntime::ensurePresentationReady()
@@ -282,6 +333,7 @@ bool EditorPlayRuntime::ensurePresentationReady()
     loop.setRenderThreadEnabled(false);
 
     ayt::entity::bootstrapModule();
+    ayt::render::RendererSubSystem::registerSubSystem();
 
     if (!loop.isPlaySessionActive() && !loop.preparePlaySession()) {
         std::fprintf(stderr, "[EditorPlayRuntime] preparePlaySession failed\n");
@@ -567,6 +619,17 @@ bool EditorPlayRuntime::startPlay()
     if (!trySpawnImportedCharacter()) {
         spawnCubeIfNeeded();
     }
+
+    // INT-01 (2026-07-15): spawn a PlayerController ScriptComponent
+    // and bind <assetRoot>/Scripts/PlayerController.logia. The hot
+    // reload watcher activates on first bind (setHotReloadEnabled runs
+    // INSIDE bindPlayerScript BEFORE bindAndLoadFromFile, so a
+    // user-edit during Play is auto-applied via S3.7b pollAndApplyReloads).
+    spawnPlayerControllerIfNeeded();
+    if (!_playerScriptBound) {
+        _playerScriptBound = bindPlayerScript();
+    }
+
     _simulationActive = true;
     return true;
 }
@@ -576,6 +639,7 @@ void EditorPlayRuntime::enterEdit()
     ayt::game::GameLoop::instance().pause();
     clearCharacter();
     clearCube();
+    clearPlayerController();
     _simulationActive = false;
 }
 
@@ -605,6 +669,101 @@ void EditorPlayRuntime::tick() {
     }
 
     ayt::game::GameLoop::instance().tickOnce();
+}
+
+// INT-01 (2026-07-15): PlayerController ScriptComponent spawn +
+// <assetRoot>/Scripts/PlayerController.logia binding. Mirrors
+// spawnCubeIfNeeded()/clearCube()'s idempotency contract.
+void EditorPlayRuntime::spawnPlayerControllerIfNeeded() {
+    if (_playerEntity != nullptr) {
+        return;
+    }
+    _playerEntity = ayt::entity::World::instance().createEntity();
+    if (_playerEntity == nullptr) {
+        return;
+    }
+
+    // Reuse the cube's mesh / material so the player's renderable
+    // shape is visible without pulling in a second .aymesh asset; the
+    // Logia script independently mutates self.position via the
+    // AYReflect codegen rewrite.
+    _playerEntity->addComponent<ayt::entity::Transform>();
+    auto* mesh = _playerEntity->addComponent<ayt::entity::MeshComponent>();
+    if (mesh != nullptr) {
+        mesh->meshPath     = _meshPath;
+        mesh->materialPath = _materialPath;
+    }
+    _playerEntity->addComponent<ayt::editor::PlayerController>();
+}
+
+void EditorPlayRuntime::clearPlayerController() noexcept {
+    if (_playerEntity != nullptr) {
+        ayt::entity::World::instance().destroyEntity(_playerEntity);
+        _playerEntity = nullptr;
+    }
+    _playerScriptBound = false;
+}
+
+bool EditorPlayRuntime::bindPlayerScript() {
+    // Resolve the registered ScriptSubSystem (EditorApp registers it
+    // at startup; this is a defensive dynamic-cast in case ordering
+    // ever shifts the bind point earlier than the registration point).
+    auto* sub = ayt::game::SubSystemRegistry::instance().findSubSystem(
+        "ayt.script.runtime");
+    if (sub == nullptr) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] ScriptSubSystem not registered yet; "
+            "bindPlayerScript no-op (will retry on next startPlay)\n");
+        return false;
+    }
+    auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub);
+    if (scriptSub == nullptr) {
+        return false;
+    }
+
+    const std::string scriptPath =
+        _assetRoot + "Scripts\\PlayerController.logia";
+    if (!ayt::io::File::exists(scriptPath)) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] %s not on disk (skip bind; "
+            "Editor Player remains inert until a user copies the "
+            "file or edits the asset seed path)\n",
+            scriptPath.c_str());
+        return false;
+    }
+
+    auto* pc = _playerEntity
+        ? _playerEntity->getComponent<ayt::editor::PlayerController>()
+        : nullptr;
+    if (pc == nullptr) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] PlayerController component missing "
+            "on _playerEntity (spawn order bug)\n");
+        return false;
+    }
+
+    // INT-01 (2026-07-15): bind BEFORE enabling hot reload. The
+    // implementation's `watchScriptPath` always records the path in
+    // _hotReload->byPath (regardless of enabled state); `setHotReloadEnabled(true)`
+    // backfills OS-level watches for any pre-recorded paths in
+    // a single sweep (S3.7b AYSubscriptSubSystem.cpp:160-176).
+    // Doing the bind first ensures the just-loaded .logia path is
+    // observed by the FileWatcher as soon as reload is enabled —
+    // a user edit during Play will fire on the next pollAndApplyReloads.
+    std::vector<ayt::script::logia::CompilerError> errors;
+    const bool ok = scriptSub->bindAndLoadFromFile(*pc, scriptPath, errors);
+    if (!ok) {
+        for (const auto& err : errors) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] bindAndLoadFromFile '%s' failed: "
+                "%d:%d %s\n",
+                scriptPath.c_str(), err.line, err.column,
+                err.message.c_str());
+        }
+        return false;
+    }
+    scriptSub->setHotReloadEnabled(true);
+    return ok;
 }
 
 } // namespace ayt::editor
