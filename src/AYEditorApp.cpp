@@ -6,10 +6,12 @@
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYDeviceManager.h"
+#include "AYDeviceInputProvider.h"
 #include "AYImportedCharacterMapper.h"
 #include "AYImporter.h"
 #include "AYRendererSubSystem.h"
 #include "AYScriptSubSystem.h"
+#include "AYSubSystemRegistry.h"
 #include "AYUIRenderBackend.h"
 
 #include <chrono>
@@ -234,6 +236,19 @@ EditorApp::EditorApp(const ayt::app::GameDesc& desc, const ayt::app::AppCommandL
     }
 }
 
+EditorApp::~EditorApp()
+{
+    // INT-02 (2026-07-15): reset provider BEFORE devices. ScriptSubSystem
+    // is owned by GameLoop and survives this dtor (GameLoop clears
+    // SubSystems on its own shutdown); if _inputProvider outlived
+    // _devices, the bridge would hold a dangling DeviceManager*.
+    // ScriptSubSystem::shutdown() also defensively calls
+    // setInputProvider(nullptr), but explicit ordering here keeps
+    // the invariant local to the type that owns the pointer.
+    _inputProvider.reset();
+    _devices.reset();
+}
+
 std::unique_ptr<EditorApp> EditorApp::create(const ayt::app::GameDesc& desc)
 {
     return std::make_unique<EditorApp>(desc);
@@ -265,6 +280,27 @@ void EditorApp::registerSubSystems()
     // dev iteration on .logia files work without restarting Play.
     ayt::game::GameLoop::instance().registerSubSystem(
         new ayt::script::ScriptSubSystem());
+
+    // INT-02 (2026-07-15): wire the AYDevice DeviceManager (owned by
+    // _devices member, lifetime == *this) into the Logia bridge so
+    // scripts reading `input.is_pressed("jump")` see real keyboard
+    // state. _devices is allocated in run() before GameLoop begins;
+    // here we install the adapter so any bindAndLoadFromFile that
+    // happens during Play picks up real input immediately.
+    //
+    // Note: ScriptSubSystem is owned by GameLoop and survives this
+    // method (its shutdown is driven by GameLoop::shutdown in run()).
+    // _inputProvider lifetime matches *this — dtor resets it before
+    // _devices so the bridge never sees a dangling DeviceManager*.
+    if (_devices && !_inputProvider) {
+        auto* sub = ayt::game::SubSystemRegistry::instance()
+                       .findSubSystem("ayt.script.runtime");
+        if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
+            _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(
+                _devices.get());
+            scriptSub->bridge().setInputProvider(_inputProvider.get());
+        }
+    }
 }
 
 void EditorApp::onInit()
@@ -283,20 +319,38 @@ void EditorApp::run()
     attachDebugConsole();
 
     onInit();
-    ayt::device::DeviceManager devices;
+    // INT-02 (2026-07-15): _devices is a member (was stack-local
+    // before). Lifetime == *this so the Logia InputProvider that
+    // registerSubSystems() installs can hold a raw pointer into it.
+    _devices = std::make_unique<ayt::device::DeviceManager>();
     ayt::device::DeviceConfig deviceConfig{};
     deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
     deviceConfig.window.width = static_cast<int>(_desc.width);
     deviceConfig.window.height = static_cast<int>(_desc.height);
-    if (!devices.initialize(deviceConfig)) {
+    if (!_devices->initialize(deviceConfig)) {
         std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
+        _devices.reset();
         return;
     }
-    ayt::device::WindowManager& window = devices.window();
+    // Provider needs to be installed now that _devices is valid;
+    // onInit() ran before _devices existed so we wire here too.
+    {
+        auto* sub = ayt::game::SubSystemRegistry::instance()
+                       .findSubSystem("ayt.script.runtime");
+        if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
+            if (!_inputProvider) {
+                _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(
+                    _devices.get());
+                scriptSub->bridge().setInputProvider(_inputProvider.get());
+            }
+        }
+    }
+    ayt::device::WindowManager& window = _devices->window();
     HWND hwnd = static_cast<HWND>(window.getWindowHandle());
     if (hwnd == nullptr) {
         std::fprintf(stderr, "[EditorApp] host window unavailable\n");
-        devices.shutdown();
+        _devices->shutdown();
+        _devices.reset();
         return;
     }
 
@@ -373,7 +427,7 @@ void EditorApp::run()
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
-        devices.shutdown();
+        _devices->shutdown();
         return;
     }
 
@@ -383,7 +437,7 @@ void EditorApp::run()
     if (!session.ensurePresentationReady()) {
         std::fprintf(stderr, "[EditorApp] presentation bootstrap failed\n");
         session.shutdown();
-        devices.shutdown();
+        _devices->shutdown();
         return;
     }
 
@@ -391,7 +445,7 @@ void EditorApp::run()
         if (rendererSub == nullptr) {
         std::fprintf(stderr, "[EditorApp] renderer subsystem unavailable\n");
         session.shutdown();
-        devices.shutdown();
+        _devices->shutdown();
         return;
     }
 
@@ -399,7 +453,7 @@ void EditorApp::run()
         std::fprintf(stderr, "[EditorApp] UIRenderBackend initialize failed\n");
         uiBackend->shutdown();
         session.shutdown();
-        devices.shutdown();
+        _devices->shutdown();
         return;
     }
     AY_EDITOR_HEAP_CHECK("after_full_init");
@@ -428,7 +482,7 @@ void EditorApp::run()
     double uiPassMs = 0.0;
     while (running && window.isWindowValid()) {
         const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
-        devices.pollEvents();
+        _devices->pollEvents();
         const auto t1 = frameTiming ? Clock::now() : Clock::time_point{};
         session.update(kDeltaSeconds);
         const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
@@ -512,7 +566,7 @@ void EditorApp::run()
     ayt::game::GameLoop::instance().shutdown();
     AY_EDITOR_HEAP_CHECK("after_gameloop_shutdown");
 
-    devices.shutdown();
+    _devices->shutdown();
     onShutdown();
 
     // Release GPU-owned state while handles are still valid; heap object avoids
