@@ -404,6 +404,13 @@ void EditorPlayRuntime::registerUpdateListener() {
     }
 
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
+        // Never spawn/rotate the fallback cube while a character (or any
+        // non-cube visual) is the active Play subject — that used to leave
+        // a second mesh in the viewport beside the imported character.
+        if (_characterEntity != nullptr) {
+            return;
+        }
+
         spawnCubeIfNeeded();
         if (_cubeEntity == nullptr) {
             return;
@@ -683,16 +690,13 @@ void EditorPlayRuntime::spawnPlayerControllerIfNeeded() {
         return;
     }
 
-    // Reuse the cube's mesh / material so the player's renderable
-    // shape is visible without pulling in a second .aymesh asset; the
-    // Logia script independently mutates self.position via the
-    // AYReflect codegen rewrite.
+    // INT-01 smoke host: Transform + PlayerController only.
+    // Do NOT attach MeshComponent here — startPlay already spawned either
+    // the procedural cube or an imported character. A second cube mesh on
+    // this entity showed up in the viewport as a fixed duplicate beside
+    // the rotating `_cubeEntity` (Logia mutates PlayerController::position,
+    // not Transform, so the duplicate never moved).
     _playerEntity->addComponent<ayt::entity::Transform>();
-    auto* mesh = _playerEntity->addComponent<ayt::entity::MeshComponent>();
-    if (mesh != nullptr) {
-        mesh->meshPath     = _meshPath;
-        mesh->materialPath = _materialPath;
-    }
     _playerEntity->addComponent<ayt::editor::PlayerController>();
 }
 

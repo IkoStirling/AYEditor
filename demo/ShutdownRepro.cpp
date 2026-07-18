@@ -159,6 +159,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int)
 
     if (level >= 1) {
         ayt::entity::bootstrapModule();
+        ayt::render::RendererSubSystem::registerSubSystem();
         AY_EDITOR_HEAP_CHECK("after_entity_bootstrap");
     }
 
