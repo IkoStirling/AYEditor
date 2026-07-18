@@ -111,6 +111,10 @@ void EditorSession::setClientSize(float width, float height) {
 
 void EditorSession::update(float dt) {
     _ui.update(dt);
+    // Per-frame reconcile: if the last known cursor is not on a splitter
+    // band, force every SplitterHandle un-revealed. Leave events alone
+    // are not sufficient (capture path / skipped WM_MOUSEMOVE).
+    syncSplitterRevealToMouse();
 
     if (_gameView.mode() == EditorMode::Play) {
         _playRuntime.tick();
@@ -170,6 +174,61 @@ bool EditorSession::isSplitHandlePoint(float x, float y) const {
     return dynamic_cast<const ayt::ui::SplitterHandle*>(hit) != nullptr;
 }
 
+namespace {
+
+void clearSplitterHoversRecursive(ayt::ui::Widget* widget)
+{
+    if (widget == nullptr) {
+        return;
+    }
+    if (auto* split = dynamic_cast<ayt::ui::SplitterHandle*>(widget)) {
+        // Prefer clearHoverReveal so we never depend on onMouseLeave
+        // side effects / override quirks for the force-unreveal path.
+        split->clearHoverReveal();
+    }
+    for (ayt::ui::Widget* child : widget->getChildren()) {
+        clearSplitterHoversRecursive(child);
+    }
+}
+
+bool pointOnSplitterRecursive(ayt::ui::Widget* widget, float x, float y)
+{
+    if (widget == nullptr || !widget->isVisible()) {
+        return false;
+    }
+    if (auto* split = dynamic_cast<ayt::ui::SplitterHandle*>(widget)) {
+        if (split->getWorldBounds().contains(ayt::math::FVector2(x, y))) {
+            return true;
+        }
+    }
+    for (ayt::ui::Widget* child : widget->getChildren()) {
+        if (pointOnSplitterRecursive(child, x, y)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+void EditorSession::clearSplitterHovers()
+{
+    clearSplitterHoversRecursive(_ui.root());
+}
+
+void EditorSession::syncSplitterRevealToMouse()
+{
+    if (!_hasLastMouse) {
+        clearSplitterHovers();
+        return;
+    }
+    // Use bounds walk (not hitTest): hitTest can prefer other widgets
+    // or miss when layout is mid-update; bounds are the reveal source of truth.
+    if (!pointOnSplitterRecursive(_ui.root(), _lastMouseX, _lastMouseY)) {
+        clearSplitterHovers();
+    }
+}
+
 bool EditorSession::isChromePoint(float x, float y) const {
     if (_gameView.mode() == EditorMode::Edit) {
         return true;
@@ -193,16 +252,28 @@ bool EditorSession::isChromePoint(float x, float y) const {
 }
 
 bool EditorSession::onMouseMove(float x, float y) {
+    _lastMouseX = x;
+    _lastMouseY = y;
+    _hasLastMouse = true;
+
     if (_ui.isCapturing()) {
+        // Still deliver moves (drag). Bounds-checked SplitterHandle::
+        // onMouseMove clears _hover when outside the band; sync in
+        // update() finishes un-reveal after mouse-up.
         return _ui.onMouseMove(x, y);
     }
 
     if (!isChromePoint(x, y)) {
         _ui.clearHover();
+        clearSplitterHovers();
         return false;
     }
 
-    return _ui.onMouseMove(x, y);
+    const bool handled = _ui.onMouseMove(x, y);
+    if (!pointOnSplitterRecursive(_ui.root(), x, y)) {
+        clearSplitterHovers();
+    }
+    return handled;
 }
 
 bool EditorSession::onMouseButtonDown(float x, float y, int button) {
@@ -232,7 +303,9 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
 }
 
 void EditorSession::onMouseLeave() {
+    _hasLastMouse = false;
     _ui.onMouseLeave();
+    clearSplitterHovers();
 }
 
 bool EditorSession::isUiHoverInteractive() const {

@@ -8,7 +8,7 @@
 #include "AYInspectorOverrides.h"
 #include "AYUIManager.h"
 
-#include "AYMathTypes.h"
+#include "aymath/MathTypes.h"
 
 #include <functional>
 #include <string>
@@ -123,6 +123,8 @@ private:
     void syncViewport();
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
+    void clearSplitterHovers();
+    void syncSplitterRevealToMouse();
 
     EditorPlayRuntime _playRuntime;
     EditorGameView _gameView;
@@ -133,6 +135,13 @@ private:
     ayt::math::FRectangle _cachedViewportBounds{};
     bool _viewportBoundsCached = false;
     bool _shutdown = false;
+
+    // Last client-space mouse position observed by onMouseMove /
+    // onMouseLeave. Used by syncSplitterRevealToMouse() so a missed
+    // leave still un-reveals splitters on the next update tick.
+    float _lastMouseX = 0.0f;
+    float _lastMouseY = 0.0f;
+    bool _hasLastMouse = false;
 
     // ED-03: staged Inspector pick state. Populated by
     // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
