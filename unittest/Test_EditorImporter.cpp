@@ -16,7 +16,7 @@
 #include "AYTest.h"
 #include "AYImporter.h"
 #include "AYImportDialog.h"
-#include "AYFile.h"
+#include "ayio/File.h"
 #include "AYPath.h"
 
 #include <cstdio>

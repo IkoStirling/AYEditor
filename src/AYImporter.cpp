@@ -29,8 +29,8 @@
 
 #include "AYImporter.h"
 
-#include <AYFile.h>
-#include <AYPath.h>
+#include <ayio/File.h>
+#include <ayio/Path.h>
 
 #include <algorithm>
 #include <cctype>

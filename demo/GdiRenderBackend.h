@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AYMathDefs.h"
+#include "aymath/MathDefs.h"
 #include "AYIRenderBackend.h"
-#include "AYMathTypes.h"
+#include "aymath/MathTypes.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
