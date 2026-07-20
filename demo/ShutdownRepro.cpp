@@ -237,6 +237,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int)
             devices.shutdown();
             return 1;
         }
+        // AI-1 (2026-07-20) — inject the backend into
+        // RenderPipeline's UIPass. The active flush boundary moved:
+        // UIPass::execute now calls backend->flushBatches() in the
+        // RenderPass dispatch path (between the host's populateFrame
+        // and flushFrame lambda calls). The lambda below is invoked
+        // twice per frame — once for Populate (widget walk that
+        // accumulates batches), once for Flush (close IRenderBackend
+        // lifecycle via session.flushFrame).
+        rendererSub->renderer().setUiBackend(&uiBackend);
         AY_EDITOR_HEAP_CHECK("after_ui_backend_init");
     }
 
@@ -248,7 +257,20 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int)
             const bool renderScene = session.shouldCompositeViewport();
             rendererSub->renderCompositeFrame(
                 renderScene, &uiBackend,
-                [&session](bool skipViewportPanel) { session.render(skipViewportPanel); });
+                [&session](bool skipViewportPanel, ayt::render::CompositeUiPhase phase) {
+                    // AI-1: dispatch on phase. The populate half runs
+                    // session.populateFrame (walks widget tree, no
+                    // flush); the flush half runs session.flushFrame
+                    // (closes IRenderBackend lifecycle). RendererSub
+                    // System::renderCompositeFrame now calls this
+                    // lambda twice per frame (see AYRendererSubSystem.cpp
+                    // :553+ for the new dispatch order).
+                    if (phase == ayt::render::CompositeUiPhase::Populate) {
+                        session.populateFrame(skipViewportPanel);
+                    } else {
+                        session.flushFrame();
+                    }
+                });
             devices.pollEvents();
         }
         AY_EDITOR_HEAP_CHECK("after_render_frames");

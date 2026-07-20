@@ -47,6 +47,15 @@ public:
     void render();
     void render(bool skipViewportPanel);
 
+    // AI-1 (2026-07-20): split render(bool) into populate + flush so
+    // AYRenderer's RenderPass dispatch can own the UI submission
+    // boundary (UIPass::execute flushes pending text). The
+    // skipViewportPanel toggle is preserved across both calls via an
+    // internal flag — populateFrame hides the viewport, flushFrame
+    // restores it. render(bool) remains as a back-compat wrapper.
+    void populateFrame(bool skipViewportPanel);
+    void flushFrame();
+
     bool shouldCompositeViewport() const;
     bool ensurePresentationReady();
     bool getViewportBounds(ayt::math::FRectangle& outBounds) const;
@@ -69,6 +78,10 @@ public:
 
 private:
     void bindToolbar();
+    void bindMenuBar();
+    void requestHostClose();
+    void requestHostMinimize();
+    void requestHostMaximizeToggle();
     // Phase 2a: toolbar Import button handler. Opens the Win32
     // file picker, runs Importer::importFile + the G1 mapper,
     // and pushes the result into EditorPlayRuntime via
@@ -132,6 +145,13 @@ private:
     HWND _hostWindow = nullptr;
     std::string _layoutPath;
     RepaintCallback _repaintCallback;
+
+    // AI-1: holds the viewport panel pointer across populateFrame +
+    // flushFrame calls so the skipViewportPanel toggle can be
+    // applied once at populate and reverted once at flush. nullptr
+    // when no toggle is active (the normal composite path).
+    ayt::ui::Widget* _panelViewportForFrame = nullptr;
+    bool            _panelViewportWasVisibleForFrame = true;
     ayt::math::FRectangle _cachedViewportBounds{};
     bool _viewportBoundsCached = false;
     bool _shutdown = false;

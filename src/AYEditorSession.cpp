@@ -5,6 +5,9 @@
 #include "AYSplitterHandle.h"
 #include "AYButton.h"
 #include "AYGameLoop.h"
+#include "AYMenuBar.h"
+#include "AYMenu.h"
+#include "AYMenuItem.h"
 #include "AYTextLabel.h"
 #include "AYWidget.h"
 
@@ -70,6 +73,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     AY_EDITOR_TRACE("initialize: layout loaded");
 
     bindToolbar();
+    bindMenuBar();
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
@@ -128,20 +132,42 @@ void EditorSession::render() {
 }
 
 void EditorSession::render(bool skipViewportPanel) {
-    ayt::ui::Widget* viewport = nullptr;
-    bool viewportWasVisible = true;
+    // Pre-AI-1 wrapper: kept for callers that want a single populate+
+    // flush call. The new AI-1 path in AYEditorApp.cpp uses
+    // populateFrame + flushFrame directly so the RenderPass dispatch
+    // can own the UI submission boundary (UIPass::execute flushes
+    // pending text batches).
+    populateFrame(skipViewportPanel);
+    flushFrame();
+}
+
+void EditorSession::populateFrame(bool skipViewportPanel) {
+    // AI-1: begin-frame the widget walk that accumulates draws on
+    // the backend's pendingRects + textBatch. No flush yet — the
+    // flush moves to UIPass::execute so the RenderPass dispatch owns
+    // the UI submission boundary. flushFrame() closes the lifecycle.
+    _panelViewportForFrame = nullptr;
     if (skipViewportPanel) {
-        viewport = _ui.findById("panel_viewport");
+        ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
         if (viewport != nullptr) {
-            viewportWasVisible = viewport->isVisible();
+            _panelViewportWasVisibleForFrame = viewport->isVisible();
             viewport->setVisible(false);
+            _panelViewportForFrame = viewport;
         }
     }
 
-    _ui.render();
+    _ui.populateFrame();
+}
 
-    if (viewport != nullptr) {
-        viewport->setVisible(viewportWasVisible);
+void EditorSession::flushFrame() {
+    // AI-1: close the IRenderBackend lifecycle (endCanvas + endFrame).
+    // endFrame() inside the backend flushes pendingRects via
+    // flushColoredRects() + any remaining text via flushPendingText().
+    _ui.flushFrame();
+
+    if (_panelViewportForFrame != nullptr) {
+        _panelViewportForFrame->setVisible(_panelViewportWasVisibleForFrame);
+        _panelViewportForFrame = nullptr;
     }
 }
 
@@ -242,6 +268,21 @@ bool EditorSession::isChromePoint(float x, float y) const {
         return true;
     }
 
+    // Open menus / combo popups live on the overlay and often extend into
+    // panel_viewport. In Play/Paused those points must still reach UIManager
+    // or dropdown items over the cube receive no hits.
+    if (ayt::ui::Widget* overlay = _ui.getOverlayRoot()) {
+        const ayt::math::FVector2 pos(x, y);
+        for (ayt::ui::Widget* child : overlay->getChildren()) {
+            if (child == nullptr || !child->isVisible()) {
+                continue;
+            }
+            if (child->getWorldBounds().contains(pos)) {
+                return true;
+            }
+        }
+    }
+
     ayt::math::FRectangle viewport{};
     if (!getViewportBounds(viewport)) {
         return true;
@@ -330,27 +371,17 @@ void EditorSession::bindToolbar() {
         }
     };
 
-    bindButton("btn_play", [this]() { _gameView.setMode(EditorMode::Play); });
-    bindButton("btn_pause", [this]() { _gameView.setMode(EditorMode::Paused); });
-    bindButton("btn_stop", [this]() { _gameView.setMode(EditorMode::Edit); });
-    bindButton("btn_step", [this]() {
-        _gameView.stepOnce();
-        if (_repaintCallback) {
-            _repaintCallback();
-        }
-    });
-    // Phase 2a: toolbar Import button. Opens the Win32 file
-    // picker, runs the same ImportDialog::importFromPath +
-    // mapConversionToImportedCharacter pipeline that G2 wired
-    // for the --import argv path, then hands the result to
-    // EditorPlayRuntime::replaceImportedCharacter for live swap.
-    bindButton("btn_import", [this]() { importCharacterFromDialog(); });
-    // ED-03: Select button. Snapshots the live character's
-    // paths into the inspector labels; idempotent.
-    bindButton("btn_select", [this]() { selectCharacter(); });
+    // Icon toolbar placeholders (visual chrome only for now).
+    bindButton("btn_icon_1", []() {});
+    bindButton("btn_icon_2", []() {});
 
-    // ED-03: Inspector body buttons. Each is a one-line
-    // lambda that delegates to the matching private handler.
+    // Custom title-bar chrome (OS caption still present — these mirror
+    // common actions; host drag/borderless is not wired yet).
+    bindButton("btn_minimize", [this]() { requestHostMinimize(); });
+    bindButton("btn_maximize", [this]() { requestHostMaximizeToggle(); });
+    bindButton("btn_close", [this]() { requestHostClose(); });
+
+    // ED-03: Inspector body buttons.
     bindButton("btn_inspector_skel",  [this]() { pickInspectorSkeleton(); });
     bindButton("btn_inspector_anim",  [this]() { pickInspectorAnimation(); });
     bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
@@ -360,6 +391,86 @@ void EditorSession::bindToolbar() {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.10f, 0.11f, 1.0f));
         }
+    }
+}
+
+void EditorSession::bindMenuBar() {
+    auto* widget = _ui.findById("menubar");
+    auto* menuBar = dynamic_cast<ayt::ui::MenuBar*>(widget);
+    if (menuBar == nullptr) {
+        return;
+    }
+
+    ayt::ui::Menu* fileMenu = menuBar->addMenu(L"File");
+    if (fileMenu != nullptr) {
+        if (auto* item = fileMenu->addItem(L"New")) {
+            item->setOnActivate([]() {});
+        }
+        if (auto* item = fileMenu->addItem(L"Open...")) {
+            item->setOnActivate([]() {});
+        }
+        if (auto* item = fileMenu->addItem(L"Import...")) {
+            item->setOnActivate([this]() { importCharacterFromDialog(); });
+        }
+        fileMenu->addSeparator();
+        if (auto* item = fileMenu->addItem(L"Exit")) {
+            item->setOnActivate([this]() { requestHostClose(); });
+        }
+    }
+
+    ayt::ui::Menu* viewMenu = menuBar->addMenu(L"View");
+    if (viewMenu != nullptr) {
+        if (auto* item = viewMenu->addItem(L"Play")) {
+            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Play); });
+        }
+        if (auto* item = viewMenu->addItem(L"Pause")) {
+            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Paused); });
+        }
+        if (auto* item = viewMenu->addItem(L"Step")) {
+            item->setOnActivate([this]() {
+                _gameView.stepOnce();
+                if (_repaintCallback) {
+                    _repaintCallback();
+                }
+            });
+        }
+        if (auto* item = viewMenu->addItem(L"Stop")) {
+            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Edit); });
+        }
+        viewMenu->addSeparator();
+        if (auto* item = viewMenu->addItem(L"Select Character")) {
+            item->setOnActivate([this]() { selectCharacter(); });
+        }
+    }
+
+    ayt::ui::Menu* helpMenu = menuBar->addMenu(L"Help");
+    if (helpMenu != nullptr) {
+        if (auto* item = helpMenu->addItem(L"About AYEditor")) {
+            item->setOnActivate([]() {});
+        }
+    }
+}
+
+void EditorSession::requestHostClose() {
+    if (_hostWindow != nullptr) {
+        ::PostMessageW(_hostWindow, WM_CLOSE, 0, 0);
+    }
+}
+
+void EditorSession::requestHostMinimize() {
+    if (_hostWindow != nullptr) {
+        ::ShowWindow(_hostWindow, SW_MINIMIZE);
+    }
+}
+
+void EditorSession::requestHostMaximizeToggle() {
+    if (_hostWindow == nullptr) {
+        return;
+    }
+    if (::IsZoomed(_hostWindow)) {
+        ::ShowWindow(_hostWindow, SW_RESTORE);
+    } else {
+        ::ShowWindow(_hostWindow, SW_MAXIMIZE);
     }
 }
 

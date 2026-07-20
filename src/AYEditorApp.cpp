@@ -14,6 +14,8 @@
 #include "AYSubSystemRegistry.h"
 #include "AYUIRenderBackend.h"
 
+#include <ayevent/EventBus.h>
+
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -265,6 +267,11 @@ ayt::game::GameLoop& EditorApp::getGameLoop()
     return ayt::game::GameLoop::instance();
 }
 
+ayt::event::EventBus& EditorApp::eventBus()
+{
+    return ayt::event::EventBus::instance();
+}
+
 void EditorApp::registerSubSystems()
 {
     // Entity ECS + render systems (no RendererSubSystem — that lives in
@@ -456,6 +463,14 @@ void EditorApp::run()
         _devices->shutdown();
         return;
     }
+    // AI-1 (2026-07-20) — inject the backend into RenderPipeline's
+    // UIPass so the RenderPass dispatch can call backend->flushBatches
+    // inside UIPass::execute. The dispatch order in
+    // RendererSubSystem::renderCompositeFrame is now:
+    //   uiPass(Populate) → renderScenePass (incl UIPass.flush) →
+    //   uiPass(Flush). This replaces the pre-AI-1 path where the
+    //   flush lived entirely in the host lambda.
+    rendererSub->renderer().setUiBackend(uiBackend.get());
     AY_EDITOR_HEAP_CHECK("after_full_init");
 
     bool running = true;
@@ -479,6 +494,12 @@ void EditorApp::run()
         std::getenv("AY_EDITOR_FRAME_TIMING") != nullptr;
     uint64_t frameIndex = 0;
     double compositeMs = 0.0;
+    // uiPassMs measures the host-side lambda that drives
+    // UIManager::populateFrame + UIManager::flushFrame around the
+    // RenderPass dispatch. AI-1 splits the lambda into two phases
+    // so UIPass::execute can flush pending text in between; this
+    // timer therefore accumulates the populate + flush cost
+    // end-to-end (both halves happen via this lambda).
     double uiPassMs = 0.0;
     while (running && window.isWindowValid()) {
         const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
@@ -501,15 +522,35 @@ void EditorApp::run()
             // the outer diag.
             rendererSub->renderCompositeFrame(
                 renderScene, uiBackend.get(),
-                [&session, frameTiming, &uiPassMs](bool skipViewportPanel) {
+                [&session, frameTiming, &uiPassMs](
+                    bool skipViewportPanel, ayt::render::CompositeUiPhase phase) {
+                    // AI-1 (2026-07-20): phase-aware dispatch. The
+                    // lambda is now called TWICE per frame — once
+                    // with Populate (before Renderer::render, so the
+                    // widget walk accumulates batches that
+                    // UIPass::execute will flush), once with Flush
+                    // (after Renderer::render, to close the
+                    // IRenderBackend lifecycle). The skipViewportPanel
+                    // toggle is applied once at populate and
+                    // reverted once at flush; the old single-call
+                    // session.render(skipViewportPanel) is preserved
+                    // by EditorSession::render(bool) for back-compat.
                     if (frameTiming) {
                         const auto tU0 = Clock::now();
-                        session.render(skipViewportPanel);
+                        if (phase == ayt::render::CompositeUiPhase::Populate) {
+                            session.populateFrame(skipViewportPanel);
+                        } else {
+                            session.flushFrame();
+                        }
                         const auto tU1 = Clock::now();
-                        uiPassMs = std::chrono::duration<double, std::milli>(
+                        uiPassMs += std::chrono::duration<double, std::milli>(
                             tU1 - tU0).count();
                     } else {
-                        session.render(skipViewportPanel);
+                        if (phase == ayt::render::CompositeUiPhase::Populate) {
+                            session.populateFrame(skipViewportPanel);
+                        } else {
+                            session.flushFrame();
+                        }
                     }
                 });
             const auto tRenderEnd = frameTiming ? Clock::now() : Clock::time_point{};
