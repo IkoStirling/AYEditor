@@ -29,7 +29,7 @@ TEST_CASE(test_editor_shell_layout_ids) {
     MockRenderer backend;
     UIManager ui;
     ui.initialize(&backend);
-    ui.bindEvent("btn_play", "onClick", []() {});
+    ui.bindEvent("btn_icon_1", "onClick", []() {});
 
     const char* json = R"({
         "type": "VBox",
@@ -38,10 +38,19 @@ TEST_CASE(test_editor_shell_layout_ids) {
         "children": [
             {
                 "type": "HBox",
-                "id": "toolbar",
-                "size": { "h": 40 },
+                "id": "menubar_row",
+                "size": { "h": 26 },
                 "children": [
-                    { "type": "Button", "id": "btn_play", "text": "Play", "onClick": "play" },
+                    { "type": "MenuBar", "id": "menubar", "size": { "w": 200, "h": 26 } },
+                    { "type": "Button", "id": "btn_close", "text": "X" }
+                ]
+            },
+            {
+                "type": "HBox",
+                "id": "icon_toolbar",
+                "size": { "h": 28 },
+                "children": [
+                    { "type": "Button", "id": "btn_icon_1", "text": "T1" },
                     { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT" }
                 ]
             }
@@ -49,7 +58,8 @@ TEST_CASE(test_editor_shell_layout_ids) {
     })";
 
     CHECK(ui.loadFromString(json));
-    CHECK(ui.findById("btn_play") != nullptr);
+    CHECK(ui.findById("menubar") != nullptr);
+    CHECK(ui.findById("btn_icon_1") != nullptr);
     CHECK(ui.findById("lbl_mode") != nullptr);
     ui.shutdown();
 }
@@ -75,7 +85,10 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     MockRenderer backend;
     EditorSession session;
     CHECK(session.initialize(&backend, layoutPath));
-    CHECK(session.ui().findById("btn_play") != nullptr);
+    CHECK(session.ui().findById("menubar") != nullptr);
+    CHECK(session.ui().findById("app_logo") != nullptr);
+    CHECK(session.ui().findById("btn_icon_1") != nullptr);
+    CHECK(session.ui().findById("btn_close") != nullptr);
     CHECK(session.ui().findById("panel_viewport") != nullptr);
     CHECK(session.ui().findById("panel_inspector") != nullptr);
     session.shutdown();

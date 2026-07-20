@@ -12,6 +12,10 @@ class DeviceManager;
 class DeviceInputProvider;
 } // namespace ayt::device
 
+namespace ayt::event {
+class EventBus;
+} // namespace ayt::event
+
 namespace ayt::editor {
 
 class EditorApp : public ayt::app::IApplication {
@@ -30,6 +34,7 @@ public:
     const ayt::app::GameDesc& getDesc() const override { return _desc; }
     ayt::game::GameLoop& getGameLoop() override;
     const ayt::app::AppCommandLine& getCommandLine() const override { return _cmdLine; }
+    ayt::event::EventBus& eventBus() override;
 
     const char* getVersion() const override { return "0.3.0"; }
     const char* getEngineVersion() const override { return "1.0.0"; }
