@@ -262,6 +262,15 @@ bool EditorPlayRuntime::ensureAssets() {
         ensureGlassMaterialAlpha();
     }
 
+    // Sky equirect: seed every ensureAssets so Deferred Play finds it
+    // even when the rest of the cache was already marked ready (cwd
+    // relative lookup from the exe dir fails otherwise).
+    if (!seedSkyBoxPng()) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] skyBox.png seed skipped "
+            "(source not found under AYRenderer/demo or AliyatRenderer)\n");
+    }
+
     if (_assetsReady) {
         return true;
     }
@@ -403,6 +412,84 @@ bool EditorPlayRuntime::seedPlayerControllerLogia() {
     return writeText(destPath, contents);
 }
 
+bool EditorPlayRuntime::seedSkyBoxPng() {
+    const std::string destPath = _assetRoot + "skyBox.png";
+    if (fileExists(destPath)) {
+        return true;
+    }
+
+    // Prefer exe-relative walks: Demo cwd is often the build tree, not
+    // the repo root, so plain "AYRuntime\\..." relative paths miss.
+    std::vector<std::string> candidates;
+    char modulePath[MAX_PATH] = {};
+    const DWORD len = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        std::string exeDir(modulePath, modulePath + len);
+        const size_t slash = exeDir.find_last_of("\\/");
+        if (slash != std::string::npos) {
+            exeDir.resize(slash + 1);
+        }
+        // From .../out/build/x64-Debug/AYRuntime/AYEditor/ walk up to
+        // Projects/ then into AYRenderer demo + AliyatRenderer textures.
+        std::string walk = exeDir;
+        for (int up = 0; up < 8; ++up) {
+            candidates.push_back(walk + "AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png");
+            candidates.push_back(walk + "AYRenderer\\demo\\assets\\skyBox.png");
+            candidates.push_back(walk + "AliyatRenderer\\assets\\core\\textures\\skyBox.png");
+            candidates.push_back(walk + "assets\\core\\textures\\skyBox.png");
+            if (walk.size() < 2) {
+                break;
+            }
+            const size_t cut = walk.find_last_of("\\/", walk.size() - 2);
+            if (cut == std::string::npos) {
+                break;
+            }
+            walk.resize(cut + 1);
+        }
+    }
+
+    static const char* kCwdCandidates[] = {
+        "AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
+        "..\\..\\..\\..\\AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
+        "..\\..\\..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+        "AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+    };
+    for (const char* c : kCwdCandidates) {
+        candidates.emplace_back(c);
+    }
+
+    std::string sourcePath;
+    for (const std::string& c : candidates) {
+        if (fileExists(c)) {
+            sourcePath = c;
+            break;
+        }
+    }
+    if (sourcePath.empty()) {
+        return false;
+    }
+
+    ayt::io::File src(sourcePath, ayt::io::File::Mode::BinaryRead);
+    if (!src.isOpen()) {
+        return false;
+    }
+    std::string bytes;
+    bytes.resize(static_cast<size_t>(src.size()));
+    if (bytes.empty()) {
+        return false;
+    }
+    if (src.read(bytes.data(), bytes.size()) != static_cast<int64_t>(bytes.size())) {
+        return false;
+    }
+    const bool ok = writeBytes(destPath, bytes.data(), bytes.size());
+    if (ok) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] skyBox.png seeded from %s → %s\n",
+            sourcePath.c_str(), destPath.c_str());
+    }
+    return ok;
+}
+
 bool EditorPlayRuntime::ensurePresentationReady()
 {
     if (_presentationReady) {
@@ -492,38 +579,15 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         rendererSub->renderer().setSceneLights(&lights);
         rendererSub->renderer().setDirectionalLight(keyDir, keyColor);
 
-        // §Skybox0 — equirect from AliyatRenderer skyBox.png (seeded
-        // into demo/assets + cache). makeDeferred already mounts
-        // SkyboxPass; without setSkySource the pass early-returns 0.
+        // §Skybox0 — equirect from cached skyBox.png (seeded from
+        // AYRenderer/demo or AliyatRenderer). makeDeferred already
+        // mounts SkyboxPass; without setSkySource the pass returns 0.
         if (!_skySourceStorage) {
             _skySourceStorage = std::make_unique<SkySourceStorage>();
         }
-        static const char* kSkyCandidates[] = {
-            "AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
-            "..\\AYRenderer\\demo\\assets\\skyBox.png",
-            "..\\..\\AYRenderer\\demo\\assets\\skyBox.png",
-            "..\\..\\..\\AYRenderer\\demo\\assets\\skyBox.png",
-            "..\\..\\..\\..\\AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
-            "AliyatRenderer\\assets\\core\\textures\\skyBox.png",
-            "..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
-            "..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
-            "..\\..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
-            "..\\..\\..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
-        };
-        std::string skyPath;
-        for (const char* c : kSkyCandidates) {
-            if (fileExists(c)) {
-                skyPath = c;
-                break;
-            }
-        }
-        if (skyPath.empty() && !_assetRoot.empty()) {
-            const std::string cached = _assetRoot + "skyBox.png";
-            if (fileExists(cached)) {
-                skyPath = cached;
-            }
-        }
-        if (!skyPath.empty()) {
+        (void)seedSkyBoxPng();
+        const std::string skyPath = _assetRoot + "skyBox.png";
+        if (fileExists(skyPath)) {
             const ayt::render::TextureHandle skyTex =
                 rendererSub->renderer().loadTexture(skyPath);
             if (skyTex.isValid()) {
@@ -542,7 +606,7 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         } else {
             rendererSub->renderer().setSkySource(nullptr);
             std::fprintf(stderr,
-                "[EditorPlayRuntime] Skybox skipped (skyBox.png not found)\n");
+                "[EditorPlayRuntime] Skybox skipped (skyBox.png not found after seed)\n");
         }
     } else {
         rendererSub->renderer().configurePipeline(

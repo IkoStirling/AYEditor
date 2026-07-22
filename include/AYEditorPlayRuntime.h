@@ -132,6 +132,9 @@ private:
     bool bindPlayerScript();
     void clearPlayerController() noexcept;
     bool seedPlayerControllerLogia();
+    // §Skybox0 — copy equirect PNG into <assetRoot>/skyBox.png so
+    // Deferred setSkySource works regardless of process cwd.
+    bool seedSkyBoxPng();
 
 
     HWND _hostWindow = nullptr;
