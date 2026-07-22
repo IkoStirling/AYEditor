@@ -4,6 +4,7 @@
 #include "aymath/MathTypes.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 struct HWND__;
@@ -112,7 +113,10 @@ private:
     void applyEditorRenderPipeline();
     void spawnCubeIfNeeded();
     void spawnGroundIfNeeded();
+    void spawnGlassIfNeeded();
     void clearGround() noexcept;
+    void clearGlass() noexcept;
+    void ensureGlassMaterialAlpha();
     void registerUpdateListener();
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
@@ -148,14 +152,31 @@ private:
     std::string _materialPath;
     std::string _groundMeshPath;
     std::string _groundMaterialPath;
+    std::string _glassMeshPath;
+    std::string _glassMaterialPath;
 
     ImportedCharacter _importedCharacter;
     ayt::entity::Entity* _cubeEntity = nullptr;
     ayt::entity::Entity* _groundEntity = nullptr;
+    ayt::entity::Entity* _glassEntity = nullptr;
     ayt::entity::Entity* _characterEntity = nullptr;
     ayt::entity::Entity* _playerEntity = nullptr;
     bool _playerScriptBound = false;
     uint64_t _updateListenerId = 0;
+
+    // B7+ multi-light storage lives in the .cpp (unique_ptr to a
+    // complete type defined there) so this header does not pull
+    // AYRenderScene into every Editor TU and does not inflate
+    // sizeof(EditorPlayRuntime) — a stale AYEditorApp.obj with the
+    // old size immediately AVs in initialize() string assigns.
+    // Cleared via setSceneLights(nullptr) in shutdownEngine.
+    struct SceneLightsStorage;
+    std::unique_ptr<SceneLightsStorage> _sceneLightsStorage;
+    // §Skybox0 — host-owned equirect SkySource (Deferred only).
+    // TextureHandle lives on Renderer; SkySource POD must outlive
+    // render() while setSkySource(&sky) is active.
+    struct SkySourceStorage;
+    std::unique_ptr<SkySourceStorage> _skySourceStorage;
 
     // ED-03: pending Inspector overrides. Populated by
     // applyComponentOverrides when no character is currently

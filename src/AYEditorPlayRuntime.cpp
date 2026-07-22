@@ -5,6 +5,7 @@
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYRendererSubSystem.h"
+#include "AYRenderScene.h"
 #include "AYScriptSubSystem.h"
 #include "AYShadercDriver.h"
 #include "AYShadowConfig.h"
@@ -26,6 +27,8 @@
 #include <logia/AYCompilerError.h>
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -125,6 +128,14 @@ std::string resolveExistingPath(const char* hint, const char* const* fallbacks, 
 
 } // namespace
 
+struct ayt::editor::EditorPlayRuntime::SceneLightsStorage {
+    ayt::render::SceneLights lights;
+};
+
+struct ayt::editor::EditorPlayRuntime::SkySourceStorage {
+    ayt::render::SkySource sky;
+};
+
 EditorPlayRuntime::EditorPlayRuntime() = default;
 
 EditorPlayRuntime::~EditorPlayRuntime()
@@ -199,6 +210,8 @@ bool EditorPlayRuntime::ensureAssets() {
     _materialPath         = _assetRoot + "cube_shadow.aymat";
     _groundMeshPath       = _assetRoot + "cube.aymesh";
     _groundMaterialPath   = _assetRoot + "ground_shadow.aymat";
+    _glassMeshPath        = _assetRoot + "cube.aymesh";
+    _glassMaterialPath    = _assetRoot + "glass_shadow.aymat";
 
     if (!ensureAssetDirectory(_cacheRoot) || !ensureAssetDirectory(_assetRoot)) {
         return false;
@@ -232,6 +245,21 @@ bool EditorPlayRuntime::ensureAssets() {
                          reloaded,
                          shadowShaderPath.c_str());
         }
+    }
+
+    // Refresh glass .aymat every ensureAssets so Alpha acceptance sticks
+    // even when the rest of the cache was already marked ready.
+    {
+        const ayt::resource::Float32 glassColor[4] = {0.25f, 0.90f, 1.0f, 0.45f};
+        ayt::resource::Material material;
+        material.setShader("simple_lit_shadow.phoskia");
+        material.setFloat4("baseColor", glassColor);
+        material.setTexture("albedoMap", "cube_albedo.aytex");
+        std::vector<ayt::resource::UInt8> matBinary;
+        if (material.saveToBinary(matBinary)) {
+            writeBytes(_glassMaterialPath, matBinary.data(), matBinary.size());
+        }
+        ensureGlassMaterialAlpha();
     }
 
     if (_assetsReady) {
@@ -291,13 +319,18 @@ bool EditorPlayRuntime::ensureAssets() {
 
     const ayt::resource::Float32 cubeColor[4]   = {1.0f, 0.45f, 0.12f, 1.0f};
     const ayt::resource::Float32 groundColor[4] = {0.55f, 0.58f, 0.62f, 1.0f};
+    // Cyan glass: a=0.35 so TransparentPass alpha blend is visible over
+    // the opaque cube / ground (shader returns albedo.a).
+    const ayt::resource::Float32 glassColor[4]  = {0.25f, 0.90f, 1.0f, 0.45f};
     // Both receive shadows; cube also casts via ShadowPass (all meshes).
     // baseColor carries chroma so a missing/wrong albedo sampler still
     // shows tint instead of R32F-depth grayscale.
     if (!bakeMaterial(_materialPath, "simple_lit_shadow.phoskia", cubeColor,
                       "cube_albedo.aytex") ||
         !bakeMaterial(_groundMaterialPath, "simple_lit_shadow.phoskia", groundColor,
-                      "ground_albedo.aytex")) {
+                      "ground_albedo.aytex") ||
+        !bakeMaterial(_glassMaterialPath, "simple_lit_shadow.phoskia", glassColor,
+                      "cube_albedo.aytex")) {
         return false;
     }
 
@@ -421,13 +454,125 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
     if (rendererSub == nullptr || !rendererSub->isReady()) {
         return;
     }
-    // Ordered pass list — swap / insert slots here later (GBuffer,
-    // deferred lighting, etc.) without rewriting Editor spawn logic.
-    rendererSub->renderer().configurePipeline(
-        ayt::render::RenderPipelineDesc::makeForwardWithShadows());
+    // B6 Editor host: default stays Forward+Shadows (zero visual
+    // regression). Deferred is opt-in via AY_DEFERRED=1 — same scene
+    // / 1 directional light should match Forward (parity acceptance).
+    const char* deferredEnv = std::getenv("AY_DEFERRED");
+    const bool useDeferred =
+        deferredEnv != nullptr && deferredEnv[0] != '\0' &&
+        std::strcmp(deferredEnv, "0") != 0;
+
+    if (useDeferred) {
+        rendererSub->renderer().configurePipeline(
+            ayt::render::RenderPipelineDesc::makeDeferred());
+        // §P5.5 A — multi-light DataSource (host-owned). LightingPass
+        // borrows the pointer each frame. Light[0] is the key that
+        // shares ShadowPass (must match setDirectionalLight / shadow
+        // matrix lightDirection). Fill/rim stay unshadowed.
+        if (!_sceneLightsStorage) {
+            _sceneLightsStorage = std::make_unique<SceneLightsStorage>();
+        }
+        ayt::render::SceneLights& lights = _sceneLightsStorage->lights;
+        lights.count = 0;
+
+        // Key — warm sun; matches ShadowPass / setDirectionalLight.
+        const ayt::math::FVector3 keyDir(0.35f, -0.85f, -0.40f);
+        const ayt::math::FVector3 keyColor(1.35f, 1.28f, 1.15f);
+        lights.add(ayt::render::Light::directional(keyDir, keyColor));
+
+        // Fill / rim stay dim vs key so key-only shadow stays readable.
+        // (Strong unshadowed fill washes the umbra and reads as "cyan flashes".)
+        lights.add(ayt::render::Light::directional(
+            ayt::math::FVector3(-0.60f, -0.30f, 0.50f),
+            ayt::math::FVector3(0.18f, 0.32f, 0.55f)));
+        lights.add(ayt::render::Light::directional(
+            ayt::math::FVector3(0.10f, -0.20f, -0.90f),
+            ayt::math::FVector3(0.45f, 0.22f, 0.12f)));
+
+        rendererSub->renderer().setSceneLights(&lights);
+        rendererSub->renderer().setDirectionalLight(keyDir, keyColor);
+
+        // §Skybox0 — equirect from AliyatRenderer skyBox.png (seeded
+        // into demo/assets + cache). makeDeferred already mounts
+        // SkyboxPass; without setSkySource the pass early-returns 0.
+        if (!_skySourceStorage) {
+            _skySourceStorage = std::make_unique<SkySourceStorage>();
+        }
+        static const char* kSkyCandidates[] = {
+            "AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
+            "..\\AYRenderer\\demo\\assets\\skyBox.png",
+            "..\\..\\AYRenderer\\demo\\assets\\skyBox.png",
+            "..\\..\\..\\AYRenderer\\demo\\assets\\skyBox.png",
+            "..\\..\\..\\..\\AYRuntime\\AYRenderer\\demo\\assets\\skyBox.png",
+            "AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+            "..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+            "..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+            "..\\..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+            "..\\..\\..\\..\\AliyatRenderer\\assets\\core\\textures\\skyBox.png",
+        };
+        std::string skyPath;
+        for (const char* c : kSkyCandidates) {
+            if (fileExists(c)) {
+                skyPath = c;
+                break;
+            }
+        }
+        if (skyPath.empty() && !_assetRoot.empty()) {
+            const std::string cached = _assetRoot + "skyBox.png";
+            if (fileExists(cached)) {
+                skyPath = cached;
+            }
+        }
+        if (!skyPath.empty()) {
+            const ayt::render::TextureHandle skyTex =
+                rendererSub->renderer().loadTexture(skyPath);
+            if (skyTex.isValid()) {
+                _skySourceStorage->sky.kind = ayt::render::SkySourceKind::Equirect;
+                _skySourceStorage->sky.equirect = skyTex;
+                rendererSub->renderer().setSkySource(&_skySourceStorage->sky);
+                std::fprintf(stderr,
+                    "[EditorPlayRuntime] Skybox equirect loaded: %s\n",
+                    skyPath.c_str());
+            } else {
+                rendererSub->renderer().setSkySource(nullptr);
+                std::fprintf(stderr,
+                    "[EditorPlayRuntime] Skybox load failed: %s\n",
+                    skyPath.c_str());
+            }
+        } else {
+            rendererSub->renderer().setSkySource(nullptr);
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] Skybox skipped (skyBox.png not found)\n");
+        }
+    } else {
+        rendererSub->renderer().configurePipeline(
+            ayt::render::RenderPipelineDesc::makeForwardWithShadows());
+        rendererSub->renderer().setSceneLights(nullptr);
+        rendererSub->renderer().setSkySource(nullptr);
+        _sceneLightsStorage.reset();
+        _skySourceStorage.reset();
+    }
+    // PostProcess: display gamma encode (ripple removed).
+    rendererSub->renderer().setPostProcessGamma(2.2f);
+    rendererSub->renderer().setPostProcessExposure(1.0f);
+    ensureGlassMaterialAlpha();
     _pipelineConfigured = true;
-    std::fprintf(stderr,
-        "[EditorPlayRuntime] render pipeline: Shadow → FO → Transparent → PP → UI\n");
+    if (useDeferred) {
+        const unsigned n = _sceneLightsStorage
+                               ? static_cast<unsigned>(_sceneLightsStorage->lights.count)
+                               : 0u;
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] render pipeline: Deferred "
+            "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP → UI) "
+            "via AY_DEFERRED=%s; P5.5 sceneLights=%u "
+            "(key+fill+rim directional; key-only shadow)\n",
+            deferredEnv, n);
+    } else {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] render pipeline: Forward "
+            "(Shadow → FO → Transparent → PP → UI); "
+            "set AY_DEFERRED=1 for Deferred + multi-light\n");
+    }
 }
 
 void EditorPlayRuntime::syncRendererBootstrap()
@@ -579,6 +724,53 @@ void EditorPlayRuntime::spawnGroundIfNeeded() {
     mesh->receiveShadow   = true;
 }
 
+void EditorPlayRuntime::spawnGlassIfNeeded() {
+    if (_glassEntity != nullptr) {
+        return;
+    }
+
+    _glassEntity = ayt::entity::World::instance().createEntity();
+    if (_glassEntity == nullptr) {
+        return;
+    }
+
+    auto* transform = _glassEntity->addComponent<ayt::entity::Transform>();
+    // In front of the orange cube toward the default camera (4,3,5).
+    transform->position = ayt::math::FVector3(1.4f, 1.0f, 1.2f);
+    transform->scale    = ayt::math::FVector3(1.1f, 1.1f, 1.1f);
+
+    auto* mesh = _glassEntity->addComponent<ayt::entity::MeshComponent>();
+    mesh->meshPath        = _glassMeshPath;
+    mesh->materialPath    = _glassMaterialPath;
+    mesh->castShadow      = false;
+    mesh->receiveShadow   = true;
+    mesh->alphaBlend      = true;
+
+    ensureGlassMaterialAlpha();
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] spawn glass (Transparent Alpha) pos=(%.2f, %.2f, %.2f) mat=%s\n",
+        transform->position.x, transform->position.y, transform->position.z,
+        _glassMaterialPath.c_str());
+}
+
+void EditorPlayRuntime::ensureGlassMaterialAlpha()
+{
+    if (_glassMaterialPath.empty()) {
+        return;
+    }
+    auto* rendererSub = ayt::render::RendererSubSystem::findRegistered();
+    if (rendererSub == nullptr || !rendererSub->isReady()) {
+        return;
+    }
+    const ayt::render::MaterialHandle mat =
+        rendererSub->renderer().loadMaterial(_glassMaterialPath);
+    if (!mat.isValid()) {
+        return;
+    }
+    rendererSub->renderer().setMaterialBlendMode(
+        mat, ayt::render::BlendMode::Alpha);
+}
+
 void EditorPlayRuntime::clearCube() noexcept {
     if (_cubeEntity != nullptr) {
         ayt::entity::World::instance().destroyEntity(_cubeEntity);
@@ -590,6 +782,13 @@ void EditorPlayRuntime::clearGround() noexcept {
     if (_groundEntity != nullptr) {
         ayt::entity::World::instance().destroyEntity(_groundEntity);
         _groundEntity = nullptr;
+    }
+}
+
+void EditorPlayRuntime::clearGlass() noexcept {
+    if (_glassEntity != nullptr) {
+        ayt::entity::World::instance().destroyEntity(_glassEntity);
+        _glassEntity = nullptr;
     }
 }
 
@@ -756,6 +955,7 @@ bool EditorPlayRuntime::startPlay()
         spawnCubeIfNeeded();
     }
     spawnGroundIfNeeded();
+    spawnGlassIfNeeded();
 
     // INT-01 (2026-07-15): spawn a PlayerController ScriptComponent
     // and bind <assetRoot>/Scripts/PlayerController.logia. The hot
@@ -777,6 +977,7 @@ void EditorPlayRuntime::enterEdit()
     clearCharacter();
     clearCube();
     clearGround();
+    clearGlass();
     clearPlayerController();
     _simulationActive = false;
 }
@@ -787,6 +988,16 @@ void EditorPlayRuntime::shutdownEngine()
         return;
     }
     _engineShutdown = true;
+
+    // Drop borrowed SceneLights / SkySource pointers before tearing
+    // down Play / destroying this object — Renderer::Impl keeps raw
+    // pointers.
+    if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
+        rendererSub->renderer().setSceneLights(nullptr);
+        rendererSub->renderer().setSkySource(nullptr);
+    }
+    _sceneLightsStorage.reset();
+    _skySourceStorage.reset();
 
     enterEdit();
 
