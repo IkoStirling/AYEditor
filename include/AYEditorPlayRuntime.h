@@ -109,7 +109,10 @@ private:
     bool ensureAssets();
     bool ensureEngineInitialized();
     void syncRendererBootstrap();
+    void applyEditorRenderPipeline();
     void spawnCubeIfNeeded();
+    void spawnGroundIfNeeded();
+    void clearGround() noexcept;
     void registerUpdateListener();
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
@@ -137,14 +140,18 @@ private:
     bool _engineShutdown = false;
     bool _simulationActive = false;
     bool _assetsReady = false;
+    bool _pipelineConfigured = false;
 
     std::string _cacheRoot;
     std::string _assetRoot;
     std::string _meshPath;
     std::string _materialPath;
+    std::string _groundMeshPath;
+    std::string _groundMaterialPath;
 
     ImportedCharacter _importedCharacter;
     ayt::entity::Entity* _cubeEntity = nullptr;
+    ayt::entity::Entity* _groundEntity = nullptr;
     ayt::entity::Entity* _characterEntity = nullptr;
     ayt::entity::Entity* _playerEntity = nullptr;
     bool _playerScriptBound = false;

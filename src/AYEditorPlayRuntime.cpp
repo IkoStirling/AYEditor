@@ -7,6 +7,7 @@
 #include "AYRendererSubSystem.h"
 #include "AYScriptSubSystem.h"
 #include "AYShadercDriver.h"
+#include "AYShadowConfig.h"
 
 #include <components/AYAnimationComponent.h>  // ED-03 override target
 #include <components/AYMeshComponent.h>
@@ -20,6 +21,7 @@
 #include "assetsImpl/AYTexture.h"
 
 #include "ayio/File.h"
+#include "aymath/MathTransform.h"
 
 #include <logia/AYCompilerError.h>
 
@@ -191,25 +193,52 @@ void EditorPlayRuntime::setImportedCharacter(const ImportedCharacter& character)
 }
 
 bool EditorPlayRuntime::ensureAssets() {
-    if (_assetsReady) {
-        return true;
-    }
-
     _cacheRoot = resolvePersistentCacheRoot();
     _assetRoot = _cacheRoot + "assets\\";
-    _meshPath     = _assetRoot + "cube.aymesh";
-    _materialPath = _assetRoot + "cube.aymat";
+    _meshPath             = _assetRoot + "cube.aymesh";
+    _materialPath         = _assetRoot + "cube_shadow.aymat";
+    _groundMeshPath       = _assetRoot + "cube.aymesh";
+    _groundMaterialPath   = _assetRoot + "ground_shadow.aymat";
 
     if (!ensureAssetDirectory(_cacheRoot) || !ensureAssetDirectory(_assetRoot)) {
         return false;
     }
 
-    const std::string shaderPath  = _assetRoot + "simple_lit.phoskia";
-    const std::string texturePath = _assetRoot + "albedo.aytex";
+    const std::string shaderPath       = _assetRoot + "simple_lit.phoskia";
+    const std::string shadowShaderPath = _assetRoot + "simple_lit_shadow.phoskia";
 
-    if (!fileExists(shaderPath) && !writeText(shaderPath, kSimpleLitPhoskia)) {
+    // Always refresh Phoskia sources so shader fixes land without wiping cache.
+    if (!writeText(shaderPath, kSimpleLitPhoskia) ||
+        !writeText(shadowShaderPath, ayt::render::kSimpleLitShadowPhoskiaSource)) {
         return false;
     }
+
+    // Dump hand-authored bgfx .sc (Editor isolation path) for inspection.
+    const std::string scDir = _assetRoot + "bgfx_sc\\";
+    ensureAssetDirectory(scDir);
+    writeText(scDir + "simple_lit_shadow_varying.def.sc",
+              ayt::render::kSimpleLitShadowVaryingSc);
+    writeText(scDir + "simple_lit_shadow_vs.sc",
+              ayt::render::kSimpleLitShadowVertexSc);
+    writeText(scDir + "simple_lit_shadow_fs.sc",
+              ayt::render::kSimpleLitShadowFragmentSc);
+
+    if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
+        const uint32_t reloaded =
+            rendererSub->renderer().reloadMaterialsForShaderFile(shadowShaderPath);
+        if (reloaded > 0) {
+            std::fprintf(stderr,
+                         "[EditorPlayRuntime] reloaded %u material(s) for '%s'\n",
+                         reloaded,
+                         shadowShaderPath.c_str());
+        }
+    }
+
+    if (_assetsReady) {
+        return true;
+    }
+
+    const std::string texturePath      = _assetRoot + "albedo.aytex";
 
     if (!fileExists(texturePath)) {
         ayt::resource::Texture texture;
@@ -223,19 +252,53 @@ bool EditorPlayRuntime::ensureAssets() {
         }
     }
 
-    if (!fileExists(_materialPath)) {
+    auto bakeMaterial = [&](const std::string& path,
+                            const char* shaderRel,
+                            const ayt::resource::Float32* baseColor,
+                            const char* albedoRelPath) -> bool {
         ayt::resource::Material material;
-        material.setShader("simple_lit.phoskia");
-        const ayt::resource::Float32 baseColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        material.setShader(shaderRel);
         material.setFloat4("baseColor", baseColor);
-        material.setTexture("albedoMap", "albedo.aytex");
+        material.setTexture("albedoMap", albedoRelPath);
         std::vector<ayt::resource::UInt8> matBinary;
         if (!material.saveToBinary(matBinary)) {
             return false;
         }
-        if (!writeBytes(_materialPath, matBinary.data(), matBinary.size())) {
+        return writeBytes(path, matBinary.data(), matBinary.size());
+    };
+
+    // Solid albedos (avoid checkerboard black cells swallowing lit/shadow).
+    const std::string cubeTexPath   = _assetRoot + "cube_albedo.aytex";
+    const std::string groundTexPath = _assetRoot + "ground_albedo.aytex";
+    {
+        ayt::resource::Texture cubeTex;
+        cubeTex.createSolidColor(4, 4, 255, 140, 40);
+        std::vector<ayt::resource::UInt8> texBinary;
+        if (!cubeTex.saveToBinary(texBinary) ||
+            !writeBytes(cubeTexPath, texBinary.data(), texBinary.size())) {
             return false;
         }
+    }
+    {
+        ayt::resource::Texture groundTex;
+        groundTex.createSolidColor(4, 4, 150, 155, 140);
+        std::vector<ayt::resource::UInt8> texBinary;
+        if (!groundTex.saveToBinary(texBinary) ||
+            !writeBytes(groundTexPath, texBinary.data(), texBinary.size())) {
+            return false;
+        }
+    }
+
+    const ayt::resource::Float32 cubeColor[4]   = {1.0f, 0.45f, 0.12f, 1.0f};
+    const ayt::resource::Float32 groundColor[4] = {0.55f, 0.58f, 0.62f, 1.0f};
+    // Both receive shadows; cube also casts via ShadowPass (all meshes).
+    // baseColor carries chroma so a missing/wrong albedo sampler still
+    // shows tint instead of R32F-depth grayscale.
+    if (!bakeMaterial(_materialPath, "simple_lit_shadow.phoskia", cubeColor,
+                      "cube_albedo.aytex") ||
+        !bakeMaterial(_groundMaterialPath, "simple_lit_shadow.phoskia", groundColor,
+                      "ground_albedo.aytex")) {
+        return false;
     }
 
     if (!fileExists(_meshPath)) {
@@ -344,8 +407,27 @@ bool EditorPlayRuntime::ensurePresentationReady()
     loop.setRenderCallback([]() {});
 
     loop.pause();
+    applyEditorRenderPipeline();
     _presentationReady = true;
     return true;
+}
+
+void EditorPlayRuntime::applyEditorRenderPipeline()
+{
+    if (_pipelineConfigured) {
+        return;
+    }
+    auto* rendererSub = ayt::render::RendererSubSystem::findRegistered();
+    if (rendererSub == nullptr || !rendererSub->isReady()) {
+        return;
+    }
+    // Ordered pass list — swap / insert slots here later (GBuffer,
+    // deferred lighting, etc.) without rewriting Editor spawn logic.
+    rendererSub->renderer().configurePipeline(
+        ayt::render::RenderPipelineDesc::makeForwardWithShadows());
+    _pipelineConfigured = true;
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] render pipeline: Shadow → FO → Transparent → PP → UI\n");
 }
 
 void EditorPlayRuntime::syncRendererBootstrap()
@@ -375,6 +457,7 @@ void EditorPlayRuntime::syncRendererBootstrap()
     if (auto* renderer = ayt::render::RendererSubSystem::findRegistered()) {
         renderer->setClientSize(_clientWidth, _clientHeight);
         renderer->setViewportRect(vx, vy, vw, vh);
+        applyEditorRenderPipeline();
     }
 }
 
@@ -452,16 +535,61 @@ void EditorPlayRuntime::spawnCubeIfNeeded() {
         return;
     }
 
-    _cubeEntity->addComponent<ayt::entity::Transform>();
+    auto* cubeXf = _cubeEntity->addComponent<ayt::entity::Transform>();
+    // Above ground top (y=0); high enough to avoid bury-on-rotate, low
+    // enough for a clear contact shadow on the receiver.
+    cubeXf->position = ayt::math::FVector3(0.0f, 0.85f, 0.0f);
     auto* mesh = _cubeEntity->addComponent<ayt::entity::MeshComponent>();
     mesh->meshPath     = _meshPath;
     mesh->materialPath = _materialPath;
+    mesh->castShadow   = true;
+    // Cast-only: receiving self-shadow on the cube looks wrong with a
+    // single cascade; contact shadow on the ground is the goal.
+    mesh->receiveShadow = false;
+
+    const ayt::math::Float4x4 world =
+        ayt::math::Transform::getMatrix(cubeXf->position, cubeXf->rotation, cubeXf->scale);
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] spawn cube pos=(%.2f, %.2f, %.2f) mat=%s "
+        "ayMathTranslation=(%.3f, %.3f, %.3f)\n",
+        cubeXf->position.x, cubeXf->position.y, cubeXf->position.z,
+        _materialPath.c_str(),
+        world.row[0].w, world.row[1].w, world.row[2].w);
+}
+
+void EditorPlayRuntime::spawnGroundIfNeeded() {
+    if (_groundEntity != nullptr) {
+        return;
+    }
+
+    _groundEntity = ayt::entity::World::instance().createEntity();
+    if (_groundEntity == nullptr) {
+        return;
+    }
+
+    auto* transform = _groundEntity->addComponent<ayt::entity::Transform>();
+    // Thin shadow receiver; top face at y=0.
+    transform->position = ayt::math::FVector3(0.0f, -0.05f, 0.0f);
+    transform->scale    = ayt::math::FVector3(8.0f, 0.1f, 8.0f);
+
+    auto* mesh = _groundEntity->addComponent<ayt::entity::MeshComponent>();
+    mesh->meshPath        = _groundMeshPath;
+    mesh->materialPath    = _groundMaterialPath;
+    mesh->castShadow      = false;
+    mesh->receiveShadow   = true;
 }
 
 void EditorPlayRuntime::clearCube() noexcept {
     if (_cubeEntity != nullptr) {
         ayt::entity::World::instance().destroyEntity(_cubeEntity);
         _cubeEntity = nullptr;
+    }
+}
+
+void EditorPlayRuntime::clearGround() noexcept {
+    if (_groundEntity != nullptr) {
+        ayt::entity::World::instance().destroyEntity(_groundEntity);
+        _groundEntity = nullptr;
     }
 }
 
@@ -478,6 +606,7 @@ void EditorPlayRuntime::replaceImportedCharacter(const ImportedCharacter& charac
     if (!trySpawnImportedCharacter()) {
         spawnCubeIfNeeded();
     }
+    spawnGroundIfNeeded();
 }
 
 // ED-02: spawn the imported skinned character if the user has set
@@ -626,6 +755,7 @@ bool EditorPlayRuntime::startPlay()
     if (!trySpawnImportedCharacter()) {
         spawnCubeIfNeeded();
     }
+    spawnGroundIfNeeded();
 
     // INT-01 (2026-07-15): spawn a PlayerController ScriptComponent
     // and bind <assetRoot>/Scripts/PlayerController.logia. The hot
@@ -646,6 +776,7 @@ void EditorPlayRuntime::enterEdit()
     ayt::game::GameLoop::instance().pause();
     clearCharacter();
     clearCube();
+    clearGround();
     clearPlayerController();
     _simulationActive = false;
 }
@@ -667,6 +798,7 @@ void EditorPlayRuntime::shutdownEngine()
     if (_presentationReady) {
         ayt::game::GameLoop::instance().endPlaySession();
         _presentationReady = false;
+        _pipelineConfigured = false;
     }
 }
 
