@@ -567,58 +567,117 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         const ayt::math::FVector3 keyColor(1.35f, 1.28f, 1.15f);
         lights.add(ayt::render::Light::directional(keyDir, keyColor));
 
-        // Fill / rim stay dim vs key so key-only shadow stays readable.
-        // (Strong unshadowed fill washes the umbra and reads as "cyan flashes".)
+        // Dim cool fill (directional) — keep umbra readable.
         lights.add(ayt::render::Light::directional(
             ayt::math::FVector3(-0.60f, -0.30f, 0.50f),
-            ayt::math::FVector3(0.18f, 0.32f, 0.55f)));
-        lights.add(ayt::render::Light::directional(
-            ayt::math::FVector3(0.10f, -0.20f, -0.90f),
-            ayt::math::FVector3(0.45f, 0.22f, 0.12f)));
+            ayt::math::FVector3(0.12f, 0.22f, 0.40f)));
+
+        // §P5.5 B — warm local point (slot 2). Not shadowed.
+        lights.add(ayt::render::Light::point(
+            ayt::math::FVector3(1.2f, 1.6f, 0.4f),
+            /*range=*/5.0f,
+            /*intensity=*/2.2f,
+            ayt::math::FVector3(1.0f, 0.55f, 0.25f)));
+
+        // §P5.5 B — soft spot from above-right onto the cube/ground.
+        lights.add(ayt::render::Light::spot(
+            ayt::math::FVector3(-0.8f, 2.4f, 1.2f),
+            ayt::math::FVector3(0.25f, -1.0f, -0.35f),
+            /*range=*/7.0f,
+            /*intensity=*/2.8f,
+            /*coneCosInner=*/0.92f,
+            /*coneCosOuter=*/0.75f,
+            ayt::math::FVector3(0.55f, 0.70f, 1.0f)));
 
         rendererSub->renderer().setSceneLights(&lights);
         rendererSub->renderer().setDirectionalLight(keyDir, keyColor);
 
-        // §Skybox0 — equirect from cached skyBox.png (seeded from
-        // AYRenderer/demo or AliyatRenderer). makeDeferred already
-        // mounts SkyboxPass; without setSkySource the pass returns 0.
+        // Sky + IBL: keep equirect backdrop; also upload a small
+        // procedural cube for LightingPass ambientCube (envCube).
         if (!_skySourceStorage) {
             _skySourceStorage = std::make_unique<SkySourceStorage>();
         }
         (void)seedSkyBoxPng();
         const std::string skyPath = _assetRoot + "skyBox.png";
+        ayt::render::TextureHandle equirectTex{};
         if (fileExists(skyPath)) {
-            const ayt::render::TextureHandle skyTex =
-                rendererSub->renderer().loadTexture(skyPath);
-            if (skyTex.isValid()) {
-                _skySourceStorage->sky.kind = ayt::render::SkySourceKind::Equirect;
-                _skySourceStorage->sky.equirect = skyTex;
-                rendererSub->renderer().setSkySource(&_skySourceStorage->sky);
+            equirectTex = rendererSub->renderer().loadTexture(skyPath);
+        }
+
+        // 16³ RGBA8 cube — sky-ish faces for IBL diffuse (not HDR).
+        constexpr uint32_t kCubeSize = 16;
+        std::vector<uint8_t> cubeFaces(kCubeSize * kCubeSize * 4u * 6u);
+        auto fillFace = [&](uint32_t face, uint8_t r, uint8_t g, uint8_t b) {
+            uint8_t* dst = cubeFaces.data()
+                + face * kCubeSize * kCubeSize * 4u;
+            for (uint32_t i = 0; i < kCubeSize * kCubeSize; ++i) {
+                dst[i * 4 + 0] = r;
+                dst[i * 4 + 1] = g;
+                dst[i * 4 + 2] = b;
+                dst[i * 4 + 3] = 255;
+            }
+        };
+        // bgfx face order: +X,-X,+Y,-Y,+Z,-Z
+        fillFace(0, 180, 140, 110); // +X warm
+        fillFace(1,  90, 120, 170); // -X cool
+        fillFace(2, 160, 190, 230); // +Y sky
+        fillFace(3,  70,  75,  70); // -Y ground
+        fillFace(4, 140, 160, 190); // +Z
+        fillFace(5, 140, 160, 190); // -Z
+        const ayt::render::TextureHandle cubeTex =
+            rendererSub->renderer().createCubeTextureFromRgba8(
+                kCubeSize, cubeFaces.data(), "editor_ibl_ambient_cube_v1");
+
+        // Sky backdrop = equirect panorama; IBL ambient = procedural
+        // cube via setSkySourceCube (kind stays Equirect so SkyboxPass
+        // does not replace the panorama with solid cube faces).
+        if (equirectTex.isValid()) {
+            _skySourceStorage->sky.kind = ayt::render::SkySourceKind::Equirect;
+            _skySourceStorage->sky.equirect = equirectTex;
+            _skySourceStorage->sky.cubeMap = cubeTex; // introspection only
+            rendererSub->renderer().setSkySource(&_skySourceStorage->sky);
+            if (cubeTex.isValid()) {
+                rendererSub->renderer().setSkySourceCube(cubeTex);
                 std::fprintf(stderr,
-                    "[EditorPlayRuntime] Skybox equirect loaded: %s\n",
+                    "[EditorPlayRuntime] Skybox equirect + IBL envCube ready "
+                    "(equirect=%s, cube=16^3 procedural)\n",
                     skyPath.c_str());
             } else {
-                rendererSub->renderer().setSkySource(nullptr);
+                rendererSub->renderer().setSkySourceCube({});
                 std::fprintf(stderr,
-                    "[EditorPlayRuntime] Skybox load failed: %s\n",
+                    "[EditorPlayRuntime] Skybox equirect loaded (no IBL cube): %s\n",
                     skyPath.c_str());
             }
+        } else if (cubeTex.isValid()) {
+            // No panorama asset — fall back to CubeMap backdrop.
+            _skySourceStorage->sky.kind = ayt::render::SkySourceKind::CubeMap;
+            _skySourceStorage->sky.cubeMap = cubeTex;
+            _skySourceStorage->sky.equirect = {};
+            rendererSub->renderer().setSkySource(&_skySourceStorage->sky);
+            rendererSub->renderer().setSkySourceCube(cubeTex);
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] Skybox CubeMap fallback + IBL "
+                "(no equirect asset)\n");
         } else {
             rendererSub->renderer().setSkySource(nullptr);
+            rendererSub->renderer().setSkySourceCube({});
             std::fprintf(stderr,
-                "[EditorPlayRuntime] Skybox skipped (skyBox.png not found after seed)\n");
+                "[EditorPlayRuntime] Skybox/IBL skipped (no equirect, no cube)\n");
         }
     } else {
         rendererSub->renderer().configurePipeline(
             ayt::render::RenderPipelineDesc::makeForwardWithShadows());
         rendererSub->renderer().setSceneLights(nullptr);
         rendererSub->renderer().setSkySource(nullptr);
+        rendererSub->renderer().setSkySourceCube({});
         _sceneLightsStorage.reset();
         _skySourceStorage.reset();
     }
     // PostProcess: display gamma encode (ripple removed).
     rendererSub->renderer().setPostProcessGamma(2.2f);
     rendererSub->renderer().setPostProcessExposure(1.0f);
+    // §P5.5 D acceptance — IBL diffuse slightly raised for visible env tint.
+    rendererSub->renderer().setAmbientStrength(0.85f);
     ensureGlassMaterialAlpha();
     _pipelineConfigured = true;
     if (useDeferred) {
@@ -629,7 +688,7 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
             "[EditorPlayRuntime] render pipeline: Deferred "
             "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP → UI) "
             "via AY_DEFERRED=%s; P5.5 sceneLights=%u "
-            "(key+fill+rim directional; key-only shadow)\n",
+            "(keyDir+fillDir+point+spot; key-only shadow; IBL cube)\n",
             deferredEnv, n);
     } else {
         std::fprintf(stderr,
@@ -1059,6 +1118,7 @@ void EditorPlayRuntime::shutdownEngine()
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
         rendererSub->renderer().setSceneLights(nullptr);
         rendererSub->renderer().setSkySource(nullptr);
+        rendererSub->renderer().setSkySourceCube({});
     }
     _sceneLightsStorage.reset();
     _skySourceStorage.reset();

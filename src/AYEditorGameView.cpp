@@ -1,8 +1,20 @@
 #include "AYEditorGameView.h"
 #include "AYEditorPlayRuntime.h"
 #include "AYGameLoop.h"
+#include "AYRendererSubSystem.h"
 
 namespace ayt::editor {
+
+namespace {
+
+void setRenderClockPaused(bool paused)
+{
+    if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        sub->renderer().setPostProcessClockPaused(paused);
+    }
+}
+
+} // namespace
 
 EditorGameView::EditorGameView(ayt::game::IGameLoop& loop, EditorPlayRuntime& runtime)
     : _loop(loop)
@@ -35,9 +47,11 @@ void EditorGameView::stepOnce() {
 void EditorGameView::applyMode(EditorMode mode) {
     switch (mode) {
     case EditorMode::Edit:
+        setRenderClockPaused(false);
         _runtime.enterEdit();
         break;
     case EditorMode::Play:
+        setRenderClockPaused(false);
         _runtime.startPlay();
         _runtime.tick();
         break;
@@ -46,6 +60,7 @@ void EditorGameView::applyMode(EditorMode mode) {
             _runtime.startPlay();
         }
         ayt::game::GameLoop::instance().pause();
+        setRenderClockPaused(true);
         break;
     }
 }

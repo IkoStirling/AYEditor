@@ -94,7 +94,7 @@
           "text": "Hierarchy",
           "size": { "w": 220, "h": 0 },
           "minSize": { "w": 160, "h": 120 },
-          "movable": true,
+          "movable": false,
           "slot": {
             "width": 220,
             "minWidth": 160,
@@ -122,7 +122,7 @@
           "text": "Inspector",
           "size": { "w": 280, "h": 0 },
           "minSize": { "w": 180, "h": 120 },
-          "movable": true,
+          "movable": false,
           "slot": {
             "width": 280,
             "minWidth": 180,

@@ -98,9 +98,11 @@ void EditorSession::shutdown() {
 
     _gameView.setModeChangedCallback({});
     _repaintCallback = nullptr;
+    // Tear down Play/renderer borrow before UI widgets — avoids
+    // Inspector path strings and GPU borrows racing UI teardown.
+    _playRuntime.shutdownEngine();
     _gameView.setMode(EditorMode::Edit);
     _ui.shutdown();
-    _playRuntime.shutdownEngine();
     _layoutPath.clear();
     _hostWindow = nullptr;
 }
