@@ -498,6 +498,75 @@ void EditorSession::bindRenderSettingsPanel()
         }
     });
 
+    // §S4d — Depth Haze (default slightly on in UI JSON).
+    auto applyHazeParams = [rendererOrNull](bool enabled, float strength, float density) {
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setDepthHazeEnabled(enabled);
+            r->setDepthHazeStrength(enabled ? strength : 0.0f);
+            r->setDepthHazeParams(
+                density,
+                ayt::math::FVector3(0.7f, 0.75f, 0.8f));
+        }
+    };
+
+    if (auto* w = _ui.findById("chk_depth_haze")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([this, applyHazeParams](bool on) {
+                float strength = 1.0f;
+                float density = 0.04f;
+                if (auto* sw = _ui.findById("sld_haze_strength")) {
+                    if (auto* s = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                        strength = s->getValue();
+                    }
+                }
+                if (auto* dw = _ui.findById("sld_haze_density")) {
+                    if (auto* s = dynamic_cast<ayt::ui::Slider*>(dw)) {
+                        density = s->getValue();
+                    }
+                }
+                applyHazeParams(on, strength, density);
+            });
+        }
+    }
+
+    bindSlider("sld_haze_strength", [this, setLabel, applyHazeParams](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Haze Strength  %.2f", static_cast<double>(v));
+        setLabel("lbl_haze_strength", buf);
+        bool enabled = true;
+        float density = 0.04f;
+        if (auto* cw = _ui.findById("chk_depth_haze")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(cw)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* dw = _ui.findById("sld_haze_density")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(dw)) {
+                density = s->getValue();
+            }
+        }
+        applyHazeParams(enabled, v, density);
+    });
+
+    bindSlider("sld_haze_density", [this, setLabel, applyHazeParams](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Haze Density  %.3f", static_cast<double>(v));
+        setLabel("lbl_haze_density", buf);
+        bool enabled = true;
+        float strength = 1.0f;
+        if (auto* cw = _ui.findById("chk_depth_haze")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(cw)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* sw = _ui.findById("sld_haze_strength")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                strength = s->getValue();
+            }
+        }
+        applyHazeParams(enabled, strength, v);
+    });
+
     bindSlider("sld_ambient", [rendererOrNull, setLabel](float v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "IBL Ambient  %.2f", static_cast<double>(v));
@@ -560,6 +629,8 @@ void EditorSession::bindRenderSettingsPanel()
     refreshLabelFromSlider("sld_gamma", "lbl_gamma", "Gamma  %.2f");
     refreshLabelFromSlider("sld_exposure", "lbl_exposure", "Exposure  %.2f");
     refreshLabelFromSlider("sld_bloom", "lbl_bloom", "Bloom  %.2f");
+    refreshLabelFromSlider("sld_haze_strength", "lbl_haze_strength", "Haze Strength  %.2f");
+    refreshLabelFromSlider("sld_haze_density", "lbl_haze_density", "Haze Density  %.3f");
     refreshLabelFromSlider("sld_ambient", "lbl_ambient", "IBL Ambient  %.2f");
     refreshLabelFromSlider("sld_shadow_bias", "lbl_shadow_bias", "Shadow Bias  %.4f");
 }
@@ -586,6 +657,23 @@ void EditorSession::applyRenderSettingsFromPanel()
     r.setPostProcessBloomStrength(sliderValue("sld_bloom", 0.3f));
     r.setAmbientStrength(sliderValue("sld_ambient", 0.85f));
     r.setShadowBias(sliderValue("sld_shadow_bias", 0.003f));
+
+    // §S4d — Depth Haze defaults: on, density 0.04, fog (0.7,0.75,0.8).
+    {
+        bool hazeOn = true;
+        if (auto* w = _ui.findById("chk_depth_haze")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+                hazeOn = chk->isChecked();
+            }
+        }
+        const float hazeStrength = sliderValue("sld_haze_strength", 1.0f);
+        const float hazeDensity = sliderValue("sld_haze_density", 0.04f);
+        r.setDepthHazeEnabled(hazeOn);
+        r.setDepthHazeStrength(hazeOn ? hazeStrength : 0.0f);
+        r.setDepthHazeParams(
+            hazeDensity,
+            ayt::math::FVector3(0.7f, 0.75f, 0.8f));
+    }
 
     if (auto* w = _ui.findById("cmb_tonemap")) {
         if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
