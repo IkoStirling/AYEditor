@@ -91,18 +91,39 @@
         {
           "type": "Window",
           "id": "panel_hierarchy",
-          "text": "Hierarchy",
+          "text": "Render",
           "size": { "w": 220, "h": 0 },
-          "minSize": { "w": 160, "h": 120 },
+          "minSize": { "w": 180, "h": 120 },
           "movable": false,
           "slot": {
-            "width": 220,
-            "minWidth": 160,
+            "width": 240,
+            "minWidth": 180,
             "maxWidthPercent": 45
           },
           "children": [
-            { "type": "TextLabel", "id": "hierarchy_hint", "text": "(empty)", "size": { "w": 180, "h": 24 } },
-            { "type": "TextLabel", "id": "hierarchy_hint2", "text": "Scene root", "size": { "w": 180, "h": 24 } }
+            { "type": "TextLabel", "id": "lbl_render_hdr", "text": "Post / Look", "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_gamma", "text": "Gamma  2.20", "size": { "w": 200, "h": 18 } },
+            { "type": "Slider", "id": "sld_gamma", "min": 1.0, "max": 3.0, "value": 2.2, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_exposure", "text": "Exposure  1.00", "size": { "w": 200, "h": 18 } },
+            { "type": "Slider", "id": "sld_exposure", "min": 0.2, "max": 3.0, "value": 1.0, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_bloom", "text": "Bloom  0.30", "size": { "w": 200, "h": 18 } },
+            { "type": "Slider", "id": "sld_bloom", "min": 0.0, "max": 1.5, "value": 0.3, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_ambient", "text": "IBL Ambient  0.85", "size": { "w": 200, "h": 18 } },
+            { "type": "Slider", "id": "sld_ambient", "min": 0.0, "max": 2.0, "value": 0.85, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_tonemap", "text": "Tonemap", "size": { "w": 200, "h": 18 } },
+            {
+              "type": "ComboBox",
+              "id": "cmb_tonemap",
+              "size": { "w": 200, "h": 24 },
+              "items": ["None", "Reinhard", "ACES"],
+              "selectedIndex": 2,
+              "maxPopupItems": 3
+            },
+            { "type": "TextLabel", "id": "lbl_render_quality", "text": "Quality", "size": { "w": 200, "h": 22 } },
+            { "type": "CheckBox", "id": "chk_shadow_pcf", "text": "Shadow PCF", "checked": true, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_shadow_bias", "text": "Shadow Bias  0.003", "size": { "w": 200, "h": 18 } },
+            { "type": "Slider", "id": "sld_shadow_bias", "min": 0.0, "max": 0.02, "value": 0.003, "size": { "w": 200, "h": 22 } },
+            { "type": "TextLabel", "id": "lbl_render_hint", "text": "Live after Play starts", "size": { "w": 200, "h": 18 } }
           ]
         },
         { "type": "SplitterHandle", "id": "split_hierarchy_viewport" },

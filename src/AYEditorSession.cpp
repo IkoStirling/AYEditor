@@ -4,16 +4,23 @@
 #include "AYEntity.h"
 #include "AYSplitterHandle.h"
 #include "AYButton.h"
+#include "AYCheckBox.h"
+#include "AYComboBox.h"
 #include "AYGameLoop.h"
 #include "AYMenuBar.h"
 #include "AYMenu.h"
 #include "AYMenuItem.h"
+#include "AYRendererSubSystem.h"
+#include "AYSlider.h"
 #include "AYTextLabel.h"
 #include "AYWidget.h"
 
 #include <components/AYAnimationComponent.h>
 #include <components/AYMeshComponent.h>
 #include <components/AYSkeletonComponent.h>
+
+#include <cstdio>
+#include <cstring>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -74,6 +81,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
 
     bindToolbar();
     bindMenuBar();
+    bindRenderSettingsPanel();
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
@@ -122,10 +130,32 @@ void EditorSession::update(float dt) {
     // are not sufficient (capture path / skipped WM_MOUSEMOVE).
     syncSplitterRevealToMouse();
 
+    if (freecamActive()) {
+        _freecam.updateMovement(dt);
+        pushFreecamToRenderer();
+    }
+
     if (_gameView.mode() == EditorMode::Play) {
         _playRuntime.tick();
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
+    }
+}
+
+bool EditorSession::freecamActive() const
+{
+    const EditorMode mode = _gameView.mode();
+    return mode == EditorMode::Play || mode == EditorMode::Paused;
+}
+
+void EditorSession::pushFreecamToRenderer()
+{
+    if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        sub->setCameraLookAt(
+            _freecam.eye(),
+            _freecam.at(),
+            _freecam.up(),
+            _freecam.fovYDegrees());
     }
 }
 
@@ -299,6 +329,12 @@ bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseY = y;
     _hasLastMouse = true;
 
+    if (_freecam.isLooking()) {
+        _freecam.updateLook(x, y);
+        pushFreecamToRenderer();
+        return true;
+    }
+
     if (_ui.isCapturing()) {
         // Still deliver moves (drag). Bounds-checked SplitterHandle::
         // onMouseMove clears _hover when outside the band; sync in
@@ -324,6 +360,13 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
         return _ui.onMouseButtonDown(x, y, button);
     }
 
+    // LMB on Game View (Play/Paused): start freecam look.
+    if (button == 0 && freecamActive() && !isChromePoint(x, y)) {
+        _ui.clearHover();
+        _freecam.beginLook(x, y);
+        return true; // host should SetCapture
+    }
+
     if (!isChromePoint(x, y)) {
         _ui.clearHover();
         return false;
@@ -333,6 +376,11 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
+    if (_freecam.isLooking() && button == 0) {
+        _freecam.endLook();
+        return true;
+    }
+
     if (_ui.isCapturing()) {
         return _ui.onMouseButtonUp(x, y, button);
     }
@@ -392,6 +440,167 @@ void EditorSession::bindToolbar() {
     if (auto* widget = _ui.findById("lbl_mode")) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.10f, 0.11f, 1.0f));
+        }
+    }
+}
+
+void EditorSession::bindRenderSettingsPanel()
+{
+    // Left "Render" panel — live knobs after RendererSubSystem exists
+    // (Play session). Safe no-ops before Play: findRegistered() is null.
+    auto rendererOrNull = []() -> ayt::render::Renderer* {
+        if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+            return &sub->renderer();
+        }
+        return nullptr;
+    };
+
+    auto setLabel = [this](const char* id, const char* textUtf8) {
+        if (auto* w = _ui.findById(id)) {
+            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
+                label->setText(std::wstring(textUtf8, textUtf8 + std::strlen(textUtf8)));
+            }
+        }
+    };
+
+    auto bindSlider = [this](const char* id, std::function<void(float)> onChanged) {
+        if (auto* w = _ui.findById(id)) {
+            if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
+                slider->setOnValueChanged(std::move(onChanged));
+            }
+        }
+    };
+
+    bindSlider("sld_gamma", [rendererOrNull, setLabel](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Gamma  %.2f", static_cast<double>(v));
+        setLabel("lbl_gamma", buf);
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setPostProcessGamma(v);
+        }
+    });
+
+    bindSlider("sld_exposure", [rendererOrNull, setLabel](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Exposure  %.2f", static_cast<double>(v));
+        setLabel("lbl_exposure", buf);
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setPostProcessExposure(v);
+        }
+    });
+
+    bindSlider("sld_bloom", [rendererOrNull, setLabel](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Bloom  %.2f", static_cast<double>(v));
+        setLabel("lbl_bloom", buf);
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setPostProcessBloomStrength(v);
+        }
+    });
+
+    bindSlider("sld_ambient", [rendererOrNull, setLabel](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "IBL Ambient  %.2f", static_cast<double>(v));
+        setLabel("lbl_ambient", buf);
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setAmbientStrength(v);
+        }
+    });
+
+    bindSlider("sld_shadow_bias", [rendererOrNull, setLabel](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Shadow Bias  %.4f", static_cast<double>(v));
+        setLabel("lbl_shadow_bias", buf);
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setShadowBias(v);
+        }
+    });
+
+    if (auto* w = _ui.findById("cmb_tonemap")) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
+            combo->setOnSelectionChanged([rendererOrNull](int index) {
+                ayt::render::Renderer* r = rendererOrNull();
+                if (r == nullptr) {
+                    return;
+                }
+                using TM = ayt::render::Renderer::TonemapMode;
+                switch (index) {
+                case 1:  r->setPostProcessTonemapMode(TM::Reinhard); break;
+                case 2:  r->setPostProcessTonemapMode(TM::ACES); break;
+                default: r->setPostProcessTonemapMode(TM::None); break;
+                }
+            });
+        }
+    }
+
+    if (auto* w = _ui.findById("chk_shadow_pcf")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([rendererOrNull](bool on) {
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setShadowPcfEnabled(on);
+                }
+            });
+        }
+    }
+
+    // Labels in JSON are decorative until Slider min/max/value load;
+    // refresh from the live widget values so thumb ↔ text stay aligned.
+    auto refreshLabelFromSlider = [this, setLabel](const char* sliderId,
+                                                   const char* labelId,
+                                                   const char* fmt) {
+        if (auto* w = _ui.findById(sliderId)) {
+            if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), fmt,
+                              static_cast<double>(slider->getValue()));
+                setLabel(labelId, buf);
+            }
+        }
+    };
+    refreshLabelFromSlider("sld_gamma", "lbl_gamma", "Gamma  %.2f");
+    refreshLabelFromSlider("sld_exposure", "lbl_exposure", "Exposure  %.2f");
+    refreshLabelFromSlider("sld_bloom", "lbl_bloom", "Bloom  %.2f");
+    refreshLabelFromSlider("sld_ambient", "lbl_ambient", "IBL Ambient  %.2f");
+    refreshLabelFromSlider("sld_shadow_bias", "lbl_shadow_bias", "Shadow Bias  %.4f");
+}
+
+void EditorSession::applyRenderSettingsFromPanel()
+{
+    auto* sub = ayt::render::RendererSubSystem::findRegistered();
+    if (sub == nullptr) {
+        return;
+    }
+    ayt::render::Renderer& r = sub->renderer();
+
+    auto sliderValue = [this](const char* id, float fallback) -> float {
+        if (auto* w = _ui.findById(id)) {
+            if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
+                return slider->getValue();
+            }
+        }
+        return fallback;
+    };
+
+    r.setPostProcessGamma(sliderValue("sld_gamma", 2.2f));
+    r.setPostProcessExposure(sliderValue("sld_exposure", 1.0f));
+    r.setPostProcessBloomStrength(sliderValue("sld_bloom", 0.3f));
+    r.setAmbientStrength(sliderValue("sld_ambient", 0.85f));
+    r.setShadowBias(sliderValue("sld_shadow_bias", 0.003f));
+
+    if (auto* w = _ui.findById("cmb_tonemap")) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
+            using TM = ayt::render::Renderer::TonemapMode;
+            switch (combo->getSelectedIndex()) {
+            case 1:  r.setPostProcessTonemapMode(TM::Reinhard); break;
+            case 2:  r.setPostProcessTonemapMode(TM::ACES); break;
+            default: r.setPostProcessTonemapMode(TM::None); break;
+            }
+        }
+    }
+
+    if (auto* w = _ui.findById("chk_shadow_pcf")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            r.setShadowPcfEnabled(chk->isChecked());
         }
     }
 }
@@ -730,16 +939,26 @@ void EditorSession::setModeLabel(const std::wstring& text) {
 
 void EditorSession::onModeChanged(EditorMode mode) {
     _ui.cancelCapture();
+    if (_freecam.isLooking()) {
+        _freecam.endLook();
+    }
 
     switch (mode) {
     case EditorMode::Edit:
         setModeLabel(L"EDIT");
+        if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+            sub->clearCameraOverride();
+        }
         break;
     case EditorMode::Play:
         setModeLabel(L"PLAY");
+        applyRenderSettingsFromPanel();
+        pushFreecamToRenderer();
         break;
     case EditorMode::Paused:
         setModeLabel(L"PAUSED");
+        applyRenderSettingsFromPanel();
+        pushFreecamToRenderer();
         break;
     }
 

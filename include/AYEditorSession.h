@@ -2,6 +2,7 @@
 
 #include "AYEditorGameView.h"
 #include "AYEditorPlayRuntime.h"
+#include "AYEditorFreecam.h"
 #include "AYImportedCharacterMapper.h"
 #include "AYImportDialog.h"
 #include "AYImporter.h"
@@ -79,6 +80,10 @@ public:
 private:
     void bindToolbar();
     void bindMenuBar();
+    void bindRenderSettingsPanel();
+    void applyRenderSettingsFromPanel();
+    void pushFreecamToRenderer();
+    bool freecamActive() const;
     void requestHostClose();
     void requestHostMinimize();
     void requestHostMaximizeToggle();
@@ -162,6 +167,9 @@ private:
     float _lastMouseX = 0.0f;
     float _lastMouseY = 0.0f;
     bool _hasLastMouse = false;
+
+    // Play/Paused freecam (LMB look + WASD/QE). Edit mode inactive.
+    EditorFreecam _freecam;
 
     // ED-03: staged Inspector pick state. Populated by
     // pickInspector{Skel,Anim} via Win32 dialogs; consumed by

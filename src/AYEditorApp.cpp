@@ -150,6 +150,7 @@ std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
     case WM_LBUTTONDOWN: {
         const float x = static_cast<float>(GET_X_LPARAM(lParam));
         const float y = static_cast<float>(GET_Y_LPARAM(lParam));
+        // Capture for UI drag OR freecam look (both return true).
         if (state->session->onMouseButtonDown(x, y, 0)) {
             SetCapture(hwnd);
         }

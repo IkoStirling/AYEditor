@@ -673,9 +673,11 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         _sceneLightsStorage.reset();
         _skySourceStorage.reset();
     }
-    // PostProcess: display gamma encode (ripple removed).
+    // PostProcess: ACES tonemap + display gamma (ripple removed).
     rendererSub->renderer().setPostProcessGamma(2.2f);
     rendererSub->renderer().setPostProcessExposure(1.0f);
+    rendererSub->renderer().setPostProcessTonemapMode(
+        ayt::render::Renderer::TonemapMode::ACES);
     // §P5.5 D acceptance — IBL diffuse slightly raised for visible env tint.
     rendererSub->renderer().setAmbientStrength(0.85f);
     ensureGlassMaterialAlpha();
