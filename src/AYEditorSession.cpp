@@ -131,7 +131,9 @@ void EditorSession::update(float dt) {
     syncSplitterRevealToMouse();
 
     if (freecamActive()) {
-        _freecam.updateMovement(dt);
+        if (viewportAcceptsGameInput()) {
+            _freecam.updateMovement(dt);
+        }
         pushFreecamToRenderer();
     }
 
@@ -322,6 +324,23 @@ bool EditorSession::isChromePoint(float x, float y) const {
 
     return x < viewport.minX || x >= viewport.maxX
         || y < viewport.minY || y >= viewport.maxY;
+}
+
+bool EditorSession::viewportAcceptsGameInput() const {
+    if (_hostWindow == nullptr) {
+        return false;
+    }
+    if (::GetForegroundWindow() != _hostWindow) {
+        return false;
+    }
+    // LMB look already started inside the viewport — keep movement.
+    if (_freecam.isLooking()) {
+        return true;
+    }
+    if (!_hasLastMouse) {
+        return false;
+    }
+    return !isChromePoint(_lastMouseX, _lastMouseY);
 }
 
 bool EditorSession::onMouseMove(float x, float y) {
@@ -567,6 +586,117 @@ void EditorSession::bindRenderSettingsPanel()
         applyHazeParams(enabled, strength, v);
     });
 
+    // §S2 v1 — SSAO (Deferred-only; UI defaults slightly on).
+    auto applySsaoParams = [rendererOrNull](bool enabled, float strength,
+                                            float radius, float bias) {
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setSsaoEnabled(enabled);
+            r->setSsaoStrength(enabled ? strength : 0.0f);
+            r->setSsaoParams(radius, bias);
+        }
+    };
+
+    if (auto* w = _ui.findById("chk_ssao")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([this, applySsaoParams](bool on) {
+                float strength = 0.45f;
+                float radius = 0.4f;
+                float bias = 0.04f;
+                if (auto* sw = _ui.findById("sld_ssao_strength")) {
+                    if (auto* s = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                        strength = s->getValue();
+                    }
+                }
+                if (auto* rw = _ui.findById("sld_ssao_radius")) {
+                    if (auto* s = dynamic_cast<ayt::ui::Slider*>(rw)) {
+                        radius = s->getValue();
+                    }
+                }
+                if (auto* bw = _ui.findById("sld_ssao_bias")) {
+                    if (auto* s = dynamic_cast<ayt::ui::Slider*>(bw)) {
+                        bias = s->getValue();
+                    }
+                }
+                applySsaoParams(on, strength, radius, bias);
+            });
+        }
+    }
+
+    bindSlider("sld_ssao_strength", [this, setLabel, applySsaoParams](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "SSAO Strength  %.2f", static_cast<double>(v));
+        setLabel("lbl_ssao_strength", buf);
+        bool enabled = true;
+        float radius = 0.4f;
+        float bias = 0.04f;
+        if (auto* cw = _ui.findById("chk_ssao")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(cw)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* rw = _ui.findById("sld_ssao_radius")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(rw)) {
+                radius = s->getValue();
+            }
+        }
+        if (auto* bw = _ui.findById("sld_ssao_bias")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(bw)) {
+                bias = s->getValue();
+            }
+        }
+        applySsaoParams(enabled, v, radius, bias);
+    });
+
+    bindSlider("sld_ssao_radius", [this, setLabel, applySsaoParams](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "SSAO Radius  %.2f", static_cast<double>(v));
+        setLabel("lbl_ssao_radius", buf);
+        bool enabled = true;
+        float strength = 0.45f;
+        float bias = 0.04f;
+        if (auto* cw = _ui.findById("chk_ssao")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(cw)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* sw = _ui.findById("sld_ssao_strength")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                strength = s->getValue();
+            }
+        }
+        if (auto* bw = _ui.findById("sld_ssao_bias")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(bw)) {
+                bias = s->getValue();
+            }
+        }
+        applySsaoParams(enabled, strength, v, bias);
+    });
+
+    bindSlider("sld_ssao_bias", [this, setLabel, applySsaoParams](float v) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "SSAO Bias  %.3f", static_cast<double>(v));
+        setLabel("lbl_ssao_bias", buf);
+        bool enabled = true;
+        float strength = 0.45f;
+        float radius = 0.4f;
+        if (auto* cw = _ui.findById("chk_ssao")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(cw)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* sw = _ui.findById("sld_ssao_strength")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                strength = s->getValue();
+            }
+        }
+        if (auto* rw = _ui.findById("sld_ssao_radius")) {
+            if (auto* s = dynamic_cast<ayt::ui::Slider*>(rw)) {
+                radius = s->getValue();
+            }
+        }
+        applySsaoParams(enabled, strength, radius, v);
+    });
+
     bindSlider("sld_ambient", [rendererOrNull, setLabel](float v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "IBL Ambient  %.2f", static_cast<double>(v));
@@ -631,6 +761,9 @@ void EditorSession::bindRenderSettingsPanel()
     refreshLabelFromSlider("sld_bloom", "lbl_bloom", "Bloom  %.2f");
     refreshLabelFromSlider("sld_haze_strength", "lbl_haze_strength", "Haze Strength  %.2f");
     refreshLabelFromSlider("sld_haze_density", "lbl_haze_density", "Haze Density  %.3f");
+    refreshLabelFromSlider("sld_ssao_strength", "lbl_ssao_strength", "SSAO Strength  %.2f");
+    refreshLabelFromSlider("sld_ssao_radius", "lbl_ssao_radius", "SSAO Radius  %.2f");
+    refreshLabelFromSlider("sld_ssao_bias", "lbl_ssao_bias", "SSAO Bias  %.3f");
     refreshLabelFromSlider("sld_ambient", "lbl_ambient", "IBL Ambient  %.2f");
     refreshLabelFromSlider("sld_shadow_bias", "lbl_shadow_bias", "Shadow Bias  %.4f");
 }
@@ -673,6 +806,22 @@ void EditorSession::applyRenderSettingsFromPanel()
         r.setDepthHazeParams(
             hazeDensity,
             ayt::math::FVector3(0.7f, 0.75f, 0.8f));
+    }
+
+    // §S2 v1 — SSAO defaults: on, strength 0.45, radius 0.4, bias 0.04.
+    {
+        bool ssaoOn = true;
+        if (auto* w = _ui.findById("chk_ssao")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+                ssaoOn = chk->isChecked();
+            }
+        }
+        const float ssaoStrength = sliderValue("sld_ssao_strength", 0.45f);
+        const float ssaoRadius = sliderValue("sld_ssao_radius", 0.4f);
+        const float ssaoBias = sliderValue("sld_ssao_bias", 0.04f);
+        r.setSsaoEnabled(ssaoOn);
+        r.setSsaoStrength(ssaoOn ? ssaoStrength : 0.0f);
+        r.setSsaoParams(ssaoRadius, ssaoBias);
     }
 
     if (auto* w = _ui.findById("cmb_tonemap")) {

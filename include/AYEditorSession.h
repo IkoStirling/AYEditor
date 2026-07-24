@@ -141,6 +141,9 @@ private:
     void syncViewport();
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
+    // Freecam WASD uses GetAsyncKeyState (global). Gate on host HWND
+    // foreground + viewport hover (or active LMB look).
+    bool viewportAcceptsGameInput() const;
     void clearSplitterHovers();
     void syncSplitterRevealToMouse();
 
