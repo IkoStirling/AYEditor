@@ -8,6 +8,8 @@
 #include "AYImporter.h"
 #include "AYInspectorOverrides.h"
 #include "AYUIManager.h"
+#include "AYDockArea.h"
+#include "AYDockCard.h"
 #include "EditorChildWindowManager.h"
 
 #include "aymath/MathTypes.h"
@@ -88,6 +90,12 @@ public:
     ayt::ui::UIManager& ui() { return _ui; }
     const ayt::ui::UIManager& ui() const { return _ui; }
 
+    // D5.5 (2026-07-26): accessor for the optional child-window manager
+    // so the promote-callback injection (wirePromoteCallback) can route
+    // detachToOwnWindow into it. Returns nullptr when no manager is
+    // active (EditorSessionDesc::childWindowManager was null).
+    EditorChildWindowManager* childWindows() { return _childWindows.get(); }
+
 private:
     void bindToolbar();
     void bindMenuBar();
@@ -146,6 +154,14 @@ private:
     // ED-03: shared work for [Apply] - build the override
     // struct from staged fields and forward.
     void commitInspectorOverrides(const EntityInspectorOverrides& ov);
+
+    // D5.5 (2026-07-26): inject DockCard::setPromoteCallback into every
+    // DockCard reachable through _ui.root(). The callback closes over
+    // `this` and routes detachToOwnWindow() into the optional
+    // EditorChildWindowManager — a floating card promoted to its own
+    // HWND opens as a child window with the card's frame + id-derived
+    // layoutPath. No-op when _childWindows is null.
+    void wirePromoteCallback();
 
     void setModeLabel(const std::wstring& text);
     void onModeChanged(EditorMode mode);

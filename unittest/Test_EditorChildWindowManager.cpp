@@ -19,6 +19,9 @@
 #include "AYUIManager.h"
 #include "AYWindowManager.h"
 #include "AYWindowTypes.h"
+#include "AYDockArea.h"
+#include "AYDockCard.h"
+#include "AYDockOverlay.h"
 #include "AYMockRenderer.h"
 
 #include <cstdio>
@@ -179,5 +182,86 @@ TEST_CASE(test_child_window_config_parse) {
     CHECK(parseChildWindowConfig("").empty());
     CHECK(parseChildWindowConfig("/nonexistent/path/config.json").empty());
 }
+
+// -------------------------------------------------------------------------
+// 4. D5.5 (2026-07-26): card promotion wiring — building a dock tree
+//    with a floating card, injecting the promote callback via
+//    EditorChildWindowManager, and calling detachToOwnWindow() on the
+//    card should open a real top-level HWND and bump mgr.count() to 1.
+//    Win32 only (mirrors test 1's gating).
+// -------------------------------------------------------------------------
+#if defined(_WIN32)
+TEST_CASE(test_card_promotion_opens_top_level_hwnd) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "D5.5 Editor Primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+
+    MockRenderer backend;
+    UIManager primary;
+    primary.initialize(&backend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    // Build a primary-root dock with one floating card so the card's
+    // parent is a DockOverlay (the only parent DockCard::detachToOwnWindow
+    // accepts for promotion).
+    auto* dock = new DockArea();
+    dock->setId("shell");
+    primary.root()->addChild(dock);
+
+    DockOverlay* overlay = dock->getOverlay();
+    CHECK(overlay != nullptr);
+    auto* profiler = new DockCard();
+    profiler->setId("profiler");
+    profiler->setTitle(L"Profiler");
+    profiler->setPosition({800.0f, 60.0f});
+    profiler->setSize({320.0f, 220.0f});
+    overlay->addFloatingCard(profiler);
+
+    EditorChildWindowManager mgr(wm, primary);
+
+    // Inject the promote callback. Mirrors the wiring
+    // EditorSession::wirePromoteCallbackRecursive does for floating cards.
+    profiler->setPromoteCallback(
+        [&mgr](const std::string& cardId,
+               const std::wstring& title,
+               int x, int y, int w, int h) -> bool {
+            std::string narrowTitle(title.begin(), title.end());
+            ChildWindowConfig cfg;
+            cfg.title      = std::move(narrowTitle);
+            cfg.layoutPath = cardId + ".json";   // best-effort
+            cfg.x = x; cfg.y = y;
+            cfg.width  = w; cfg.height = h;
+            void* hOut = nullptr;
+            return mgr.openChildWindow(cfg, hOut);
+        });
+
+    // Pre-condition: zero children.
+    CHECK(mgr.count() == 0);
+
+    // Trigger the promotion.
+    const bool accepted = profiler->detachToOwnWindow();
+    CHECK(accepted);
+
+    // The manager now owns one entry; the floating card has detached
+    // from the overlay. The child UIManager reports the promoted
+    // frame size verbatim.
+    CHECK(mgr.count() == 1);
+    CHECK(overlay->getFloatingCardCount() == 0);
+    CHECK(mgr.entries()[0].ui != nullptr);
+    CHECK(mgr.entries()[0].ui->getClientSize().x == 320.0f);
+    CHECK(mgr.entries()[0].ui->getClientSize().y == 220.0f);
+
+    // Close the promoted window to clean up the HWND before teardown.
+    mgr.closeChildWindow(mgr.entries()[0].handle);
+    CHECK(mgr.count() == 0);
+
+    primary.shutdown();
+    wm.destroyWindow();
+}
+#endif
 
 TEST_SUITE_END

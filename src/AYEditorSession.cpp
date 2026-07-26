@@ -111,6 +111,13 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             AY_EDITOR_TRACE("initialize: opened %zu child window(s)",
                             _childWindows->count());
         }
+        // D5.5 (2026-07-26): now that the child-window manager is live,
+        // give every DockCard reachable from the primary UI's root a
+        // promote-callback that closes over `_childWindows`. Cards in
+        // slots AND floating cards on the overlay both get wired; the
+        // card itself decides whether detachToOwnWindow is meaningful
+        // (floating card path; slot-card promotion is a future cut).
+        wirePromoteCallback();
     }
 
     return true;
@@ -1204,6 +1211,85 @@ void EditorSession::commitInspectorOverrides(const EntityInspectorOverrides& ov)
     if (_repaintCallback) {
         _repaintCallback();
     }
+}
+
+// =============================================================================
+// D5.5 — Card promotion wiring.
+//
+// We walk the primary UIManager's root widget tree and inject
+// setPromoteCallback into every DockCard we encounter (slot or floating).
+// The lambda closes over `this` so detachToOwnWindow on any card routes
+// into the optional EditorChildWindowManager. Card-promotion is a
+// pure-AYUI feature; the only AYEditor involvement is injecting the
+// callback — we do NOT touch DockCard's interface here (callback
+// injection is the contract, per design §17.5 D5.5).
+//
+// Walk strategy: recursive descent via getChildren(). The root may be
+// nullptr (no layout loaded yet) — we silently no-op. A DockArea
+// that isn't reached because the layout tree didn't include one also
+// no-ops; there are simply no cards to wire.
+// =============================================================================
+
+namespace {
+void wirePromoteCallbackRecursive(ayt::ui::Widget* w, EditorSession* session) {
+    if (!w) return;
+    if (auto* dock = dynamic_cast<ayt::ui::DockArea*>(w)) {
+        // Only wire floating cards. Slot-docked cards are NOT promoted
+        // because DockCard::detachToOwnWindow's parent == DockOverlay
+        // gate (K-INV-D5.5 in AYDockCard.cpp) would reject them anyway;
+        // injecting a no-op-true callback would invite confusion. The
+        // slot-card-promotion path is a future cut.
+        if (auto* overlay = dock->getOverlay()) {
+            for (size_t i = 0; i < overlay->getFloatingCardCount(); ++i) {
+                if (auto* card = overlay->getFloatingCard(i)) {
+                    card->setPromoteCallback(
+                        [session](
+                            const std::string& cardId,
+                            const std::wstring& title,
+                            int x, int y, int w, int h) -> bool {
+                            // Convert wstring title -> narrow UTF-8
+                            // for ChildWindowConfig::title (the
+                            // top-level window title is wide internally
+                            // in AYDevice, but ChildWindowConfig is the
+                            // narrow-string intermediate used at the
+                            // AYEditor API boundary).
+                            std::string narrowTitle(title.begin(),
+                                                    title.end());
+                            ChildWindowConfig cfg;
+                            cfg.title = std::move(narrowTitle);
+                            // The promoted card keeps its id as a
+                            // loadLayout hint; the child's loadLayout
+                            // is best-effort (open still succeeds on
+                            // missing file).
+                            cfg.layoutPath = cardId + ".json";
+                            cfg.x = x;
+                            cfg.y = y;
+                            cfg.width  = w;
+                            cfg.height = h;
+                            void* hOut = nullptr;
+                            if (session && session->childWindows()) {
+                                return session->childWindows()
+                                    ->openChildWindow(cfg, hOut);
+                            }
+                            return false;
+                        });
+                }
+            }
+        }
+        // Don't descend — DockArea owns its subtree and we already
+        // walked it via overlay enumeration. Returning here matches
+        // the explicit "I own my tree" stance of CompoundWidget.
+        return;
+    }
+    for (ayt::ui::Widget* child : w->getChildren()) {
+        wirePromoteCallbackRecursive(child, session);
+    }
+}
+} // namespace
+
+void EditorSession::wirePromoteCallback() {
+    if (!_childWindows) return;  // no manager → no-op
+    wirePromoteCallbackRecursive(_ui.root(), this);
 }
 
 void EditorSession::setModeLabel(const std::wstring& text) {
