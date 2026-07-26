@@ -896,25 +896,33 @@ void EditorPlayRuntime::ensureGlassMaterialAlpha()
         mat, ayt::render::BlendMode::Alpha);
 }
 
-void EditorPlayRuntime::clearCube() noexcept {
-    if (_cubeEntity != nullptr) {
-        ayt::entity::World::instance().destroyEntity(_cubeEntity);
-        _cubeEntity = nullptr;
+namespace {
+
+// World::shutdown() deletes entities but leaves EditorPlayRuntime's raw
+// pointers dangling. Only destroy while the world still owns them.
+void releaseOwnedEntity(ayt::entity::Entity*& ptr) noexcept
+{
+    if (ptr == nullptr) {
+        return;
     }
+    if (ayt::entity::World::instance().isInitialized()) {
+        ayt::entity::World::instance().destroyEntity(ptr);
+    }
+    ptr = nullptr;
+}
+
+} // namespace
+
+void EditorPlayRuntime::clearCube() noexcept {
+    releaseOwnedEntity(_cubeEntity);
 }
 
 void EditorPlayRuntime::clearGround() noexcept {
-    if (_groundEntity != nullptr) {
-        ayt::entity::World::instance().destroyEntity(_groundEntity);
-        _groundEntity = nullptr;
-    }
+    releaseOwnedEntity(_groundEntity);
 }
 
 void EditorPlayRuntime::clearGlass() noexcept {
-    if (_glassEntity != nullptr) {
-        ayt::entity::World::instance().destroyEntity(_glassEntity);
-        _glassEntity = nullptr;
-    }
+    releaseOwnedEntity(_glassEntity);
 }
 
 // Phase 2a: hot-swap. Sequence mirrors the spawn policy documented
@@ -1035,10 +1043,13 @@ void EditorPlayRuntime::applyComponentOverrides(
 }
 
 void EditorPlayRuntime::clearCharacter() noexcept {
-    if (_characterEntity != nullptr) {
-        ayt::entity::destroyCharacter(_characterEntity);
-        _characterEntity = nullptr;
+    if (_characterEntity == nullptr) {
+        return;
     }
+    if (ayt::entity::World::instance().isInitialized()) {
+        ayt::entity::destroyCharacter(_characterEntity);
+    }
+    _characterEntity = nullptr;
 }
 
 bool EditorPlayRuntime::startPlay()
@@ -1170,10 +1181,7 @@ void EditorPlayRuntime::spawnPlayerControllerIfNeeded() {
 }
 
 void EditorPlayRuntime::clearPlayerController() noexcept {
-    if (_playerEntity != nullptr) {
-        ayt::entity::World::instance().destroyEntity(_playerEntity);
-        _playerEntity = nullptr;
-    }
+    releaseOwnedEntity(_playerEntity);
     _playerScriptBound = false;
 }
 

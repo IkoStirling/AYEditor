@@ -15,6 +15,7 @@ set(SRC_FILES
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
+    src/EditorChildWindowManager.cpp  # D5+.5 (2026-07-26): child WindowManager wiring
     src/EditorPlayerController.cpp  # INT-01 sample script host + AYReflect registration
 )
 
@@ -27,6 +28,7 @@ set(HEAD_FILES
     include/AYImporter.h
     include/AYImportDialog.h
     include/AYImportedCharacterMapper.h
+    include/EditorChildWindowManager.h  # D5+.5 (2026-07-26)
     include/EditorPlayerController.h
 )
 
@@ -40,6 +42,10 @@ target_include_directories(${MODULE_NAME} PRIVATE
     ${AY_RESOURCE_ROOT}/include/assetsImpl
     ${AY_RESOURCE_ROOT}/interface
     ${AY_RESOURCE_ROOT}/interface/assetsDefs
+    # D5+.5 (2026-07-26): nlohmann/json single-header lives in
+    # AYUI's thirdparty_/; reuse instead of pulling a new dep into
+    # AYEditor. Matches the AYUI Loader/UILayoutLoader.cpp pattern.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/thirdparty_/nlohmann
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication

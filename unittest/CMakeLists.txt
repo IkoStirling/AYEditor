@@ -46,4 +46,15 @@ if(MSVC)
     )
 endif()
 
+# D5+.5 (2026-07-26): Disable /OPT:REF for this test binary only —
+# MSVC's optimizer was stripping the AYTest static `_reg_*`
+# initializers when their only "use" was inside the initializer
+# itself (calling registerTest to append to the chain). With
+# /OPT:NO REF, every symbol in the .obj survives the link, so the
+# static init table is preserved end-to-end. Test binary only;
+# demos (which link the same pair without issue) keep /OPT:REF.
+if(MSVC)
+    target_link_options(${MODULE_NAME} PRIVATE "/OPT:NOREF")
+endif()
+
 add_test(NAME ${MODULE_NAME} COMMAND ${MODULE_NAME})

@@ -8,6 +8,7 @@
 #include "AYImporter.h"
 #include "AYInspectorOverrides.h"
 #include "AYUIManager.h"
+#include "EditorChildWindowManager.h"
 
 #include "aymath/MathTypes.h"
 
@@ -16,6 +17,8 @@
 
 struct HWND__;
 using HWND = HWND__*;
+
+namespace ayt::device { class WindowManager; }
 
 namespace ayt::editor {
 
@@ -28,6 +31,14 @@ struct EditorSessionDesc {
     std::string layoutPath;
     HWND hostWindow = nullptr;
     ImportedCharacter importedCharacter;  // empty = fall back to cube
+
+    // D5+.5 (2026-07-26): optional child-window manager wiring.
+    // Both fields are nullable (no children requested by default).
+    // When `childWindowManager` is non-null + `childWindowConfigPath`
+    // is non-empty, EditorSession parses the JSON + opens each entry
+    // through the manager after primary UIManager is initialized.
+    ayt::device::WindowManager* childWindowManager = nullptr;
+    std::string childWindowConfigPath;
 };
 
 class EditorSession {
@@ -150,6 +161,15 @@ private:
     EditorPlayRuntime _playRuntime;
     EditorGameView _gameView;
     ayt::ui::UIManager _ui;
+
+    // D5+.5 (2026-07-26): optional child-window manager. Late-bound
+    // via make_unique in initialize() when desc.childWindowManager
+    // is non-null. Reset BEFORE _ui.shutdown() per K-INV-D5-6:
+    // ~EditorChildWindowManager destroys child HWNDs while primary
+    // UI is still alive (its render path can be called with active
+    // pointer in primary, never nullptr).
+    std::unique_ptr<EditorChildWindowManager> _childWindows;
+
     HWND _hostWindow = nullptr;
     std::string _layoutPath;
     RepaintCallback _repaintCallback;

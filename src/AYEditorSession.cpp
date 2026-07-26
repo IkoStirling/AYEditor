@@ -88,6 +88,31 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
 
     syncViewport();
     AY_EDITOR_TRACE("initialize: done");
+
+    // D5+.5 (2026-07-26): wire optional child-window manager. Only
+    // constructs when the host passed a non-null WindowManager — all
+    // existing callers (EditorShellDemo, ShutdownRepro, tests) are
+    // unaffected because both `childWindowManager` and
+    // `childWindowConfigPath` default-empty in EditorSessionDesc.
+    if (desc.childWindowManager != nullptr) {
+        _childWindows = std::make_unique<EditorChildWindowManager>(
+            *desc.childWindowManager, _ui);
+        if (!desc.childWindowConfigPath.empty()) {
+            const auto cfgs =
+                parseChildWindowConfig(desc.childWindowConfigPath);
+            for (const auto& cfg : cfgs) {
+                void* h = nullptr;
+                if (!_childWindows->openChildWindow(cfg, h)) {
+                    std::fprintf(stderr,
+                        "[EditorSession] child window '%s' failed to open\n",
+                        cfg.title.c_str());
+                }
+            }
+            AY_EDITOR_TRACE("initialize: opened %zu child window(s)",
+                            _childWindows->count());
+        }
+    }
+
     return true;
 }
 
@@ -106,6 +131,13 @@ void EditorSession::shutdown() {
 
     _gameView.setModeChangedCallback({});
     _repaintCallback = nullptr;
+    // K-INV-D5-6: tear down child HWNDs BEFORE primary UIManager
+    // shutdown. ~EditorChildWindowManager calls _wm.destroyTopLevelWindow
+    // for every entry; ~UIManager on each child may poke
+    // g_activeUIManager if it was active during the last tick. Doing
+    // this here (with _ui still alive and owning the active slot)
+    // avoids an UAF cleanup race against the primary.
+    _childWindows.reset();
     // Tear down Play/renderer borrow before UI widgets — avoids
     // Inspector path strings and GPU borrows racing UI teardown.
     _playRuntime.shutdownEngine();
@@ -124,6 +156,14 @@ void EditorSession::setClientSize(float width, float height) {
 }
 
 void EditorSession::update(float dt) {
+    // D5+.5: tick every open child (each via pushActive scope) before
+    // the primary update so the active pointer is correctly swapped
+    // before any per-frame UI logic that might read g_activeUIManager.
+    // Pass nullptr backend — child UIManagers use K-INV-D5-4 null
+    // backend no-op; the host's _ui owns the only real backend.
+    if (_childWindows) {
+        _childWindows->tickAll(dt, nullptr);
+    }
     _ui.update(dt);
     // Per-frame reconcile: if the last known cursor is not on a splitter
     // band, force every SplitterHandle un-revealed. Leave events alone
