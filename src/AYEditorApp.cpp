@@ -9,12 +9,14 @@
 #include "AYDeviceInputProvider.h"
 #include "AYImportedCharacterMapper.h"
 #include "AYImporter.h"
+#include "AYNetworkModule.h"
 #include "AYRendererSubSystem.h"
 #include "AYScriptSubSystem.h"
 #include "AYSubSystemRegistry.h"
 #include "AYUIRenderBackend.h"
 
 #include <ayevent/EventBus.h>
+#include <ayplatform/Console.h>
 
 #include <chrono>
 #include <cstdio>
@@ -51,6 +53,7 @@ void attachDebugConsole()
     FILE* stream = nullptr;
     freopen_s(&stream, "CONOUT$", "w", stdout);
     freopen_s(&stream, "CONOUT$", "w", stderr);
+    ayt::platform::ensureConsoleUtf8();
     std::fprintf(stdout, "[EditorApp] debug console attached\n");
 }
 
@@ -278,6 +281,7 @@ void EditorApp::registerSubSystems()
     // Entity ECS + render systems (no RendererSubSystem — that lives in
     // AYRenderer and must not be pulled through AYEntity bootstrap).
     ayt::entity::bootstrapModule();
+    ayt::net::registerNetworkSubSystem();
     ayt::render::RendererSubSystem::registerSubSystem();
 
     // INT-01 (2026-07-15): ScriptSubSystem drives Logia tickAmbient /
@@ -376,19 +380,24 @@ void EditorApp::run()
         const std::string layoutPath = resolveLayoutPath();
 
     // ---- G2: --import <path> bootstrap ----------------------------------
-    // Parse argv for `--import <path.fbx>`. When present, run the ED-01
-    // importer into the editor cache, map the ConversionResult into an
-    // ImportedCharacter via the G1 helper, and stash it on
-    // sessionDesc.importedCharacter so EditorSession::initialize forwards
-    // it to EditorPlayRuntime. On any failure (parse error, missing file,
-    // extension unknown, FBX missing animation, etc.) we log and
-    // continue - the cube fallback path remains intact. G3 documents this
-    // policy on the startPlay() side.
+    // Parse argv for `--import <path.fbx>`. When absent, fall back to
+    // `_defaultImportPath` (AYEditorShell_Demo sets Sour.fbx). When
+    // present, run the ED-01 importer into the editor cache, map the
+    // ConversionResult into an ImportedCharacter via the G1 helper, and
+    // stash it on sessionDesc.importedCharacter so EditorSession::
+    // initialize forwards it to EditorPlayRuntime. On any failure we
+    // log and continue - the cube fallback path remains intact.
     ImportedCharacter importedCharacter;
     {
         const std::vector<std::string> tokens =
             tokenizeCommandLine(::GetCommandLineA());
-        const std::string importPath = findImportPath(tokens);
+        std::string importPath = findImportPath(tokens);
+        if (importPath.empty() && !_defaultImportPath.empty()) {
+            importPath = _defaultImportPath;
+            std::fprintf(stderr,
+                         "[EditorApp] no --import; using default: %s\n",
+                         importPath.c_str());
+        }
         if (!importPath.empty()) {
             const std::string cacheRoot =
                 EditorPlayRuntime::resolvePersistentCacheRoot();
@@ -401,6 +410,10 @@ void EditorApp::run()
                              "[EditorApp] import failed: %s (falling back to cube)\n",
                              result.errorMessage.c_str());
             } else {
+                if (result.usedCache) {
+                    std::fprintf(stderr,
+                                 "[EditorApp] import cache hit (no FBX convert)\n");
+                }
                 ImportedCharacterMapDiagnostics diag;
                 importedCharacter = mapConversionToImportedCharacter(
                     result.conversion, cacheRoot, diag);
@@ -416,12 +429,26 @@ void EditorApp::run()
                                  missing.c_str());
                     importedCharacter = ImportedCharacter{};
                 } else {
+                    if (!diag.missing.empty()) {
+                        std::string optional;
+                        for (size_t i = 0; i < diag.missing.size(); ++i) {
+                            if (i > 0) optional += ", ";
+                            optional += diag.missing[i];
+                        }
+                        std::fprintf(stderr,
+                                     "[EditorApp] import optional missing [%s] "
+                                     "(bind-pose / default lit OK)\n",
+                                     optional.c_str());
+                    }
                     std::fprintf(stderr,
                                  "[EditorApp] imported character ready "
-                                 "(mesh=%s, skel=%s, anim=%s)\n",
+                                 "(mesh=%s, extraMeshes=%zu, skel=%s, anim=%s)\n",
                                  importedCharacter.meshPath.c_str(),
+                                 importedCharacter.additionalMeshPaths.size(),
                                  importedCharacter.skeletonPath.c_str(),
-                                 importedCharacter.animationPath.c_str());
+                                 importedCharacter.animationPath.empty()
+                                     ? "(none/bind-pose)"
+                                     : importedCharacter.animationPath.c_str());
                 }
             }
         }

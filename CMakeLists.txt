@@ -49,7 +49,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
-    PRIVATE AYEntity AYRenderer AYResource AYIO AYScript
+    PRIVATE AYEntity AYRenderer AYResource AYIO AYScript AYPlatform AYNetwork
     # INT-02 (2026-07-15): DeviceInputProvider lives in
     # AYDeviceSubSystem (not AYDevice core, by dep-graph design).
     # EditorApp.cpp references the type to install it into the Logia

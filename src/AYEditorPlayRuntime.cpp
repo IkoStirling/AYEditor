@@ -4,16 +4,22 @@
 #include "AYEntity.h"
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
+#include "AYNetworkModule.h"
 #include "AYRendererSubSystem.h"
 #include "AYRenderScene.h"
 #include "AYScriptSubSystem.h"
 #include "AYShadercDriver.h"
 #include "AYShadowConfig.h"
 
+#include <Replication/EntityReplicationAdapter.h>
+
 #include <components/AYAnimationComponent.h>  // ED-03 override target
+#include <components/AYHealthComponent.h>
 #include <components/AYMeshComponent.h>
+#include <components/AYNetworkComponent.h>
 #include <components/AYScriptComponent.h>
 #include <components/AYSkeletonComponent.h>   // ED-03 override target
+#include <components/AYTransformComponent.h>
 
 #include "EditorPlayerController.h"  // INT-01 sample script host
 
@@ -55,6 +61,121 @@
 namespace ayt::editor {
 
 namespace {
+
+constexpr uint32_t kEditorCubeNetId = 1;
+
+uint16_t resolveEditorPlayNetworkPort()
+{
+    if (const char* env = std::getenv("AY_NETWORK_PORT")) {
+        const int parsed = std::atoi(env);
+        if (parsed > 0 && parsed <= 65535) {
+            return static_cast<uint16_t>(parsed);
+        }
+    }
+    return 7777;
+}
+
+bool editorRegisterReplication(ayt::entity::Entity* entity, uint32_t netId,
+                               ayt::entity::IComponent* dataComponent,
+                               const char* componentTypeName)
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr || entity == nullptr || dataComponent == nullptr
+        || componentTypeName == nullptr) {
+        return false;
+    }
+    if (std::strcmp(componentTypeName, "HealthComponent") == 0) {
+        return ayt::net::EntityReplicationAdapter::registerEntityComponent<
+            ayt::entity::HealthComponent>(*net->getReplicationManager(), entity, netId);
+    }
+    return false;
+}
+
+void editorUnregisterReplication(uint32_t netId)
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr || netId == 0) {
+        return;
+    }
+    ayt::net::EntityReplicationAdapter::unregisterEntityComponent(
+        *net->getReplicationManager(), netId);
+}
+
+void installNetworkComponentBindingsOnce()
+{
+    static bool installed = false;
+    if (installed) {
+        return;
+    }
+    installed = true;
+    ayt::entity::NetworkComponent::setReplicationCallbacks(
+        editorRegisterReplication, editorUnregisterReplication);
+}
+
+void startEditorNetworkListenServer()
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    if (net->getMode() != ayt::net::ConnectionMode::Disconnected) {
+        return;
+    }
+    const uint16_t port = resolveEditorPlayNetworkPort();
+    net->listen(port);
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] Network listen-server on port %u (AY_NETWORK_PORT to override)\n",
+        static_cast<unsigned>(port));
+}
+
+void stopEditorNetworkListenServer()
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    if (net->getMode() == ayt::net::ConnectionMode::Disconnected) {
+        return;
+    }
+    net->disconnect();
+    std::fprintf(stderr, "[EditorPlayRuntime] Network disconnected\n");
+}
+
+void wireCubeNetworkReplication(ayt::entity::Entity* cubeEntity)
+{
+    if (cubeEntity == nullptr) {
+        return;
+    }
+    installNetworkComponentBindingsOnce();
+    if (ayt::net::findRegisteredNetworkSubSystem() == nullptr) {
+        return;
+    }
+
+    auto* netComp = cubeEntity->getComponent<ayt::entity::NetworkComponent>();
+    if (netComp == nullptr) {
+        netComp = cubeEntity->addComponent<ayt::entity::NetworkComponent>();
+    }
+    if (netComp == nullptr || netComp->isReplicationBound()) {
+        return;
+    }
+
+    netComp->setNetId(kEditorCubeNetId);
+    netComp->setOwner(true);
+
+    auto* health = cubeEntity->getComponent<ayt::entity::HealthComponent>();
+    if (health == nullptr) {
+        health = cubeEntity->addComponent<ayt::entity::HealthComponent>();
+    }
+    if (health == nullptr) {
+        return;
+    }
+    health->setHp(100);
+    netComp->setReplicatedComponent(health, "HealthComponent");
+    if (!netComp->bindReplication()) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] cube NetworkComponent bindReplication failed\n");
+    }
+}
 
 const char* kSimpleLitPhoskia = R"(
 material SimpleLit {
@@ -516,6 +637,8 @@ bool EditorPlayRuntime::ensurePresentationReady()
     loop.setRenderThreadEnabled(false);
 
     ayt::entity::bootstrapModule();
+    installNetworkComponentBindingsOnce();
+    ayt::net::registerNetworkSubSystem();
     ayt::render::RendererSubSystem::registerSubSystem();
 
     if (!loop.isPlaySessionActive() && !loop.preparePlaySession()) {
@@ -541,13 +664,14 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
     if (rendererSub == nullptr || !rendererSub->isReady()) {
         return;
     }
-    // B6 Editor host: default stays Forward+Shadows (zero visual
-    // regression). Deferred is opt-in via AY_DEFERRED=1 — same scene
-    // / 1 directional light should match Forward (parity acceptance).
+    // B6 Editor host: Deferred is the default (Skybox + GBuffer + multi-light
+    // + Transparent). Forward is opt-out via AY_DEFERRED=0 for hosts that
+    // need the simpler Shadow→FO→Transparent path.
     const char* deferredEnv = std::getenv("AY_DEFERRED");
     const bool useDeferred =
-        deferredEnv != nullptr && deferredEnv[0] != '\0' &&
-        std::strcmp(deferredEnv, "0") != 0;
+        deferredEnv == nullptr
+        || deferredEnv[0] == '\0'
+        || std::strcmp(deferredEnv, "0") != 0;
 
     if (useDeferred) {
         rendererSub->renderer().configurePipeline(
@@ -689,14 +813,14 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         std::fprintf(stderr,
             "[EditorPlayRuntime] render pipeline: Deferred "
             "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP → UI) "
-            "via AY_DEFERRED=%s; P5.5 sceneLights=%u "
+            "default; AY_DEFERRED=%s; P5.5 sceneLights=%u "
             "(keyDir+fillDir+point+spot; key-only shadow; IBL cube)\n",
-            deferredEnv, n);
+            deferredEnv != nullptr ? deferredEnv : "(unset)", n);
     } else {
         std::fprintf(stderr,
             "[EditorPlayRuntime] render pipeline: Forward "
-            "(Shadow → FO → Transparent → PP → UI); "
-            "set AY_DEFERRED=1 for Deferred + multi-light\n");
+            "(Shadow → FO → Transparent → PP → UI) via AY_DEFERRED=0; "
+            "unset AY_DEFERRED (or =1) for Deferred + skybox + multi-light\n");
     }
 }
 
@@ -757,13 +881,8 @@ void EditorPlayRuntime::registerUpdateListener() {
     }
 
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
-        // Never spawn/rotate the fallback cube while a character (or any
-        // non-cube visual) is the active Play subject — that used to leave
-        // a second mesh in the viewport beside the imported character.
-        if (_characterEntity != nullptr) {
-            return;
-        }
-
+        // Rotate the opaque reference cube when present. Character
+        // (if any) keeps its own AnimationSystem pose.
         spawnCubeIfNeeded();
         if (_cubeEntity == nullptr) {
             return;
@@ -935,10 +1054,17 @@ void EditorPlayRuntime::replaceImportedCharacter(const ImportedCharacter& charac
     setImportedCharacter(character);
     clearCharacter();
     clearCube();
-    if (!trySpawnImportedCharacter()) {
-        spawnCubeIfNeeded();
+    const bool hasCharacter = trySpawnImportedCharacter();
+    spawnCubeIfNeeded();
+    if (hasCharacter && _cubeEntity != nullptr) {
+        if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
+            xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+        }
     }
     spawnGroundIfNeeded();
+    if (_simulationActive) {
+        wireCubeNetworkReplication(_cubeEntity);
+    }
 }
 
 // ED-02: spawn the imported skinned character if the user has set
@@ -952,15 +1078,23 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
         return false;
     }
     if (!_importedCharacter.isValid()) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] no valid imported character "
+            "(mesh='%s' skel='%s') — cube fallback\n",
+            _importedCharacter.meshPath.c_str(),
+            _importedCharacter.skeletonPath.c_str());
         return false;
     }
 
-    _characterEntity = ayt::entity::spawnCharacterFromPaths(
-        _importedCharacter.meshPath,
-        _importedCharacter.materialPath,
-        _importedCharacter.skeletonPath,
-        _importedCharacter.animationPath);
+    auto spawnOne = [&](const std::string& meshPath) -> ayt::entity::Entity* {
+        return ayt::entity::spawnCharacterFromPaths(
+            meshPath,
+            _importedCharacter.materialPath,
+            _importedCharacter.skeletonPath,
+            _importedCharacter.animationPath);
+    };
 
+    _characterEntity = spawnOne(_importedCharacter.meshPath);
     if (_characterEntity == nullptr) {
         std::fprintf(stderr,
             "[EditorPlayRuntime] spawnCharacterFromPaths returned "
@@ -968,13 +1102,45 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
         return false;
     }
 
-    // ED-03: if the Inspector stashed overrides earlier
-    // (before any character was spawned, or via a previous
-    // round), apply them to the freshly spawned entity now.
-    // Doing this here means the user can hot-swap an FBX, set
-    // new clip + skel paths in the Inspector, click Play, and
-    // see the animation bound to the entity on the very first
-    // tick.
+    // Default 1.0 — Assimp FBX often already lands near meters. MMD cm
+    // assets: set AY_EDITOR_CHARACTER_SCALE=0.01. The previous 0.01
+    // default made meter-scale meshes an invisible speck next to the cube.
+    float characterScale = 1.0f;
+    if (const char* envScale = std::getenv("AY_EDITOR_CHARACTER_SCALE")) {
+        const float parsed = static_cast<float>(std::atof(envScale));
+        if (parsed > 0.0f) {
+            characterScale = parsed;
+        }
+    }
+    auto applyScale = [characterScale](ayt::entity::Entity* e) {
+        if (e == nullptr) return;
+        if (auto* xf = e->getComponent<ayt::entity::Transform>()) {
+            xf->scale = ayt::math::FVector3(
+                characterScale, characterScale, characterScale);
+        }
+    };
+    applyScale(_characterEntity);
+
+    for (const std::string& extraMesh : _importedCharacter.additionalMeshPaths) {
+        ayt::entity::Entity* part = spawnOne(extraMesh);
+        if (part == nullptr) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] extra mesh spawn failed: %s\n",
+                extraMesh.c_str());
+            continue;
+        }
+        applyScale(part);
+        _additionalCharacterEntities.push_back(part);
+    }
+
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] spawned character meshes=%zu scale=%.4f "
+        "(anim=%s)\n",
+        1u + _additionalCharacterEntities.size(),
+        characterScale,
+        _importedCharacter.animationPath.empty() ? "bind-pose"
+                                                 : "clip");
+
     if (!_pendingOverrides.isCleared()) {
         applyComponentOverrides(_pendingOverrides);
     }
@@ -1037,18 +1203,31 @@ void EditorPlayRuntime::applyComponentOverrides(
                     overrides.animationPathOverride.c_str());
             } else {
                 animComp->clipPath = overrides.animationPathOverride;
+                // Clip present → switch back onto the skinned draw path.
+                if (auto* meshComp =
+                        _characterEntity->getComponent<ayt::entity::MeshComponent>()) {
+                    meshComp->skinned = true;
+                    // Force AnimationSystem to (re)bind the player next tick.
+                    if (auto* skelComp =
+                            _characterEntity->getComponent<ayt::entity::SkeletonComponent>()) {
+                        skelComp->loaded = false;
+                    }
+                }
             }
         }
     }
 }
 
 void EditorPlayRuntime::clearCharacter() noexcept {
-    if (_characterEntity == nullptr) {
-        return;
-    }
     if (ayt::entity::World::instance().isInitialized()) {
-        ayt::entity::destroyCharacter(_characterEntity);
+        for (ayt::entity::Entity* part : _additionalCharacterEntities) {
+            ayt::entity::destroyCharacter(part);
+        }
+        if (_characterEntity != nullptr) {
+            ayt::entity::destroyCharacter(_characterEntity);
+        }
     }
+    _additionalCharacterEntities.clear();
     _characterEntity = nullptr;
 }
 
@@ -1058,40 +1237,32 @@ bool EditorPlayRuntime::startPlay()
         return false;
     }
 
+    startEditorNetworkListenServer();
+
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
         rendererSub->renderer().resetDebugOverlayStats();
     }
 
     ayt::game::GameLoop::instance().resume();
     // Spawn-policy contract (G3):
-    //   1. trySpawnImportedCharacter() wins when EditorApp populated
-    //      sessionDesc.importedCharacter with a valid 4-tuple
-    //      (mesh + material + skeleton + animation) via the
-    //      `--import <path.fbx>` flag. See mapConversionToImportedCharacter
-    //      in AYImportedCharacterMapper.{h,cpp}; that helper enforces
-    //      Phase 1's "Animation is required" policy so a mesh-only
-    //      or mesh+skeleton-only conversion can never reach here with
-    //      a half-valid character.
-    //   2. The procedural cube is the fallback for every other path:
-    //      - no `--import` flag
-    //      - import failed (file missing / unsupported extension /
-    //        FBX parse error)
-    //      - import succeeded but produced no skinned character
-    //        (mapper returned success=false; cube still renders)
-    //      - trySpawnImportedCharacter was called but
-    //        spawnCharacterFromPaths returned nullptr at runtime
-    //        (resource adapter failure; cube replaces it)
-    //   3. Order is intentional: a designer passing a valid
-    //      `--import <character.fbx>` should always see that
-    //      character; the cube is the always-visible default when
-    //      nothing else resolves. Cube spawn is gated by
-    //      `_cubeEntity != nullptr` so it never doubles up with the
-    //      character entity.
-    if (!trySpawnImportedCharacter()) {
-        spawnCubeIfNeeded();
+    //   1. trySpawnImportedCharacter() when EditorApp populated
+    //      sessionDesc.importedCharacter with Mesh+Skeleton.
+    //   2. Always keep the procedural opaque cube as a lit reference
+    //      (offset aside when a character is present) so a failed /
+    //      invisible character cannot be mistaken for "cube removed".
+    //   3. Glass (Transparent) + ground still spawn every Play.
+    const bool hasCharacter = trySpawnImportedCharacter();
+    spawnCubeIfNeeded();
+    if (hasCharacter && _cubeEntity != nullptr) {
+        if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
+            // Keep the opaque cube visible beside the character so the
+            // Deferred opaque path can be verified independently of skinning.
+            xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+        }
     }
     spawnGroundIfNeeded();
     spawnGlassIfNeeded();
+    wireCubeNetworkReplication(_cubeEntity);
 
     // INT-01 (2026-07-15): spawn a PlayerController ScriptComponent
     // and bind <assetRoot>/Scripts/PlayerController.logia. The hot
@@ -1110,6 +1281,7 @@ bool EditorPlayRuntime::startPlay()
 void EditorPlayRuntime::enterEdit()
 {
     ayt::game::GameLoop::instance().pause();
+    stopEditorNetworkListenServer();
     clearCharacter();
     clearCube();
     clearGround();
