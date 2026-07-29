@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 struct HWND__;
 using HWND = HWND__*;
@@ -16,17 +18,31 @@ class Entity;
 
 namespace ayt::editor {
 
-// Phase 1 ED-02: when set (via setImportedCharacter), the Play mode
-// spawns the imported character instead of the procedural cube.
+// When set (via setImportedCharacter), the Play mode spawns the
+// imported character instead of the procedural cube.
+//
+// Visibility policy (2026-07-27): Mesh + Skeleton are required.
+// Material / Animation are optional — SkinnedMeshRenderSystem uses
+// an inline SkinnedLit (ignores .aymat), and empty animationPath
+// keeps bind-pose identity skin matrices (see AnimationSystem).
+// additionalMeshPaths hold every Mesh after the first (MMD FBX often
+// splits body/hair/accessories); each is spawned as its own entity
+// sharing the same skeleton/animation paths.
 struct ImportedCharacter {
     std::string meshPath;
     std::string materialPath;
     std::string skeletonPath;
     std::string animationPath;
+    std::vector<std::string> additionalMeshPaths;
     bool isValid() const {
-        return !meshPath.empty() && !materialPath.empty()
-            && !skeletonPath.empty() && !animationPath.empty();
+        return !meshPath.empty() && !skeletonPath.empty();
     }
+};
+
+// Network Play role for AYEditorShell_Demo dual-process verification.
+enum class NetPlayRole : uint8_t {
+    Server = 0,  // listen + authoritative spawn (default Editor Play)
+    Client = 1,  // connect + consume EntitySpawn / replication
 };
 
 // Single-window composite presentation: bgfx on main AYDevice window.
@@ -41,6 +57,9 @@ public:
     void setHostWindow(HWND hostWindow);
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
+    void setNetPlayRole(NetPlayRole role) { _netPlayRole = role; }
+    NetPlayRole netPlayRole() const { return _netPlayRole; }
+    void setNetConnectHost(std::string host) { _netConnectHost = std::move(host); }
 
     // Phase 2a: hot-swap. Replaces whatever entity is currently
     // spawned (cube, previous character, or nothing) with the new
@@ -96,6 +115,15 @@ public:
     // swap. Safe to call with no cube spawned (no-op).
     void clearCube() noexcept;
     ayt::entity::Entity* selectedCharacterEntity() const { return _characterEntity; }
+    ayt::entity::Entity* cubeEntity() const { return _cubeEntity; }
+    // Prefer character; otherwise the procedural cube (Play fallback).
+    ayt::entity::Entity* primarySelectableEntity() const {
+        return _characterEntity != nullptr ? _characterEntity : _cubeEntity;
+    }
+    // Extra mesh parts (MMD multi-mesh); primary is `_characterEntity`.
+    const std::vector<ayt::entity::Entity*>& additionalCharacterEntities() const {
+        return _additionalCharacterEntities;
+    }
 
     // G2: cache-root resolution promoted to public-static so
     // EditorApp::run() (which lives outside this class) can derive
@@ -136,6 +164,13 @@ private:
     // Deferred setSkySource works regardless of process cwd.
     bool seedSkyBoxPng();
 
+    void startEditorNetworkClient();
+    void installServerReplicationLateJoinHandler();
+    void rebroadcastServerReplicationSpawns();
+    void pollClientNetworkReplication();
+    bool trySpawnClientReplicatedEntity(uint32_t netId, uint16_t typeHash);
+    void clearClientReplicatedEntities() noexcept;
+    ayt::entity::Entity* spawnVisualCubeEntity(uint32_t netId);
 
     HWND _hostWindow = nullptr;
     uint32_t _clientWidth = 1280;
@@ -163,6 +198,7 @@ private:
     ayt::entity::Entity* _groundEntity = nullptr;
     ayt::entity::Entity* _glassEntity = nullptr;
     ayt::entity::Entity* _characterEntity = nullptr;
+    std::vector<ayt::entity::Entity*> _additionalCharacterEntities;
     ayt::entity::Entity* _playerEntity = nullptr;
     bool _playerScriptBound = false;
     uint64_t _updateListenerId = 0;
@@ -188,6 +224,12 @@ private:
     // Character so the user's per-character clip/skel picks
     // persist across hot-swap.
     EntityInspectorOverrides _pendingOverrides;
+
+    NetPlayRole _netPlayRole = NetPlayRole::Server;
+    std::string _netConnectHost = "127.0.0.1";
+    std::unordered_map<uint32_t, ayt::entity::Entity*> _clientReplicatedEntities;
+    std::unordered_map<uint32_t, int32_t> _clientReplicatedLastHp;
+    bool _serverLateJoinHandlerInstalled = false;
 };
 
 } // namespace ayt::editor

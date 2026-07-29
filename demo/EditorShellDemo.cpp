@@ -1,7 +1,22 @@
 // EditorShellDemo.cpp — E2-composite entry: EditorApp + single-window bgfx composite
+//
+// Default character: Sour Miku FBX (MMD-origin, model only — no clip).
+// First convert can take ~1–2 minutes; later launches reuse
+// ayeditor_cache/.../Sour.aydep.json (bind-pose preview). Override with
+// `--import <other.fbx>`, AY_EDITOR_FORCE_IMPORT=1, or
+// AY_EDITOR_CHARACTER_SCALE=<float>.
 
 #include "AYEditorApp.h"
 #include "AYGameLoop.h"
+
+#include <cstdio>
+
+namespace {
+
+constexpr const char* kDefaultSourFbx =
+    "D:/Projects/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour.fbx";
+
+} // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
@@ -17,6 +32,14 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     desc.enableRenderThread = false;
 
     auto app = ayt::editor::EditorApp::create(desc);
+    app->setDefaultImportPath(kDefaultSourFbx);
+    std::fprintf(stderr,
+                 "[EditorShellDemo] default import: %s\n"
+                 "[EditorShellDemo] note: model-only FBX → bind-pose; "
+                 "first convert ~1–2 min, then cache\n"
+                 "[EditorShellDemo] net client: AYEditorShell_Demo.exe --net-client "
+                 "[--net-host 127.0.0.1] (start server Play first)\n",
+                 kDefaultSourFbx);
     app->run();
     return 0;
 }

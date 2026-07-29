@@ -224,6 +224,26 @@ std::string findImportPath(const std::vector<std::string>& tokens)
     return std::string{};
 }
 
+bool hasNetClientFlag(const std::vector<std::string>& tokens)
+{
+    for (const std::string& token : tokens) {
+        if (token == "--net-client") {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::string findNetConnectHost(const std::vector<std::string>& tokens)
+{
+    for (size_t i = 0; i + 1 < tokens.size(); ++i) {
+        if (tokens[i] == "--net-host") {
+            return tokens[i + 1];
+        }
+    }
+    return "127.0.0.1";
+}
+
 } // namespace
 
 EditorApp::EditorApp(const ayt::app::GameDesc& desc) : _desc(desc) {}
@@ -388,11 +408,18 @@ void EditorApp::run()
     // initialize forwards it to EditorPlayRuntime. On any failure we
     // log and continue - the cube fallback path remains intact.
     ImportedCharacter importedCharacter;
+    const std::vector<std::string> cmdTokens =
+        tokenizeCommandLine(::GetCommandLineA());
+    const bool netClientMode = hasNetClientFlag(cmdTokens);
+    const std::string netConnectHost = findNetConnectHost(cmdTokens);
+    if (netClientMode) {
+        std::fprintf(stderr,
+            "[EditorApp] net client mode (connect to %s)\n",
+            netConnectHost.c_str());
+    }
     {
-        const std::vector<std::string> tokens =
-            tokenizeCommandLine(::GetCommandLineA());
-        std::string importPath = findImportPath(tokens);
-        if (importPath.empty() && !_defaultImportPath.empty()) {
+        std::string importPath = findImportPath(cmdTokens);
+        if (!netClientMode && importPath.empty() && !_defaultImportPath.empty()) {
             importPath = _defaultImportPath;
             std::fprintf(stderr,
                          "[EditorApp] no --import; using default: %s\n",
@@ -459,6 +486,8 @@ void EditorApp::run()
     sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.hostWindow = hwnd;
+    sessionDesc.netClientMode = netClientMode;
+    sessionDesc.netConnectHost = netConnectHost;
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
@@ -475,6 +504,8 @@ void EditorApp::run()
         _devices->shutdown();
         return;
     }
+
+    session.autoEnterNetClientPlay();
 
         rendererSub = ayt::render::RendererSubSystem::findRegistered();
         if (rendererSub == nullptr) {

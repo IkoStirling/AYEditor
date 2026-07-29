@@ -5,6 +5,7 @@
 #include "AYEntityModule.h"
 #include "AYGameLoop.h"
 #include "AYNetworkModule.h"
+#include <IAYNetwork.h>
 #include "AYRendererSubSystem.h"
 #include "AYRenderScene.h"
 #include "AYScriptSubSystem.h"
@@ -322,6 +323,204 @@ void EditorPlayRuntime::setClientSize(uint32_t width, uint32_t height)
 void EditorPlayRuntime::setImportedCharacter(const ImportedCharacter& character)
 {
     _importedCharacter = character;
+}
+
+void EditorPlayRuntime::startEditorNetworkClient()
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    if (net->getMode() != ayt::net::ConnectionMode::Disconnected) {
+        return;
+    }
+    const uint16_t port = resolveEditorPlayNetworkPort();
+    net->connect(_netConnectHost.c_str(), port);
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] Network client connecting to %s:%u "
+        "(AY_NETWORK_PORT / --net-host to override)\n",
+        _netConnectHost.c_str(), static_cast<unsigned>(port));
+}
+
+void EditorPlayRuntime::installServerReplicationLateJoinHandler()
+{
+    if (_serverLateJoinHandlerInstalled || _netPlayRole != NetPlayRole::Server) {
+        return;
+    }
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    _serverLateJoinHandlerInstalled = true;
+    net->onConnectionChange([this](ayt::net::NetConnection* conn, bool connected,
+                                   ayt::net::DisconnectReason /*reason*/) {
+        if (!connected || _netPlayRole != NetPlayRole::Server || conn == nullptr) {
+            return;
+        }
+        (void)conn;
+        rebroadcastServerReplicationSpawns();
+    });
+}
+
+void EditorPlayRuntime::rebroadcastServerReplicationSpawns()
+{
+    if (_cubeEntity == nullptr) {
+        return;
+    }
+    auto* netComp = _cubeEntity->getComponent<ayt::entity::NetworkComponent>();
+    auto* health = _cubeEntity->getComponent<ayt::entity::HealthComponent>();
+    if (netComp == nullptr || health == nullptr || !netComp->isReplicationBound()) {
+        return;
+    }
+    if (editorRegisterReplication(_cubeEntity, netComp->getNetId(), health,
+                                  "HealthComponent")) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] rebroadcast EntitySpawn netId=%u for late joiner\n",
+            netComp->getNetId());
+    }
+}
+
+void EditorPlayRuntime::clearClientReplicatedEntities() noexcept
+{
+    if (ayt::entity::World::instance().isInitialized()) {
+        for (const auto& entry : _clientReplicatedEntities) {
+            if (entry.second != nullptr) {
+                ayt::entity::World::instance().destroyEntity(entry.second);
+            }
+        }
+    }
+    _clientReplicatedEntities.clear();
+    _clientReplicatedLastHp.clear();
+    _cubeEntity = nullptr;
+}
+
+ayt::entity::Entity* EditorPlayRuntime::spawnVisualCubeEntity(uint32_t /*netId*/)
+{
+    ayt::entity::Entity* entity = ayt::entity::World::instance().createEntity();
+    if (entity == nullptr) {
+        return nullptr;
+    }
+
+    auto* cubeXf = entity->addComponent<ayt::entity::Transform>();
+    cubeXf->position = ayt::math::FVector3(0.0f, 0.85f, 0.0f);
+    auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
+    mesh->meshPath      = _meshPath;
+    mesh->materialPath  = _materialPath;
+    mesh->castShadow    = true;
+    mesh->receiveShadow = false;
+    return entity;
+}
+
+bool EditorPlayRuntime::trySpawnClientReplicatedEntity(uint32_t netId, uint16_t typeHash)
+{
+    (void)typeHash;
+    if (_clientReplicatedEntities.find(netId) != _clientReplicatedEntities.end()) {
+        return false;
+    }
+
+    installNetworkComponentBindingsOnce();
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return false;
+    }
+
+    ayt::entity::Entity* entity = spawnVisualCubeEntity(netId);
+    if (entity == nullptr) {
+        return false;
+    }
+
+    auto* netComp = entity->addComponent<ayt::entity::NetworkComponent>();
+    netComp->setNetId(netId);
+    ayt::entity::HealthComponent* health =
+        entity->addComponent<ayt::entity::HealthComponent>();
+    if (health == nullptr) {
+        ayt::entity::World::instance().destroyEntity(entity);
+        return false;
+    }
+
+    if (!ayt::net::EntityReplicationAdapter::registerEntityComponent<
+            ayt::entity::HealthComponent>(*net->getReplicationManager(), entity, netId)) {
+        ayt::entity::World::instance().destroyEntity(entity);
+        return false;
+    }
+
+    _clientReplicatedEntities[netId] = entity;
+    _clientReplicatedLastHp[netId]   = health->getHp();
+    if (netId == kEditorCubeNetId) {
+        _cubeEntity = entity;
+    }
+
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] client spawned replicated cube netId=%u hp=%d\n",
+        netId, health->getHp());
+    return true;
+}
+
+void EditorPlayRuntime::pollClientNetworkReplication()
+{
+    if (_netPlayRole != NetPlayRole::Client || !_simulationActive) {
+        return;
+    }
+
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr || !net->isConnected()) {
+        return;
+    }
+
+    ayt::net::ReplicationManager* mgr = net->getReplicationManager();
+    if (mgr == nullptr) {
+        return;
+    }
+
+    for (uint32_t netId = 1; netId <= 32; ++netId) {
+        if (_clientReplicatedEntities.find(netId) != _clientReplicatedEntities.end()) {
+            continue;
+        }
+        uint16_t typeHash = 0;
+        if (!mgr->peekSpawnAnnouncement(netId, typeHash)) {
+            continue;
+        }
+        trySpawnClientReplicatedEntity(netId, typeHash);
+    }
+
+    std::vector<uint32_t> despawned;
+    for (const auto& entry : _clientReplicatedEntities) {
+        const uint32_t netId = entry.first;
+        ayt::entity::Entity* entity = entry.second;
+        if (mgr->findObject(netId) != nullptr) {
+            if (entity != nullptr) {
+                if (auto* health = entity->getComponent<ayt::entity::HealthComponent>()) {
+                    const int32_t hp = health->getHp();
+                    auto hpIt = _clientReplicatedLastHp.find(netId);
+                    if (hpIt == _clientReplicatedLastHp.end() || hpIt->second != hp) {
+                        _clientReplicatedLastHp[netId] = hp;
+                        std::fprintf(stderr,
+                            "[EditorPlayRuntime] client netId=%u hp=%d\n", netId, hp);
+                    }
+                }
+            }
+            continue;
+        }
+        despawned.push_back(netId);
+    }
+
+    for (uint32_t netId : despawned) {
+        auto it = _clientReplicatedEntities.find(netId);
+        if (it == _clientReplicatedEntities.end()) {
+            continue;
+        }
+        if (it->second != nullptr && ayt::entity::World::instance().isInitialized()) {
+            ayt::entity::World::instance().destroyEntity(it->second);
+        }
+        if (_cubeEntity == it->second) {
+            _cubeEntity = nullptr;
+        }
+        _clientReplicatedEntities.erase(it);
+        _clientReplicatedLastHp.erase(netId);
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] client despawned replicated entity netId=%u\n",
+            netId);
+    }
 }
 
 bool EditorPlayRuntime::ensureAssets() {
@@ -651,6 +850,7 @@ bool EditorPlayRuntime::ensurePresentationReady()
 
     loop.pause();
     applyEditorRenderPipeline();
+    installServerReplicationLateJoinHandler();
     _presentationReady = true;
     return true;
 }
@@ -881,9 +1081,12 @@ void EditorPlayRuntime::registerUpdateListener() {
     }
 
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
-        // Rotate the opaque reference cube when present. Character
-        // (if any) keeps its own AnimationSystem pose.
-        spawnCubeIfNeeded();
+        if (_netPlayRole == NetPlayRole::Client) {
+            pollClientNetworkReplication();
+        } else if (_simulationActive) {
+            spawnCubeIfNeeded();
+        }
+
         if (_cubeEntity == nullptr) {
             return;
         }
@@ -919,23 +1122,12 @@ void EditorPlayRuntime::spawnCubeIfNeeded() {
         return;
     }
 
-    _cubeEntity = ayt::entity::World::instance().createEntity();
+    _cubeEntity = spawnVisualCubeEntity(kEditorCubeNetId);
     if (_cubeEntity == nullptr) {
         return;
     }
 
-    auto* cubeXf = _cubeEntity->addComponent<ayt::entity::Transform>();
-    // Above ground top (y=0); high enough to avoid bury-on-rotate, low
-    // enough for a clear contact shadow on the receiver.
-    cubeXf->position = ayt::math::FVector3(0.0f, 0.85f, 0.0f);
-    auto* mesh = _cubeEntity->addComponent<ayt::entity::MeshComponent>();
-    mesh->meshPath     = _meshPath;
-    mesh->materialPath = _materialPath;
-    mesh->castShadow   = true;
-    // Cast-only: receiving self-shadow on the cube looks wrong with a
-    // single cascade; contact shadow on the ground is the goal.
-    mesh->receiveShadow = false;
-
+    auto* cubeXf = _cubeEntity->getComponent<ayt::entity::Transform>();
     const ayt::math::Float4x4 world =
         ayt::math::Transform::getMatrix(cubeXf->position, cubeXf->rotation, cubeXf->scale);
     std::fprintf(stderr,
@@ -1237,13 +1429,21 @@ bool EditorPlayRuntime::startPlay()
         return false;
     }
 
-    startEditorNetworkListenServer();
-
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
         rendererSub->renderer().resetDebugOverlayStats();
     }
 
     ayt::game::GameLoop::instance().resume();
+
+    if (_netPlayRole == NetPlayRole::Client) {
+        startEditorNetworkClient();
+        spawnGroundIfNeeded();
+        _simulationActive = true;
+        return true;
+    }
+
+    startEditorNetworkListenServer();
+
     // Spawn-policy contract (G3):
     //   1. trySpawnImportedCharacter() when EditorApp populated
     //      sessionDesc.importedCharacter with Mesh+Skeleton.
@@ -1282,6 +1482,12 @@ void EditorPlayRuntime::enterEdit()
 {
     ayt::game::GameLoop::instance().pause();
     stopEditorNetworkListenServer();
+    if (_netPlayRole == NetPlayRole::Client) {
+        clearClientReplicatedEntities();
+        clearGround();
+        _simulationActive = false;
+        return;
+    }
     clearCharacter();
     clearCube();
     clearGround();

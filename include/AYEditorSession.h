@@ -34,6 +34,10 @@ struct EditorSessionDesc {
     HWND hostWindow = nullptr;
     ImportedCharacter importedCharacter;  // empty = fall back to cube
 
+    // Dual-process net demo: `--net-client` auto-enters Play and connects.
+    bool netClientMode = false;
+    std::string netConnectHost = "127.0.0.1";
+
     // D5+.5 (2026-07-26): optional child-window manager wiring.
     // Both fields are nullable (no children requested by default).
     // When `childWindowManager` is non-null + `childWindowConfigPath`
@@ -73,6 +77,9 @@ public:
     bool shouldCompositeViewport() const;
     bool ensurePresentationReady();
     bool getViewportBounds(ayt::math::FRectangle& outBounds) const;
+
+    // `--net-client`: enter Play immediately after presentation bootstrap.
+    void autoEnterNetClientPlay();
 
     bool onMouseMove(float x, float y);
     bool onMouseButtonDown(float x, float y, int button);
@@ -122,11 +129,14 @@ private:
     void refreshInspectorLabels();
 
     // ED-03: select the live character entity for inspection.
-    // Bound to the toolbar [Select] button. If no character is
-    // currently spawned, logs and continues (the inspector
-    // stays in "No selection" state). Triggers a label refresh
-    // so the inspector mirrors the just-selected entity.
+    // Bound to View → Select Character. If no character is
+    // currently spawned, falls back to the procedural cube so
+    // Inspector is never stuck on "No selection" while Play shows
+    // something. Triggers a label refresh.
     void selectCharacter();
+
+    // Viewport LMB click (no drag) → select primary Play entity.
+    void selectPlayEntityFromViewport();
 
     // ED-03: commit the picked paths to the live character
     // (and to the runtime's pending-overrides buffer so a
@@ -207,8 +217,14 @@ private:
     float _lastMouseY = 0.0f;
     bool _hasLastMouse = false;
 
-    // Play/Paused freecam (LMB look + WASD/QE). Edit mode inactive.
+    // Play/Paused freecam (LMB drag look + WASD/QE). Edit mode inactive.
     EditorFreecam _freecam;
+    // Click-vs-drag: LMB down on viewport arms a pending click; if the
+    // cursor moves past slop we start freecam look instead of select.
+    bool  _viewportLmbPending = false;
+    bool  _viewportLmbDragged = false;
+    float _viewportLmbX = 0.0f;
+    float _viewportLmbY = 0.0f;
 
     // ED-03: staged Inspector pick state. Populated by
     // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
@@ -217,6 +233,12 @@ private:
     // is a no-op. Reset clears them.
     std::string _inspectorSkelPick;
     std::string _inspectorAnimPick;
+
+    // Viewport click cycles Character ↔ opaque cube so the Inspector
+    // visibly changes (full ray-pick deferred).
+    bool _inspectorPreferCube = false;
+    uint32_t _viewportClickCount = 0;
+    bool _netClientAutoPlay = false;
 };
 
 } // namespace ayt::editor

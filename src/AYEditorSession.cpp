@@ -48,6 +48,10 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
     _playRuntime.setImportedCharacter(desc.importedCharacter);
+    _playRuntime.setNetPlayRole(
+        desc.netClientMode ? NetPlayRole::Client : NetPlayRole::Server);
+    _playRuntime.setNetConnectHost(desc.netConnectHost);
+    _netClientAutoPlay = desc.netClientMode;
     // Pre-existing _CrtCheckMemory() failure on session_after_set_host
     // in Debug builds. Commented to keep the build runnable; the four
     // checks later in initialize() remain enabled as debug invariants.
@@ -262,6 +266,16 @@ bool EditorSession::ensurePresentationReady() {
     return _playRuntime.ensurePresentationReady();
 }
 
+void EditorSession::autoEnterNetClientPlay()
+{
+    if (!_netClientAutoPlay) {
+        return;
+    }
+    std::fprintf(stderr,
+        "[EditorSession] --net-client: auto-entering Play mode\n");
+    _gameView.setMode(EditorMode::Play);
+}
+
 bool EditorSession::getViewportBounds(ayt::math::FRectangle& outBounds) const {
     ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
     if (viewport == nullptr) {
@@ -395,6 +409,19 @@ bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseY = y;
     _hasLastMouse = true;
 
+    // Armed viewport LMB: past slop → freecam look (not a click-select).
+    if (_viewportLmbPending && !_viewportLmbDragged && !_freecam.isLooking()) {
+        const float dx = x - _viewportLmbX;
+        const float dy = y - _viewportLmbY;
+        if ((dx * dx + dy * dy) >= (5.0f * 5.0f)) {
+            _viewportLmbDragged = true;
+            _freecam.beginLook(_viewportLmbX, _viewportLmbY);
+            _freecam.updateLook(x, y);
+            pushFreecamToRenderer();
+            return true;
+        }
+    }
+
     if (_freecam.isLooking()) {
         _freecam.updateLook(x, y);
         pushFreecamToRenderer();
@@ -422,19 +449,47 @@ bool EditorSession::onMouseMove(float x, float y) {
 }
 
 bool EditorSession::onMouseButtonDown(float x, float y, int button) {
+    // Dismiss MenuBar popups on any click that is not inside an open
+    // menu. Play-mode freecam / isCapturing used to skip UIManager, so
+    // click-outside never ran and the dropdown stayed painted forever.
+    {
+        const ayt::math::FVector2 pos(x, y);
+        bool insideOpenMenu = false;
+        if (ayt::ui::Widget* overlay = _ui.getOverlayRoot()) {
+            for (ayt::ui::Widget* child : overlay->getChildren()) {
+                auto* menu = dynamic_cast<ayt::ui::Menu*>(child);
+                if (menu == nullptr || !menu->isOpen()) {
+                    continue;
+                }
+                if (menu->getWorldBounds().contains(pos)) {
+                    insideOpenMenu = true;
+                    break;
+                }
+            }
+        }
+        if (!insideOpenMenu) {
+            if (auto* menuBar =
+                    dynamic_cast<ayt::ui::MenuBar*>(_ui.findById("menubar"))) {
+                menuBar->closeOpenMenu();
+            }
+        }
+    }
+
     if (_ui.isCapturing()) {
         return _ui.onMouseButtonDown(x, y, button);
     }
 
-    // LMB on Game View (Play/Paused): start freecam look.
-    if (button == 0 && freecamActive() && !isChromePoint(x, y)) {
-        _ui.clearHover();
-        _freecam.beginLook(x, y);
-        return true; // host should SetCapture
-    }
-
     if (!isChromePoint(x, y)) {
         _ui.clearHover();
+
+        if (button == 0 && freecamActive()) {
+            // Defer freecam until drag past slop — short click selects.
+            _viewportLmbPending = true;
+            _viewportLmbDragged = false;
+            _viewportLmbX = x;
+            _viewportLmbY = y;
+            return true; // host should SetCapture
+        }
         return false;
     }
 
@@ -442,6 +497,19 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
+    if (button == 0 && _viewportLmbPending) {
+        const bool wasClick = !_viewportLmbDragged && !_freecam.isLooking();
+        _viewportLmbPending = false;
+        _viewportLmbDragged = false;
+        if (_freecam.isLooking()) {
+            _freecam.endLook();
+        }
+        if (wasClick) {
+            selectPlayEntityFromViewport();
+        }
+        return true;
+    }
+
     if (_freecam.isLooking() && button == 0) {
         _freecam.endLook();
         return true;
@@ -1055,11 +1123,7 @@ void EditorSession::importCharacterFromDialog()
 }
 
 // ED-03: walk the inspector's TextLabels and update them with
-// the currently-spawned character entity's path strings. Safe
-// to call from any time (refresh after spawn, refresh after
-// hot-swap, refresh after apply-overrides, refresh after
-// reset-overrides). When no character is spawned, sets the
-// title to "No selection".
+// the currently-spawned Play entity (character preferred, else cube).
 void EditorSession::refreshInspectorLabels()
 {
     auto setUtf8 = [this](const char* id, const std::string& utf8) {
@@ -1070,7 +1134,17 @@ void EditorSession::refreshInspectorLabels()
         }
     };
 
-    ayt::entity::Entity* e = _playRuntime.selectedCharacterEntity();
+    ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
+    ayt::entity::Entity* cube = _playRuntime.cubeEntity();
+    ayt::entity::Entity* e = nullptr;
+    if (_inspectorPreferCube && cube != nullptr) {
+        e = cube;
+    } else if (character != nullptr) {
+        e = character;
+    } else {
+        e = cube;
+    }
+
     if (e == nullptr) {
         setUtf8("inspector_hint", "No selection");
         setUtf8("inspector_mesh", "mesh: -");
@@ -1079,39 +1153,79 @@ void EditorSession::refreshInspectorLabels()
         return;
     }
 
-    setUtf8("inspector_hint", "Character");
+    const bool isCharacter = (e == character);
+    char hint[96];
+    std::snprintf(hint, sizeof(hint), "%s  (click#%u)",
+                  isCharacter ? "Character" : "Cube (opaque ref)",
+                  static_cast<unsigned>(_viewportClickCount));
+    setUtf8("inspector_hint", hint);
 
     if (auto* meshC = e->getComponent<ayt::entity::MeshComponent>()) {
         setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
+    } else {
+        setUtf8("inspector_mesh", "mesh: -");
     }
     if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
         setUtf8("inspector_skel", "skel: " + skelC->skeletonPath);
+    } else {
+        setUtf8("inspector_skel", "skel: -");
     }
     if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
-        setUtf8("inspector_anim", "anim: " + animC->clipPath);
+        setUtf8("inspector_anim",
+                animC->clipPath.empty() ? "anim: (bind-pose)"
+                                        : ("anim: " + animC->clipPath));
+    } else {
+        setUtf8("inspector_anim", "anim: -");
     }
 }
 
-// ED-03: [Select] handler. Snapshots the live character
-// entity's paths into the inspector labels and into the staged
-// pick state. Idempotent - clicking multiple times re-renders.
-// Phase 1 includes only the toolbar [Select] button as the
-// selection mechanism; ED-05 (Hierarchy panel) replaces it.
+void EditorSession::selectPlayEntityFromViewport()
+{
+    // Cycle Character ↔ opaque cube so Inspector labels change on
+    // every short click (ray-pick not required yet).
+    ++_viewportClickCount;
+    if (_playRuntime.selectedCharacterEntity() != nullptr
+        && _playRuntime.cubeEntity() != nullptr) {
+        _inspectorPreferCube = !_inspectorPreferCube;
+    } else {
+        _inspectorPreferCube = (_playRuntime.selectedCharacterEntity() == nullptr);
+    }
+    selectCharacter();
+}
+
+// ED-03: [Select] handler. Snapshots paths into the inspector.
+// Falls back to the procedural cube when character spawn failed.
 void EditorSession::selectCharacter()
 {
-    if (_playRuntime.selectedCharacterEntity() == nullptr) {
+    ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
+    ayt::entity::Entity* cube = _playRuntime.cubeEntity();
+    ayt::entity::Entity* e = nullptr;
+    if (_inspectorPreferCube && cube != nullptr) {
+        e = cube;
+    } else if (character != nullptr) {
+        e = character;
+    } else {
+        e = cube;
+    }
+
+    if (e == nullptr) {
         std::fprintf(stderr,
-            "[EditorSession] no character to select; click Import first\n");
+            "[EditorSession] nothing to select; enter Play first "
+            "(character or cube)\n");
         refreshInspectorLabels();
         return;
     }
 
-    auto* e = _playRuntime.selectedCharacterEntity();
-    if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
-        _inspectorSkelPick = skelC->skeletonPath;
-    }
-    if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
-        _inspectorAnimPick = animC->clipPath;
+    if (e == character) {
+        if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
+            _inspectorSkelPick = skelC->skeletonPath;
+        }
+        if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
+            _inspectorAnimPick = animC->clipPath;
+        }
+    } else {
+        _inspectorSkelPick.clear();
+        _inspectorAnimPick.clear();
     }
 
     refreshInspectorLabels();
@@ -1314,9 +1428,12 @@ void EditorSession::onModeChanged(EditorMode mode) {
         }
         break;
     case EditorMode::Play:
-        setModeLabel(L"PLAY");
+        setModeLabel(_netClientAutoPlay ? L"PLAY (NET CLIENT)" : L"PLAY");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
+        // Auto-select whatever Play just spawned so Inspector is never
+        // stuck on "No selection" while the viewport shows a cube.
+        selectCharacter();
         break;
     case EditorMode::Paused:
         setModeLabel(L"PAUSED");
