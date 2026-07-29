@@ -175,6 +175,10 @@ void wireCubeNetworkReplication(ayt::entity::Entity* cubeEntity)
     if (!netComp->bindReplication()) {
         std::fprintf(stderr,
             "[EditorPlayRuntime] cube NetworkComponent bindReplication failed\n");
+    } else {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] cube replication bound netId=%u (EntitySpawn broadcast)\n",
+            kEditorCubeNetId);
     }
 }
 
@@ -354,29 +358,76 @@ void EditorPlayRuntime::installServerReplicationLateJoinHandler()
     _serverLateJoinHandlerInstalled = true;
     net->onConnectionChange([this](ayt::net::NetConnection* conn, bool connected,
                                    ayt::net::DisconnectReason /*reason*/) {
-        if (!connected || _netPlayRole != NetPlayRole::Server || conn == nullptr) {
+        if (!connected || _netPlayRole != NetPlayRole::Server) {
             return;
         }
-        (void)conn;
-        rebroadcastServerReplicationSpawns();
+        rebroadcastServerReplicationSpawns(conn);
+        // Retry next frame in case GNS is not yet send-ready on this conn.
+        _pendingLateJoinConn = conn;
     });
 }
 
-void EditorPlayRuntime::rebroadcastServerReplicationSpawns()
+void EditorPlayRuntime::installClientReplicationConnectHandler()
+{
+    if (_clientConnectHandlerInstalled || _netPlayRole != NetPlayRole::Client) {
+        return;
+    }
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    _clientConnectHandlerInstalled = true;
+    net->onConnectionChange([this](ayt::net::NetConnection* /*conn*/, bool connected,
+                                   ayt::net::DisconnectReason /*reason*/) {
+        if (!connected || _netPlayRole != NetPlayRole::Client) {
+            return;
+        }
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] net client connected — polling spawn announcements\n");
+        pollClientNetworkReplication();
+    });
+}
+
+void EditorPlayRuntime::rebroadcastServerReplicationSpawns(ayt::net::NetConnection* lateJoiner)
 {
     if (_cubeEntity == nullptr) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] rebroadcast skipped: no cube entity (enter Play on server first)\n");
         return;
     }
     auto* netComp = _cubeEntity->getComponent<ayt::entity::NetworkComponent>();
     auto* health = _cubeEntity->getComponent<ayt::entity::HealthComponent>();
-    if (netComp == nullptr || health == nullptr || !netComp->isReplicationBound()) {
+    if (netComp == nullptr || health == nullptr) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] rebroadcast skipped: cube missing Network/Health component\n");
         return;
     }
-    if (editorRegisterReplication(_cubeEntity, netComp->getNetId(), health,
-                                  "HealthComponent")) {
+    if (!netComp->isReplicationBound()) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] rebroadcast skipped: cube replication not bound "
+            "(bindReplication failed at Play start?)\n");
+        return;
+    }
+
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    ayt::net::ReplicationManager* mgr = net->getReplicationManager();
+    if (mgr == nullptr) {
+        return;
+    }
+
+    const uint32_t netId = netComp->getNetId();
+    if (mgr->rebroadcastEntitySpawn(netId, lateJoiner)) {
         std::fprintf(stderr,
             "[EditorPlayRuntime] rebroadcast EntitySpawn netId=%u for late joiner\n",
-            netComp->getNetId());
+            netId);
+    } else {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] rebroadcast EntitySpawn failed netId=%u "
+            "(no registered replication object?)\n",
+            netId);
     }
 }
 
@@ -440,6 +491,8 @@ bool EditorPlayRuntime::trySpawnClientReplicatedEntity(uint32_t netId, uint16_t 
 
     if (!ayt::net::EntityReplicationAdapter::registerEntityComponent<
             ayt::entity::HealthComponent>(*net->getReplicationManager(), entity, netId)) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] client registerEntityComponent failed netId=%u\n", netId);
         ayt::entity::World::instance().destroyEntity(entity);
         return false;
     }
@@ -481,6 +534,14 @@ void EditorPlayRuntime::pollClientNetworkReplication()
             continue;
         }
         trySpawnClientReplicatedEntity(netId, typeHash);
+    }
+
+    if (!_clientLoggedWaitingSpawn && _clientReplicatedEntities.empty()
+        && mgr->spawnAnnouncementCount() == 0) {
+        _clientLoggedWaitingSpawn = true;
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] net client connected — waiting for EntitySpawn "
+            "from server (enter Play on host first, then --net-client)\n");
     }
 
     std::vector<uint32_t> despawned;
@@ -839,6 +900,11 @@ bool EditorPlayRuntime::ensurePresentationReady()
     installNetworkComponentBindingsOnce();
     ayt::net::registerNetworkSubSystem();
     ayt::render::RendererSubSystem::registerSubSystem();
+    if (_netPlayRole == NetPlayRole::Server) {
+        installServerReplicationLateJoinHandler();
+    } else {
+        installClientReplicationConnectHandler();
+    }
 
     if (!loop.isPlaySessionActive() && !loop.preparePlaySession()) {
         std::fprintf(stderr, "[EditorPlayRuntime] preparePlaySession failed\n");
@@ -850,7 +916,6 @@ bool EditorPlayRuntime::ensurePresentationReady()
 
     loop.pause();
     applyEditorRenderPipeline();
-    installServerReplicationLateJoinHandler();
     _presentationReady = true;
     return true;
 }
@@ -1083,8 +1148,15 @@ void EditorPlayRuntime::registerUpdateListener() {
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
         if (_netPlayRole == NetPlayRole::Client) {
             pollClientNetworkReplication();
-        } else if (_simulationActive) {
-            spawnCubeIfNeeded();
+        } else {
+            if (_pendingLateJoinConn != nullptr) {
+                ayt::net::NetConnection* conn = _pendingLateJoinConn;
+                _pendingLateJoinConn = nullptr;
+                rebroadcastServerReplicationSpawns(conn);
+            }
+            if (_simulationActive) {
+                spawnCubeIfNeeded();
+            }
         }
 
         if (_cubeEntity == nullptr) {

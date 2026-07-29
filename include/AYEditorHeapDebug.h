@@ -20,8 +20,6 @@
           if (!_CrtCheckMemory()) {                                                         \
               std::fprintf(stderr, "[HeapCheck] FAIL at %s\n", (label));                    \
               _CrtDbgBreak();                                                               \
-          } else {                                                                          \
-              std::fprintf(stderr, "[HeapCheck] OK at %s\n", (label));                      \
           }                                                                                 \
       } while (0)
 

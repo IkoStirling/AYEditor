@@ -16,6 +16,10 @@ namespace ayt::entity {
 class Entity;
 }
 
+namespace ayt::net {
+class NetConnection;
+}
+
 namespace ayt::editor {
 
 // When set (via setImportedCharacter), the Play mode spawns the
@@ -166,7 +170,8 @@ private:
 
     void startEditorNetworkClient();
     void installServerReplicationLateJoinHandler();
-    void rebroadcastServerReplicationSpawns();
+    void installClientReplicationConnectHandler();
+    void rebroadcastServerReplicationSpawns(ayt::net::NetConnection* lateJoiner = nullptr);
     void pollClientNetworkReplication();
     bool trySpawnClientReplicatedEntity(uint32_t netId, uint16_t typeHash);
     void clearClientReplicatedEntities() noexcept;
@@ -230,6 +235,9 @@ private:
     std::unordered_map<uint32_t, ayt::entity::Entity*> _clientReplicatedEntities;
     std::unordered_map<uint32_t, int32_t> _clientReplicatedLastHp;
     bool _serverLateJoinHandlerInstalled = false;
+    bool _clientConnectHandlerInstalled = false;
+    ayt::net::NetConnection* _pendingLateJoinConn = nullptr;
+    bool _clientLoggedWaitingSpawn = false;
 };
 
 } // namespace ayt::editor
