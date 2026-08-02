@@ -14,6 +14,8 @@
 #include "AYSlider.h"
 #include "AYTextLabel.h"
 #include "AYWidget.h"
+#include "AYDockArea.h"
+#include "AYDockCard.h"
 
 #include <components/AYAnimationComponent.h>
 #include <components/AYMeshComponent.h>
@@ -85,7 +87,12 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
 
     bindToolbar();
     bindMenuBar();
+    bindTransportBar();
+    bindNetworkPanelStub();
     bindRenderSettingsPanel();
+
+    _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
+    setDockCardVisible("card_network", false);
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
@@ -93,11 +100,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     syncViewport();
     AY_EDITOR_TRACE("initialize: done");
 
-    // D5+.5 (2026-07-26): wire optional child-window manager. Only
-    // constructs when the host passed a non-null WindowManager — all
-    // existing callers (EditorShellDemo, ShutdownRepro, tests) are
-    // unaffected because both `childWindowManager` and
-    // `childWindowConfigPath` default-empty in EditorSessionDesc.
+    // D5+.5: optional child-window manager for DockCard promotion.
     if (desc.childWindowManager != nullptr) {
         _childWindows = std::make_unique<EditorChildWindowManager>(
             *desc.childWindowManager, _ui);
@@ -115,12 +118,6 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             AY_EDITOR_TRACE("initialize: opened %zu child window(s)",
                             _childWindows->count());
         }
-        // D5.5 (2026-07-26): now that the child-window manager is live,
-        // give every DockCard reachable from the primary UI's root a
-        // promote-callback that closes over `_childWindows`. Cards in
-        // slots AND floating cards on the overlay both get wired; the
-        // card itself decides whether detachToOwnWindow is meaningful
-        // (floating card path; slot-card promotion is a future cut).
         wirePromoteCallback();
     }
 
@@ -149,6 +146,7 @@ void EditorSession::shutdown() {
     // this here (with _ui still alive and owning the active slot)
     // avoids an UAF cleanup race against the primary.
     _childWindows.reset();
+    _mainDock = nullptr;
     // Tear down Play/renderer borrow before UI widgets — avoids
     // Inspector path strings and GPU borrows racing UI teardown.
     _playRuntime.shutdownEngine();
@@ -193,6 +191,10 @@ void EditorSession::update(float dt) {
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
     }
+
+    // Splitter drag updates HBox slot widths; keep the 3D viewport rect
+    // in sync every frame so render composite tracks panel resize.
+    syncViewportIfChanged();
 }
 
 bool EditorSession::freecamActive() const
@@ -241,6 +243,7 @@ void EditorSession::populateFrame(bool skipViewportPanel) {
         }
     }
 
+    _ui.layout();
     _ui.populateFrame();
 }
 
@@ -555,17 +558,10 @@ void EditorSession::bindToolbar() {
         }
     };
 
-    // Icon toolbar placeholders (visual chrome only for now).
-    bindButton("btn_icon_1", []() {});
-    bindButton("btn_icon_2", []() {});
-
-    // Custom title-bar chrome (OS caption still present — these mirror
-    // common actions; host drag/borderless is not wired yet).
     bindButton("btn_minimize", [this]() { requestHostMinimize(); });
     bindButton("btn_maximize", [this]() { requestHostMaximizeToggle(); });
     bindButton("btn_close", [this]() { requestHostClose(); });
 
-    // ED-03: Inspector body buttons.
     bindButton("btn_inspector_skel",  [this]() { pickInspectorSkeleton(); });
     bindButton("btn_inspector_anim",  [this]() { pickInspectorAnimation(); });
     bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
@@ -574,6 +570,86 @@ void EditorSession::bindToolbar() {
     if (auto* widget = _ui.findById("lbl_mode")) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.10f, 0.11f, 1.0f));
+        }
+    }
+}
+
+void EditorSession::bindTransportBar() {
+    auto bindButton = [this](const char* id, std::function<void()> handler) {
+        _ui.bindEvent(id, "onClick", handler);
+        if (auto* widget = _ui.findById(id)) {
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
+                button->setOnClicked(handler);
+            }
+        }
+    };
+
+    bindButton("btn_play", [this]() { _gameView.setMode(EditorMode::Play); });
+    bindButton("btn_pause", [this]() { _gameView.setMode(EditorMode::Paused); });
+    bindButton("btn_step", [this]() {
+        _gameView.stepOnce();
+        if (_repaintCallback) {
+            _repaintCallback();
+        }
+    });
+    bindButton("btn_stop", [this]() { _gameView.setMode(EditorMode::Edit); });
+}
+
+void EditorSession::setDockCardVisible(const char* cardId, bool visible) {
+    ayt::ui::DockCard* card = nullptr;
+    if (_mainDock != nullptr) {
+        card = _mainDock->findCard(cardId);
+    }
+    if (card == nullptr) {
+        card = dynamic_cast<ayt::ui::DockCard*>(_ui.findById(cardId));
+    }
+    if (card != nullptr) {
+        card->setVisible(visible);
+    }
+    _ui.invalidateLayout();
+    _ui.layout();
+    syncViewport();
+    if (_repaintCallback) {
+        _repaintCallback();
+    }
+}
+
+void EditorSession::toggleDockCard(const char* cardId, bool& visibleFlag) {
+    visibleFlag = !visibleFlag;
+    setDockCardVisible(cardId, visibleFlag);
+}
+
+void EditorSession::bindNetworkPanelStub() {
+    auto bindButton = [this](const char* id, std::function<void()> handler) {
+        _ui.bindEvent(id, "onClick", handler);
+        if (auto* widget = _ui.findById(id)) {
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
+                button->setOnClicked(handler);
+            }
+        }
+    };
+
+    bindButton("btn_net_spawn", []() {
+        std::fprintf(stderr,
+            "[EditorSession] Network Spawn (stub) — wire to server EntitySpawn\n");
+    });
+    bindButton("btn_net_despawn", []() {
+        std::fprintf(stderr,
+            "[EditorSession] Network Despawn (stub) — wire to server despawn\n");
+    });
+
+    if (auto* w = _ui.findById("sld_net_hp")) {
+        if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
+            slider->setOnValueChanged([this](float v) {
+                char buf[64];
+                std::snprintf(buf, sizeof(buf), "Cube HP  %.0f",
+                              static_cast<double>(v));
+                if (auto* lbl = _ui.findById("lbl_net_hp")) {
+                    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(lbl)) {
+                        label->setText(std::wstring(buf, buf + std::strlen(buf)));
+                    }
+                }
+            });
         }
     }
 }
@@ -981,27 +1057,25 @@ void EditorSession::bindMenuBar() {
         }
     }
 
-    ayt::ui::Menu* viewMenu = menuBar->addMenu(L"View");
-    if (viewMenu != nullptr) {
-        if (auto* item = viewMenu->addItem(L"Play")) {
-            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Play); });
-        }
-        if (auto* item = viewMenu->addItem(L"Pause")) {
-            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Paused); });
-        }
-        if (auto* item = viewMenu->addItem(L"Step")) {
+    ayt::ui::Menu* windowMenu = menuBar->addMenu(L"Window");
+    if (windowMenu != nullptr) {
+        if (auto* item = windowMenu->addItem(L"Render Settings")) {
             item->setOnActivate([this]() {
-                _gameView.stepOnce();
-                if (_repaintCallback) {
-                    _repaintCallback();
-                }
+                toggleDockCard("card_render", _panelRenderVisible);
             });
         }
-        if (auto* item = viewMenu->addItem(L"Stop")) {
-            item->setOnActivate([this]() { _gameView.setMode(EditorMode::Edit); });
+        if (auto* item = windowMenu->addItem(L"Inspector")) {
+            item->setOnActivate([this]() {
+                toggleDockCard("card_inspector", _panelInspectorVisible);
+            });
         }
-        viewMenu->addSeparator();
-        if (auto* item = viewMenu->addItem(L"Select Character")) {
+        if (auto* item = windowMenu->addItem(L"Network")) {
+            item->setOnActivate([this]() {
+                toggleDockCard("card_network", _panelNetworkVisible);
+            });
+        }
+        windowMenu->addSeparator();
+        if (auto* item = windowMenu->addItem(L"Select Character")) {
             item->setOnActivate([this]() { selectCharacter(); });
         }
     }
@@ -1442,6 +1516,8 @@ void EditorSession::onModeChanged(EditorMode mode) {
         break;
     }
 
+    _ui.invalidateLayout();
+    _ui.layout();
     syncViewport();
 
     if (_repaintCallback) {

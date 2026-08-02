@@ -75,10 +75,9 @@ TEST_CASE(map_conversion_with_all_four_types_returns_valid_character)
         "D:/tmp/ayeditor_cache/assets/animations/suzanne_idle.ayanm");
 }
 
-// Phase 1 policy: Animation is required. Mesh-only or Mesh+Skeleton
-// only conversions are rejected. This pins the policy against
-// accidental relaxation in a future commit.
-TEST_CASE(map_conversion_missing_animation_returns_invalid_with_diagnostic)
+// Visibility policy (2026-07-27): Mesh+Skeleton without Animation is
+// valid (bind-pose preview). Missing Animation alone still succeeds.
+TEST_CASE(map_conversion_missing_animation_still_valid_for_bind_pose)
 {
     ConversionResult r = makeFullResult();
     // Drop the Animation entry.
@@ -88,10 +87,10 @@ TEST_CASE(map_conversion_missing_animation_returns_invalid_with_diagnostic)
     ImportedCharacter c =
         mapConversionToImportedCharacter(r, kCacheRoot, diag);
 
-    CHECK_FALSE(diag.success);
+    CHECK_TRUE(diag.success);
     CHECK_TRUE(diag.missing.size() == 1);
     CHECK_TRUE(diag.missing[0] == "Animation");
-    CHECK_FALSE(c.isValid());
+    CHECK_TRUE(c.isValid());
     CHECK_TRUE(c.animationPath.empty());
     // Mesh / material / skeleton paths are still populated so a
     // future Inspector (ED-03) can preview the partial asset.
@@ -100,9 +99,8 @@ TEST_CASE(map_conversion_missing_animation_returns_invalid_with_diagnostic)
     CHECK_FALSE(c.skeletonPath.empty());
 }
 
-// Mesh-only FBX: a static mesh with no skin. All three remaining
-// types must show up in `missing`. Regression-prevention for the
-// case where a designer imports a non-character FBX.
+// Mesh-only FBX: a static mesh with no skin. Skeleton is required for
+// a skinned character spawn, so success is false.
 TEST_CASE(map_conversion_mesh_only_returns_invalid_with_diagnostic)
 {
     ConversionResult r;
@@ -125,10 +123,8 @@ TEST_CASE(map_conversion_mesh_only_returns_invalid_with_diagnostic)
     CHECK_FALSE(c.isValid());
 }
 
-// When two meshes are present (e.g. an FBX with a low-poly collider
-// proxy), we deliberately pick the FIRST one. Today no caller hits
-// this path - all four types come from the same FBX - but pinning
-// the policy now prevents future surprise.
+// When two meshes are present (e.g. MMD body + hair), the first fills
+// meshPath and the rest go to additionalMeshPaths.
 TEST_CASE(map_conversion_picks_first_resource_of_each_type_when_duplicates)
 {
     ConversionResult r = makeFullResult();
@@ -146,6 +142,9 @@ TEST_CASE(map_conversion_picks_first_resource_of_each_type_when_duplicates)
     CHECK_TRUE(diag.success);
     CHECK_TRUE(c.meshPath ==
         "D:/tmp/ayeditor_cache/assets/meshes/suzanne_RootNode_Suzanne.aymesh");
+    CHECK_TRUE(c.additionalMeshPaths.size() == 1);
+    CHECK_TRUE(c.additionalMeshPaths[0] ==
+        "D:/tmp/ayeditor_cache/assets/meshes/suzanne_collider.aymesh");
 }
 
 // Defensive: EditorPlayRuntime::resolvePersistentCacheRoot() and any

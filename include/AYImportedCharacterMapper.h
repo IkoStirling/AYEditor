@@ -2,9 +2,9 @@
 // AYImportedCharacterMapper.h - Phase 1 G1.
 //
 // Pure data-shape transform: scan a ConversionResult (returned by
-// IConverter::convert via Importer::importFile) for the four asset
-// types we need to spawn an `EditorPlayRuntime` skinned character,
-// and produce a populated `ImportedCharacter` whose path fields are
+// IConverter::convert via Importer::importFile) for the asset types
+// we need to spawn an `EditorPlayRuntime` skinned character, and
+// produce a populated `ImportedCharacter` whose path fields are
 // absolute on-disk paths under the editor cache.
 //
 // No I/O. No logging. Caller (EditorApp::run) is responsible for the
@@ -17,11 +17,11 @@
 //   "Skeleton"    - AYResource/src/Converter/SkeletonConverter.cpp:113
 //   "Animation"   - AYResource/src/Converter/AnimationConverter.cpp:165
 //
-// Phase 1 policy: Animation is REQUIRED. Mesh-only or Mesh+Skeleton-only
-// conversions are reported as `success = false` with "Animation" in
-// `missing`. This avoids an `AnimationComponent` deref crash on the
-// first tick when `clipPath` is empty. Phase 2 may relax when
-// static-pose previews land.
+// Visibility policy (2026-07-27): Mesh + Skeleton are REQUIRED.
+// Material and Animation are optional (listed in `missing` for
+// diagnostics but do not fail `success`). Empty animation → bind-pose
+// preview. All Mesh entries after the first go into
+// `additionalMeshPaths` (MMD multi-part FBX).
 
 #include <IAYConverter.h>
 #include <string>
@@ -43,27 +43,13 @@ struct ImportedCharacterMapDiagnostics {
     bool success = false;
 };
 
-// Walk `result.resources` and pick the first entry of each required
-// type. Each picked virtual path is resolved against `cacheRoot` to
-// produce an absolute on-disk path of the form
-// `<cacheRoot>assets/<virtualPath>` (forward slashes inside the
-// virtual path are preserved; the cacheRoot/join layer normalizes
-// trailing separators).
-//
-// `cacheRoot` may be passed with or without a trailing separator
-// ('/' or '\\'). The mapper appends "assets/" before the virtual
-// path; an empty `cacheRoot` yields paths that begin with
-// "assets/..." - callers should pass the same value as
-// `EditorPlayRuntime::resolvePersistentCacheRoot()`.
+// Walk `result.resources` and pick assets. Each picked virtual path is
+// resolved against `cacheRoot` to produce an absolute on-disk path of
+// the form `<cacheRoot>assets/<virtualPath>`.
 //
 // Returns:
-//   * When all four required types are present and non-empty,
-//     `outCharacter.isValid()` is true; `outDiag.success` is true;
-//     `outDiag.missing` is empty.
-//   * When any required type is missing or its path is empty,
-//     `outCharacter` is default-constructed (all empty strings,
-//     isValid() == false); `outDiag.success` is false;
-//     `outDiag.missing` lists the type names that were not found.
+//   * success when Mesh + Skeleton are present (isValid() true).
+//   * All Mesh resources after the first populate additionalMeshPaths.
 ImportedCharacter mapConversionToImportedCharacter(
     const ayt::resource::ConversionResult& result,
     const std::string& cacheRoot,

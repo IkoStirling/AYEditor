@@ -3,6 +3,7 @@
 #include "IAYApplication.h"
 
 #include <memory>
+#include <string>
 
 // Forward declarations only — AYDevice.h / AYScriptRuntimeBridge.h
 // would otherwise leak their full include graph onto every
@@ -28,6 +29,10 @@ public:
     static std::unique_ptr<EditorApp> create(const ayt::app::GameDesc& desc,
                                              const ayt::app::AppCommandLine& cmdLine);
 
+    // Used by AYEditorShell_Demo to preload a character FBX when the
+    // user did not pass `--import <path>`. Empty = no default (cube).
+    void setDefaultImportPath(std::string path) { _defaultImportPath = std::move(path); }
+
     void registerSubSystems() override;
     void run() override;
 
@@ -46,6 +51,7 @@ public:
 private:
     ayt::app::GameDesc       _desc;
     ayt::app::AppCommandLine _cmdLine;
+    std::string              _defaultImportPath;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

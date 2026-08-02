@@ -33,9 +33,15 @@ public:
     struct Result {
         ayt::resource::ConversionResult conversion;
         bool        success = false;
+        bool        usedCache = false;  // true when .aydep.json reused (no convert)
         std::string errorMessage;
     };
 
+    // Import or reuse cache. If `<destinationDir>/<basename>.aydep.json`
+    // exists and is not older than `sourcePath`, loads ConversionResult
+    // from the sidecar and skips FBX convert (important for multi-minute
+    // MMD/character FBX). Set env `AY_EDITOR_FORCE_IMPORT=1` to force
+    // a full re-convert.
     static Result importFile(const std::string& sourcePath,
                              const std::string& destinationDir);
 

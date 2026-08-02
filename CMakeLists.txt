@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.12)
-project(AYEditor)
+project(AYEditor
+    VERSION 0.1.0
+    DESCRIPTION "AYEditor — editor shell + Play/network client + Importer mapping"
+)
 
 set(MODULE_NAME AYEditor)
 
@@ -203,3 +206,5 @@ add_custom_command(TARGET AYEditorShutdownRepro POST_BUILD
 
 enable_testing()
 add_subdirectory(unittest)
+
+message(STATUS "AYEditor v0.1.0 (Play/runtime + net-client + D5.5 Card promotion + Importer mapping) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")

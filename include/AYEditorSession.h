@@ -106,8 +106,12 @@ public:
 private:
     void bindToolbar();
     void bindMenuBar();
+    void bindTransportBar();
+    void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
     void applyRenderSettingsFromPanel();
+    void setDockCardVisible(const char* cardId, bool visible);
+    void toggleDockCard(const char* cardId, bool& visibleFlag);
     void pushFreecamToRenderer();
     bool freecamActive() const;
     void requestHostClose();
@@ -239,6 +243,12 @@ private:
     bool _inspectorPreferCube = false;
     uint32_t _viewportClickCount = 0;
     bool _netClientAutoPlay = false;
+
+    ayt::ui::DockArea* _mainDock = nullptr;
+
+    bool _panelRenderVisible = true;
+    bool _panelInspectorVisible = true;
+    bool _panelNetworkVisible = false;
 };
 
 } // namespace ayt::editor

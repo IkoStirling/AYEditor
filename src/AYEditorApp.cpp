@@ -488,6 +488,7 @@ void EditorApp::run()
     sessionDesc.hostWindow = hwnd;
     sessionDesc.netClientMode = netClientMode;
     sessionDesc.netConnectHost = netConnectHost;
+    sessionDesc.childWindowManager = &_devices->window();
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
