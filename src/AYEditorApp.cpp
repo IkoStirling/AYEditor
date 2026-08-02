@@ -16,6 +16,7 @@
 #include <IEngineHost.h>
 
 #include <ayevent/EventBus.h>
+#include <ayio/Env.h>
 #include <ayplatform/Console.h>
 
 #include <chrono>
@@ -531,7 +532,7 @@ void EditorApp::run()
     // launching AYEditorShell_Demo.exe.
     using Clock = std::chrono::high_resolution_clock;
     const bool frameTiming =
-        std::getenv("AY_EDITOR_FRAME_TIMING") != nullptr;
+        ayt::io::env::get("AY_EDITOR_FRAME_TIMING").has_value();
     uint64_t frameIndex = 0;
     double compositeMs = 0.0;
     // uiPassMs measures the host-side lambda that drives

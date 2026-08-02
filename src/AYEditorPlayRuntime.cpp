@@ -28,6 +28,7 @@
 #include "assetsImpl/AYMesh.h"
 #include "assetsImpl/AYTexture.h"
 
+#include "ayio/Env.h"
 #include "ayio/File.h"
 #include "aymath/MathTransform.h"
 
@@ -67,8 +68,8 @@ constexpr uint32_t kEditorCubeNetId = 1;
 
 uint16_t resolveEditorPlayNetworkPort()
 {
-    if (const char* env = std::getenv("AY_NETWORK_PORT")) {
-        const int parsed = std::atoi(env);
+    if (const std::string env = ayt::io::env::get("AY_NETWORK_PORT").value_or(""); !env.empty()) {
+        const int parsed = std::atoi(env.c_str());
         if (parsed > 0 && parsed <= 65535) {
             return static_cast<uint16_t>(parsed);
         }
@@ -932,11 +933,10 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
     // B6 Editor host: Deferred is the default (Skybox + GBuffer + multi-light
     // + Transparent). Forward is opt-out via AY_DEFERRED=0 for hosts that
     // need the simpler Shadow→FO→Transparent path.
-    const char* deferredEnv = std::getenv("AY_DEFERRED");
+    const std::string deferredEnv = ayt::io::env::get("AY_DEFERRED").value_or("");
     const bool useDeferred =
-        deferredEnv == nullptr
-        || deferredEnv[0] == '\0'
-        || std::strcmp(deferredEnv, "0") != 0;
+        deferredEnv.empty()
+        || deferredEnv != "0";
 
     if (useDeferred) {
         rendererSub->renderer().configurePipeline(
@@ -1370,8 +1370,8 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
     // assets: set AY_EDITOR_CHARACTER_SCALE=0.01. The previous 0.01
     // default made meter-scale meshes an invisible speck next to the cube.
     float characterScale = 1.0f;
-    if (const char* envScale = std::getenv("AY_EDITOR_CHARACTER_SCALE")) {
-        const float parsed = static_cast<float>(std::atof(envScale));
+    if (const std::string envScale = ayt::io::env::get("AY_EDITOR_CHARACTER_SCALE").value_or(""); !envScale.empty()) {
+        const float parsed = static_cast<float>(std::atof(envScale.c_str()));
         if (parsed > 0.0f) {
             characterScale = parsed;
         }

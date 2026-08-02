@@ -7,7 +7,9 @@
 
 #include "AYImportJob.h"
 
+#include <ayio/Env.h>
 #include <cstdlib>
+#include <string>
 
 namespace ayt::editor
 {
@@ -16,8 +18,8 @@ namespace {
 
 bool forceImportRequested()
 {
-    const char* v = std::getenv("AY_EDITOR_FORCE_IMPORT");
-    return v != nullptr && v[0] != '\0' && v[0] != '0';
+    const std::string v = ayt::io::env::get("AY_EDITOR_FORCE_IMPORT").value_or("");
+    return !v.empty() && v[0] != '0';
 }
 
 } // namespace
