@@ -3,17 +3,17 @@
 #include "AYEditorHeapDebug.h"
 #include "AYEditorPlayRuntime.h"
 #include "AYEditorSession.h"
-#include "AYEntityModule.h"
+#include "AYRegisterDefaultEditorModules.h"
 #include "AYGameLoop.h"
 #include "AYDeviceManager.h"
 #include "AYDeviceInputProvider.h"
 #include "AYImportedCharacterMapper.h"
 #include "AYImporter.h"
-#include "AYNetworkModule.h"
 #include "AYRendererSubSystem.h"
 #include "AYScriptSubSystem.h"
-#include "AYSubSystemRegistry.h"
 #include "AYUIRenderBackend.h"
+
+#include <IEngineHost.h>
 
 #include <ayevent/EventBus.h>
 #include <ayplatform/Console.h>
@@ -298,35 +298,12 @@ ayt::event::EventBus& EditorApp::eventBus()
 
 void EditorApp::registerSubSystems()
 {
-    // Entity ECS + render systems (no RendererSubSystem — that lives in
-    // AYRenderer and must not be pulled through AYEntity bootstrap).
-    ayt::entity::bootstrapModule();
-    ayt::net::registerNetworkSubSystem();
-    ayt::render::RendererSubSystem::registerSubSystem();
+    // Engine-host Step 1: shared Editor assembly (AYApplication/docs/engine-host.md).
+    registerDefaultEditorModules();
 
-    // INT-01 (2026-07-15): ScriptSubSystem drives Logia tickAmbient /
-    // tickLogiaSystems / tickComponentHosts. Registered explicitly
-    // per AYScriptSubSystem.h's contract (auto-registration would
-    // NPE — IGameLoop::instance() may not be alive at static-init
-    // time). Editor enables hot reload separately on bind to make
-    // dev iteration on .logia files work without restarting Play.
-    ayt::game::GameLoop::instance().registerSubSystem(
-        new ayt::script::ScriptSubSystem());
-
-    // INT-02 (2026-07-15): wire the AYDevice DeviceManager (owned by
-    // _devices member, lifetime == *this) into the Logia bridge so
-    // scripts reading `input.is_pressed("jump")` see real keyboard
-    // state. _devices is allocated in run() before GameLoop begins;
-    // here we install the adapter so any bindAndLoadFromFile that
-    // happens during Play picks up real input immediately.
-    //
-    // Note: ScriptSubSystem is owned by GameLoop and survives this
-    // method (its shutdown is driven by GameLoop::shutdown in run()).
-    // _inputProvider lifetime matches *this — dtor resets it before
-    // _devices so the bridge never sees a dangling DeviceManager*.
+    // INT-02: Script ← Editor-owned DeviceManager (not DeviceSubSystem).
     if (_devices && !_inputProvider) {
-        auto* sub = ayt::game::SubSystemRegistry::instance()
-                       .findSubSystem("ayt.script.runtime");
+        auto* sub = engineHost().findSubSystem("ayt.script.runtime");
         if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
             _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(
                 _devices.get());
@@ -346,6 +323,8 @@ void EditorApp::onShutdown() {}
 
 void EditorApp::run()
 {
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+
     AY_EDITOR_HEAP_DEBUG_INIT();
     AY_EDITOR_HEAP_CHECK("startup");
     attachDebugConsole();
@@ -367,8 +346,7 @@ void EditorApp::run()
     // Provider needs to be installed now that _devices is valid;
     // onInit() ran before _devices existed so we wire here too.
     {
-        auto* sub = ayt::game::SubSystemRegistry::instance()
-                       .findSubSystem("ayt.script.runtime");
+        auto* sub = engineHost().findSubSystem("ayt.script.runtime");
         if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
             if (!_inputProvider) {
                 _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(

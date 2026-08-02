@@ -14,6 +14,7 @@ set(SRC_FILES
     src/AYEditorGameView.cpp
     src/AYEditorPlayRuntime.cpp
     src/AYEditorApp.cpp
+    src/AYRegisterDefaultEditorModules.cpp
     src/AYEditorFreecam.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
@@ -27,6 +28,7 @@ set(HEAD_FILES
     include/AYEditorGameView.h
     include/AYEditorPlayRuntime.h
     include/AYEditorApp.h
+    include/AYRegisterDefaultEditorModules.h
     include/AYEditorFreecam.h
     include/AYImporter.h
     include/AYImportDialog.h
