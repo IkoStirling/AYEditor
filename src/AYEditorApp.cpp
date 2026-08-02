@@ -298,8 +298,10 @@ ayt::event::EventBus& EditorApp::eventBus()
 
 void EditorApp::registerSubSystems()
 {
-    // Engine-host Step 1: shared Editor assembly (AYApplication/docs/engine-host.md).
+    // Engine-host: shared Editor assembly + service table
+    // (AYApplication/docs/engine-host.md).
     registerDefaultEditorModules();
+    ayt::app::bindBuiltinHostServices(engineHost());
 
     // INT-02: Script ← Editor-owned DeviceManager (not DeviceSubSystem).
     if (_devices && !_inputProvider) {
