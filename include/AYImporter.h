@@ -1,17 +1,9 @@
 #pragma once
-// AYImporter.h — Phase 1 ED-01.
+// AYImporter.h — Editor façade over AYResource::importAsset (P5).
 //
-// Thin orchestrator around AYResource::IConverter. Hides the
-// `IConverter::create → setOutputDir → convert` dance so ED-01 only
-// touches one type. Returns the same `ConversionResult` struct
-// (defined in `AYResource/interface/IAYConverter.h:13-34`) so callers
-// can show what files were produced and report errors via `ayt::log`.
-//
-// All extension routing lives here (we mirror the factory's table at
-// `IAYConverter.cpp:30-47` so the user gets a clean error for
-// unsupported types instead of an opaque nullptr from inside the
-// factory). Adding a new source format means (a) implementing the
-// converter, and (b) extending this switch.
+// Keeps the ED-01 Result shape for EditorShellDemo / ImportDialog.
+// Extension routing, cache reuse (.aydep.json), and convert live in
+// AYImportJob.h (library core; CLI: AYTool/import_tool).
 
 #include <IAYConverter.h>
 #include <string>
