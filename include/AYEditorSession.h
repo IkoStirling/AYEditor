@@ -178,6 +178,7 @@ private:
     void wirePromoteCallback();
 
     void setModeLabel(const std::wstring& text);
+    void setInspectorHint(const std::wstring& text);  // PR-5 (LM-2)
     void onModeChanged(EditorMode mode);
     void syncViewport();
     bool isChromePoint(float x, float y) const;
@@ -249,6 +250,18 @@ private:
     bool _panelRenderVisible = true;
     bool _panelInspectorVisible = true;
     bool _panelNetworkVisible = false;
+
+    // PR-5 (v0.1.2 LM-2): Play/Paused 时锁 Inspector 写路径。
+    // onModeChanged 切 mode 时同步切换。Inspector 4 button click handler
+    // (pickInspector{Skel,Anim} / applyInspectorOverrides /
+    // resetInspectorOverrides) 入口守卫 `if (!allowInspectorEdit()) return;`。
+    // 视觉提示走 `inspector_hint` TextLabel 文案切换 ("No selection" /
+    // "Locked during Play") — AYUI Button 没有 setEnabled 接口
+    // (D:/Projects/AYRuntime/AYUI/Controls/AYButton.h), 故仅做 click 早返。
+    bool _allowInspectorEdit = true;
+
+    // PR-5 LM-2 helper — Inspector 4 click handler + apply/commit 入口守卫。
+    bool allowInspectorEdit() const noexcept { return _allowInspectorEdit; }
 };
 
 } // namespace ayt::editor

@@ -138,7 +138,7 @@
             "spacing": 4,
             "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
             "children": [
-              { "type": "TextLabel", "id": "inspector_hint", "text": "No selection", "size": { "w": 240, "h": 24 } },
+              { "type": "TextLabel", "id": "inspector_hint", "text": "Click buttons to configure.", "size": { "w": 240, "h": 24 } },
               { "type": "TextLabel", "id": "inspector_mesh", "text": "mesh: -", "size": { "w": 240, "h": 20 } },
               { "type": "TextLabel", "id": "inspector_skel", "text": "skel: -", "size": { "w": 240, "h": 20 } },
               { "type": "TextLabel", "id": "inspector_anim", "text": "anim: -", "size": { "w": 240, "h": 20 } },

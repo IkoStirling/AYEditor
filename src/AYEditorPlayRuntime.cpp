@@ -1080,7 +1080,7 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
             "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP → UI) "
             "default; AY_DEFERRED=%s; P5.5 sceneLights=%u "
             "(keyDir+fillDir+point+spot; key-only shadow; IBL cube)\n",
-            deferredEnv != nullptr ? deferredEnv : "(unset)", n);
+            deferredEnv.empty() ? "(unset)" : deferredEnv.c_str(), n);
     } else {
         std::fprintf(stderr,
             "[EditorPlayRuntime] render pipeline: Forward "

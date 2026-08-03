@@ -1314,6 +1314,8 @@ void EditorSession::selectCharacter()
 // commits it. Cancel returns empty = no-op.
 void EditorSession::pickInspectorSkeleton()
 {
+    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
+    if (!allowInspectorEdit()) return;
     // We currently pass the empty filter straight through; the
     // ImportDialog::showOpenFileDialog defaults to its built-in
     // 3D-Model (.fbx/.gltf/.glb) filter, which is wider than
@@ -1332,6 +1334,8 @@ void EditorSession::pickInspectorSkeleton()
 // ED-03: [Pick Anim] handler, sibling of pickInspectorSkeleton.
 void EditorSession::pickInspectorAnimation()
 {
+    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
+    if (!allowInspectorEdit()) return;
     const std::string picked =
         ayt::editor::ImportDialog::showOpenFileDialog(_hostWindow);
     if (picked.empty()) {
@@ -1370,6 +1374,8 @@ void EditorSession::setInspectorAnimationPath(const std::string& path)
 // "keep").
 void EditorSession::applyInspectorOverrides()
 {
+    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
+    if (!allowInspectorEdit()) return;
     EntityInspectorOverrides ov;
     ov.skeletonPathOverride  = _inspectorSkelPick;
     ov.animationPathOverride = _inspectorAnimPick;
@@ -1383,6 +1389,8 @@ void EditorSession::applyInspectorOverrides()
 // animating now.
 void EditorSession::resetInspectorOverrides()
 {
+    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
+    if (!allowInspectorEdit()) return;
     _inspectorSkelPick.clear();
     _inspectorAnimPick.clear();
     EntityInspectorOverrides emptyOv;
@@ -1394,6 +1402,9 @@ void EditorSession::resetInspectorOverrides()
 // override to the runtime, refresh labels, trigger redraw.
 void EditorSession::commitInspectorOverrides(const EntityInspectorOverrides& ov)
 {
+    // PR-5 (LM-2): 双层守卫 — applyInspectorOverrides/resetInspectorOverrides
+    // 入口已守；此处再守一次防外部 caller 直接调 commitInspectorOverrides 路径。
+    if (!allowInspectorEdit()) return;
     _playRuntime.applyComponentOverrides(ov);
     refreshInspectorLabels();
     if (_repaintCallback) {
@@ -1488,6 +1499,19 @@ void EditorSession::setModeLabel(const std::wstring& text) {
     }
 }
 
+// PR-5 (LM-2): Inspector hint 文案切换 helper.
+// inspector_hint TextLabel 在 editor_shell.ui.json:141 已存在（id=
+// "inspector_hint", initial text "No selection"）。Play/Paused 时切
+// "Locked during Play"；Edit 模式回 "Click buttons to configure."
+// （让用户在 Reset 完 pick 后看见可操作提示）。
+void EditorSession::setInspectorHint(const std::wstring& text) {
+    if (auto* widget = _ui.findById("inspector_hint")) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
+            label->setText(text);
+        }
+    }
+}
+
 void EditorSession::onModeChanged(EditorMode mode) {
     _ui.cancelCapture();
     if (_freecam.isLooking()) {
@@ -1497,12 +1521,18 @@ void EditorSession::onModeChanged(EditorMode mode) {
     switch (mode) {
     case EditorMode::Edit:
         setModeLabel(L"EDIT");
+        // PR-5 (LM-2): Inspector 写权限恢复 + hint 文案恢复。
+        _allowInspectorEdit = true;
+        setInspectorHint(L"Click buttons to configure.");
         if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
             sub->clearCameraOverride();
         }
         break;
     case EditorMode::Play:
         setModeLabel(_netClientAutoPlay ? L"PLAY (NET CLIENT)" : L"PLAY");
+        // PR-5 (LM-2): Inspector 写权限锁 + hint 提示。
+        _allowInspectorEdit = false;
+        setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
         // Auto-select whatever Play just spawned so Inspector is never
@@ -1511,6 +1541,9 @@ void EditorSession::onModeChanged(EditorMode mode) {
         break;
     case EditorMode::Paused:
         setModeLabel(L"PAUSED");
+        // PR-5 (LM-2): Paused 也锁 Inspector（与 Play 同语义）。
+        _allowInspectorEdit = false;
+        setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
         break;
