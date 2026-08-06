@@ -27,10 +27,13 @@
 #include "assetsImpl/AYMaterial.h"
 #include "assetsImpl/AYMesh.h"
 #include "assetsImpl/AYTexture.h"
+#include "AYAssetPath.h"
 
 #include "ayio/Env.h"
 #include "ayio/File.h"
 #include "aymath/MathTransform.h"
+#include "aymath/MathTypes.h"
+#include "aymath/MathDefs.h"
 
 #include <logia/AYCompilerError.h>
 
@@ -588,6 +591,9 @@ void EditorPlayRuntime::pollClientNetworkReplication()
 bool EditorPlayRuntime::ensureAssets() {
     _cacheRoot = resolvePersistentCacheRoot();
     _assetRoot = _cacheRoot + "assets\\";
+    // So mesh→material / material→texture virtual deps resolve under
+    // assets/, not under the referring file's directory (meshes/).
+    ayt::resource::setAssetRoot(_assetRoot);
     _meshPath             = _assetRoot + "cube.aymesh";
     _materialPath         = _assetRoot + "cube_shadow.aymat";
     _groundMeshPath       = _assetRoot + "cube.aymesh";
@@ -1376,14 +1382,22 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
             characterScale = parsed;
         }
     }
-    auto applyScale = [characterScale](ayt::entity::Entity* e) {
+    // Many FBX/PMX sources are Z-up. Engine + freecam are Y-up, so without
+    // this the character lies flat on XZ and looks like a washed-out top-down
+    // silhouette. Entity rotation keeps skinning in model space correct.
+    const ayt::math::FQuaternion zUpToYUp =
+        ayt::math::FQuaternion::fromAxisAngle(
+            ayt::math::FVector3(1.0f, 0.0f, 0.0f),
+            -MATH_PI * 0.5f);
+    auto applySpawnXform = [characterScale, &zUpToYUp](ayt::entity::Entity* e) {
         if (e == nullptr) return;
         if (auto* xf = e->getComponent<ayt::entity::Transform>()) {
             xf->scale = ayt::math::FVector3(
                 characterScale, characterScale, characterScale);
+            xf->rotation = zUpToYUp;
         }
     };
-    applyScale(_characterEntity);
+    applySpawnXform(_characterEntity);
 
     for (const std::string& extraMesh : _importedCharacter.additionalMeshPaths) {
         ayt::entity::Entity* part = spawnOne(extraMesh);
@@ -1393,7 +1407,7 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
                 extraMesh.c_str());
             continue;
         }
-        applyScale(part);
+        applySpawnXform(part);
         _additionalCharacterEntities.push_back(part);
     }
 

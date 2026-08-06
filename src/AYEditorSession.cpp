@@ -234,12 +234,20 @@ void EditorSession::populateFrame(bool skipViewportPanel) {
     // flush moves to UIPass::execute so the RenderPass dispatch owns
     // the UI submission boundary. flushFrame() closes the lifecycle.
     _panelViewportForFrame = nullptr;
+    _cardViewportForFrame = nullptr;
     if (skipViewportPanel) {
         ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
         if (viewport != nullptr) {
             _panelViewportWasVisibleForFrame = viewport->isVisible();
             viewport->setVisible(false);
             _panelViewportForFrame = viewport;
+        }
+        // Hide only the DockCard body fill — setVisible(false) on the
+        // card would collapse the Center slot weight in DockArea.
+        if (auto* card = dynamic_cast<ayt::ui::Panel*>(_ui.findById("card_viewport"))) {
+            _cardViewportHadBackgroundForFrame = card->isBackgroundEnabled();
+            card->setBackgroundEnabled(false);
+            _cardViewportForFrame = card;
         }
     }
 
@@ -256,6 +264,10 @@ void EditorSession::flushFrame() {
     if (_panelViewportForFrame != nullptr) {
         _panelViewportForFrame->setVisible(_panelViewportWasVisibleForFrame);
         _panelViewportForFrame = nullptr;
+    }
+    if (_cardViewportForFrame != nullptr) {
+        _cardViewportForFrame->setBackgroundEnabled(_cardViewportHadBackgroundForFrame);
+        _cardViewportForFrame = nullptr;
     }
 }
 

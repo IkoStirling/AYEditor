@@ -211,6 +211,12 @@ private:
     // when no toggle is active (the normal composite path).
     ayt::ui::Widget* _panelViewportForFrame = nullptr;
     bool            _panelViewportWasVisibleForFrame = true;
+    // Play composite: parent DockCard (`card_viewport`) must not paint
+    // its opaque Panel fill over the PostProcess 3D blit. We toggle
+    // Panel::setBackgroundEnabled rather than setVisible(false) so the
+    // Center dock slot weight stays intact.
+    ayt::ui::Panel* _cardViewportForFrame = nullptr;
+    bool            _cardViewportHadBackgroundForFrame = true;
     ayt::math::FRectangle _cachedViewportBounds{};
     bool _viewportBoundsCached = false;
     bool _shutdown = false;
