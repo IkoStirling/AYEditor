@@ -25,6 +25,7 @@
 // can't strip their references.
 #include "Test_EditorChildWindowManager.cpp"   // D5+.5 case definitions
 #include "Test_ImportedCharacterMapper.cpp"     // master test cases
+#include "Test_EditorTransportDirtyPrompt.cpp"  // v0.3 PR-4 case definitions
 
 void runTest()
 {

@@ -15,12 +15,25 @@
 #include "aymath/MathTypes.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 
 struct HWND__;
 using HWND = HWND__*;
 
 namespace ayt::device { class WindowManager; }
+
+// v0.3 PR-4 — forward decl Scene（design §4.2.x）
+// Scene 完整定义在 .cpp 引入（AYScene.h），避免把 AYScene 完整 lib 暴露到
+// 任何 include AYEditorSession.h 的 TU；与 PR-3 caller 持 _edit ownership
+// 路径对齐（AYSceneManager.h:69-76；SM 绝对不持 ownership）。
+// 决策 1a: caller 持 ownership（PR-4）
+// 决策 2a: 不接 EditorPlayRuntime 私有通路（PR-4）
+// 决策 3a: EditorMode vs SceneMode 分离（PR-4；3 态 vs 2 态）
+// **文件作用域 forward decl**：必须在 `namespace ayt::editor {` 之外声明，
+// 否则会嵌套在 `ayt::editor::ayt::scene::Scene`，导致
+// `std::unique_ptr<ayt::scene::Scene>` 类型校验失败。
+namespace ayt::scene { class Scene; }
 
 namespace ayt::editor {
 
@@ -180,6 +193,7 @@ private:
     void setModeLabel(const std::wstring& text);
     void setInspectorHint(const std::wstring& text);  // PR-5 (LM-2)
     void onModeChanged(EditorMode mode);
+    void refreshUnsavedIndicator();  // v0.3 PR-4 (design §4.3.x 决策 5a)
     void syncViewport();
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
@@ -192,6 +206,13 @@ private:
     EditorPlayRuntime _playRuntime;
     EditorGameView _gameView;
     ayt::ui::UIManager _ui;
+
+    // v0.3 PR-4 — Editor 持 Edit Scene（design §4.2.x）
+    // std::unique_ptr<ayt::scene::Scene>（SceneMode::Edit），与 EditorSession 同寿。
+    // initialize() 末尾走 host->scenes()->setEdit() + setCurrent() 注入；
+    // shutdown() 末尾 reverse（setEdit(nullptr) + setCurrent(nullptr) + reset）。
+    // SM 不持 _editScene ownership（PR-3 caller 持 _edit 路径对齐）。
+    std::unique_ptr<ayt::scene::Scene> _editScene;
 
     // D5+.5 (2026-07-26): optional child-window manager. Late-bound
     // via make_unique in initialize() when desc.childWindowManager

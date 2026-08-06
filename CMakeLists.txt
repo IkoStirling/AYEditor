@@ -55,6 +55,10 @@ target_include_directories(${MODULE_NAME} PRIVATE
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
     PRIVATE AYEntity AYRenderer AYResource AYIO AYScript AYPlatform AYNetwork
+    # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
+    # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
+    # 暴露 SceneManager 类型。
+    PRIVATE AYScene
     # INT-02 (2026-07-15): DeviceInputProvider lives in
     # AYDeviceSubSystem (not AYDevice core, by dep-graph design).
     # EditorApp.cpp references the type to install it into the Logia

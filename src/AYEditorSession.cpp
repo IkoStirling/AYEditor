@@ -17,6 +17,15 @@
 #include "AYDockArea.h"
 #include "AYDockCard.h"
 
+// v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
+// AYScene 完整 include 因 _editScene 需 SceneMode/Scene 完整类型；
+// IEngineHost 走 host facade（v0.1.3 PR-6 ship）。
+#include "AYScene.h"
+#include "AYSceneManager.h"
+#include "AYSceneMode.h"
+#include "IEngineHost.h"
+#include "AYApplication.h"  // currentEngineHost() / defaultEngineHost()
+
 #include <components/AYAnimationComponent.h>
 #include <components/AYMeshComponent.h>
 #include <components/AYSkeletonComponent.h>
@@ -100,6 +109,22 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     syncViewport();
     AY_EDITOR_TRACE("initialize: done");
 
+    // v0.3 PR-4 — Editor 持 Edit Scene（design §4.2.x）
+    // 决策 1a: caller 持 _editScene ownership
+    // 决策 3a: EditorMode 3 态 vs SceneMode 2 态；本处只 setCurrent 让 Edit
+    //         mode 有 Scene 关联；applyMode 仍走 EditorPlayRuntime 私有通路
+    // 决策 4a: 不接 hook 拦 beginPlay；UX 弹窗由 caller 决定
+    if (auto* host = ayt::app::currentEngineHost()) {
+        if (auto* sm = host->scenes()) {
+            _editScene = std::make_unique<ayt::scene::Scene>(
+                ayt::scene::SceneMode::Edit, "<editor_default>");
+            sm->setEdit(_editScene.get());
+            sm->setCurrent(_editScene.get());
+            AY_EDITOR_TRACE("initialize: edit scene injected (%s)",
+                            _editScene->name().c_str());
+        }
+    }
+
     // D5+.5: optional child-window manager for DockCard promotion.
     if (desc.childWindowManager != nullptr) {
         _childWindows = std::make_unique<EditorChildWindowManager>(
@@ -154,6 +179,19 @@ void EditorSession::shutdown() {
     _ui.shutdown();
     _layoutPath.clear();
     _hostWindow = nullptr;
+
+    // v0.3 PR-4 — shutdown reverse setEdit/setCurrent + reset _editScene
+    // 顺序：先反注册 scene → 再 reset（EditorSession 析构时 unique_ptr 还会
+    // 再 reset 一次；提前 reset 避免 SM 还指向 dangling Scene）
+    if (auto* host = ayt::app::currentEngineHost()) {
+        if (auto* sm = host->scenes()) {
+            if (_editScene) {
+                sm->setCurrent(nullptr);
+                sm->setEdit(nullptr);
+            }
+        }
+    }
+    _editScene.reset();
 }
 
 void EditorSession::setClientSize(float width, float height) {
@@ -596,7 +634,47 @@ void EditorSession::bindTransportBar() {
         }
     };
 
-    bindButton("btn_play", [this]() { _gameView.setMode(EditorMode::Play); });
+    // v0.3 PR-4 — btn_play enable 条件 + dirty prompt UX（design §4.3.x）
+    // 决策 1a: enable = host->scenes()->canBeginPlay()
+    // 决策 4a: Save/Discard/Cancel 三选项 Win32 MessageBoxW
+    // 决策 5a: lbl_unsaved period refresh（mode changed 时同步）
+    bindButton("btn_play", [this]() {
+        auto* host = ayt::app::currentEngineHost();
+        if (!host) return;
+        auto* sm = host->scenes();
+        if (!sm || !sm->canBeginPlay()) return;
+
+        // Save/Discard/Cancel prompt (PR-3 requireSaveBeforePlay 意图 getter)
+        if (sm->requireSaveBeforePlay()) {
+            int choice = ::MessageBoxW(
+                _hostWindow,
+                L"Scene has unsaved changes.\n\nSave before Play?",
+                L"AYEditor",
+                MB_YESNOCANCEL | MB_ICONWARNING);
+            if (choice == IDCANCEL) return;  // Cancel: 早返
+            if (choice == IDYES) {
+                auto* edit = sm->edit();
+                if (edit == nullptr) return;
+                // 编辑场景路径为空时不强行 save（避免无意义空文件）；提示错误
+                if (edit->path().empty()) {
+                    ::MessageBoxW(_hostWindow,
+                        L"Scene has no path. Use File > Save first.",
+                        L"AYEditor", MB_OK | MB_ICONERROR);
+                    return;
+                }
+                if (!edit->save(edit->path())) {
+                    ::MessageBoxW(_hostWindow,
+                        L"Save failed. Cannot start Play.",
+                        L"AYEditor", MB_OK | MB_ICONERROR);
+                    return;
+                }
+            }
+            // IDNO = Discard：继续
+        }
+
+        _gameView.setMode(EditorMode::Play);
+    });
+
     bindButton("btn_pause", [this]() { _gameView.setMode(EditorMode::Paused); });
     bindButton("btn_step", [this]() {
         _gameView.stepOnce();
@@ -605,6 +683,30 @@ void EditorSession::bindTransportBar() {
         }
     });
     bindButton("btn_stop", [this]() { _gameView.setMode(EditorMode::Edit); });
+
+    // v0.3 PR-4 — lbl_unsaved 初始 refresh（design §4.3.x 决策 5a）
+    refreshUnsavedIndicator();
+}
+
+// helper：刷新 lbl_unsaved TextLabel（visible + text）
+// 决策 5a: mode changed / save / clear 触发点 refresh；不每帧轮询
+void EditorSession::refreshUnsavedIndicator() {
+    auto* widget = _ui.findById("lbl_unsaved");
+    if (widget == nullptr) return;
+    auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget);
+    if (label == nullptr) return;
+
+    auto* host = ayt::app::currentEngineHost();
+    bool dirty = false;
+    if (host) {
+        if (auto* sm = host->scenes()) {
+            if (sm->isEditDirty()) {
+                dirty = true;
+            }
+        }
+    }
+    label->setText(dirty ? L"•" : L"");
+    label->setVisible(dirty);
 }
 
 void EditorSession::setDockCardVisible(const char* cardId, bool visible) {
@@ -1560,6 +1662,9 @@ void EditorSession::onModeChanged(EditorMode mode) {
         pushFreecamToRenderer();
         break;
     }
+
+    // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）
+    refreshUnsavedIndicator();
 
     _ui.invalidateLayout();
     _ui.layout();

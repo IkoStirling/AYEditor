@@ -40,6 +40,27 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                  "[EditorShellDemo] net client: AYEditorShell_Demo.exe --net-client "
                  "[--net-host 127.0.0.1] (start server Play first)\n",
                  kDefaultSourFbx);
+
+    // v0.3 PR-4 — 启动日志验证 host->scenes() wiring 通（design §4.2.x）
+    // 不影响 demo 行为；仅 stderr 状态打印，便于 v0.3 验收 + 后续 PR debug。
+    if (auto* host = ayt::app::defaultEngineHost()) {
+        if (auto* sm = host->scenes()) {
+            std::fprintf(stderr,
+                         "[EditorShellDemo] PR-4 host->scenes() wiring: OK\n"
+                         "[EditorShellDemo]   canBeginPlay=%s isEditDirty=%s\n",
+                         sm->canBeginPlay() ? "true" : "false",
+                         sm->isEditDirty()  ? "true" : "false");
+        } else {
+            std::fprintf(stderr,
+                         "[EditorShellDemo] PR-4 host->scenes() missing — "
+                         "bindBuiltinHostServices not called?\n");
+        }
+    } else {
+        std::fprintf(stderr,
+                     "[EditorShellDemo] PR-4 host == nullptr — "
+                     "defaultEngineHost() unavailable\n");
+    }
+
     app->run();
     return 0;
 }

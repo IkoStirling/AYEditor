@@ -1,8 +1,8 @@
 # AYEditor Design
 
-**Version:** v0.3  
-**Date:** 2026-07-03  
-**Status:** E2-composite — single-window bgfx UI + viewport sub-rect via `AYUIRenderBackend` on AYDevice host window (see [§2.3](#23-viewport-presentation-interim-vs-target))
+**Version:** v0.3.0  
+**Date:** 2026-08-06  
+**Status:** E2-composite + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX（v0.3 PR-4；Q-G 收口延续）
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -246,6 +246,86 @@ loader.bindEvent("btn_step",  "onClick", [&]{ session.gameView().stepOnce(); });
 
 Do **not** encode mode transitions inside JSON.
 
+### 4.2.x Editor Session 持 Edit Scene（v0.3 PR-4）
+
+`EditorSession` 持 `std::unique_ptr<ayt::scene::Scene> _editScene`（SceneMode::Edit），
+与 EditorSession 同寿。`initialize()` 末尾（line 124）：
+
+```cpp
+if (auto* host = ayt::app::currentEngineHost()) {
+    if (auto* sm = host->scenes()) {
+        _editScene = std::make_unique<ayt::scene::Scene>(
+            ayt::scene::SceneMode::Edit, "<editor_default>");
+        sm->setEdit(_editScene.get());
+        sm->setCurrent(_editScene.get());
+    }
+}
+```
+
+`shutdown()` 末尾 reverse（setCurrent(nullptr) → setEdit(nullptr) → reset）。
+
+**不接 EditorPlayRuntime 私有通路**：`EditorGameView::applyMode` Play/Edit 切换
+仍走 `EditorPlayRuntime::startPlay()/enterEdit()`，**不**调
+`host->scenes()->beginPlay()`。理由：EditorPlayRuntime 私有通路直接操作 World
+（spawn cube / ground / glass / playerController），不走 Scene::load——与
+SceneManager 的 "Edit ↔ Play Scene 切" 语义不同。v0.3 PR-4 仅 ship
+"Editor 持 Edit Scene + transport bar UX"，不改 EditorPlayRuntime 业务。
+
+**EditorMode 与 SceneMode 分离**（决策 3a）：EditorMode 3 态（Edit / Play /
+Paused）vs SceneMode 2 态（Edit / Play）。Paused 不接 SceneManager；Editor 状态
+切换走 `_gameView.setMode()` 私有通路。
+
+### 4.3.x Transport bar UX（v0.3 PR-4 / Q4=b 最小 Hierarchy）
+
+`bindTransportBar` 改造（PR-4）：
+
+1. **`btn_play` enable 条件** = `host->scenes()->canBeginPlay()`（决策 1a；
+   内置逻辑；caller 仍可点击；enable 是 UI 提示）
+2. **`btn_play` click handler 头部 dirty prompt**（决策 4a）：
+   - `host->scenes()->requireSaveBeforePlay()` →
+     弹 Win32 `MessageBoxW(MB_YESNOCANCEL | MB_ICONWARNING)`
+   - **Cancel** → 早返（不切 mode）
+   - **Save** → 调 `host->scenes()->edit()->save(path)`；失败弹错 + 早返
+   - **Discard** → 继续（切 EditorMode::Play）
+3. **`lbl_unsaved` TextLabel**（`editor_shell.ui.json` 新增；id=`lbl_unsaved`）：
+   - dirty → 显示 "•"（warning 色 `(0.85, 0.55, 0.10, 1.0)`）
+   - clean → 隐藏（visible=false）
+   - refresh 时机：`onModeChanged` + `bindTransportBar` 末尾 + 编辑器主动调
+     `refreshUnsavedIndicator()`（决策 5a）；**不**每帧轮询（避免每帧调用
+     host facade）
+4. **Scene 列表最小 Hierarchy**（Q4=b）：
+   - `lbl_mode` 已有 + `lbl_unsaved`（dirty 指示）
+   - 显示当前 Edit Scene name（`host->scenes()->edit() ? ... : ""`）+
+     Play Scene name（`host->scenes()->play() ? ... : ""`）
+   - **不**展开 entity 树；entity 树推迟后续 PR
+
+**决策镜像**（PR-4 7 项 decision）：
+
+| 决策 | 内容 |
+|------|------|
+| 1a | caller 持 _editScene ownership（std::unique_ptr） |
+| 2a | 不接 EditorPlayRuntime 私有通路 |
+| 3a | EditorMode 3 态 vs SceneMode 2 态分离 |
+| 4a | Save/Discard/Cancel 三选项（Win32 MessageBoxW） |
+| 5a | lbl_unsaved 不每帧轮询；mode 切换 + 编辑器主动 refresh |
+| 6a | PR-4 不 ship Scene 树（entity 树推迟后续 PR） |
+| 7a | EditorShellDemo 同步加启动日志验证 wiring |
+
+**测试矩阵**（v0.3 PR-4 ship 时）：
+
+- `editor_transport_edit_scene_injected_after_initialize` — _editScene 创建 + host 反映
+- `editor_transport_can_begin_play_true_after_initialize` — canBeginPlay 翻转
+- `editor_transport_lbl_unsaved_visible_when_edit_dirty` — dirty 显 "•"
+- `editor_transport_lbl_unsaved_hidden_when_edit_clean` — clean 隐藏
+- `editor_transport_lbl_unsaved_follows_on_mode_changed` — mode 切换同步
+
+**Deferred**（不 ship PR-4）：
+- ❌ MessageBoxW 拦截（Win32 API hook 复杂；e2e 验证）
+- ❌ Save/Discard/Cancel 3 选项 click handler 完整路径（依赖 _hostWindow + MessageBoxW）
+- ❌ Entity 树 Hierarchy 面板（PR-4 仅 Scene 列表最小版）
+- ❌ 接 EditorPlayRuntime 私有通路到 SceneManager（私有通路直接操作 World）
+- ❌ dirty 信号订阅（PR-1/2/3 决策 7a/5a/3a 三层锁）
+
 ---
 
 ## 5. Editor chrome (AYUI)
@@ -422,6 +502,7 @@ Long term, [AYExtension/Editor](../AYExtension/design.md) may thin-wrap or re-ex
 | 2026-07-03 | **E2 split:** E2-interim = child HWND + GDI host (Windows-safe); E2-composite = U2 single-window target |
 | 2026-07-03 | Viewport native ownership migrates to **AYDevice** at E3; interim Win32 encapsulated in demo + `EditorPlayRuntime` |
 | 2026-07-03 | AYDevice **WindowManager skeleton** recommended before E3; full input/XR not required for editor shell |
+| 2026-08-06 | v0.3 PR-4 Editor 持 _editScene + transport bar UX（决策 1a/2a/3a/4a/5a/6a/7a） |
 
 ---
 
