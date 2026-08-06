@@ -17,6 +17,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 struct HWND__;
 using HWND = HWND__*;
@@ -34,6 +35,11 @@ namespace ayt::device { class WindowManager; }
 // 否则会嵌套在 `ayt::editor::ayt::scene::Scene`，导致
 // `std::unique_ptr<ayt::scene::Scene>` 类型校验失败。
 namespace ayt::scene { class Scene; }
+
+// v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
+// TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
+// 任何 include AYEditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
+namespace ayt::ui { class TreeView; }
 
 namespace ayt::editor {
 
@@ -194,6 +200,31 @@ private:
     void setInspectorHint(const std::wstring& text);  // PR-5 (LM-2)
     void onModeChanged(EditorMode mode);
     void refreshUnsavedIndicator();  // v0.3 PR-4 (design §4.3.x 决策 5a)
+
+    // v0.3+ PR-5 — Hierarchy / Outliner 面板（design §4.3.y）
+    //
+    // bindOutlinerPanel: 一次性 bind（selection callback + itemHeight）。
+    //   在 initialize() 的 bindRenderSettingsPanel() 之后调一次。
+    // refreshOutliner: 纯读重建 tree。**INV-4 锁**：只走
+    //   world().getAllEntities() const + Entity::getId/getName，
+    //   绝不 mutate Scene（Scene::_dirty 唯一写者是 clear/load/save，
+    //   见 AYScene.h:118 注释）。
+    // 决策 1b（mode-keyed World 源）：
+    //   Edit        → host->scenes()->edit()->world()（v1 永远空，
+    //                 因为没有任何路径往 Edit World 建 entity ——
+    //                 见 AYScene.cpp:44 私有 World 实例 vs
+    //                 AYEditorPlayRuntime.cpp:454/1224/1632 singleton spawn）
+    //   Play/Paused → ayt::entity::World::instance()（EditorPlayRuntime
+    //                 实际 spawn 目标）
+    // onOutlinerSelectionChanged: 行点击 → Inspector。flatIndex 0 = 合成
+    //   scene root（不可选）；>0 映射 _outlinerEntityIds[flatIndex - 1]。
+    //   **Landmine B**：**不得**在此同步调 refreshOutliner()/_ui.layout()，
+    //   TreeView::rebuildNodes() 会 delete 当前正在派发事件的 TreeNode
+    //   （AYTreeView.cpp:80-85 + :194），UIManager::onMouseButtonUp:1339
+    //   随后 deref 已释放的 _hoverWidget → UAF。改置 _outlinerRefreshPending。
+    void bindOutlinerPanel();
+    void refreshOutliner();
+    void onOutlinerSelectionChanged(int flatIndex);
     void syncViewport();
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
@@ -277,6 +308,21 @@ private:
     bool _panelRenderVisible = true;
     bool _panelInspectorVisible = true;
     bool _panelNetworkVisible = false;
+    bool _panelOutlinerVisible = true;  // v0.3+ PR-5
+
+    // v0.3+ PR-5 — Outliner state。
+    // _outliner: 非持有（UIManager/DockCard 持树 ownership）；shutdown()
+    //   在 _ui.shutdown() 前置 nullptr（Landmine E）。
+    // _outlinerEntityIds: flatIndex-1 → Entity id（**id 而非 Entity***：
+    //   endPlay / World teardown 后裸指针会 dangle；走 World::findEntity
+    //   （AYWorld.h:42）重解析，miss = 已销毁 → 自动降级 Landmine F）。
+    // _outlinerSelectedEntityId: 0 = 无 Hierarchy 选择（Inspector 退回
+    //   PR-4 的 character/cube 二选一路径）。
+    // _outlinerRefreshPending: 延迟重建标志；update(dt) 内消费（Landmine B）。
+    ayt::ui::TreeView*    _outliner = nullptr;
+    std::vector<uint32_t> _outlinerEntityIds;
+    uint32_t              _outlinerSelectedEntityId = 0;
+    bool                  _outlinerRefreshPending = false;
 
     // PR-5 (v0.1.2 LM-2): Play/Paused 时锁 Inspector 写路径。
     // onModeChanged 切 mode 时同步切换。Inspector 4 button click handler

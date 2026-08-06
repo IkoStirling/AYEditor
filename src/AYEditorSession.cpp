@@ -13,6 +13,7 @@
 #include "AYRendererSubSystem.h"
 #include "AYSlider.h"
 #include "AYTextLabel.h"
+#include "AYTreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYWidget.h"
 #include "AYDockArea.h"
 #include "AYDockCard.h"
@@ -100,6 +101,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     bindNetworkPanelStub();
     bindRenderSettingsPanel();
 
+    // v0.3+ PR-5 — bindOutlinerPanel (design §4.3.y)
+    // 一次性 bind（selection callback + itemHeight via setItemHeight;
+    // JSON 的 itemHeight 在 DockCard.content 路径被静默丢，见 Landmine A）。
+    bindOutlinerPanel();
+
     _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
     setDockCardVisible("card_network", false);
     AY_EDITOR_TRACE("initialize: toolbar bound");
@@ -124,6 +130,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
                             _editScene->name().c_str());
         }
     }
+
+    // v0.3+ PR-5 — 首刷 Hierarchy（_editScene 注入后才有 scene name）。
+    // Edit World v1 永远空（决策 1b；plan §0.2）；Play 未启动 → tree 仅
+    // 含合成 root。INV-4：纯读，Scene::_dirty 不可能被置位。
+    refreshOutliner();
 
     // D5+.5: optional child-window manager for DockCard promotion.
     if (desc.childWindowManager != nullptr) {
@@ -176,6 +187,15 @@ void EditorSession::shutdown() {
     // Inspector path strings and GPU borrows racing UI teardown.
     _playRuntime.shutdownEngine();
     _gameView.setMode(EditorMode::Edit);
+
+    // v0.3+ PR-5 — Landmine E: 清 Outliner 状态**早于** _ui.shutdown()
+    // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
+    // 链上 deref）。
+    _outliner = nullptr;
+    _outlinerEntityIds.clear();
+    _outlinerSelectedEntityId = 0;
+    _outlinerRefreshPending = false;
+
     _ui.shutdown();
     _layoutPath.clear();
     _hostWindow = nullptr;
@@ -212,6 +232,13 @@ void EditorSession::update(float dt) {
         _childWindows->tickAll(dt, nullptr);
     }
     _ui.update(dt);
+
+    // v0.3+ PR-5 — Landmine B: 延迟消费 Outliner 重建（禁止在 TreeNode
+    // 事件派发内重建；onOutlinerSelectionChanged 注释）。
+    if (_outlinerRefreshPending) {
+        _outlinerRefreshPending = false;
+        refreshOutliner();
+    }
     // Per-frame reconcile: if the last known cursor is not on a splitter
     // band, force every SplitterHandle un-revealed. Leave events alone
     // are not sufficient (capture path / skipped WM_MOUSEMOVE).
@@ -709,6 +736,179 @@ void EditorSession::refreshUnsavedIndicator() {
     label->setVisible(dirty);
 }
 
+// =============================================================================
+// v0.3+ PR-5 — Hierarchy / Outliner (design §4.3.y)
+// =============================================================================
+namespace {
+
+// 决策 1b（mode-keyed World 源）：
+//   Edit        → host->scenes()->edit()->world()（canonical；v1 永远空，
+//                 因为没有任何路径往 Edit World 建 entity ——
+//                 见 AYScene.cpp:44 私有 World 实例 vs
+//                 AYEditorPlayRuntime.cpp:454/1224/1632 singleton spawn）
+//   Play/Paused → World::instance()（EditorPlayRuntime 实际 spawn 目标）
+// 返回 const 引用以物理性保证 INV-4（不可能从这里 mutate Scene）。
+const ayt::entity::World* resolveHierarchyWorld(EditorMode mode)
+{
+    if (mode == EditorMode::Edit) {
+        auto* host = ayt::app::currentEngineHost();
+        if (host == nullptr) return nullptr;
+        auto* sm = host->scenes();
+        if (sm == nullptr) return nullptr;
+        auto* edit = sm->edit();
+        if (edit == nullptr) return nullptr;
+        return &edit->world();
+    }
+    if (!ayt::entity::World::instance().isInitialized()) {
+        return nullptr;
+    }
+    return &ayt::entity::World::instance();
+}
+
+// 非 const 版：selection 解析需要 findEntity（AYWorld.h:42 非 const）。
+ayt::entity::World* resolveHierarchyWorldMutable(EditorMode mode)
+{
+    return const_cast<ayt::entity::World*>(
+        resolveHierarchyWorld(mode));
+}
+
+} // namespace
+
+void EditorSession::bindOutlinerPanel()
+{
+    _outliner = dynamic_cast<ayt::ui::TreeView*>(
+        _ui.findById("tree_outliner"));
+    if (_outliner == nullptr) {
+        // PR-4 的 "layout 缺失静默跳过" 模式（initialize 已在
+        // _layoutPath.empty() 时不 loadLayout；此处 findById 落空同理）。
+        return;
+    }
+    // Landmine A 修法：TreeView 的 JSON itemHeight 在 DockCard.content 路径
+    // 下不会被应用（AYLayoutLoader.cpp:191-197 走 buildWidgetTree，
+    // 不走 AYWidgetSerializer.cpp:441-443 的 itemHeight 解析）。
+    // 故从代码设。
+    _outliner->setItemHeight(16.0f);
+    _outliner->setOnSelectionChanged(
+        [this](int flatIndex) { onOutlinerSelectionChanged(flatIndex); });
+}
+
+void EditorSession::refreshOutliner()
+{
+    if (_outliner == nullptr) {
+        return;
+    }
+
+    auto setUtf8 = [this](const char* id, const std::string& utf8) {
+        if (auto* w = _ui.findById(id)) {
+            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
+                label->setText(
+                    std::wstring(utf8.begin(), utf8.end()));
+            }
+        }
+    };
+
+    _outlinerEntityIds.clear();
+
+    const ayt::entity::World* world =
+        resolveHierarchyWorld(_gameView.mode());
+    if (world == nullptr) {
+        _outliner->clearTree();
+        _outlinerSelectedEntityId = 0;
+        setUtf8("outliner_hint", "Scene: -");
+        return;
+    }
+
+    // 合成 root 节点 label：scene name（host->scenes()->current()）。
+    std::string rootLabel = "<no scene>";
+    if (auto* host = ayt::app::currentEngineHost()) {
+        if (auto* sm = host->scenes()) {
+            if (auto* cur = sm->current()) {
+                rootLabel = cur->name().empty() ? "<unnamed>"
+                                                : cur->name();
+            }
+        }
+    }
+    if (_gameView.mode() != EditorMode::Edit) {
+        rootLabel += "  (Play World)";
+    }
+    setUtf8("outliner_hint", "Scene: " + rootLabel);
+
+    std::vector<ayt::ui::TreeNodeData> nodes;
+    ayt::ui::TreeNodeData root;
+    root.label = std::wstring(rootLabel.begin(), rootLabel.end());
+    root.hasChildren = true;
+    root.expanded = true;
+    root.parentIndex = -1;
+    nodes.push_back(root);
+
+    // INV-4：唯一 Scene 触点是 const World& + getAllEntities() const
+    // （AYWorld.h:43）+ Entity::getId/getName（AYEntityImpl.h:31-32）。
+    // 无任何 clear/load/save 调用 → Scene::_dirty 不可能被置位。
+    const std::vector<ayt::entity::Entity*> entities =
+        world->getAllEntities();
+    nodes.reserve(entities.size() + 1);
+    _outlinerEntityIds.reserve(entities.size());
+    for (ayt::entity::Entity* e : entities) {
+        if (e == nullptr) continue;
+        const char* nameC = e->getName();
+        std::string name = (nameC != nullptr && nameC[0] != '\0')
+            ? std::string(nameC)
+            : ("entity#" + std::to_string(
+                  static_cast<unsigned>(e->getId())));
+
+        ayt::ui::TreeNodeData d;
+        d.label = std::wstring(name.begin(), name.end());
+        d.hasChildren = false;
+        d.expanded = false;
+        d.parentIndex = 0;  // 挂在合成 root 下
+        nodes.push_back(d);
+        _outlinerEntityIds.push_back(e->getId());
+    }
+
+    _outliner->setTree(nodes);
+
+    // 选择保持：id 仍在列表里就把高亮放回去（flatIndex = 序号 + 1）。
+    if (_outlinerSelectedEntityId != 0) {
+        int flat = -1;
+        for (size_t i = 0; i < _outlinerEntityIds.size(); ++i) {
+            if (_outlinerEntityIds[i] == _outlinerSelectedEntityId) {
+                flat = static_cast<int>(i) + 1;
+                break;
+            }
+        }
+        if (flat < 0) {
+            _outlinerSelectedEntityId = 0;  // 实体已销毁（endPlay 等）
+        } else {
+            _outliner->setSelectedIndex(flat);
+        }
+    }
+}
+
+void EditorSession::onOutlinerSelectionChanged(int flatIndex)
+{
+    // flat 0 = 合成 scene root：清 Hierarchy 选择，Inspector 退回 PR-4 路径。
+    if (flatIndex <= 0) {
+        _outlinerSelectedEntityId = 0;
+        refreshInspectorLabels();
+        if (_repaintCallback) _repaintCallback();
+        return;
+    }
+    const size_t idx = static_cast<size_t>(flatIndex - 1);
+    if (idx >= _outlinerEntityIds.size()) {
+        return;
+    }
+    _outlinerSelectedEntityId = _outlinerEntityIds[idx];
+
+    // **Landmine B**：不**在此调 refreshOutliner()/_ui.layout()：会
+    // delete 正在派发事件的 TreeNode（AYTreeView.cpp:80-85/194）→
+    // UIManager::onMouseButtonUp:1339 UAF。只刷 Inspector（纯
+    // TextLabel setText） + repaint。
+    refreshInspectorLabels();
+    if (_repaintCallback) {
+        _repaintCallback();
+    }
+}
+
 void EditorSession::setDockCardVisible(const char* cardId, bool visible) {
     ayt::ui::DockCard* card = nullptr;
     if (_mainDock != nullptr) {
@@ -1183,6 +1383,12 @@ void EditorSession::bindMenuBar() {
                 toggleDockCard("card_inspector", _panelInspectorVisible);
             });
         }
+        // v0.3+ PR-5 — Hierarchy panel toggle (design §4.3.y)
+        if (auto* item = windowMenu->addItem(L"Hierarchy")) {
+            item->setOnActivate([this]() {
+                toggleDockCard("card_outliner", _panelOutlinerVisible);
+            });
+        }
         if (auto* item = windowMenu->addItem(L"Network")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_network", _panelNetworkVisible);
@@ -1321,6 +1527,39 @@ void EditorSession::refreshInspectorLabels()
             }
         }
     };
+
+    // v0.3+ PR-5 — Hierarchy 选择优先于 PR-4 的 character/cube 二选一。
+    // 存 id 不存指针 → 每次重解析，实体没了自动降级（Landmine F）。
+    if (_outlinerSelectedEntityId != 0) {
+        if (auto* w = resolveHierarchyWorldMutable(_gameView.mode())) {
+            if (ayt::entity::Entity* sel =
+                    w->findEntity(_outlinerSelectedEntityId)) {
+                const char* nm = sel->getName();
+                setUtf8("inspector_hint",
+                        std::string("Hierarchy: ")
+                        + ((nm && nm[0]) ? nm : "entity"));
+                if (auto* meshC = sel->getComponent<ayt::entity::MeshComponent>()) {
+                    setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
+                } else {
+                    setUtf8("inspector_mesh", "mesh: -");
+                }
+                if (auto* skelC = sel->getComponent<ayt::entity::SkeletonComponent>()) {
+                    setUtf8("inspector_skel", "skel: " + skelC->skeletonPath);
+                } else {
+                    setUtf8("inspector_skel", "skel: -");
+                }
+                if (auto* animC = sel->getComponent<ayt::entity::AnimationComponent>()) {
+                    setUtf8("inspector_anim",
+                            animC->clipPath.empty() ? "anim: (bind-pose)"
+                                                    : ("anim: " + animC->clipPath));
+                } else {
+                    setUtf8("inspector_anim", "anim: -");
+                }
+                return;
+            }
+        }
+        _outlinerSelectedEntityId = 0;  // 已销毁 → 降级到 PR-4 路径
+    }
 
     ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
     ayt::entity::Entity* cube = _playRuntime.cubeEntity();
@@ -1665,6 +1904,13 @@ void EditorSession::onModeChanged(EditorMode mode) {
 
     // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）
     refreshUnsavedIndicator();
+
+    // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）且
+    // 可能销毁 Play 实体 → 清选择 + 排队重建。延迟到 update() 消费
+    // 是因为 btn_play/btn_stop click handler 仍在 UIManager 事件派发栈内
+    // （Landmine B）。
+    _outlinerSelectedEntityId = 0;
+    _outlinerRefreshPending = true;
 
     _ui.invalidateLayout();
     _ui.layout();

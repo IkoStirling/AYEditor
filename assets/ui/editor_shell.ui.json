@@ -67,6 +67,22 @@
       "cards": [
         {
           "slot": "Left",
+          "id": "card_outliner",
+          "title": "Hierarchy",
+          "floatable": true,
+          "content": {
+            "type": "VBox",
+            "id": "panel_outliner_body",
+            "spacing": 2,
+            "padding": { "left": 6, "top": 4, "right": 6, "bottom": 4 },
+            "children": [
+              { "type": "TextLabel", "id": "outliner_hint", "text": "Scene: -", "size": { "w": 200, "h": 18 } },
+              { "type": "TreeView", "id": "tree_outliner", "size": { "w": 200, "h": 220 } }
+            ]
+          }
+        },
+        {
+          "slot": "Left",
           "id": "card_render",
           "title": "Render",
           "floatable": true,
