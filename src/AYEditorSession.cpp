@@ -1532,8 +1532,19 @@ void EditorSession::importCharacterFromDialog()
 
 // ED-03: walk the inspector's TextLabels and update them with
 // the currently-spawned Play entity (character preferred, else cube).
+//
+// v0.4 PR-2 (design §6 decision 7a + LM-2 fix): Play/Paused 模式下
+// inspector 已 lock（PR-5 LM-2 语义），上层 onModeChanged 已
+// `setInspectorHint("Locked during Play.")`。本函数必须不再触碰
+// 任何 inspector label — 否则 line 1590 "No selection" 会覆盖上层
+// 的 mode-aware hint（pre-existing bug，PR-1 验证：git stash 后
+// baseline 同样 fail）。Edit 模式行为不变。
 void EditorSession::refreshInspectorLabels()
 {
+    if (_gameView.mode() != EditorMode::Edit) {
+        return;
+    }
+
     auto setUtf8 = [this](const char* id, const std::string& utf8) {
         if (auto* w = _ui.findById(id)) {
             if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
