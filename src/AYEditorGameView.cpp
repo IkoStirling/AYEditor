@@ -45,6 +45,12 @@ void EditorGameView::stepOnce() {
 }
 
 void EditorGameView::applyMode(EditorMode mode) {
+    // v0.4 PR-1 (design §6): applyMode 是 EditorMode → EditorPlayRuntime
+    // 的 adapter。**不直接**调 SceneManager — SM 入口由
+    // _runtime.startPlay()/enterEdit() 头部接管 (F3.a / F3.b；G1/G5 收口)。
+    // 链路：btn_play → applyMode(Play) → _runtime.startPlay() →
+    // sm->beginPlay() → spawn → GameLoop::tickOnce (renderer 帧提交
+    // 在 GameLoop 内耦合；PR-1 不切 SM::tick)。
     switch (mode) {
     case EditorMode::Edit:
         setRenderClockPaused(false);

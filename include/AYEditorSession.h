@@ -113,6 +113,10 @@ public:
 
     EditorGameView& gameView() { return _gameView; }
     const EditorGameView& gameView() const { return _gameView; }
+    // v0.4 PR-1: 暴露 play runtime 给单测（_gameView 路径下若需要直接
+    // 调 startPlay/enterEdit/setNetPlayRole 等；不暴露给非测试 caller）。
+    EditorPlayRuntime& playRuntime() { return _playRuntime; }
+    const EditorPlayRuntime& playRuntime() const { return _playRuntime; }
     ayt::ui::UIManager& ui() { return _ui; }
     const ayt::ui::UIManager& ui() const { return _ui; }
 

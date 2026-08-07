@@ -35,6 +35,10 @@
 #include "aymath/MathTypes.h"
 #include "aymath/MathDefs.h"
 
+#include "AYScene.h"           // v0.4 PR-1: sm->play()->world() in resolvePlayWorld
+#include "AYSceneManager.h"    // v0.4 PR-1: sm->beginPlay/endPlay in startPlay/enterEdit
+#include "AYApplication.h"     // v0.4 PR-1: currentEngineHost() in resolvePlayWorld
+
 #include <logia/AYCompilerError.h>
 
 #include <cstdio>
@@ -451,7 +455,9 @@ void EditorPlayRuntime::clearClientReplicatedEntities() noexcept
 
 ayt::entity::Entity* EditorPlayRuntime::spawnVisualCubeEntity(uint32_t /*netId*/)
 {
-    ayt::entity::Entity* entity = ayt::entity::World::instance().createEntity();
+    // v0.4 PR-1 (G4): spawn 走 resolvePlayWorld()。Server 路径走
+    // sm->play()->world()；client 路径走 World::instance()（决策 4a）。
+    ayt::entity::Entity* entity = resolvePlayWorld()->createEntity();
     if (entity == nullptr) {
         return nullptr;
     }
@@ -1221,7 +1227,8 @@ void EditorPlayRuntime::spawnGroundIfNeeded() {
         return;
     }
 
-    _groundEntity = ayt::entity::World::instance().createEntity();
+    // v0.4 PR-1 (G4): spawn 走 resolvePlayWorld()。
+    _groundEntity = resolvePlayWorld()->createEntity();
     if (_groundEntity == nullptr) {
         return;
     }
@@ -1243,7 +1250,8 @@ void EditorPlayRuntime::spawnGlassIfNeeded() {
         return;
     }
 
-    _glassEntity = ayt::entity::World::instance().createEntity();
+    // v0.4 PR-1 (G4): spawn 走 resolvePlayWorld()。
+    _glassEntity = resolvePlayWorld()->createEntity();
     if (_glassEntity == nullptr) {
         return;
     }
@@ -1289,29 +1297,55 @@ namespace {
 
 // World::shutdown() deletes entities but leaves EditorPlayRuntime's raw
 // pointers dangling. Only destroy while the world still owns them.
-void releaseOwnedEntity(ayt::entity::Entity*& ptr) noexcept
+// v0.4 PR-1: 接收 World& 参数（由 EditorPlayRuntime::resolvePlayWorld()
+// 提供），不再 hardcode World::instance()，收口 LM-1。
+void releaseOwnedEntity(ayt::entity::Entity*& ptr,
+                       ayt::entity::World& world) noexcept
 {
     if (ptr == nullptr) {
         return;
     }
-    if (ayt::entity::World::instance().isInitialized()) {
-        ayt::entity::World::instance().destroyEntity(ptr);
+    if (world.isInitialized()) {
+        world.destroyEntity(ptr);
     }
     ptr = nullptr;
 }
 
 } // namespace
 
+ayt::entity::World* EditorPlayRuntime::resolvePlayWorld() noexcept
+{
+    // v0.4 PR-1 (design §6, G4): 单一 helper 解析 Play World 源。
+    // 优先 host->scenes()->play()->world()（beginPlay 后的 Play Scene World）；
+    // fallback 到 World::instance()（SM 不可达 / beginPlay 未调 / net-client）。
+    //
+    // net-client 路径不调 beginPlay（G9 + 决策 4a），直接走 singleton —
+    // 避免 log 噪音（LM-X2）。Server/未指定角色走 SM 路径。
+    if (_netPlayRole != NetPlayRole::Client) {
+        auto* host = ayt::app::currentEngineHost();
+        auto* sm = (host != nullptr) ? host->scenes() : nullptr;
+        if (sm != nullptr) {
+            if (auto* play = sm->play()) {
+                return &play->world();
+            }
+        }
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] resolvePlayWorld: SM/play unavailable, "
+            "falling back to World::instance()\n");
+    }
+    return &ayt::entity::World::instance();
+}
+
 void EditorPlayRuntime::clearCube() noexcept {
-    releaseOwnedEntity(_cubeEntity);
+    releaseOwnedEntity(_cubeEntity, *resolvePlayWorld());
 }
 
 void EditorPlayRuntime::clearGround() noexcept {
-    releaseOwnedEntity(_groundEntity);
+    releaseOwnedEntity(_groundEntity, *resolvePlayWorld());
 }
 
 void EditorPlayRuntime::clearGlass() noexcept {
-    releaseOwnedEntity(_glassEntity);
+    releaseOwnedEntity(_glassEntity, *resolvePlayWorld());
 }
 
 // Phase 2a: hot-swap. Sequence mirrors the spawn policy documented
@@ -1497,7 +1531,8 @@ void EditorPlayRuntime::applyComponentOverrides(
 }
 
 void EditorPlayRuntime::clearCharacter() noexcept {
-    if (ayt::entity::World::instance().isInitialized()) {
+    // v0.4 PR-1 (G4): isInitialized 检查走 resolvePlayWorld()。
+    if (resolvePlayWorld()->isInitialized()) {
         for (ayt::entity::Entity* part : _additionalCharacterEntities) {
             ayt::entity::destroyCharacter(part);
         }
@@ -1513,6 +1548,28 @@ bool EditorPlayRuntime::startPlay()
 {
     if (!ensureEngineInitialized()) {
         return false;
+    }
+
+    // v0.4 PR-1 (design §6, G1): SceneManager beginPlay 兜底。
+    //   btn_play → applyMode(Play) → 此函数 → 编辑场景 → tmp 克隆 →
+    //   setCurrent(play)。保证后续 spawn 走 sm->play()->world()，
+    //   收口 LM-1（World::instance() vs Scene 独立 World 边界）。
+    //   net-client 路径跳过（client 不持久化；决策 4a + G9）：
+    //   client 只 consume 服务端 EntitySpawn，本地不写 tmp 克隆。
+    if (_netPlayRole != NetPlayRole::Client) {
+        auto* host = ayt::app::currentEngineHost();
+        auto* sm = (host != nullptr) ? host->scenes() : nullptr;
+        if (sm == nullptr || !sm->canBeginPlay()) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] startPlay: no SceneManager or cannot "
+                "begin play (host=%p sm=%p)\n", (void*)host, (void*)sm);
+            return false;
+        }
+        if (!sm->beginPlay()) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] startPlay: sm->beginPlay() failed\n");
+            return false;
+        }
     }
 
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
@@ -1566,6 +1623,17 @@ bool EditorPlayRuntime::startPlay()
 
 void EditorPlayRuntime::enterEdit()
 {
+    // v0.4 PR-1 (design §6, G5): SceneManager endPlay 兜底。
+    //   **idempotent** — 多次调安全 (btn_stop + applyMode(Edit) +
+    //   shutdownEngine 三处都走此函数；SM 内部 _play==nullptr 时 no-op，
+    //   AYSceneManager.h:99-103)。清 tmp 克隆 + 销毁 _play Scene →
+    //   Scene 析构 → World 析构 → 无残留 (INV-3)。
+    auto* host = ayt::app::currentEngineHost();
+    auto* sm = (host != nullptr) ? host->scenes() : nullptr;
+    if (sm != nullptr) {
+        sm->endPlay();
+    }
+
     ayt::game::GameLoop::instance().pause();
     stopEditorNetworkListenServer();
     if (_netPlayRole == NetPlayRole::Client) {
@@ -1629,7 +1697,8 @@ void EditorPlayRuntime::spawnPlayerControllerIfNeeded() {
     if (_playerEntity != nullptr) {
         return;
     }
-    _playerEntity = ayt::entity::World::instance().createEntity();
+    // v0.4 PR-1 (G4): spawn 走 resolvePlayWorld()。
+    _playerEntity = resolvePlayWorld()->createEntity();
     if (_playerEntity == nullptr) {
         return;
     }
@@ -1645,7 +1714,8 @@ void EditorPlayRuntime::spawnPlayerControllerIfNeeded() {
 }
 
 void EditorPlayRuntime::clearPlayerController() noexcept {
-    releaseOwnedEntity(_playerEntity);
+    // v0.4 PR-1 (G4): 走 resolvePlayWorld()。
+    releaseOwnedEntity(_playerEntity, *resolvePlayWorld());
     _playerScriptBound = false;
 }
 

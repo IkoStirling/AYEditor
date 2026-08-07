@@ -14,6 +14,7 @@ using HWND = HWND__*;
 
 namespace ayt::entity {
 class Entity;
+class World;
 }
 
 namespace ayt::net {
@@ -152,6 +153,11 @@ private:
     void registerUpdateListener();
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
+    // v0.4 PR-1 (design §6, G4): 单一 helper 解析 Play World 源。
+    // 优先 host->scenes()->play()->world()（beginPlay 后的 Play Scene World）；
+    // fallback 到 World::instance()（SM 不可达 / beginPlay 未调 / net-client）。
+    // 是 cpp-local 实现；private 因需访问 _netPlayRole 字段。
+    ayt::entity::World* resolvePlayWorld() noexcept;
 
     // INT-01 (2026-07-15): Logia end-to-end smoke — spawn a fresh
     // Entity with the EditorPlayerController ScriptComponent, bind

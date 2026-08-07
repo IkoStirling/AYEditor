@@ -252,6 +252,13 @@ void EditorSession::update(float dt) {
     }
 
     if (_gameView.mode() == EditorMode::Play) {
+        // v0.4 PR-1 (design §6, 决策 2): tick 仍走 _playRuntime.tick() →
+        // GameLoop::tickOnce。**不切到 SceneManager::tick** — renderer 帧
+        // 提交 + system tick + network poll + script hot-reload poll 在
+        // GameLoop 内耦合 (LM-X4)；切 SM::tick 会破坏 renderer pipeline 顺序。
+        // Play Scene World 由 startPlay 头部 beginPlay 创建；system tick
+        // = GameLoop::TickSystems() 遍历 World::instance() 系统注册器
+        // (v0.4 PR-1 不动)。
         _playRuntime.tick();
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
@@ -699,9 +706,16 @@ void EditorSession::bindTransportBar() {
             // IDNO = Discard：继续
         }
 
+        // v0.4 PR-1 (design §6): btn_play **不直接**调 sm->beginPlay() —
+        // 委托给 _gameView.setMode(Play) → applyMode(Play) →
+        // _runtime.startPlay() 头部 (F3.a)。保持"single source of truth =
+        // EditorPlayRuntime"。Save/Discard/Cancel UX 完整不动。
         _gameView.setMode(EditorMode::Play);
     });
 
+    // v0.4 PR-1: btn_stop 不直接调 sm->endPlay()；委托给
+    // _gameView.setMode(Edit) → applyMode(Edit) → _runtime.enterEdit()
+    // 头部 (F3.b) → sm->endPlay()（idempotent；G2/G5 收口）。
     bindButton("btn_pause", [this]() { _gameView.setMode(EditorMode::Paused); });
     bindButton("btn_step", [this]() {
         _gameView.stepOnce();

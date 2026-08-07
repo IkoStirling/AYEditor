@@ -27,6 +27,7 @@
 #include "Test_ImportedCharacterMapper.cpp"     // master test cases
 #include "Test_EditorTransportDirtyPrompt.cpp"  // v0.3 PR-4 case definitions
 #include "Test_EditorHierarchy.cpp"            // v0.3+ PR-5 case definitions
+#include "Test_EditorSceneBridge.cpp"          // v0.4 PR-1 Scene runtime bridge
 
 void runTest()
 {

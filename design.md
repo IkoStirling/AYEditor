@@ -326,6 +326,66 @@ Paused）vs SceneMode 2 态（Edit / Play）。Paused 不接 SceneManager；Edit
 - ❌ 接 EditorPlayRuntime 私有通路到 SceneManager（私有通路直接操作 World）
 - ❌ dirty 信号订阅（PR-1/2/3 决策 7a/5a/3a 三层锁）
 
+### 4.3.y Scene runtime bridge（v0.4 PR-1 / 通路接线收口）
+
+PR-4 ship 了 `_editScene` ownership + transport bar UX；PR-5 ship 了 Hierarchy entity tree。但 **btn_play / btn_stop click handler 完全不调 `sm->beginPlay()` / `sm->endPlay()`**，entity spawn 仍走 `World::instance()` —— 两条路径并存导致 `_current` 永远指向 Edit Scene，但 Play 模式实际上挂在 `World::instance()` 上。**PR-1 收口最后一刀** = 让 EditorPlayRuntime 真正接通 SceneManager，让 spawn 路径走 `sm->play()->world()`（收口 LM-1）。
+
+**决策**（v0.4 PR-1）：
+
+| # | 议题 | 裁定 |
+|---|------|------|
+| Q1 = a | **adapter 模式** — EditorPlayRuntime 做 adapter，不直接 EditorSession 调 SM | single source of truth = `_runtime.startPlay/enterEdit`；applyMode/btn_play/btn_stop 不直接调 SM |
+| Q2 = b | **保持双 tick**（Play 仍 `GameLoop::tickOnce()`，**不切** `SM::tick`） | renderer 帧提交 + system tick + network poll 在 GameLoop 内耦合；切 SM::tick 破坏 pipeline 顺序 |
+| Q3 = a | **endPlay idempotent**（SM 内部 `_play==nullptr` 时 no-op；三处触发安全） | btn_stop + enterEdit + shutdownEngine 三处都可能触发；idempotent = 兜底 |
+| Q4 = a | **net-client 路径不调 beginPlay**（推迟到 v0.5） | client consume 服务端 EntitySpawn，本地不持久化 |
+| Q5 = a | G6 / G7 / G8 推到 v0.4 PR-2 / PR-3 | 本 PR 最小切片 = G1+G2+G3+G4+G5+G9 |
+| Q6 = a | **1 PR ship** | 避免拆多刀 |
+| Q7 = a | 新增 7 case + 既有 173 不 regress | target 175-177 PASS |
+
+**Gap 收口表**：
+
+| ID | gap | 收口点 |
+|----|-----|--------|
+| **G1** | btn_play 不调 `sm->beginPlay()` | `_runtime.startPlay()` 头部插入 `sm->beginPlay()`（非 Client 路径） |
+| **G2** | btn_stop 不调 `sm->endPlay()` | `_runtime.enterEdit()` 头部插入 `sm->endPlay()` |
+| **G3** | applyMode 不调 SM | adapter 模式：EditorPlayRuntime 做单一入口 |
+| **G4** | entity spawn 走 `World::instance()` | 新增 `resolvePlayWorld()` helper：Server → `sm->play()->world()`；Client / fallback → `World::instance()` |
+| **G5** | `_runtime.enterEdit` 不调 `sm->endPlay()` | F3.b 头部兜底（与 shutdownEngine 自动覆盖） |
+| **G6** | `_gameView.stepOnce()` 不走 SM | defer v0.4 PR-2（D1） |
+| **G7** | `refreshOutliner` Play mode 仍走 `World::instance()` | defer v0.4 PR-2（D2） |
+| **G8** | mode label 反映 `EditorMode` 而非 `SceneMode` | defer v0.4 PR-2/3（D3） |
+| **G9** | `--net-client` 走 `autoEnterNetClientPlay` | 同 G1：`sm->beginPlay()` Client 短路 |
+
+**5 个新 landmine**：
+
+| ID | 风险 | 缓解 |
+|----|------|------|
+| **LM-X1** | beginPlay save 失败静默吞错 | startPlay 头部 fprintf stderr + return false；btn_play UX 不动 |
+| **LM-X2** | net-client 路径 fallback 噪音 stderr | helper 优先判 `_netPlayRole == Client` → 直接返 `World::instance()` 静默 |
+| **LM-X3** | endPlay 后 entity 裸指针 dangle | `releaseOwnedEntity(ptr, world&)` 走 resolvePlayWorld；endPlay 后 `sm->play()` 返 nullptr → fallback `World::instance().isInitialized()` 检查 + 置 nullptr |
+| **LM-X4** | Tick 路径未切 SM::tick → Play Scene 无独立 tick 入口 | §6 明确"PR-1 不切"；system tick = GameLoop::TickSystems() 遍历 World::instance() 系统注册器 |
+| **LM-X5** | Test runner double-include LNK2005 | main.cpp `#include` only；不进 add_executable（PR-4/5 同 landmine） |
+
+**7 个新 test case**（`Test_EditorSceneBridge.cpp`）：
+
+- T1: `editor_scene_bridge_btn_play_invokes_begin_play` — G1
+- T2: `editor_scene_bridge_btn_stop_invokes_end_play` — G2 + idempotent
+- T3: `editor_scene_bridge_play_world_resolve_no_panic` — G4 fallback
+- T4: `editor_scene_bridge_enter_edit_fallback_calls_end_play` — G5
+- T5: `editor_scene_bridge_net_client_path_skips_begin_play` — G9 + 决策 4a
+- T6: `editor_scene_bridge_end_play_destroys_play_scene_world` — G4 destroy + LM-X3
+- T7: `editor_scene_bridge_is_edit_dirty_survives_play_round_trip` — INV-3/4 锁
+
+**不在 PR-1 范围**（明确 defer）：
+
+- D1: G6 `_gameView.stepOnce()` 不走 SM（v0.4 PR-2）
+- D2: G7 `refreshOutliner()` Play 模式切 `sm->play()->world()`（v0.4 PR-2）
+- D3: G8 mode label 改用 `SceneMode`（v0.4 PR-2/3）
+- D4: G9 net-client 路径显式 beginPlay（v0.5）
+- D5: LM-X3 端到端清理顺序重构（v0.4 PR-2）
+
+**AYScene 0 改动**：v0.3 PR-3 已 ship 完整公共契约；本 PR 仅消费 `sm->beginPlay()` / `sm->endPlay()` / `sm->play()` / `sm->canBeginPlay()` / `sm->edit()` / `sm->isEditDirty()` / `sm->currentMode()`。
+
 ---
 
 ## 5. Editor chrome (AYUI)
