@@ -1,6 +1,12 @@
 #include "GdiRenderBackend.h"
 #include "aymath/MathDefs.h"
 
+// PR-Dock-TearOff (2026-08-08): this file moved from the AYEditorShell_Demo
+// target into the AYEditor lib so EditorChildWindowManager can render
+// promoted child windows. GDI is Win32-only — guard the whole
+// implementation so non-Windows builds of the lib compile the file empty.
+#if defined(_WIN32)
+
 namespace ayt::editor {
 
 using namespace ayt::math;
@@ -107,3 +113,5 @@ void GdiRenderBackend::drawWithAlpha(const math::FRectangle& bounds, void* textu
 }
 
 } // namespace ayt::editor
+
+#endif // _WIN32

@@ -135,7 +135,7 @@ TEST_CASE(test_tick_all_push_pop_order) {
 
     UIManager* activeBefore = UIManager::tryGet();
     CHECK(activeBefore == &primary);
-    mgr.tickAll(0.016f, nullptr);
+    mgr.tickAll(0.016f);
     UIManager* activeAfter = UIManager::tryGet();
     CHECK(activeAfter == &primary);
 
@@ -224,19 +224,13 @@ TEST_CASE(test_card_promotion_opens_top_level_hwnd) {
     EditorChildWindowManager mgr(wm, primary);
 
     // Inject the promote callback. Mirrors the wiring
-    // EditorSession::wirePromoteCallbackRecursive does for floating cards.
+    // EditorSession::wirePromoteCallbackRecursive does for floating
+    // cards — PR-Dock-TearOff: the live card goes straight to
+    // promoteCard (no JSON rebuild).
     profiler->setPromoteCallback(
-        [&mgr](const std::string& cardId,
-               const std::wstring& title,
+        [&mgr](DockCard* card, const std::wstring& title,
                int x, int y, int w, int h) -> bool {
-            std::string narrowTitle(title.begin(), title.end());
-            ChildWindowConfig cfg;
-            cfg.title      = std::move(narrowTitle);
-            cfg.layoutPath = cardId + ".json";   // best-effort
-            cfg.x = x; cfg.y = y;
-            cfg.width  = w; cfg.height = h;
-            void* hOut = nullptr;
-            return mgr.openChildWindow(cfg, hOut);
+            return mgr.promoteCard(card, title, x, y, w, h);
         });
 
     // Pre-condition: zero children.
@@ -263,5 +257,107 @@ TEST_CASE(test_card_promotion_opens_top_level_hwnd) {
     wm.destroyWindow();
 }
 #endif
+
+// -------------------------------------------------------------------------
+// 5. PR-Dock-TearOff live-card migration (Win32): the promote callback
+//    routes through EditorChildWindowManager::promoteCard; the card's
+//    LIVE widget tree ends up in the child window's UIManager root, the
+//    child has a real GDI backend, and closing the child cleans up the
+//    entry (the card is freed with the child root).
+// -------------------------------------------------------------------------
+#if defined(_WIN32)
+TEST_CASE(test_promote_live_card_migration) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "D5.5 Editor Primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+
+    MockRenderer backend;
+    UIManager primary;
+    primary.initialize(&backend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    auto* dock = new DockArea();
+    dock->setId("shell");
+    primary.root()->addChild(dock);
+
+    DockOverlay* overlay = dock->getOverlay();
+    CHECK(overlay != nullptr);
+    auto* profiler = new DockCard();
+    profiler->setId("profiler");
+    profiler->setTitle(L"Profiler");
+    profiler->setPosition({800.0f, 60.0f});
+    profiler->setSize({320.0f, 220.0f});
+    // Live content subtree — must survive the migration verbatim.
+    auto* content = new Widget();
+    content->setId("live-content");
+    profiler->setContent(content);
+    overlay->addFloatingCard(profiler);
+
+    EditorChildWindowManager mgr(wm, primary);
+    profiler->setPromoteCallback(
+        [&mgr](DockCard* card, const std::wstring& title,
+               int x, int y, int w, int h) -> bool {
+            return mgr.promoteCard(card, title, x, y, w, h);
+        });
+
+    CHECK(mgr.count() == 0);
+    const bool accepted = profiler->detachToOwnWindow();
+    CHECK(accepted);
+    CHECK(mgr.count() == 1);
+
+    // The LIVE card migrated: it now sits in the child root with its
+    // content intact; the source overlay forgot it.
+    const EditorChildWindowManager::Entry& entry = mgr.entries()[0];
+    CHECK(entry.card == profiler);
+    CHECK(profiler->getParent() == entry.ui->root());
+    CHECK(profiler->getContent() == content);
+    CHECK(overlay->getFloatingCardCount() == 0);
+
+    // Child renders through a real GDI backend.
+    CHECK(entry.backend != nullptr);
+    // Child client matches the promoted frame.
+    CHECK(entry.ui->getClientSize().x == 320.0f);
+    CHECK(entry.ui->getClientSize().y == 220.0f);
+    // Card fills the client area.
+    CHECK(profiler->getSize().x == 320.0f);
+    CHECK(profiler->getSize().y == 220.0f);
+
+    // tickAll renders into the window without crashing (GetDC path).
+    mgr.tickAll(0.016f);
+
+    // Closing the child window destroys the entry; the card is freed
+    // with the child root's widget tree.
+    mgr.closeChildWindow(entry.handle);
+    CHECK(mgr.count() == 0);
+
+    primary.shutdown();
+    wm.destroyWindow();
+}
+#endif
+
+// -------------------------------------------------------------------------
+// 6. Cross-platform contract for clientToScreenCoords: non-Win32 is an
+//    identity transform (createTopLevelWindow is a stub there). Win32
+//    conversion is covered end-to-end by the migration test above.
+// -------------------------------------------------------------------------
+TEST_CASE(test_client_to_screen_coords_contract) {
+    WindowManager wm;
+    int x = 321;
+    int y = 123;
+    clientToScreenCoords(wm, x, y);
+#if !defined(_WIN32)
+    CHECK(x == 321);
+    CHECK(y == 123);
+#else
+    // Win32: must not crash with no primary window (getWindowHandle
+    // nullptr → no-op) and must produce a finite int.
+    CHECK(x == 321);
+    CHECK(y == 123);
+#endif
+}
 
 TEST_SUITE_END

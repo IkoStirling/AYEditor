@@ -9,10 +9,10 @@
 // UIManager reference for g_activeUIManager restoration on teardown
 // (K-INV-D5-6 shutdown order).
 //
-// Renderer: child UIManagers are initialized with nullptr. Real bgfx
-// routing per HWND is v2 (D5.6). For now, the child's render path
-// no-ops via the populateFrame / flushFrame guard at AYUIManager.cpp
-// (K-INV-D5-4 null backend).
+// PR-Dock-TearOff (2026-08-08): child UIManagers now render through a
+// per-window GdiRenderBackend (Win32) and receive typed input events
+// (mouse/key/wheel/char) forwarded from TopLevelWindowCallbacks. The
+// old null-backend path (K-INV-D5-4) remains the non-Win32 fallback.
 
 #include "AYUIManager.h"
 #include "AYWindowManager.h"
@@ -23,6 +23,10 @@
 #include <string>
 #include <vector>
 
+namespace ayt::ui {
+class DockCard;
+} // namespace ayt::ui
+
 namespace ayt::editor {
 
 struct ChildWindowConfig {
@@ -32,7 +36,19 @@ struct ChildWindowConfig {
     int  y = 100;
     int  width  = 800;
     int  height = 600;
+    // PR-Dock-TearOff live-card migration: when non-null, the child
+    // window hosts the LIVE card (reparented into the child root) and
+    // layoutPath is ignored. null = classic config-file path.
+    ayt::ui::DockCard* card = nullptr;
 };
+
+// PR-Dock-TearOff: client→screen coordinate conversion for promote
+// frames (AYUI world space = primary client coords → OS screen space).
+// Win32 does ClientToScreen against the primary HWND; other platforms
+// are identity (createTopLevelWindow is a stub there). Exposed (not
+// anonymous-namespace) so the cross-platform test can pin the
+// identity contract without an HWND.
+void clientToScreenCoords(ayt::device::WindowManager& wm, int& x, int& y);
 
 // Static helper. Parses a JSON config file with shape:
 //   { "windows": [ { "title": "...", "layoutPath": "...", "x": 100,
@@ -58,10 +74,19 @@ public:
     bool openChildWindow(const ChildWindowConfig& cfg, Handle& outHandle);
     void closeChildWindow(Handle h);
 
-    // Tick every open child. backend may be null (D5 v1 — no real
-    // bgfx routing per HWND; the child's render path early-returns
-    // because UIManager::_backend == nullptr).
-    void tickAll(float dt, ayt::ui::IRenderBackend* backend);
+    // PR-Dock-TearOff: promote a live DockCard into a new top-level
+    // window. The frame arrives in PRIMARY-window client coordinates
+    // (AYUI world space); Win32 converts to screen coords here
+    // (ClientToScreen) — AYUI stays cross-platform, AYDevice's
+    // TopLevelWindowDesc keeps OS screen space. Non-Win32: coordinates
+    // pass through unchanged and createTopLevelWindow's stub returns
+    // false.
+    bool promoteCard(ayt::ui::DockCard* card, const std::wstring& title,
+                     int x, int y, int w, int h);
+
+    // Tick every open child: pushActive scope → update → GDI render
+    // into the per-window backend (Win32; GetDC per frame).
+    void tickAll(float dt);
 
     // Route a device key event to the matching child's UIManager.
     // Returns false if no entry with `h` exists. Caller must already
@@ -76,6 +101,11 @@ public:
         Handle                            handle = nullptr;
         std::shared_ptr<ayt::ui::UIManager> ui;
         std::string                       layoutPath;
+        // PR-Dock-TearOff: per-window render backend (null on
+        // non-Win32 → K-INV-D5-4 null-backend no-op path).
+        std::unique_ptr<ayt::ui::IRenderBackend> backend;
+        // Live promoted card (null for config-file children).
+        ayt::ui::DockCard*                card = nullptr;
         bool                              needsDraw = false;
     };
     const std::vector<Entry>& entries() const { return _entries; }

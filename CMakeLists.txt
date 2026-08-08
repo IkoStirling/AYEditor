@@ -21,6 +21,11 @@ set(SRC_FILES
     src/AYImportedCharacterMapper.cpp
     src/EditorChildWindowManager.cpp  # D5+.5 (2026-07-26): child WindowManager wiring
     src/EditorPlayerController.cpp  # INT-01 sample script host + AYReflect registration
+    # PR-Dock-TearOff (2026-08-08): per-HWND GDI render backend for
+    # promoted child windows. Moved from the demo target into the lib;
+    # the whole file is #if defined(_WIN32) so non-Windows builds of
+    # the lib stay clean.
+    demo/GdiRenderBackend.cpp
 )
 
 set(HEAD_FILES
@@ -124,12 +129,15 @@ endif()
 add_executable(AYEditorShell_Demo WIN32
     demo/AYEditorDebugHeapEarly.cpp
     demo/EditorShellDemo.cpp
-    demo/GdiRenderBackend.cpp
 )
 
 target_include_directories(AYEditorShell_Demo PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${CMAKE_CURRENT_SOURCE_DIR}/demo
+    # EditorShellDemo PR-4 启动日志调用 host->scenes()（SceneManager 类型
+    # 定义在 AYScene/include；AYEditor lib 对 AYScene 是 PRIVATE link，
+    # 不传递给 demo target）。
+    ${CMAKE_CURRENT_SOURCE_DIR}/../AYScene/include
 )
 
 target_link_libraries(AYEditorShell_Demo PRIVATE

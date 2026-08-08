@@ -8,6 +8,8 @@
 
 #include "AYEditorApp.h"
 #include "AYGameLoop.h"
+#include "IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
+#include "AYSceneManager.h"   // SceneManager::canBeginPlay/isEditDirty (PR-4 日志块)
 
 #include <cstdio>
 
@@ -43,22 +45,19 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     // v0.3 PR-4 — 启动日志验证 host->scenes() wiring 通（design §4.2.x）
     // 不影响 demo 行为；仅 stderr 状态打印，便于 v0.3 验收 + 后续 PR debug。
-    if (auto* host = ayt::app::defaultEngineHost()) {
-        if (auto* sm = host->scenes()) {
-            std::fprintf(stderr,
-                         "[EditorShellDemo] PR-4 host->scenes() wiring: OK\n"
-                         "[EditorShellDemo]   canBeginPlay=%s isEditDirty=%s\n",
-                         sm->canBeginPlay() ? "true" : "false",
-                         sm->isEditDirty()  ? "true" : "false");
-        } else {
-            std::fprintf(stderr,
-                         "[EditorShellDemo] PR-4 host->scenes() missing — "
-                         "bindBuiltinHostServices not called?\n");
-        }
+    // v0.3 PR-4 API 变化：defaultEngineHost() 是 Meyers 单例（永不为
+    // null），返回 IEngineHost& 而非指针。
+    ayt::app::IEngineHost& host = ayt::app::defaultEngineHost();
+    if (auto* sm = host.scenes()) {
+        std::fprintf(stderr,
+                     "[EditorShellDemo] PR-4 host->scenes() wiring: OK\n"
+                     "[EditorShellDemo]   canBeginPlay=%s isEditDirty=%s\n",
+                     sm->canBeginPlay() ? "true" : "false",
+                     sm->isEditDirty()  ? "true" : "false");
     } else {
         std::fprintf(stderr,
-                     "[EditorShellDemo] PR-4 host == nullptr — "
-                     "defaultEngineHost() unavailable\n");
+                     "[EditorShellDemo] PR-4 host->scenes() missing — "
+                     "bindBuiltinHostServices not called?\n");
     }
 
     app->run();

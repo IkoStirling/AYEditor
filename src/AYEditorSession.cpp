@@ -226,10 +226,10 @@ void EditorSession::update(float dt) {
     // D5+.5: tick every open child (each via pushActive scope) before
     // the primary update so the active pointer is correctly swapped
     // before any per-frame UI logic that might read g_activeUIManager.
-    // Pass nullptr backend — child UIManagers use K-INV-D5-4 null
-    // backend no-op; the host's _ui owns the only real backend.
+    // PR-Dock-TearOff: child windows now carry their own GDI backend;
+    // tickAll renders into each HWND internally.
     if (_childWindows) {
-        _childWindows->tickAll(dt, nullptr);
+        _childWindows->tickAll(dt);
     }
     _ui.update(dt);
 
@@ -1815,29 +1815,16 @@ namespace {
 void wireCardPromotion(ayt::ui::DockCard* card, EditorSession* session) {
     card->setPromoteCallback(
         [session](
-            const std::string& cardId,
+            ayt::ui::DockCard* promoted,
             const std::wstring& title,
             int x, int y, int w, int h) -> bool {
-            // Convert wstring title -> narrow UTF-8 for
-            // ChildWindowConfig::title (the top-level window title is
-            // wide internally in AYDevice, but ChildWindowConfig is the
-            // narrow-string intermediate used at the AYEditor API
-            // boundary).
-            std::string narrowTitle(title.begin(), title.end());
-            ChildWindowConfig cfg;
-            cfg.title = std::move(narrowTitle);
-            // The promoted card keeps its id as a loadLayout hint; the
-            // child's loadLayout is best-effort (open still succeeds on
-            // missing file).
-            cfg.layoutPath = cardId + ".json";
-            cfg.x = x;
-            cfg.y = y;
-            cfg.width  = w;
-            cfg.height = h;
-            void* hOut = nullptr;
+            // PR-Dock-TearOff live-card migration: the host reparents
+            // the card ITSELF into the child window's UIManager —
+            // no JSON rebuild, the whole live subtree moves. x/y are
+            // primary-client coords; promoteCard converts to screen.
             if (session && session->childWindows()) {
                 return session->childWindows()
-                    ->openChildWindow(cfg, hOut);
+                    ->promoteCard(promoted, title, x, y, w, h);
             }
             return false;
         });
