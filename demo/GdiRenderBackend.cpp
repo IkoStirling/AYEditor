@@ -1,10 +1,8 @@
 #include "GdiRenderBackend.h"
 #include "aymath/MathDefs.h"
 
-// PR-Dock-TearOff (2026-08-08): this file moved from the AYEditorShell_Demo
-// target into the AYEditor lib so EditorChildWindowManager can render
-// promoted child windows. GDI is Win32-only — guard the whole
-// implementation so non-Windows builds of the lib compile the file empty.
+// PR-Dock-TearOff: GDI backend for EditorChildWindowManager promoted
+// windows. Keep in lockstep with AYUI/demo/GalleryChildBackend.cpp.
 #if defined(_WIN32)
 
 namespace ayt::editor {
@@ -27,16 +25,72 @@ GdiRenderBackend::GdiRenderBackend(HWND hwnd)
     : _hwnd(hwnd) {
 }
 
+GdiRenderBackend::~GdiRenderBackend() {
+    releaseBackbuffer();
+    if (_font != nullptr) {
+        DeleteObject(_font);
+        _font = nullptr;
+    }
+}
+
+void GdiRenderBackend::releaseBackbuffer() {
+    if (_memDc != nullptr) {
+        if (_oldBitmap != nullptr) {
+            SelectObject(_memDc, _oldBitmap);
+            _oldBitmap = nullptr;
+        }
+        DeleteDC(_memDc);
+        _memDc = nullptr;
+    }
+    if (_bitmap != nullptr) {
+        DeleteObject(_bitmap);
+        _bitmap = nullptr;
+    }
+    _bbWidth = 0;
+    _bbHeight = 0;
+    _hdc = nullptr;
+}
+
+void GdiRenderBackend::ensureBackbuffer(int width, int height) {
+    if (width < 1 || height < 1 || _windowDc == nullptr) {
+        return;
+    }
+    if (_memDc != nullptr && _bitmap != nullptr
+        && _bbWidth == width && _bbHeight == height) {
+        _hdc = _memDc;
+        return;
+    }
+    releaseBackbuffer();
+    _memDc = CreateCompatibleDC(_windowDc);
+    if (_memDc == nullptr) {
+        return;
+    }
+    _bitmap = CreateCompatibleBitmap(_windowDc, width, height);
+    if (_bitmap == nullptr) {
+        DeleteDC(_memDc);
+        _memDc = nullptr;
+        return;
+    }
+    _oldBitmap = static_cast<HBITMAP>(SelectObject(_memDc, _bitmap));
+    _bbWidth = width;
+    _bbHeight = height;
+    _hdc = _memDc;
+}
+
 void GdiRenderBackend::setDrawTarget(HDC hdc, int width, int height) {
-    _hdc = hdc;
+    _windowDc = hdc;
     _width = width;
     _height = height;
+    ensureBackbuffer(width, height);
 }
 
 void GdiRenderBackend::beginFrame() {
 }
 
 void GdiRenderBackend::endFrame() {
+    if (_windowDc != nullptr && _memDc != nullptr && _width > 0 && _height > 0) {
+        BitBlt(_windowDc, 0, 0, _width, _height, _memDc, 0, 0, SRCCOPY);
+    }
 }
 
 void GdiRenderBackend::beginCanvas(const math::FRectangle& viewport) {
@@ -63,6 +117,25 @@ RECT GdiRenderBackend::toRect(const math::FRectangle& bounds) const {
     rect.right = static_cast<LONG>(bounds.maxX);
     rect.bottom = static_cast<LONG>(bounds.maxY);
     return rect;
+}
+
+HFONT GdiRenderBackend::fontForSize(int fontSize) {
+    if (fontSize < 1) {
+        fontSize = 12;
+    }
+    if (_font != nullptr && _fontSize == fontSize) {
+        return _font;
+    }
+    if (_font != nullptr) {
+        DeleteObject(_font);
+        _font = nullptr;
+    }
+    _font = CreateFontW(
+        fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    _fontSize = fontSize;
+    return _font;
 }
 
 void GdiRenderBackend::drawRect(const math::FRectangle& bounds, const math::FVector4& color) {
@@ -92,18 +165,17 @@ void GdiRenderBackend::drawText(const math::FRectangle& bounds, const std::wstri
     SetBkMode(_hdc, TRANSPARENT);
     SetTextColor(_hdc, toColorRef(color));
 
-    HFONT font = CreateFontW(
-        fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-
-    HGDIOBJ oldFont = SelectObject(_hdc, font);
+    HFONT font = fontForSize(fontSize);
+    HGDIOBJ oldFont = font ? SelectObject(_hdc, font) : nullptr;
     RECT rect = toRect(bounds);
+    const UINT align = (text.size() == 1)
+        ? DT_CENTER
+        : horizontalAlign(ayt::ui::IRenderBackend::TextStyle::Align::Left);
     DrawTextW(_hdc, text.c_str(), static_cast<int>(text.size()), &rect,
-              DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | horizontalAlign(
-                  ayt::ui::IRenderBackend::TextStyle::Align::Left));
-    SelectObject(_hdc, oldFont);
-    DeleteObject(font);
+              DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | align);
+    if (oldFont != nullptr) {
+        SelectObject(_hdc, oldFont);
+    }
 }
 
 void GdiRenderBackend::drawWithAlpha(const math::FRectangle& bounds, void* textureHandle,

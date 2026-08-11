@@ -146,6 +146,10 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     d.y      = cfg.y;
     d.width  = cfg.width;
     d.height = cfg.height;
+    // Live DockCard promote: no OS caption (card paints its own chrome).
+    // JSON-config children keep the classic overlapped frame.
+    d.borderless = (cfg.card != nullptr);
+    d.resizable  = (cfg.card != nullptr);
 
     Handle h = nullptr;
     if (!_wm.createTopLevelWindow(d, h)) {
@@ -172,6 +176,10 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
 #else
     e.ui->initialize(nullptr);  // K-INV-D5-4 null backend = no render
 #endif
+    // initialize() claims g_activeUIManager; restore the editor primary
+    // so tryGet() between frames does not stay on the child.
+    ayt::ui::UIManager::makeActive(&_primary);
+
     e.ui->setClientSize(static_cast<float>(cfg.width),
                         static_cast<float>(cfg.height));
     if (cfg.card != nullptr) {
@@ -182,8 +190,9 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         e.card->setPosition(ayt::math::FVector2(0.0f, 0.0f));
         e.card->setSize(ayt::math::FVector2(
             static_cast<float>(cfg.width), static_cast<float>(cfg.height)));
+        e.card->setShowResizeGrip(true);
         e.ui->root()->addChild(e.card);
-        e.ui->root()->performLayout();
+        e.ui->layout();
     } else if (!cfg.layoutPath.empty()) {
         // Best-effort — failure logs but doesn't abort open. The
         // child window still lives and shows whatever the default
@@ -282,24 +291,11 @@ void EditorChildWindowManager::closeChildWindow(Handle h) {
             if (it->handle != nullptr) {
                 _wm.destroyTopLevelWindow(it->handle);
             }
-            // shared_ptr<UIManager> drops here — ~UIManager calls
-            // shutdown() which resets g_activeUIManager IF this was
-            // the active one. Re-set the primary as active so a
-            // subsequent update() finds the editor's primary manager
-            // in slot, not nullptr.
+            // shared_ptr<UIManager> drops here — ~UIManager::shutdown
+            // clears g_active if the child held it. Always re-claim the
+            // editor primary so the next tryGet() is not nullptr.
             _entries.erase(it);
-            if (ayt::ui::UIManager::tryGet() == nullptr) {
-                // Restore primary as active so the next tick/sw
-                // doesn't see an empty slot. Try setActive via
-                // initialising the primary — it already IS active
-                // unless shutdown() reset it, in which case we have
-                // a deeper problem. As a belt-and-braces fallback:
-                // re-run initialize on primary? No — primary is
-                // owned by EditorSession and we cannot re-init it
-                // safely. The only safe fallback is to leave the
-                // slot empty; EditorSession updates set the primary
-                // back as active via the existing pushActive path.
-            }
+            ayt::ui::UIManager::makeActive(&_primary);
             return;
         }
     }
