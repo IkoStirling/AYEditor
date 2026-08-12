@@ -150,6 +150,8 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     // JSON-config children keep the classic overlapped frame.
     d.borderless = (cfg.card != nullptr);
     d.resizable  = (cfg.card != nullptr);
+    // Hidden until first GDI frame — avoids white flash on show.
+    d.visible = false;
 
     Handle h = nullptr;
     if (!_wm.createTopLevelWindow(d, h)) {
@@ -191,6 +193,24 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         e.card->setSize(ayt::math::FVector2(
             static_cast<float>(cfg.width), static_cast<float>(cfg.height)));
         e.card->setShowResizeGrip(true);
+        e.card->setShowMaximizeButton(true);
+        e.card->setMaximizeHandler(
+            [](void* user, ayt::ui::DockCard* c) {
+                auto* self = static_cast<EditorChildWindowManager*>(user);
+                if (self == nullptr || c == nullptr) {
+                    return;
+                }
+                for (const auto& ent : self->entries()) {
+                    if (ent.card != c || ent.handle == nullptr) {
+                        continue;
+                    }
+                    self->_wm.toggleTopLevelMaximized(ent.handle);
+                    c->setMaximizedVisual(
+                        self->_wm.isTopLevelMaximized(ent.handle));
+                    break;
+                }
+            },
+            this);
         e.ui->root()->addChild(e.card);
         e.ui->layout();
     } else if (!cfg.layoutPath.empty()) {
@@ -258,6 +278,21 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         ui->onDeviceChar(utf8, byteCount);
     };
     _wm.setTopLevelCallbacks(h, cbs);
+
+#if defined(_WIN32)
+    if (e.backend && e.handle != nullptr) {
+        if (HDC hdc = ::GetDC(static_cast<HWND>(e.handle))) {
+            ayt::ui::UIManager::ActiveScope guard(e.ui.get());
+            const int cw = static_cast<int>(e.ui->getClientSize().x);
+            const int ch = static_cast<int>(e.ui->getClientSize().y);
+            auto* gdi = static_cast<GdiRenderBackend*>(e.backend.get());
+            gdi->setDrawTarget(hdc, cw, ch);
+            e.ui->render();
+            ::ReleaseDC(static_cast<HWND>(e.handle), hdc);
+        }
+    }
+#endif
+    _wm.setTopLevelVisible(h, true);
 
     _entries.push_back(std::move(e));
     outHandle = h;
