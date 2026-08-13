@@ -256,10 +256,15 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ui->onMouseLeave();
     };
-    cbs.onMouseButton = [ui](float x, float y, int button, bool pressed) {
+    const auto afterMouse = cfg.afterMouseButton;
+    cbs.onMouseButton = [ui, afterMouse](float x, float y, int button, bool pressed) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
-        return pressed ? ui->onMouseButtonDown(x, y, button)
-                       : ui->onMouseButtonUp(x, y, button);
+        const bool captured = pressed ? ui->onMouseButtonDown(x, y, button)
+                                      : ui->onMouseButtonUp(x, y, button);
+        if (afterMouse) {
+            afterMouse(*ui, x, y, button, pressed);
+        }
+        return captured;
     };
     cbs.onMouseWheel = [ui](float x, float y, float deltaY) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());

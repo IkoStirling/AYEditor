@@ -26,6 +26,8 @@ set(SRC_FILES
     # the whole file is #if defined(_WIN32) so non-Windows builds of
     # the lib stay clean.
     demo/GdiRenderBackend.cpp
+    # UI Layout Editor session core (shared with AYUI_LayoutEditor demo).
+    ../AYUI/demo/layout_editor/LayoutEditorSession.cpp
 )
 
 set(HEAD_FILES
@@ -40,6 +42,7 @@ set(HEAD_FILES
     include/AYImportedCharacterMapper.h
     include/EditorChildWindowManager.h  # D5+.5 (2026-07-26)
     include/EditorPlayerController.h
+    ../AYUI/demo/layout_editor/LayoutEditorSession.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
@@ -56,6 +59,8 @@ target_include_directories(${MODULE_NAME} PRIVATE
     # AYUI's thirdparty_/; reuse instead of pulling a new dep into
     # AYEditor. Matches the AYUI Loader/UILayoutLoader.cpp pattern.
     ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/thirdparty_/nlohmann
+    # UI Layout Editor session headers (demo/layout_editor).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/demo/layout_editor
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication

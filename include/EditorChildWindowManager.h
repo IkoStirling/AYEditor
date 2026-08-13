@@ -19,6 +19,7 @@
 #include "AYWindowTypes.h"
 #include "AYInputTypes.h"
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -40,6 +41,10 @@ struct ChildWindowConfig {
     // window hosts the LIVE card (reparented into the child root) and
     // layoutPath is ignored. null = classic config-file path.
     ayt::ui::DockCard* card = nullptr;
+    // Optional post-dispatch mouse hook (UI Layout Editor canvas pick).
+    // Fires after UIManager::onMouseButtonDown/Up inside ActiveScope.
+    std::function<void(ayt::ui::UIManager& ui, float x, float y,
+                       int button, bool pressed)> afterMouseButton;
 };
 
 // PR-Dock-TearOff: client→screen coordinate conversion for promote

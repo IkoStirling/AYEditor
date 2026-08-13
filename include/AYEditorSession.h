@@ -40,6 +40,7 @@ namespace ayt::scene { class Scene; }
 // TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
 // 任何 include AYEditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
 namespace ayt::ui { class TreeView; }
+namespace ayt::ui { class LayoutEditorSession; }
 
 namespace ayt::editor {
 
@@ -129,6 +130,8 @@ public:
 private:
     void bindToolbar();
     void bindMenuBar();
+    void openLayoutEditorWindow();
+    void syncLayoutEditorLifetime();
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
@@ -256,6 +259,11 @@ private:
     // UI is still alive (its render path can be called with active
     // pointer in primary, never nullptr).
     std::unique_ptr<EditorChildWindowManager> _childWindows;
+
+    // v0.5 — UI Layout Editor child window + session (shared with
+    // AYUI_LayoutEditor). Reset when the child HWND is closed.
+    std::unique_ptr<ayt::ui::LayoutEditorSession> _layoutEditor;
+    EditorChildWindowManager::Handle _layoutEditorHandle = nullptr;
 
     HWND _hostWindow = nullptr;
     std::string _layoutPath;

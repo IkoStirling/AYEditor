@@ -17,6 +17,7 @@
 #include "AYWidget.h"
 #include "AYDockArea.h"
 #include "AYDockCard.h"
+#include "LayoutEditorSession.h"
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因 _editScene 需 SceneMode/Scene 完整类型；
@@ -41,8 +42,77 @@
 #  define NOMINMAX
 #endif
 #include <Windows.h>
+#include <commdlg.h>
+#include <sys/stat.h>
+#include <vector>
 
 namespace ayt::editor {
+
+namespace {
+
+bool layoutEditorFileExists(const std::string& path) {
+    struct stat st {};
+    return !path.empty() && ::stat(path.c_str(), &st) == 0;
+}
+
+std::string resolveLayoutEditorChromePath() {
+    const std::vector<std::string> candidates = {
+        "assets/ui/layout_editor.ui.json",
+        "AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
+        "../AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
+        "../../AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
+        "AYRuntime/AYUI/demo/layout_editor/assets/layout_editor.ui.json",
+        "../AYRuntime/AYUI/demo/layout_editor/assets/layout_editor.ui.json",
+    };
+    for (const std::string& path : candidates) {
+        if (layoutEditorFileExists(path)) {
+            return path;
+        }
+    }
+    return candidates.front();
+}
+
+std::string showUiJsonOpenDialog(HWND owner) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        "AYUI Layout (*.ui.json)\0*.ui.json\0"
+        "JSON (*.json)\0*.json\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "ui.json";
+    if (!::GetOpenFileNameA(&ofn)) {
+        return {};
+    }
+    return std::string(path);
+}
+
+std::string showUiJsonSaveDialog(HWND owner) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        "AYUI Layout (*.ui.json)\0*.ui.json\0"
+        "JSON (*.json)\0*.json\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "ui.json";
+    if (!::GetSaveFileNameA(&ofn)) {
+        return {};
+    }
+    return std::string(path);
+}
+
+} // namespace
 
 EditorSession::EditorSession()
     : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
@@ -181,6 +251,8 @@ void EditorSession::shutdown() {
     // g_activeUIManager if it was active during the last tick. Doing
     // this here (with _ui still alive and owning the active slot)
     // avoids an UAF cleanup race against the primary.
+    _layoutEditor.reset();
+    _layoutEditorHandle = nullptr;
     _childWindows.reset();
     _mainDock = nullptr;
     // Tear down Play/renderer borrow before UI widgets — avoids
@@ -223,6 +295,7 @@ void EditorSession::setClientSize(float width, float height) {
 }
 
 void EditorSession::update(float dt) {
+    syncLayoutEditorLifetime();
     // D5+.5: tick every open child (each via pushActive scope) before
     // the primary update so the active pointer is correctly swapped
     // before any per-frame UI logic that might read g_activeUIManager.
@@ -1414,12 +1487,104 @@ void EditorSession::bindMenuBar() {
         }
     }
 
+    ayt::ui::Menu* toolsMenu = menuBar->addMenu(L"Tools");
+    if (toolsMenu != nullptr) {
+        if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
+            item->setOnActivate([this]() { openLayoutEditorWindow(); });
+        }
+    }
+
     ayt::ui::Menu* helpMenu = menuBar->addMenu(L"Help");
     if (helpMenu != nullptr) {
         if (auto* item = helpMenu->addItem(L"About AYEditor")) {
             item->setOnActivate([]() {});
         }
     }
+}
+
+void EditorSession::syncLayoutEditorLifetime() {
+    if (_layoutEditor == nullptr) {
+        return;
+    }
+    if (_childWindows == nullptr || _layoutEditorHandle == nullptr) {
+        _layoutEditor.reset();
+        _layoutEditorHandle = nullptr;
+        return;
+    }
+    bool alive = false;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == _layoutEditorHandle) {
+            alive = true;
+            break;
+        }
+    }
+    if (!alive) {
+        _layoutEditor.reset();
+        _layoutEditorHandle = nullptr;
+    }
+}
+
+void EditorSession::openLayoutEditorWindow() {
+    if (_childWindows == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] UI Layout Editor requires ChildWindowManager\n");
+        return;
+    }
+    syncLayoutEditorLifetime();
+    if (_layoutEditor != nullptr && _layoutEditorHandle != nullptr) {
+        // Already open — leave the existing child focused.
+        return;
+    }
+
+    ChildWindowConfig cfg;
+    cfg.title = "UI Layout Editor";
+    cfg.layoutPath = resolveLayoutEditorChromePath();
+    cfg.x = 120;
+    cfg.y = 80;
+    cfg.width = 1280;
+    cfg.height = 720;
+    cfg.afterMouseButton =
+        [this](ayt::ui::UIManager& /*ui*/, float x, float y, int button,
+               bool pressed) {
+            if (!pressed || button != 0 || _layoutEditor == nullptr) {
+                return;
+            }
+            _layoutEditor->onCanvasClick(ayt::math::FVector2(x, y));
+        };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] failed to open UI Layout Editor (%s)\n",
+            cfg.layoutPath.c_str());
+        return;
+    }
+
+    ayt::ui::UIManager* childUi = nullptr;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == handle) {
+            childUi = entry.ui.get();
+            break;
+        }
+    }
+    if (childUi == nullptr) {
+        _childWindows->closeChildWindow(handle);
+        return;
+    }
+
+    auto session = std::make_unique<ayt::ui::LayoutEditorSession>();
+    HWND owner = _hostWindow;
+    session->setOpenPathPicker([owner]() { return showUiJsonOpenDialog(owner); });
+    session->setSavePathPicker([owner]() { return showUiJsonSaveDialog(owner); });
+    if (!session->attach(*childUi)) {
+        std::fprintf(stderr,
+            "[EditorSession] LayoutEditorSession::attach failed\n");
+        _childWindows->closeChildWindow(handle);
+        return;
+    }
+
+    _layoutEditor = std::move(session);
+    _layoutEditorHandle = handle;
 }
 
 void EditorSession::requestHostClose() {

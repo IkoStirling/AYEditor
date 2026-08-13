@@ -1,0 +1,89 @@
+{
+  "type": "VBox",
+  "id": "layout_editor_root",
+  "size": { "w": 1280, "h": 720 },
+  "spacing": 0,
+  "children": [
+    {
+      "type": "HBox",
+      "id": "toolbar_row",
+      "size": { "h": 36 },
+      "spacing": 6,
+      "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
+      "children": [
+        { "type": "TextLabel", "id": "lbl_title", "text": "AYUI Layout Editor", "size": { "w": 160, "h": 24 }, "slot": { "width": 160 } },
+        { "type": "Button", "id": "btn_open", "text": "Open", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
+        { "type": "Button", "id": "btn_save", "text": "Save", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
+        { "type": "Button", "id": "btn_save_as", "text": "Save As", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
+        { "type": "Separator", "id": "tb_sep1", "size": { "w": 8, "h": 24 }, "slot": { "width": 8 } },
+        { "type": "Button", "id": "btn_add_button", "text": "+ Button", "size": { "w": 88, "h": 26 }, "slot": { "width": 88 } },
+        { "type": "Button", "id": "btn_add_label", "text": "+ Label", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
+        { "type": "Button", "id": "btn_add_panel", "text": "+ Panel", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
+        { "type": "Button", "id": "btn_delete", "text": "Delete", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
+        { "type": "TextLabel", "id": "lbl_status", "text": "Ready", "size": { "w": 320, "h": 24 } }
+      ]
+    },
+    {
+      "type": "HBox",
+      "id": "body_row",
+      "size": { "h": 0 },
+      "spacing": 0,
+      "children": [
+        {
+          "type": "VBox",
+          "id": "hierarchy_col",
+          "size": { "w": 220 },
+          "slot": { "width": 220 },
+          "spacing": 4,
+          "padding": { "left": 8, "top": 6, "right": 6, "bottom": 6 },
+          "children": [
+            { "type": "TextLabel", "id": "lbl_hierarchy", "text": "Hierarchy", "size": { "w": 200, "h": 20 } },
+            { "type": "ListView", "id": "list_hierarchy", "size": { "w": 200, "h": 0 } }
+          ]
+        },
+        {
+          "type": "Separator",
+          "id": "sep_left",
+          "size": { "w": 2, "h": 0 },
+          "slot": { "width": 2 }
+        },
+        {
+          "type": "Panel",
+          "id": "canvas_host",
+          "size": { "w": 0, "h": 0 },
+          "padding": { "left": 4, "top": 4, "right": 4, "bottom": 4 },
+          "children": []
+        },
+        {
+          "type": "Separator",
+          "id": "sep_right",
+          "size": { "w": 2, "h": 0 },
+          "slot": { "width": 2 }
+        },
+        {
+          "type": "VBox",
+          "id": "props_col",
+          "size": { "w": 240 },
+          "slot": { "width": 240 },
+          "spacing": 4,
+          "padding": { "left": 8, "top": 6, "right": 8, "bottom": 6 },
+          "children": [
+            { "type": "TextLabel", "id": "lbl_props", "text": "Properties", "size": { "w": 220, "h": 20 } },
+            { "type": "TextLabel", "id": "lbl_prop_id", "text": "id", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_id", "text": "", "size": { "w": 220, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_x", "text": "x", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_x", "text": "", "size": { "w": 220, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_y", "text": "y", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_y", "text": "", "size": { "w": 220, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_w", "text": "w", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_w", "text": "", "size": { "w": 220, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_h", "text": "h", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_h", "text": "", "size": { "w": 220, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_text", "text": "text", "size": { "w": 220, "h": 16 } },
+            { "type": "TextInput", "id": "prop_text", "text": "", "size": { "w": 220, "h": 26 } }
+          ]
+        }
+      ]
+    }
+  ]
+}
