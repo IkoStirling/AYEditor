@@ -1570,6 +1570,11 @@ bool EditorPlayRuntime::startPlay()
                 "[EditorPlayRuntime] startPlay: sm->beginPlay() failed\n");
             return false;
         }
+        // P0: beginPlay setCurrent(play) → World::instance() redirects to the
+        // Play Scene World. Re-run bootstrap so Animation/Render/2D systems
+        // land on that World (first bootstrap during ensureEngineInitialized
+        // targeted the process fallback).
+        ayt::entity::bootstrapModule();
     }
 
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {

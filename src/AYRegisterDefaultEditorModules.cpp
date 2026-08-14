@@ -1,20 +1,20 @@
 #include "AYRegisterDefaultEditorModules.h"
 
-#include "AYRendererSubSystem.h"
 #include "AYScriptSubSystem.h"
 
 #include <AYEntityModule.h>
 #include <AYGameLoop.h>
 #include <AYNetworkModule.h>
+#include <AYRegisterDefaultModules.h>
 
 namespace ayt::editor
 {
 
 void registerDefaultEditorModules()
 {
-    ayt::entity::bootstrapModule();
+    // P1: shared presentation stack with Client (enablePresentation=true).
+    ayt::app::registerEntityPresentationStack();
     ayt::net::registerNetworkSubSystem();
-    ayt::render::RendererSubSystem::registerSubSystem();
 
     ayt::game::GameLoop::instance().registerSubSystem(
         new ayt::script::ScriptSubSystem());
