@@ -41,10 +41,19 @@ struct ChildWindowConfig {
     // window hosts the LIVE card (reparented into the child root) and
     // layoutPath is ignored. null = classic config-file path.
     ayt::ui::DockCard* card = nullptr;
-    // Optional post-dispatch mouse hook (UI Layout Editor canvas pick).
-    // Fires after UIManager::onMouseButtonDown/Up inside ActiveScope.
-    std::function<void(ayt::ui::UIManager& ui, float x, float y,
-                       int button, bool pressed)> afterMouseButton;
+    // Optional hooks for UI Layout Editor.
+    // before*: return true to consume (skip UIManager).
+    std::function<bool(ayt::ui::UIManager& ui, float x, float y,
+                       int button, bool pressed)> beforeMouseButton;
+    std::function<bool(ayt::ui::UIManager& ui, float x, float y)> beforeMouseMove;
+    std::function<bool(ayt::ui::UIManager& ui, float x, float y, float deltaY)>
+        beforeMouseWheel;
+    std::function<bool(ayt::ui::UIManager& ui, ayt::device::KeyCode kc,
+                       bool pressed)> beforeKey;
+    // Optional cursor override (Layout Editor resize/move hints).
+    // Return Default to fall back to UIManager::getCursorHint().
+    std::function<ayt::ui::UiCursorHint(ayt::ui::UIManager& ui, float x, float y)>
+        resolveCursorHint;
 };
 
 // PR-Dock-TearOff: client→screen coordinate conversion for promote

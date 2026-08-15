@@ -22,7 +22,7 @@
 #include <components/AYScriptComponent.h>
 
 #include <IAYEntity.h>
-#include <aymath/MathTypes.h>
+#include <AYMath/MathTypes.h>
 
 namespace ayt::editor {
 

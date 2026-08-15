@@ -250,6 +250,10 @@ Do **not** encode mode transitions inside JSON.
 
 Tools → **UI Layout Editor…** opens an `EditorChildWindowManager` child that loads `assets/ui/layout_editor.ui.json` and attaches shared `ayt::ui::LayoutEditorSession` (same core as standalone `AYUI_LayoutEditor`). Format remains `*.ui.json` via `UILayoutLoader` — see [AYUI design §20](../AYUI/design.md#20-ui-layout-editor).
 
+### 4.3.aa Audio Editor (v0.5)
+
+Tools → **Audio Editor…** opens a child that loads `assets/ui/audio_editor.ui.json` and attaches shared `ayt::audio::AudioEditorSession` (same core as standalone `AYAudio_AudioEditor`). Mixer desk: transport, stream BGM, bus gains, duck/reverb/timeScale, spatial L/C/R. Requires `AudioSubSystem` from `registerDefaultEditorModules` (skipped with `-no-audio`).
+
 ### 4.2.x Editor Session 持 Edit Scene（v0.3 PR-4）
 
 `EditorSession` 持 `std::unique_ptr<ayt::scene::Scene> _editScene`（SceneMode::Edit），

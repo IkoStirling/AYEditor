@@ -28,6 +28,8 @@ set(SRC_FILES
     demo/GdiRenderBackend.cpp
     # UI Layout Editor session core (shared with AYUI_LayoutEditor demo).
     ../AYUI/demo/layout_editor/LayoutEditorSession.cpp
+    # Audio Editor session core (shared with AYAudio_AudioEditor demo).
+    ../AYAudio/demo/audio_editor/AudioEditorSession.cpp
 )
 
 set(HEAD_FILES
@@ -43,6 +45,7 @@ set(HEAD_FILES
     include/EditorChildWindowManager.h  # D5+.5 (2026-07-26)
     include/EditorPlayerController.h
     ../AYUI/demo/layout_editor/LayoutEditorSession.h
+    ../AYAudio/demo/audio_editor/AudioEditorSession.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
@@ -61,6 +64,8 @@ target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/thirdparty_/nlohmann
     # UI Layout Editor session headers (demo/layout_editor).
     ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/demo/layout_editor
+    # Audio Editor session headers (AYAudio/demo/audio_editor).
+    ${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
@@ -69,6 +74,10 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
     # 暴露 SceneManager 类型。
     PRIVATE AYScene
+    # PhysicsSubSystem via registerPhysicsModule (shared with Client/Server).
+    PRIVATE AYPhysics
+    # AudioSubSystem + Audio Editor Tools child (shared with Client).
+    PRIVATE AYAudio
     # INT-02 (2026-07-15): DeviceInputProvider lives in
     # AYDeviceSubSystem (not AYDevice core, by dep-graph design).
     # EditorApp.cpp references the type to install it into the Logia

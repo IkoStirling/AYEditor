@@ -16,8 +16,8 @@
 #include <IEngineHost.h>
 
 #include <ayevent/EventBus.h>
-#include <ayio/Env.h>
-#include <ayplatform/Console.h>
+#include <AYIO/Env.h>
+#include <AYPlatform/Console.h>
 
 #include <chrono>
 #include <cstdio>
@@ -301,7 +301,9 @@ void EditorApp::registerSubSystems()
 {
     // Engine-host: shared Editor assembly + service table
     // (AYApplication/docs/engine-host.md).
-    registerDefaultEditorModules();
+    EditorModuleOptions opts{};
+    opts.enableAudio = !_cmdLine.noAudio;
+    registerDefaultEditorModules(opts);
     ayt::app::bindBuiltinHostServices(engineHost());
 
     // INT-02: Script ← Editor-owned DeviceManager (not DeviceSubSystem).

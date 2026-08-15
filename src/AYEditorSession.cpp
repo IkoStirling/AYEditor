@@ -18,6 +18,9 @@
 #include "AYDockArea.h"
 #include "AYDockCard.h"
 #include "LayoutEditorSession.h"
+#include "AudioEditorSession.h"
+#include "AYAudioSubSystem.h"
+#include "UIKeyCode.h"
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因 _editScene 需 SceneMode/Scene 完整类型；
@@ -70,6 +73,41 @@ std::string resolveLayoutEditorChromePath() {
         }
     }
     return candidates.front();
+}
+
+std::string resolveAudioEditorChromePath() {
+    const std::vector<std::string> candidates = {
+        "assets/ui/audio_editor.ui.json",
+        "AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
+        "../AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
+        "../../AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
+        "AYRuntime/AYAudio/demo/audio_editor/assets/audio_editor.ui.json",
+        "../AYRuntime/AYAudio/demo/audio_editor/assets/audio_editor.ui.json",
+    };
+    for (const std::string& path : candidates) {
+        if (layoutEditorFileExists(path)) {
+            return path;
+        }
+    }
+    return candidates.front();
+}
+
+std::string showOpenAudioFileDialog(HWND owner) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        "Audio (*.wav;*.mp3;*.ogg)\0*.wav;*.mp3;*.ogg\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!::GetOpenFileNameA(&ofn)) {
+        return {};
+    }
+    return std::string(path);
 }
 
 std::string showUiJsonOpenDialog(HWND owner) {
@@ -253,6 +291,8 @@ void EditorSession::shutdown() {
     // avoids an UAF cleanup race against the primary.
     _layoutEditor.reset();
     _layoutEditorHandle = nullptr;
+    _audioEditor.reset();
+    _audioEditorHandle = nullptr;
     _childWindows.reset();
     _mainDock = nullptr;
     // Tear down Play/renderer borrow before UI widgets — avoids
@@ -296,6 +336,13 @@ void EditorSession::setClientSize(float width, float height) {
 
 void EditorSession::update(float dt) {
     syncLayoutEditorLifetime();
+    if (_layoutEditor != nullptr) {
+        _layoutEditor->pumpDeferred();
+    }
+    syncAudioEditorLifetime();
+    if (_audioEditor != nullptr) {
+        _audioEditor->tick(dt);
+    }
     // D5+.5: tick every open child (each via pushActive scope) before
     // the primary update so the active pointer is correctly swapped
     // before any per-frame UI logic that might read g_activeUIManager.
@@ -1492,6 +1539,9 @@ void EditorSession::bindMenuBar() {
         if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
             item->setOnActivate([this]() { openLayoutEditorWindow(); });
         }
+        if (auto* item = toolsMenu->addItem(L"Audio Editor...")) {
+            item->setOnActivate([this]() { openAudioEditorWindow(); });
+        }
     }
 
     ayt::ui::Menu* helpMenu = menuBar->addMenu(L"Help");
@@ -1543,13 +1593,52 @@ void EditorSession::openLayoutEditorWindow() {
     cfg.y = 80;
     cfg.width = 1280;
     cfg.height = 720;
-    cfg.afterMouseButton =
+    cfg.beforeMouseButton =
         [this](ayt::ui::UIManager& /*ui*/, float x, float y, int button,
-               bool pressed) {
-            if (!pressed || button != 0 || _layoutEditor == nullptr) {
-                return;
+               bool pressed) -> bool {
+            if (_layoutEditor == nullptr) {
+                return false;
             }
-            _layoutEditor->onCanvasClick(ayt::math::FVector2(x, y));
+            const ayt::math::FVector2 pos(x, y);
+            return pressed ? _layoutEditor->onPointerDown(pos, button)
+                           : _layoutEditor->onPointerUp(pos, button);
+        };
+    cfg.beforeMouseMove =
+        [this](ayt::ui::UIManager& /*ui*/, float x, float y) -> bool {
+            if (_layoutEditor == nullptr) {
+                return false;
+            }
+            return _layoutEditor->onPointerMove(ayt::math::FVector2(x, y));
+        };
+    cfg.beforeMouseWheel =
+        [this](ayt::ui::UIManager& /*ui*/, float x, float y,
+               float deltaY) -> bool {
+            if (_layoutEditor == nullptr) {
+                return false;
+            }
+            return _layoutEditor->onWheel(ayt::math::FVector2(x, y), deltaY);
+        };
+    cfg.beforeKey =
+        [this](ayt::ui::UIManager& /*ui*/, ayt::device::KeyCode kc,
+               bool pressed) -> bool {
+            if (!pressed || _layoutEditor == nullptr) {
+                return false;
+            }
+            const int uiKey =
+                static_cast<int>(ayt::ui::fromDeviceKey(kc));
+            if (uiKey == ayt::ui::UIKey_Shift ||
+                uiKey == ayt::ui::UIKey_Control ||
+                uiKey == ayt::ui::UIKey_Alt) {
+                return false;
+            }
+            return _layoutEditor->onKeyDown(uiKey);
+        };
+    cfg.resolveCursorHint =
+        [this](ayt::ui::UIManager& /*ui*/, float x, float y) {
+            if (_layoutEditor == nullptr) {
+                return ayt::ui::UiCursorHint::Default;
+            }
+            return _layoutEditor->canvasCursorHint(ayt::math::FVector2(x, y));
         };
 
     EditorChildWindowManager::Handle handle = nullptr;
@@ -1585,6 +1674,105 @@ void EditorSession::openLayoutEditorWindow() {
 
     _layoutEditor = std::move(session);
     _layoutEditorHandle = handle;
+}
+
+void EditorSession::syncAudioEditorLifetime() {
+    if (_audioEditor == nullptr) {
+        return;
+    }
+    if (_childWindows == nullptr || _audioEditorHandle == nullptr) {
+        _audioEditor.reset();
+        _audioEditorHandle = nullptr;
+        return;
+    }
+    bool alive = false;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == _audioEditorHandle) {
+            alive = true;
+            break;
+        }
+    }
+    if (!alive) {
+        _audioEditor.reset();
+        _audioEditorHandle = nullptr;
+    }
+}
+
+void EditorSession::openAudioEditorWindow() {
+    if (_childWindows == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] Audio Editor requires ChildWindowManager\n");
+        return;
+    }
+    syncAudioEditorLifetime();
+    if (_audioEditor != nullptr && _audioEditorHandle != nullptr) {
+        return;
+    }
+
+    ChildWindowConfig cfg;
+    cfg.title = "Audio Editor";
+    cfg.layoutPath = resolveAudioEditorChromePath();
+    cfg.x = 140;
+    cfg.y = 100;
+    cfg.width = 960;
+    cfg.height = 640;
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] failed to open Audio Editor (%s)\n",
+            cfg.layoutPath.c_str());
+        return;
+    }
+
+    ayt::ui::UIManager* childUi = nullptr;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == handle) {
+            childUi = entry.ui.get();
+            break;
+        }
+    }
+    if (childUi == nullptr) {
+        _childWindows->closeChildWindow(handle);
+        return;
+    }
+
+    auto session = std::make_unique<ayt::audio::AudioEditorSession>();
+    // Edit mode does not run GameLoop audio ticks — session drives update.
+    // During Play, GameLoop also updates Audio; double pump is safe.
+    session->setDriveAudioUpdate(true);
+    ayt::audio::AudioSubSystem* audioSub =
+        ayt::audio::AudioSubSystem::findRegistered();
+    if (audioSub == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSession] Audio Editor: no AudioSubSystem "
+            "(built with -no-audio?)\n");
+        _childWindows->closeChildWindow(handle);
+        return;
+    }
+    if (audioSub->engine() == nullptr || !audioSub->engine()->isInitialized()) {
+        if (!audioSub->initialize()) {
+            std::fprintf(stderr,
+                "[EditorSession] AudioSubSystem::initialize failed\n");
+            _childWindows->closeChildWindow(handle);
+            return;
+        }
+        if (auto* host = ayt::app::currentEngineHost()) {
+            ayt::app::bindBuiltinHostServices(*host);
+        }
+    }
+    session->setAudio(audioSub);
+    HWND owner = _hostWindow;
+    session->setPathPicker([owner]() { return showOpenAudioFileDialog(owner); });
+    if (!session->attach(*childUi)) {
+        std::fprintf(stderr,
+            "[EditorSession] AudioEditorSession::attach failed\n");
+        _childWindows->closeChildWindow(handle);
+        return;
+    }
+
+    _audioEditor = std::move(session);
+    _audioEditorHandle = handle;
 }
 
 void EditorSession::requestHostClose() {

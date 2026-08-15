@@ -12,7 +12,7 @@
 #include "AYDockCard.h"
 #include "EditorChildWindowManager.h"
 
-#include "aymath/MathTypes.h"
+#include "AYMath/MathTypes.h"
 
 #include <functional>
 #include <memory>
@@ -41,6 +41,8 @@ namespace ayt::scene { class Scene; }
 // 任何 include AYEditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
 namespace ayt::ui { class TreeView; }
 namespace ayt::ui { class LayoutEditorSession; }
+namespace ayt::audio { class AudioEditorSession; }
+namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
 
@@ -132,6 +134,8 @@ private:
     void bindMenuBar();
     void openLayoutEditorWindow();
     void syncLayoutEditorLifetime();
+    void openAudioEditorWindow();
+    void syncAudioEditorLifetime();
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
@@ -264,6 +268,10 @@ private:
     // AYUI_LayoutEditor). Reset when the child HWND is closed.
     std::unique_ptr<ayt::ui::LayoutEditorSession> _layoutEditor;
     EditorChildWindowManager::Handle _layoutEditorHandle = nullptr;
+
+    // Audio Editor child (shared with AYAudio_AudioEditor).
+    std::unique_ptr<ayt::audio::AudioEditorSession> _audioEditor;
+    EditorChildWindowManager::Handle _audioEditorHandle = nullptr;
 
     HWND _hostWindow = nullptr;
     std::string _layoutPath;

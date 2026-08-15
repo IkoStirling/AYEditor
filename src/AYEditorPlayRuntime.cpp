@@ -29,11 +29,11 @@
 #include "assetsImpl/AYTexture.h"
 #include "AYAssetPath.h"
 
-#include "ayio/Env.h"
-#include "ayio/File.h"
-#include "aymath/MathTransform.h"
-#include "aymath/MathTypes.h"
-#include "aymath/MathDefs.h"
+#include "AYIO/Env.h"
+#include "AYIO/File.h"
+#include "AYMath/MathTransform.h"
+#include "AYMath/MathTypes.h"
+#include "AYMath/MathDefs.h"
 
 #include "AYScene.h"           // v0.4 PR-1: sm->play()->world() in resolvePlayWorld
 #include "AYSceneManager.h"    // v0.4 PR-1: sm->beginPlay/endPlay in startPlay/enterEdit

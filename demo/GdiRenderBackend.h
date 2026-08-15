@@ -4,9 +4,9 @@
 // Draws into an offscreen bitmap and BitBlts once per frame to avoid
 // front-buffer flicker (keep in lockstep with AYUI demo GalleryChildBackend).
 
-#include "aymath/MathDefs.h"
+#include "AYMath/MathDefs.h"
 #include "IAYRenderBackend.h"
-#include "aymath/MathTypes.h"
+#include "AYMath/MathTypes.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN

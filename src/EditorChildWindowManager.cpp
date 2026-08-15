@@ -15,6 +15,7 @@
 
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <string>
 
 // nlohmann/json single-header — already in AYUI's thirdparty. Reach
@@ -248,30 +249,45 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         }
         ui->root()->performLayout();
     };
-    cbs.onMouseMove = [ui](float x, float y) {
+    const auto beforeButton = cfg.beforeMouseButton;
+    const auto beforeMove = cfg.beforeMouseMove;
+    const auto beforeWheel = cfg.beforeMouseWheel;
+    const auto beforeKey = cfg.beforeKey;
+    const auto resolveCursor = cfg.resolveCursorHint;
+    auto mousePos = std::make_shared<ayt::math::FVector2>(0.0f, 0.0f);
+    cbs.onMouseMove = [ui, beforeMove, mousePos](float x, float y) {
+        mousePos->x = x;
+        mousePos->y = y;
         ayt::ui::UIManager::ActiveScope guard(ui.get());
+        if (beforeMove && beforeMove(*ui, x, y)) {
+            return;
+        }
         ui->onMouseMove(x, y);
     };
     cbs.onMouseLeave = [ui]() {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ui->onMouseLeave();
     };
-    const auto afterMouse = cfg.afterMouseButton;
-    cbs.onMouseButton = [ui, afterMouse](float x, float y, int button, bool pressed) {
+    cbs.onMouseButton = [ui, beforeButton](float x, float y, int button, bool pressed) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
-        const bool captured = pressed ? ui->onMouseButtonDown(x, y, button)
-                                      : ui->onMouseButtonUp(x, y, button);
-        if (afterMouse) {
-            afterMouse(*ui, x, y, button, pressed);
+        if (beforeButton && beforeButton(*ui, x, y, button, pressed)) {
+            return true; // request capture while document-dragging
         }
-        return captured;
+        return pressed ? ui->onMouseButtonDown(x, y, button)
+                       : ui->onMouseButtonUp(x, y, button);
     };
-    cbs.onMouseWheel = [ui](float x, float y, float deltaY) {
+    cbs.onMouseWheel = [ui, beforeWheel](float x, float y, float deltaY) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
+        if (beforeWheel && beforeWheel(*ui, x, y, deltaY)) {
+            return;
+        }
         ui->onMouseWheel(x, y, deltaY);
     };
-    cbs.onKey = [ui](::ayt::device::KeyCode kc, bool pressed) {
+    cbs.onKey = [ui, beforeKey](::ayt::device::KeyCode kc, bool pressed) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
+        if (beforeKey && beforeKey(*ui, kc, pressed)) {
+            return;
+        }
         if (pressed) {
             ui->onDeviceKeyDown(kc);
         } else {
@@ -282,6 +298,41 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ui->onDeviceChar(utf8, byteCount);
     };
+#if defined(_WIN32)
+    cbs.onSetCursor = [ui, resolveCursor, mousePos]() -> bool {
+        ayt::ui::UIManager::ActiveScope guard(ui.get());
+        ayt::ui::UiCursorHint hint = ayt::ui::UiCursorHint::Default;
+        if (resolveCursor) {
+            hint = resolveCursor(*ui, mousePos->x, mousePos->y);
+        }
+        if (hint == ayt::ui::UiCursorHint::Default) {
+            hint = ui->getCursorHint();
+        }
+        static const HCURSOR arrow = ::LoadCursor(nullptr, IDC_ARROW);
+        static const HCURSOR hand  = ::LoadCursor(nullptr, IDC_HAND);
+        static const HCURSOR we    = ::LoadCursor(nullptr, IDC_SIZEWE);
+        static const HCURSOR ns    = ::LoadCursor(nullptr, IDC_SIZENS);
+        static const HCURSOR nwse  = ::LoadCursor(nullptr, IDC_SIZENWSE);
+        static const HCURSOR nesw  = ::LoadCursor(nullptr, IDC_SIZENESW);
+        static const HCURSOR move  = ::LoadCursor(nullptr, IDC_SIZEALL);
+        static const HCURSOR beam  = ::LoadCursor(nullptr, IDC_IBEAM);
+        HCURSOR c = arrow;
+        switch (hint) {
+        case ayt::ui::UiCursorHint::Hand: c = hand; break;
+        case ayt::ui::UiCursorHint::SizeWe:
+        case ayt::ui::UiCursorHint::SizeHorizontal: c = we; break;
+        case ayt::ui::UiCursorHint::SizeNs:
+        case ayt::ui::UiCursorHint::SizeVertical: c = ns; break;
+        case ayt::ui::UiCursorHint::SizeNwse: c = nwse; break;
+        case ayt::ui::UiCursorHint::SizeNesw: c = nesw; break;
+        case ayt::ui::UiCursorHint::Move: c = move; break;
+        case ayt::ui::UiCursorHint::Beam: c = beam; break;
+        default: break;
+        }
+        ::SetCursor(c);
+        return true;
+    };
+#endif
     _wm.setTopLevelCallbacks(h, cbs);
 
 #if defined(_WIN32)

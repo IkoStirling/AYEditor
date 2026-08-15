@@ -1,7 +1,7 @@
 #pragma once
 
 #include "AYInspectorOverrides.h"
-#include "aymath/MathTypes.h"
+#include "AYMath/MathTypes.h"
 
 #include <cstdint>
 #include <memory>

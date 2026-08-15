@@ -1,5 +1,5 @@
 #include "GdiRenderBackend.h"
-#include "aymath/MathDefs.h"
+#include "AYMath/MathDefs.h"
 
 // PR-Dock-TearOff: GDI backend for EditorChildWindowManager promoted
 // windows. Keep in lockstep with AYUI/demo/GalleryChildBackend.cpp.

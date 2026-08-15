@@ -6,21 +6,43 @@
   "children": [
     {
       "type": "HBox",
-      "id": "toolbar_row",
+      "id": "toolbar_file",
       "size": { "h": 36 },
       "spacing": 6,
       "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
       "children": [
-        { "type": "TextLabel", "id": "lbl_title", "text": "AYUI Layout Editor", "size": { "w": 160, "h": 24 }, "slot": { "width": 160 } },
-        { "type": "Button", "id": "btn_open", "text": "Open", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
-        { "type": "Button", "id": "btn_save", "text": "Save", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
-        { "type": "Button", "id": "btn_save_as", "text": "Save As", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
-        { "type": "Separator", "id": "tb_sep1", "size": { "w": 8, "h": 24 }, "slot": { "width": 8 } },
-        { "type": "Button", "id": "btn_add_button", "text": "+ Button", "size": { "w": 88, "h": 26 }, "slot": { "width": 88 } },
-        { "type": "Button", "id": "btn_add_label", "text": "+ Label", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
-        { "type": "Button", "id": "btn_add_panel", "text": "+ Panel", "size": { "w": 80, "h": 26 }, "slot": { "width": 80 } },
-        { "type": "Button", "id": "btn_delete", "text": "Delete", "size": { "w": 72, "h": 26 }, "slot": { "width": 72 } },
-        { "type": "TextLabel", "id": "lbl_status", "text": "Ready", "size": { "w": 320, "h": 24 } }
+        { "type": "TextLabel", "id": "lbl_title", "text": "AYUI Layout Editor", "size": { "w": 150, "h": 24 }, "slot": { "width": 150 } },
+        { "type": "Button", "id": "btn_open", "text": "Open", "size": { "w": 56, "h": 26 }, "slot": { "width": 56 } },
+        { "type": "Button", "id": "btn_save", "text": "Save", "size": { "w": 56, "h": 26 }, "slot": { "width": 56 } },
+        { "type": "Button", "id": "btn_save_as", "text": "SaveAs", "size": { "w": 64, "h": 26 }, "slot": { "width": 64 } },
+        { "type": "Separator", "id": "tb_sep1", "size": { "w": 6, "h": 24 }, "slot": { "width": 6 } },
+        { "type": "Button", "id": "btn_undo", "text": "Undo", "size": { "w": 56, "h": 26 }, "slot": { "width": 56 } },
+        { "type": "Button", "id": "btn_redo", "text": "Redo", "size": { "w": 56, "h": 26 }, "slot": { "width": 56 } },
+        { "type": "Separator", "id": "tb_sep2", "size": { "w": 6, "h": 24 }, "slot": { "width": 6 } },
+        { "type": "Button", "id": "btn_delete", "text": "Delete", "size": { "w": 64, "h": 26 }, "slot": { "width": 64 } },
+        { "type": "Button", "id": "btn_move_up", "text": "Up", "size": { "w": 44, "h": 26 }, "slot": { "width": 44 } },
+        { "type": "Button", "id": "btn_move_down", "text": "Down", "size": { "w": 52, "h": 26 }, "slot": { "width": 52 } },
+        { "type": "Button", "id": "btn_snap", "text": "Snap", "size": { "w": 52, "h": 26 }, "slot": { "width": 52 } },
+        { "type": "TextLabel", "id": "lbl_status", "text": "Ready", "size": { "w": 520, "h": 24 } }
+      ]
+    },
+    {
+      "type": "HBox",
+      "id": "toolbar_align",
+      "size": { "h": 36 },
+      "spacing": 4,
+      "padding": { "left": 8, "top": 2, "right": 8, "bottom": 2 },
+      "children": [
+        { "type": "TextLabel", "id": "lbl_align", "text": "PosAlign", "size": { "w": 64, "h": 24 }, "slot": { "width": 64 } },
+        { "type": "Button", "id": "btn_align_left", "text": "Left", "size": { "w": 44, "h": 26 }, "slot": { "width": 44 } },
+        { "type": "Button", "id": "btn_align_hcenter", "text": "HMid", "size": { "w": 48, "h": 26 }, "slot": { "width": 48 } },
+        { "type": "Button", "id": "btn_align_right", "text": "Right", "size": { "w": 48, "h": 26 }, "slot": { "width": 48 } },
+        { "type": "Button", "id": "btn_align_top", "text": "Top", "size": { "w": 40, "h": 26 }, "slot": { "width": 40 } },
+        { "type": "Button", "id": "btn_align_vcenter", "text": "VMid", "size": { "w": 48, "h": 26 }, "slot": { "width": 48 } },
+        { "type": "Button", "id": "btn_align_bottom", "text": "Bot", "size": { "w": 40, "h": 26 }, "slot": { "width": 40 } },
+        { "type": "Button", "id": "btn_dist_h", "text": "DistH", "size": { "w": 52, "h": 26 }, "slot": { "width": 52 } },
+        { "type": "Button", "id": "btn_dist_v", "text": "DistV", "size": { "w": 52, "h": 26 }, "slot": { "width": 52 } },
+        { "type": "TextLabel", "id": "lbl_align_hint", "text": "Ctrl/Shift multi-select. Shortcuts: C/V/D copy-paste-dup | arrows nudge | G snap | Ctrl+wheel zoom | MMB/Space pan | drag empty=marquee", "size": { "w": 720, "h": 24 } }
       ]
     },
     {
@@ -32,13 +54,63 @@
         {
           "type": "VBox",
           "id": "hierarchy_col",
-          "size": { "w": 220 },
-          "slot": { "width": 220 },
+          "size": { "w": 240 },
+          "slot": { "width": 240 },
           "spacing": 4,
           "padding": { "left": 8, "top": 6, "right": 6, "bottom": 6 },
           "children": [
-            { "type": "TextLabel", "id": "lbl_hierarchy", "text": "Hierarchy", "size": { "w": 200, "h": 20 } },
-            { "type": "ListView", "id": "list_hierarchy", "size": { "w": 200, "h": 0 } }
+            { "type": "TextLabel", "id": "lbl_palette", "text": "Widgets", "size": { "w": 220, "h": 18 }, "slot": { "height": 18 } },
+            {
+              "type": "VBox",
+              "id": "palette_panel",
+              "size": { "w": 220, "h": 168 },
+              "slot": { "height": 168 },
+              "spacing": 3,
+              "children": [
+                { "type": "TextLabel", "id": "lbl_pal_basic", "text": "Basic — click or drag", "size": { "w": 220, "h": 16 }, "slot": { "height": 16 } },
+                {
+                  "type": "HBox",
+                  "id": "pal_row_basic1",
+                  "size": { "h": 28 },
+                  "slot": { "height": 28 },
+                  "spacing": 4,
+                  "children": [
+                    { "type": "Button", "id": "btn_add_button", "text": "Btn", "size": { "w": 50, "h": 26 }, "slot": { "width": 50 } },
+                    { "type": "Button", "id": "btn_add_label", "text": "Lbl", "size": { "w": 50, "h": 26 }, "slot": { "width": 50 } },
+                    { "type": "Button", "id": "btn_add_input", "text": "Input", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } },
+                    { "type": "Button", "id": "btn_add_checkbox", "text": "Chk", "size": { "w": 50, "h": 26 }, "slot": { "width": 50 } }
+                  ]
+                },
+                {
+                  "type": "HBox",
+                  "id": "pal_row_basic2",
+                  "size": { "h": 28 },
+                  "slot": { "height": 28 },
+                  "spacing": 4,
+                  "children": [
+                    { "type": "Button", "id": "btn_add_slider", "text": "Slider", "size": { "w": 64, "h": 26 }, "slot": { "width": 64 } }
+                  ]
+                },
+                { "type": "TextLabel", "id": "lbl_pal_layout", "text": "Layout / containers", "size": { "w": 220, "h": 16 }, "slot": { "height": 16 } },
+                {
+                  "type": "HBox",
+                  "id": "pal_row_layout1",
+                  "size": { "h": 28 },
+                  "slot": { "height": 28 },
+                  "spacing": 4,
+                  "children": [
+                    { "type": "Button", "id": "btn_add_panel", "text": "Panel", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } },
+                    { "type": "Button", "id": "btn_add_vbox", "text": "VBox", "size": { "w": 50, "h": 26 }, "slot": { "width": 50 } },
+                    { "type": "Button", "id": "btn_add_hbox", "text": "HBox", "size": { "w": 50, "h": 26 }, "slot": { "width": 50 } },
+                    { "type": "Button", "id": "btn_add_scroll", "text": "Scroll", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } }
+                  ]
+                }
+              ]
+            },
+            { "type": "Separator", "id": "sep_palette", "size": { "w": 220, "h": 2 }, "slot": { "height": 2 } },
+            { "type": "TextLabel", "id": "lbl_hierarchy", "text": "Hierarchy", "size": { "w": 220, "h": 18 }, "slot": { "height": 18 } },
+            { "type": "TextLabel", "id": "lbl_hierarchy_hint", "text": "Drag rows: top/bottom=order, mid=into container", "size": { "w": 220, "h": 32 }, "slot": { "height": 32 } },
+            { "type": "ListView", "id": "list_hierarchy", "size": { "w": 220, "h": 400 }, "slot": { "height": 0 } }
           ]
         },
         {
@@ -63,24 +135,46 @@
         {
           "type": "VBox",
           "id": "props_col",
-          "size": { "w": 240 },
-          "slot": { "width": 240 },
-          "spacing": 4,
+          "size": { "w": 250 },
+          "slot": { "width": 250 },
+          "spacing": 3,
           "padding": { "left": 8, "top": 6, "right": 8, "bottom": 6 },
           "children": [
-            { "type": "TextLabel", "id": "lbl_props", "text": "Properties", "size": { "w": 220, "h": 20 } },
-            { "type": "TextLabel", "id": "lbl_prop_id", "text": "id", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_id", "text": "", "size": { "w": 220, "h": 26 } },
-            { "type": "TextLabel", "id": "lbl_prop_x", "text": "x", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_x", "text": "", "size": { "w": 220, "h": 26 } },
-            { "type": "TextLabel", "id": "lbl_prop_y", "text": "y", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_y", "text": "", "size": { "w": 220, "h": 26 } },
-            { "type": "TextLabel", "id": "lbl_prop_w", "text": "w", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_w", "text": "", "size": { "w": 220, "h": 26 } },
-            { "type": "TextLabel", "id": "lbl_prop_h", "text": "h", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_h", "text": "", "size": { "w": 220, "h": 26 } },
-            { "type": "TextLabel", "id": "lbl_prop_text", "text": "text", "size": { "w": 220, "h": 16 } },
-            { "type": "TextInput", "id": "prop_text", "text": "", "size": { "w": 220, "h": 26 } }
+            { "type": "TextLabel", "id": "lbl_props", "text": "Properties", "size": { "w": 230, "h": 18 } },
+            { "type": "TextLabel", "id": "lbl_prop_empty", "text": "Select a widget", "size": { "w": 230, "h": 18 } },
+            { "type": "TextLabel", "id": "lbl_prop_id", "text": "id", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_id", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_x", "text": "x", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_x", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_y", "text": "y", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_y", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_w", "text": "w", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_w", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_h", "text": "h", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_h", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_text", "text": "text", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_text", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_text_halign", "text": "text hAlign", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_text_halign", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_text_valign", "text": "text vAlign", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_text_valign", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_style", "text": "styleId", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_style_combo", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_checked", "text": "checked", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_checked", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_password", "text": "password", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_password", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_readonly", "text": "readOnly", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_readonly", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_gravity", "text": "gravity", "size": { "w": 230, "h": 14 } },
+            { "type": "ComboBox", "id": "prop_gravity", "size": { "w": 230, "h": 26 } },
+            { "type": "TextLabel", "id": "lbl_prop_spacing", "text": "spacing", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_spacing", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextLabel", "id": "lbl_prop_pad", "text": "padding L/T/R/B", "size": { "w": 230, "h": 14 } },
+            { "type": "TextInput", "id": "prop_pad_l", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextInput", "id": "prop_pad_t", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextInput", "id": "prop_pad_r", "text": "", "size": { "w": 230, "h": 24 } },
+            { "type": "TextInput", "id": "prop_pad_b", "text": "", "size": { "w": 230, "h": 24 } }
           ]
         }
       ]
