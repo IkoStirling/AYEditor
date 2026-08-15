@@ -14,8 +14,8 @@
 // end-to-end verification step (see plan §Verification).
 
 #include "AYTest.h"
-#include "AYImporter.h"
-#include "AYImportDialog.h"
+#include "AYEditor/Importer.h"
+#include "AYEditor/ImportDialog.h"
 #include "AYIO/File.h"
 #include <AYIO/Path.h>
 

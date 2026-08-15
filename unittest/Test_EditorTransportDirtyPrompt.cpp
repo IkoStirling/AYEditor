@@ -21,16 +21,16 @@
 // via candidates[]）；并在 EngineHostScope 包裹下注入 _editScene。
 
 #include "AYTest.h"
-#include "AYEditorSession.h"
-#include "AYMockRenderer.h"
-#include "AYBox.h"
-#include "AYButton.h"
-#include "AYTextLabel.h"
+#include "AYEditor/EditorSession.h"
+#include "AYUI/MockRenderer.h"
+#include "AYUI/Box.h"
+#include "AYUI/Button.h"
+#include "AYUI/TextLabel.h"
 
-#include "AYSceneManager.h"
+#include "AYScene/SceneManager.h"
 #include "AYScene.h"            // 完整 Scene 定义（clear/isDirty/mode）；forward decl 不够
-#include "AYSceneMode.h"
-#include "IEngineHost.h"
+#include "AYScene/SceneMode.h"
+#include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 
 #include <sys/stat.h>

@@ -1,13 +1,13 @@
-#include "EditorPlayerController.h"
+#include "AYEditor/EditorPlayerController.h"
 
-#include <AYEntityModule.h>
-#include <AYWorld.h>
+#include <AYEntity/EntityModule.h>
+#include <AYEntity/World.h>
 
 #include <AYReflect/IReflect.h>
 #include <AYReflect.h>
 #include <AYReflectMacros.h>
 
-#include <logia/AYSemanticAnalyzer.h>
+#include <AYScript/logia/SemanticAnalyzer.h>
 
 // INT-01 (2026-07-15): Register `PlayerController` with AYReflect under
 // the bare name "PlayerController" so the codegen multi-hop rewrite

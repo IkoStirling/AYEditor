@@ -1,6 +1,6 @@
-#include "EditorChildWindowManager.h"
+#include "AYEditor/EditorChildWindowManager.h"
 
-#include "AYDockCard.h"
+#include "AYUI/DockCard.h"
 
 #if defined(_WIN32)
 #  include "GdiRenderBackend.h"

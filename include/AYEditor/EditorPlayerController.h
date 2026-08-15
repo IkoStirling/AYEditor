@@ -1,5 +1,5 @@
 #pragma once
-// EditorPlayerController.h — INT-01 (2026-07-15)
+// AYEditor/EditorPlayerController.h — INT-01 (2026-07-15)
 //
 // Sample `script PlayerController`-host component. Used by Editor
 // Play runtime as the canonical end-to-end integration smoke:
@@ -19,9 +19,9 @@
 // EditorPlayerController.cpp must use the bare name when
 // registering with AYReflect.
 
-#include <components/AYScriptComponent.h>
+#include <AYEntity/components/ScriptComponent.h>
 
-#include <IAYEntity.h>
+#include <AYEntity/IEntity.h>
 #include <AYMath/MathTypes.h>
 
 namespace ayt::editor {

@@ -1,21 +1,21 @@
-#include "AYEditorApp.h"
+#include "AYEditor/EditorApp.h"
 
-#include "AYEditorHeapDebug.h"
-#include "AYEditorPlayRuntime.h"
-#include "AYEditorSession.h"
-#include "AYRegisterDefaultEditorModules.h"
+#include "AYEditor/EditorHeapDebug.h"
+#include "AYEditor/EditorPlayRuntime.h"
+#include "AYEditor/EditorSession.h"
+#include "AYEditor/RegisterDefaultEditorModules.h"
 #include "AYGameLoop.h"
-#include "AYDeviceManager.h"
-#include "AYDeviceInputProvider.h"
-#include "AYImportedCharacterMapper.h"
-#include "AYImporter.h"
-#include "AYRendererSubSystem.h"
-#include "AYScriptSubSystem.h"
-#include "AYUIRenderBackend.h"
+#include "AYDevice/DeviceManager.h"
+#include "AYDevice/DeviceInputProvider.h"
+#include "AYEditor/ImportedCharacterMapper.h"
+#include "AYEditor/Importer.h"
+#include "AYRenderer/RendererSubSystem.h"
+#include "AYScript/ScriptSubSystem.h"
+#include "AYRenderer/UIRenderBackend.h"
 
-#include <IEngineHost.h>
+#include <AYApplication/IEngineHost.h>
 
-#include <ayevent/EventBus.h>
+#include <AYEventSystem/EventBus.h>
 #include <AYIO/Env.h>
 #include <AYPlatform/Console.h>
 

@@ -7,7 +7,7 @@
 // and is bound to the toolbar Import button. It is statically guarded
 // so non-Windows builds compile (returns empty string there).
 
-#include "AYImportDialog.h"
+#include "AYEditor/ImportDialog.h"
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN

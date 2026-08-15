@@ -528,11 +528,11 @@ AYEditor/
 ├── README.md
 ├── CMakeLists.txt         ← E0
 ├── interface/
-│   └── IAYEditorSession.h
+│   └── AYEditor/EditorSession.h
 ├── include/
-│   ├── AYEditorSession.h
-│   ├── AYEditorGameView.h
-│   └── AYEditorPlayRuntime.h   ← viewport host (child HWND interim; AYDevice later)
+│   ├── AYEditor/EditorSession.h
+│   ├── AYEditor/EditorGameView.h
+│   └── AYEditor/EditorPlayRuntime.h   ← viewport host (child HWND interim; AYDevice later)
 ├── src/
 │   ├── AYEditorSession.cpp
 │   ├── AYEditorGameView.cpp

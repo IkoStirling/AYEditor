@@ -6,13 +6,13 @@
 //   level 3: + ensurePresentationReady + UIRenderBackend init, no frames
 //   level 4: + renderCompositeFrame for --frames N (default 1)
 
-#include "AYEditorHeapDebug.h"
-#include "AYEditorSession.h"
-#include "AYEntityModule.h"
+#include "AYEditor/EditorHeapDebug.h"
+#include "AYEditor/EditorSession.h"
+#include "AYEntity/EntityModule.h"
 #include "AYGameLoop.h"
-#include "AYDeviceManager.h"
-#include "AYRendererSubSystem.h"
-#include "AYUIRenderBackend.h"
+#include "AYDevice/DeviceManager.h"
+#include "AYRenderer/RendererSubSystem.h"
+#include "AYRenderer/UIRenderBackend.h"
 
 #include <cstdio>
 #include <cstdlib>

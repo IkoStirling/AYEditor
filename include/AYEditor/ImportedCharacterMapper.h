@@ -1,5 +1,5 @@
 #pragma once
-// AYImportedCharacterMapper.h - Phase 1 G1.
+// AYEditor/ImportedCharacterMapper.h - Phase 1 G1.
 //
 // Pure data-shape transform: scan a ConversionResult (returned by
 // IConverter::convert via Importer::importFile) for the asset types
@@ -23,11 +23,11 @@
 // preview. All Mesh entries after the first go into
 // `additionalMeshPaths` (MMD multi-part FBX).
 
-#include <IAYConverter.h>
+#include <AYResource/IConverter.h>
 #include <string>
 #include <vector>
 
-#include "AYEditorPlayRuntime.h"  // ImportedCharacter
+#include "AYEditor/EditorPlayRuntime.h"  // ImportedCharacter
 
 namespace ayt::editor
 {

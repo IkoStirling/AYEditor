@@ -1,16 +1,16 @@
 #pragma once
 
-#include "AYEditorGameView.h"
-#include "AYEditorPlayRuntime.h"
-#include "AYEditorFreecam.h"
-#include "AYImportedCharacterMapper.h"
-#include "AYImportDialog.h"
-#include "AYImporter.h"
-#include "AYInspectorOverrides.h"
-#include "AYUIManager.h"
-#include "AYDockArea.h"
-#include "AYDockCard.h"
-#include "EditorChildWindowManager.h"
+#include "AYEditor/EditorGameView.h"
+#include "AYEditor/EditorPlayRuntime.h"
+#include "AYEditor/EditorFreecam.h"
+#include "AYEditor/ImportedCharacterMapper.h"
+#include "AYEditor/ImportDialog.h"
+#include "AYEditor/Importer.h"
+#include "AYEditor/InspectorOverrides.h"
+#include "AYUI/UIManager.h"
+#include "AYUI/DockArea.h"
+#include "AYUI/DockCard.h"
+#include "AYEditor/EditorChildWindowManager.h"
 
 #include "AYMath/MathTypes.h"
 
@@ -26,8 +26,8 @@ namespace ayt::device { class WindowManager; }
 
 // v0.3 PR-4 — forward decl Scene（design §4.2.x）
 // Scene 完整定义在 .cpp 引入（AYScene.h），避免把 AYScene 完整 lib 暴露到
-// 任何 include AYEditorSession.h 的 TU；与 PR-3 caller 持 _edit ownership
-// 路径对齐（AYSceneManager.h:69-76；SM 绝对不持 ownership）。
+// 任何 include AYEditor/EditorSession.h 的 TU；与 PR-3 caller 持 _edit ownership
+// 路径对齐（AYScene/SceneManager.h:69-76；SM 绝对不持 ownership）。
 // 决策 1a: caller 持 ownership（PR-4）
 // 决策 2a: 不接 EditorPlayRuntime 私有通路（PR-4）
 // 决策 3a: EditorMode vs SceneMode 分离（PR-4；3 态 vs 2 态）
@@ -38,7 +38,7 @@ namespace ayt::scene { class Scene; }
 
 // v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
 // TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
-// 任何 include AYEditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
+// 任何 include AYEditor/EditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
 namespace ayt::ui { class TreeView; }
 namespace ayt::ui { class LayoutEditorSession; }
 namespace ayt::audio { class AudioEditorSession; }
@@ -46,7 +46,7 @@ namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
 
-// `ImportedCharacter` is defined in `AYEditorPlayRuntime.h` (included
+// `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
 // Play runtime; no need to redeclare.
 
@@ -335,7 +335,7 @@ private:
     //   在 _ui.shutdown() 前置 nullptr（Landmine E）。
     // _outlinerEntityIds: flatIndex-1 → Entity id（**id 而非 Entity***：
     //   endPlay / World teardown 后裸指针会 dangle；走 World::findEntity
-    //   （AYWorld.h:42）重解析，miss = 已销毁 → 自动降级 Landmine F）。
+    //   （AYEntity/World.h:42）重解析，miss = 已销毁 → 自动降级 Landmine F）。
     // _outlinerSelectedEntityId: 0 = 无 Hierarchy 选择（Inspector 退回
     //   PR-4 的 character/cube 二选一路径）。
     // _outlinerRefreshPending: 延迟重建标志；update(dt) 内消费（Landmine B）。

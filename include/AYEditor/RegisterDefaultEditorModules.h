@@ -1,5 +1,5 @@
 #pragma once
-// AYRegisterDefaultEditorModules.h — Editor shell default assembly (Step 1)
+// AYEditor/RegisterDefaultEditorModules.h — Editor shell default assembly (Step 1)
 //
 // See AYApplication/docs/engine-host.md §2.2.
 

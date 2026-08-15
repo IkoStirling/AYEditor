@@ -1,4 +1,4 @@
-#include "AYEditorFreecam.h"
+#include "AYEditor/EditorFreecam.h"
 
 #include <cmath>
 

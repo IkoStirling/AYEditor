@@ -4,7 +4,7 @@
 // Mesh entries), joins virtual paths against cacheRoot to produce
 // absolute paths.
 
-#include "AYImportedCharacterMapper.h"
+#include "AYEditor/ImportedCharacterMapper.h"
 
 #include <algorithm>
 #include <cctype>

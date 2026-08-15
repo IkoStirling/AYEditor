@@ -1,13 +1,13 @@
 #pragma once
-// AYInspectorOverrides.h - Phase 1 ED-03.
+// AYEditor/InspectorOverrides.h - Phase 1 ED-03.
 //
 // User-edited overrides that the Inspector applies to the live
 // selected character entity's SkeletonComponent / AnimationComponent
-// paths. Lives outside AYEditorPlayRuntime.h because both
+// paths. Lives outside AYEditor/EditorPlayRuntime.h because both
 // EditorSession (UI-driven) and EditorPlayRuntime (runtime-driven)
 // need to reference the struct. Plain-data; follows the same
-// pattern as ImportedCharacter in AYEditorPlayRuntime.h and
-// ImportedCharacterMapDiagnostics in AYImportedCharacterMapper.h.
+// pattern as ImportedCharacter in AYEditor/EditorPlayRuntime.h and
+// ImportedCharacterMapDiagnostics in AYEditor/ImportedCharacterMapper.h.
 
 #include <string>
 

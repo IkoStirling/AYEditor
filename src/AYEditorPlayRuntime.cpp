@@ -1,33 +1,33 @@
-#include "AYEditorPlayRuntime.h"
+#include "AYEditor/EditorPlayRuntime.h"
 
-#include "AYCharacterEntity.h"  // ED-02 spawnCharacterFromPaths / destroyCharacter
+#include "AYEntity/CharacterEntity.h"  // ED-02 spawnCharacterFromPaths / destroyCharacter
 #include "AYEntity.h"
-#include "AYEntityModule.h"
+#include "AYEntity/EntityModule.h"
 #include "AYGameLoop.h"
-#include "AYNetworkModule.h"
-#include <IAYNetwork.h>
-#include "AYRendererSubSystem.h"
-#include "AYRenderScene.h"
-#include "AYScriptSubSystem.h"
-#include "AYShadercDriver.h"
-#include "AYShadowConfig.h"
+#include "AYNetwork/NetworkModule.h"
+#include <AYNetwork/INetwork.h>
+#include "AYRenderer/RendererSubSystem.h"
+#include "AYRenderer/RenderScene.h"
+#include "AYScript/ScriptSubSystem.h"
+#include "AYShader/ShadercDriver.h"
+#include "AYRenderer/ShadowConfig.h"
 
-#include <Replication/EntityReplicationAdapter.h>
+#include <AYNetwork/Replication/EntityReplicationAdapter.h>
 
-#include <components/AYAnimationComponent.h>  // ED-03 override target
-#include <components/AYHealthComponent.h>
-#include <components/AYMeshComponent.h>
-#include <components/AYNetworkComponent.h>
-#include <components/AYScriptComponent.h>
-#include <components/AYSkeletonComponent.h>   // ED-03 override target
-#include <components/AYTransformComponent.h>
+#include <AYEntity/components/AnimationComponent.h>  // ED-03 override target
+#include <AYEntity/components/HealthComponent.h>
+#include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/components/NetworkComponent.h>
+#include <AYEntity/components/ScriptComponent.h>
+#include <AYEntity/components/SkeletonComponent.h>   // ED-03 override target
+#include <AYEntity/components/TransformComponent.h>
 
-#include "EditorPlayerController.h"  // INT-01 sample script host
+#include "AYEditor/EditorPlayerController.h"  // INT-01 sample script host
 
-#include "assetsImpl/AYMaterial.h"
-#include "assetsImpl/AYMesh.h"
-#include "assetsImpl/AYTexture.h"
-#include "AYAssetPath.h"
+#include "AYResource/assetsImpl/Material.h"
+#include "AYResource/assetsImpl/Mesh.h"
+#include "AYResource/assetsImpl/Texture.h"
+#include "AYResource/AssetPath.h"
 
 #include "AYIO/Env.h"
 #include "AYIO/File.h"
@@ -36,10 +36,10 @@
 #include "AYMath/MathDefs.h"
 
 #include "AYScene.h"           // v0.4 PR-1: sm->play()->world() in resolvePlayWorld
-#include "AYSceneManager.h"    // v0.4 PR-1: sm->beginPlay/endPlay in startPlay/enterEdit
+#include "AYScene/SceneManager.h"    // v0.4 PR-1: sm->beginPlay/endPlay in startPlay/enterEdit
 #include "AYApplication.h"     // v0.4 PR-1: currentEngineHost() in resolvePlayWorld
 
-#include <logia/AYCompilerError.h>
+#include <AYScript/logia/CompilerError.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -1631,7 +1631,7 @@ void EditorPlayRuntime::enterEdit()
     // v0.4 PR-1 (design §6, G5): SceneManager endPlay 兜底。
     //   **idempotent** — 多次调安全 (btn_stop + applyMode(Edit) +
     //   shutdownEngine 三处都走此函数；SM 内部 _play==nullptr 时 no-op，
-    //   AYSceneManager.h:99-103)。清 tmp 克隆 + 销毁 _play Scene →
+    //   AYScene/SceneManager.h:99-103)。清 tmp 克隆 + 销毁 _play Scene →
     //   Scene 析构 → World 析构 → 无残留 (INV-3)。
     auto* host = ayt::app::currentEngineHost();
     auto* sm = (host != nullptr) ? host->scenes() : nullptr;

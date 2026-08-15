@@ -1,13 +1,13 @@
 #pragma once
 
-#include "IAYApplication.h"
+#include "AYApplication/IApplication.h"
 
 #include <memory>
 #include <string>
 
-// Forward declarations only — AYDevice.h / AYScriptRuntimeBridge.h
+// Forward declarations only — AYDevice.h / AYScript/ScriptRuntimeBridge.h
 // would otherwise leak their full include graph onto every
-// translation unit that pulls AYEditorApp.h.
+// translation unit that pulls AYEditor/EditorApp.h.
 namespace ayt::device {
 class DeviceManager;
 class DeviceInputProvider;

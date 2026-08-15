@@ -1,12 +1,12 @@
 #include "AYTest.h"
-#include "AYEditorSession.h"
-#include "AYMockRenderer.h"
-#include "AYBox.h"
-#include "AYDockArea.h"
-#include "AYDockCard.h"
-#include "AYButton.h"
-#include "AYTextLabel.h"  // PR-5 LM-2 test: hint TextLabel observe
-#include "AYImage.h"
+#include "AYEditor/EditorSession.h"
+#include "AYUI/MockRenderer.h"
+#include "AYUI/Box.h"
+#include "AYUI/DockArea.h"
+#include "AYUI/DockCard.h"
+#include "AYUI/Button.h"
+#include "AYUI/TextLabel.h"  // PR-5 LM-2 test: hint TextLabel observe
+#include "AYUI/Image.h"
 
 #include <sys/stat.h>
 #include <string>

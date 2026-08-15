@@ -1,39 +1,39 @@
-#include "AYEditorSession.h"
+#include "AYEditor/EditorSession.h"
 
-#include "AYEditorHeapDebug.h"
+#include "AYEditor/EditorHeapDebug.h"
 #include "AYEntity.h"
-#include "AYSplitterHandle.h"
-#include "AYButton.h"
-#include "AYCheckBox.h"
-#include "AYComboBox.h"
+#include "AYUI/SplitterHandle.h"
+#include "AYUI/Button.h"
+#include "AYUI/CheckBox.h"
+#include "AYUI/ComboBox.h"
 #include "AYGameLoop.h"
-#include "AYMenuBar.h"
-#include "AYMenu.h"
-#include "AYMenuItem.h"
-#include "AYRendererSubSystem.h"
-#include "AYSlider.h"
-#include "AYTextLabel.h"
-#include "AYTreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
-#include "AYWidget.h"
-#include "AYDockArea.h"
-#include "AYDockCard.h"
+#include "AYUI/MenuBar.h"
+#include "AYUI/Menu.h"
+#include "AYUI/MenuItem.h"
+#include "AYRenderer/RendererSubSystem.h"
+#include "AYUI/Slider.h"
+#include "AYUI/TextLabel.h"
+#include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
+#include "AYUI/Widget.h"
+#include "AYUI/DockArea.h"
+#include "AYUI/DockCard.h"
 #include "LayoutEditorSession.h"
 #include "AudioEditorSession.h"
-#include "AYAudioSubSystem.h"
-#include "UIKeyCode.h"
+#include "AYAudio/AudioSubSystem.h"
+#include "AYUI/UIKeyCode.h"
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因 _editScene 需 SceneMode/Scene 完整类型；
 // IEngineHost 走 host facade（v0.1.3 PR-6 ship）。
 #include "AYScene.h"
-#include "AYSceneManager.h"
-#include "AYSceneMode.h"
-#include "IEngineHost.h"
+#include "AYScene/SceneManager.h"
+#include "AYScene/SceneMode.h"
+#include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"  // currentEngineHost() / defaultEngineHost()
 
-#include <components/AYAnimationComponent.h>
-#include <components/AYMeshComponent.h>
-#include <components/AYSkeletonComponent.h>
+#include <AYEntity/components/AnimationComponent.h>
+#include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/components/SkeletonComponent.h>
 
 #include <cstdio>
 #include <cstring>
@@ -899,7 +899,7 @@ const ayt::entity::World* resolveHierarchyWorld(EditorMode mode)
     return &ayt::entity::World::instance();
 }
 
-// 非 const 版：selection 解析需要 findEntity（AYWorld.h:42 非 const）。
+// 非 const 版：selection 解析需要 findEntity（AYEntity/World.h:42 非 const）。
 ayt::entity::World* resolveHierarchyWorldMutable(EditorMode mode)
 {
     return const_cast<ayt::entity::World*>(
@@ -976,7 +976,7 @@ void EditorSession::refreshOutliner()
     nodes.push_back(root);
 
     // INV-4：唯一 Scene 触点是 const World& + getAllEntities() const
-    // （AYWorld.h:43）+ Entity::getId/getName（AYEntityImpl.h:31-32）。
+    // （AYEntity/World.h:43）+ Entity::getId/getName（AYEntity/EntityImpl.h:31-32）。
     // 无任何 clear/load/save 调用 → Scene::_dirty 不可能被置位。
     const std::vector<ayt::entity::Entity*> entities =
         world->getAllEntities();

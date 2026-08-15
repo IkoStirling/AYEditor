@@ -33,17 +33,18 @@ set(SRC_FILES
 )
 
 set(HEAD_FILES
-    include/AYEditorSession.h
-    include/AYEditorGameView.h
-    include/AYEditorPlayRuntime.h
-    include/AYEditorApp.h
-    include/AYRegisterDefaultEditorModules.h
-    include/AYEditorFreecam.h
-    include/AYImporter.h
-    include/AYImportDialog.h
-    include/AYImportedCharacterMapper.h
-    include/EditorChildWindowManager.h  # D5+.5 (2026-07-26)
-    include/EditorPlayerController.h
+    AYEditor.h
+    include/AYEditor/EditorSession.h
+    include/AYEditor/EditorGameView.h
+    include/AYEditor/EditorPlayRuntime.h
+    include/AYEditor/EditorApp.h
+    include/AYEditor/RegisterDefaultEditorModules.h
+    include/AYEditor/EditorFreecam.h
+    include/AYEditor/Importer.h
+    include/AYEditor/ImportDialog.h
+    include/AYEditor/ImportedCharacterMapper.h
+    ../AYDevice/include/AYDevice/WindowManager.h  # D5+.5 (2026-07-26)
+    include/AYEditor/EditorPlayerController.h
     ../AYUI/demo/layout_editor/LayoutEditorSession.h
     ../AYAudio/demo/audio_editor/AudioEditorSession.h
 )
@@ -51,6 +52,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_include_directories(${MODULE_NAME} PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 

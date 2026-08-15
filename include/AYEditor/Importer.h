@@ -1,11 +1,11 @@
 #pragma once
-// AYImporter.h — Editor façade over AYResource::importAsset (P5).
+// AYEditor/Importer.h — Editor façade over AYResource::importAsset (P5).
 //
 // Keeps the ED-01 Result shape for EditorShellDemo / ImportDialog.
 // Extension routing, cache reuse (.aydep.json), and convert live in
-// AYImportJob.h (library core; CLI: AYTool/import_tool).
+// AYResource/ImportJob.h (library core; CLI: AYTool/import_tool).
 
-#include <IAYConverter.h>
+#include <AYResource/IConverter.h>
 #include <string>
 
 namespace ayt::editor

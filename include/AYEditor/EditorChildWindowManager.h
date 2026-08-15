@@ -14,10 +14,10 @@
 // (mouse/key/wheel/char) forwarded from TopLevelWindowCallbacks. The
 // old null-backend path (K-INV-D5-4) remains the non-Win32 fallback.
 
-#include "AYUIManager.h"
-#include "AYWindowManager.h"
-#include "AYWindowTypes.h"
-#include "AYInputTypes.h"
+#include "AYUI/UIManager.h"
+#include "AYDevice/WindowManager.h"
+#include "AYDevice/WindowTypes.h"
+#include "AYDevice/InputTypes.h"
 
 #include <functional>
 #include <memory>

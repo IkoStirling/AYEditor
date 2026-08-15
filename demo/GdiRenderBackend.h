@@ -5,7 +5,7 @@
 // front-buffer flicker (keep in lockstep with AYUI demo GalleryChildBackend).
 
 #include "AYMath/MathDefs.h"
-#include "IAYRenderBackend.h"
+#include "AYUI/IRenderBackend.h"
 #include "AYMath/MathTypes.h"
 
 #ifndef WIN32_LEAN_AND_MEAN

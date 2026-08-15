@@ -1,6 +1,6 @@
 #pragma once
 
-#include <IAYGameLoop.h>
+#include <AYGameLoop/IGameLoop.h>
 #include <cstdint>
 #include <functional>
 

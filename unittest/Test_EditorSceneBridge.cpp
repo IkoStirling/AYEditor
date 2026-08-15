@@ -21,17 +21,17 @@
 //     本测试通过 _runtime.startPlay() 直接驱动）
 
 #include "AYTest.h"
-#include "AYEditorSession.h"
-#include "AYMockRenderer.h"
+#include "AYEditor/EditorSession.h"
+#include "AYUI/MockRenderer.h"
 
-#include "AYEditorPlayRuntime.h"
-#include "AYEditorGameView.h"
+#include "AYEditor/EditorPlayRuntime.h"
+#include "AYEditor/EditorGameView.h"
 
 #include "AYScene.h"
-#include "AYSceneManager.h"
-#include "AYSceneMode.h"
+#include "AYScene/SceneManager.h"
+#include "AYScene/SceneMode.h"
 
-#include "IEngineHost.h"
+#include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 
 #include "AYEntity.h"

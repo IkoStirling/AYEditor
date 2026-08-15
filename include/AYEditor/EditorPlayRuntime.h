@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AYInspectorOverrides.h"
+#include "AYEditor/InspectorOverrides.h"
 #include "AYMath/MathTypes.h"
 
 #include <cstdint>

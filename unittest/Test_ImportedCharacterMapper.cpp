@@ -3,7 +3,7 @@
 // Pure data-shape transform; no I/O, no FBX, no ECS. Drives the
 // mapper with synthetic ConversionResult vectors that mirror the
 // type strings emitted by the AYResource sub-converters (see
-// AYImportedCharacterMapper.h for the four canonical lines).
+// AYEditor/ImportedCharacterMapper.h for the four canonical lines).
 //
 // Drives the "character wins, cube is fallback" policy: only
 // conversions with all four required types produce a valid
@@ -13,7 +13,7 @@
 // crash the editor.
 
 #include "AYTest.h"
-#include "AYImportedCharacterMapper.h"
+#include "AYEditor/ImportedCharacterMapper.h"
 
 #include <string>
 #include <vector>

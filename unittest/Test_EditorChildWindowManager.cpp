@@ -15,14 +15,14 @@
 
 #include "AYTest.h"
 
-#include "EditorChildWindowManager.h"
-#include "AYUIManager.h"
-#include "AYWindowManager.h"
-#include "AYWindowTypes.h"
-#include "AYDockArea.h"
-#include "AYDockCard.h"
-#include "AYDockOverlay.h"
-#include "AYMockRenderer.h"
+#include "AYEditor/EditorChildWindowManager.h"
+#include "AYUI/UIManager.h"
+#include "AYDevice/WindowManager.h"
+#include "AYDevice/WindowTypes.h"
+#include "AYUI/DockArea.h"
+#include "AYUI/DockCard.h"
+#include "AYUI/DockOverlay.h"
+#include "AYUI/MockRenderer.h"
 
 #include <cstdio>
 #include <fstream>

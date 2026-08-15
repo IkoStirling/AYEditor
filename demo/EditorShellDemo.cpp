@@ -6,10 +6,10 @@
 // `--import <other.fbx>`, AY_EDITOR_FORCE_IMPORT=1, or
 // AY_EDITOR_CHARACTER_SCALE=<float>.
 
-#include "AYEditorApp.h"
+#include "AYEditor/EditorApp.h"
 #include "AYGameLoop.h"
-#include "IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
-#include "AYSceneManager.h"   // SceneManager::canBeginPlay/isEditDirty (PR-4 日志块)
+#include "AYApplication/IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
+#include "AYScene/SceneManager.h"   // SceneManager::canBeginPlay/isEditDirty (PR-4 日志块)
 
 #include <cstdio>
 

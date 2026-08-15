@@ -3,9 +3,9 @@
 // Cache layout: see AYEditor/docs/cache-path-convention.md.
 // Force rebuild: env AY_EDITOR_FORCE_IMPORT=1.
 
-#include "AYImporter.h"
+#include "AYEditor/Importer.h"
 
-#include "AYImportJob.h"
+#include "AYResource/ImportJob.h"
 
 #include <AYIO/Env.h>
 #include <cstdlib>

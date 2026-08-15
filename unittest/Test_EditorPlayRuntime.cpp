@@ -13,14 +13,14 @@
 //     in commit 54d0841.
 
 #include "AYTest.h"
-#include "AYEditorPlayRuntime.h"
+#include "AYEditor/EditorPlayRuntime.h"
 #include "AYEntity.h"
-#include "AYEntityModule.h"
-#include "AYCharacterEntity.h"
+#include "AYEntity/EntityModule.h"
+#include "AYEntity/CharacterEntity.h"
 
-#include <components/AYAnimationComponent.h>
-#include <components/AYMeshComponent.h>
-#include <components/AYSkeletonComponent.h>
+#include <AYEntity/components/AnimationComponent.h>
+#include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/components/SkeletonComponent.h>
 
 #include <cstring>
 #include <string>

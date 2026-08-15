@@ -1,13 +1,13 @@
-#include "AYRegisterDefaultEditorModules.h"
+#include "AYEditor/RegisterDefaultEditorModules.h"
 
-#include "AYScriptSubSystem.h"
+#include "AYScript/ScriptSubSystem.h"
 
-#include <AYAudioBackendFactory.h>
-#include <AYAudioSubSystem.h>
-#include <AYEntityModule.h>
+#include <AYAudio/AudioBackendFactory.h>
+#include <AYAudio/AudioSubSystem.h>
+#include <AYEntity/EntityModule.h>
 #include <AYGameLoop.h>
-#include <AYNetworkModule.h>
-#include <AYRegisterDefaultModules.h>
+#include <AYNetwork/NetworkModule.h>
+#include <AYApplication/RegisterDefaultModules.h>
 
 #include <memory>
 

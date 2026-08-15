@@ -11,7 +11,7 @@
 //   5. 无 host/Edit World → tree 空 + hint "Scene: -"
 //
 // 不覆盖（deferred to e2e / manual）：
-//   - 真层级（Entity 无 parent 字段，AYEntityImpl.h:69-73）
+//   - 真层级（Entity 无 parent 字段，AYEntity/EntityImpl.h:69-73）
 //   - 滚动 / 展开折叠（TreeView 自测覆盖，AYUI C-12）
 //   - Outliner 多选 / 搜索 / 过滤（Outliner v1 仅显示 + 单选）
 //
@@ -22,17 +22,17 @@
 //     本文件**只**通过 main.cpp `#include` 注册，不进 add_executable
 
 #include "AYTest.h"
-#include "AYEditorSession.h"
-#include "AYMockRenderer.h"
-#include "AYBox.h"
-#include "AYTextLabel.h"
-#include "AYTreeView.h"
-#include "AYDockCard.h"
+#include "AYEditor/EditorSession.h"
+#include "AYUI/MockRenderer.h"
+#include "AYUI/Box.h"
+#include "AYUI/TextLabel.h"
+#include "AYUI/TreeView.h"
+#include "AYUI/DockCard.h"
 
 #include "AYScene.h"
-#include "AYSceneManager.h"
-#include "AYSceneMode.h"
-#include "IEngineHost.h"
+#include "AYScene/SceneManager.h"
+#include "AYScene/SceneMode.h"
+#include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 #include "AYEntity.h"
 

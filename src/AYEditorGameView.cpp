@@ -1,7 +1,7 @@
-#include "AYEditorGameView.h"
-#include "AYEditorPlayRuntime.h"
+#include "AYEditor/EditorGameView.h"
+#include "AYEditor/EditorPlayRuntime.h"
 #include "AYGameLoop.h"
-#include "AYRendererSubSystem.h"
+#include "AYRenderer/RendererSubSystem.h"
 
 namespace ayt::editor {
 

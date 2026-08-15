@@ -16,10 +16,10 @@ dropping an `.fbx` (or `.gltf`/`.glb`/`.png`/...) on disk ends up with
 |---|---|---|
 | `Importer::importFile(srcPath, destDir)` → real IConverter dispatch | ✅ shipped | `AYEditor/src/AYImporter.cpp:64-113` |
 | `ImportDialog::importFromPath` thin pass-through | ✅ shipped | `AYEditor/src/AYImportDialog.cpp:12-16` |
-| `Importer::Result { ConversionResult conversion; bool success; std::string errorMessage; }` | ✅ shipped (matches task wording) | `AYEditor/include/AYImporter.h:33-37` |
+| `Importer::Result { ConversionResult conversion; bool success; std::string errorMessage; }` | ✅ shipped (matches task wording) | `AYEditor/include/AYEditor/Importer.h:33-37` |
 | Extension table mirrors factory (`fbx`/`gltf`/`glb`/`png`/`bmp`/`tga`/`dds`) | ✅ shipped | `AYEditor/src/AYImporter.cpp:55-62` |
 | 6 distinct error strings for failure modes | ✅ shipped | `AYImporter.cpp:11-19, 68-99` |
-| `never throws` contract — full try/catch coverage | ✅ shipped | `AYImporter.h:31-32`, `AYImporter.cpp:90-109` |
+| `never throws` contract — full try/catch coverage | ✅ shipped | `AYEditor/Importer.h:31-32`, `AYImporter.cpp:90-109` |
 | Unit tests: 6 cases (extensionOf, isSupportedExtension, empty/missing/unsupported/error shapes, ImportDialog passthrough) | ✅ shipped | `AYEditor/unittest/Test_EditorImporter.cpp` |
 | Dependency on `AYResource` (link + include) | ✅ shipped | `AYEditor/CMakeLists.txt:33,40` |
 | FBXConverter R-03 (skeleton/mesh/animation sub-converters) | ✅ already shipped by resource team | `AYResource/src/Converter/FBXConverter.cpp` |
