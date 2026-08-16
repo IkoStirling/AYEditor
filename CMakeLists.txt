@@ -8,6 +8,7 @@ set(MODULE_NAME AYEditor)
 
 set(AY_RESOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYResource")
 set(AY_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader")
+include("${AY_SHADER_ROOT}/cmake/AYBgfx.cmake")
 
 set(SRC_FILES
     src/AYEditorSession.cpp
@@ -100,47 +101,6 @@ endif()
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/demo
 )
-
-if(NOT DEFINED AY_SHADER_SHADERC_PATH)
-    if(WIN32)
-        set(_ays_shaderc_name "shaderc.exe")
-    else()
-        set(_ays_shaderc_name "shaderc")
-    endif()
-    set(AY_SHADER_SHADERC_PATH
-        "${AY_SHADER_ROOT}/thirdParty/bgfx-install/debug/bin/${_ays_shaderc_name}")
-endif()
-
-if(NOT DEFINED AY_SHADER_BGFX_COMMON_DIR)
-    set(_ays_bgfx_search
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../thirdparty/bgfx/examples/common"
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../thirdparty/bgfx/examples/common"
-    )
-    set(AY_SHADER_BGFX_COMMON_DIR "")
-    foreach(_dir IN LISTS _ays_bgfx_search)
-        if(EXISTS "${_dir}/common.sh")
-            set(AY_SHADER_BGFX_COMMON_DIR "${_dir}")
-            break()
-        endif()
-    endforeach()
-endif()
-
-if(NOT DEFINED AY_SHADER_BGFX_SRC_DIR AND AY_SHADER_BGFX_COMMON_DIR)
-    set(AY_SHADER_BGFX_SRC_DIR "${AY_SHADER_BGFX_COMMON_DIR}/../../src")
-endif()
-
-if(NOT DEFINED AY_BGFX_SHADER_INCLUDE_DIR)
-    set(_ays_bgfx_include_search
-        "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader/thirdParty/bgfx-install/debug/include/bgfx"
-    )
-    set(AY_BGFX_SHADER_INCLUDE_DIR "")
-    foreach(_dir IN LISTS _ays_bgfx_include_search)
-        if(EXISTS "${_dir}/bgfx_shader.sh")
-            set(AY_BGFX_SHADER_INCLUDE_DIR "${_dir}")
-            break()
-        endif()
-    endforeach()
-endif()
 
 add_executable(AYEditorShell_Demo WIN32
     demo/AYEditorDebugHeapEarly.cpp

@@ -284,14 +284,8 @@ void EditorPlayRuntime::configureShaderToolchainOnce()
         return;
     }
 
-    static const char* kShadercFallbacks[] = {
-        "AYRuntime/AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
-        "../AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
-        "../../AYShader/thirdParty/bgfx-install/debug/bin/shaderc.exe",
-    };
     const std::string shadercPath =
-        resolveExistingPath(AY_SHADER_SHADERC_HINT, kShadercFallbacks,
-                            sizeof(kShadercFallbacks) / sizeof(kShadercFallbacks[0]));
+        resolveExistingPath(AY_SHADER_SHADERC_HINT, nullptr, 0);
     if (!shadercPath.empty() && fileExists(shadercPath)) {
         ayt::shader::AYShadercDriver::setDefaultExecutable(shadercPath);
     }
