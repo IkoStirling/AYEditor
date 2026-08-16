@@ -1,23 +1,20 @@
 # AYEditor
 
-Minimal editor product layer for AY Engine — toolbar, panels, Edit/Play modes, and viewport composition.
+AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play 会话、场景隔离、视口合成、导入流程和编辑器工具窗口。
 
-**Status:** E2-composite — single-window bgfx UI + viewport sub-rect via `AYUIRenderBackend`
+**当前状态：** v0.3 编辑器壳层，包含 Edit/Play Scene、Transport Bar、网络客户端与通过 `AYRenderer/UIRenderBackend.h` 完成的单窗口 UI/3D 合成。
 
-## Quick links
+## 公开接口
 
-| Topic | Document |
-|-------|----------|
-| Phases E0–E4+ | [design.md §3](design.md#3-phase-roadmap) |
-| Interim vs target composite | [design.md §2.3](design.md#23-viewport-presentation-interim-vs-target) |
-| AYDevice timing | [design.md §2.4](design.md#24-aydevice-when-to-introduce) |
-| Edit vs Play | [design.md §2.1](design.md#21-mode-matrix) |
-| Editor UI JSON | [design.md §5](design.md#5-editor-chrome-ayui) |
-| Inspector / scene save (later) | [design.md §8](design.md#8-deferred-metadata--serialization) |
-| AYUI chrome contract | [AYUI/design.md §13](../AYUI/design.md#13-editor-chrome) |
+```cpp
+#include <AYEditor.h>
+#include <AYEditor/EditorApp.h>
+#include <AYEditor/EditorSession.h>
+#include <AYEditor/EditorPlayRuntime.h>
+```
 
-## Current milestone
+## 依赖
 
-**E2-composite — `AYEditorShell_Demo`:** `EditorApp` + `DeviceManager`; `UIRenderBackend` draws chrome; 3D in viewport sub-rect on the same swap chain.
+主要依赖 AYUI、AYGameLoop、AYDevice、AYApplication；运行时集成还使用 AYEntity、AYRenderer、AYResource、AYScene、AYPhysics、AYAudio、AYScript 与 AYNetwork。
 
-**Next:** E3 cleanup (`BuildType::Editor`, unified entry) or E4+ (Inspector / scene I/O).
+阶段、模式矩阵和编辑器 UI 契约见 [design.md](design.md)。
