@@ -57,8 +57,8 @@ bool hierarchyLayoutFileExists(const std::string& path)
 // PR-5：新增两条相对路径。既有两条（"assets/ui/…"、
 // "AYRuntime/AYEditor/assets/ui/…"）在 CI/VS 的实际 cwd 下都 miss，导致
 // layout 相关 case 全部静默跳过（0 CHECK）。"../assets/ui/…" 命中
-// unittest/ 工作目录，"../../assets/ui/…" 命中 ay_configure_test_tmpdir
-// 设的 test_tmp/（cmake/AYTestUtils.cmake:9,17）。
+// unittest/ 工作目录，"../../assets/ui/…" 命中 ay_add_test
+// 设置的目标专属 test_tmp/ 工作目录。
 std::string resolveHierarchyLayoutPath()
 {
     const std::string candidates[] = {

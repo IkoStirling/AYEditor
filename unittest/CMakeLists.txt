@@ -61,5 +61,4 @@ if(MSVC)
     target_link_options(${MODULE_NAME} PRIVATE "/OPT:NOREF")
 endif()
 
-ay_configure_test_tmpdir(${MODULE_NAME})
-add_test(NAME ${MODULE_NAME} COMMAND ${MODULE_NAME})
+ay_add_test(${MODULE_NAME})
