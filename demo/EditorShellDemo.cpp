@@ -11,6 +11,8 @@
 #include "AYApplication/IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
 #include "AYScene/SceneManager.h"   // SceneManager::canBeginPlay/isEditDirty (PR-4 日志块)
 
+#include <AYIO/Env.h>
+
 #include <cstdio>
 
 namespace {
@@ -22,10 +24,17 @@ constexpr const char* kDefaultSourFbx =
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
-    AllocConsole();
-    FILE* dummy = nullptr;
-    freopen_s(&dummy, "CONOUT$", "w", stdout);
-    freopen_s(&dummy, "CONOUT$", "w", stderr);
+    // AY_EDITOR_NO_CONSOLE=1 keeps stdout/stderr on the parent process
+    // pipe (no AllocConsole / CONOUT$ hijack) so `exe 2>file` captures
+    // engine diagnostics. Default: interactive console as before.
+    const bool keepPipe =
+        ayt::io::env::get("AY_EDITOR_NO_CONSOLE").value_or("") == "1";
+    if (!keepPipe) {
+        AllocConsole();
+        FILE* dummy = nullptr;
+        freopen_s(&dummy, "CONOUT$", "w", stdout);
+        freopen_s(&dummy, "CONOUT$", "w", stderr);
+    }
 
     ayt::app::GameDesc desc{};
     desc.name = "AY Editor (E2-composite)";

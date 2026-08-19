@@ -22,6 +22,16 @@ bool forceImportRequested()
     return !v.empty() && v[0] != '0';
 }
 
+bool cookTexturesRequested()
+{
+    // Release-cook override: AY_IMPORT_COOK_TEXTURES=1 runs the full
+    // BC7+mips → .aytex pipeline. Default (dev) references raw texture
+    // files (png/jpg/...) and copies them into textures/ instead — see
+    // ImportOptions::cookTextures.
+    const std::string v = ayt::io::env::get("AY_IMPORT_COOK_TEXTURES").value_or("");
+    return !v.empty() && v[0] != '0';
+}
+
 } // namespace
 
 std::string Importer::extensionOf(const std::string& path)
@@ -43,6 +53,7 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.force = forceImportRequested();
     opts.requireCharacterAssets = true;
     opts.loadOption = ayt::resource::IConverter::LoadOption::Full;
+    opts.cookTextures = cookTexturesRequested();
 
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
 
