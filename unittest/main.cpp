@@ -19,6 +19,8 @@
 // for all 5 suites. This drops the `#include` requirement for D5 +
 // ImportedMapper (per the CMakeLists split) — see the test files'
 // TU build for those.
+// Keep this aggregation explicit: CMake compiles main.cpp, so these included
+// test sources share one test-registration translation unit.
 //
 // D5 child-window cases + Imported mapper test cases are registered
 // below via direct `registerTest` calls from main() so the linker

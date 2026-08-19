@@ -26,16 +26,24 @@ void EditorGameView::setModeChangedCallback(ModeChangedCallback callback) {
 }
 
 void EditorGameView::setMode(EditorMode mode) {
+    (void)trySetMode(mode);
+}
+
+bool EditorGameView::trySetMode(EditorMode mode) {
     if (_mode == mode) {
-        return;
+        return true;
     }
 
-    applyMode(mode);
+    if (!applyMode(mode)) {
+        return false;
+    }
+
     _mode = mode;
 
     if (_modeChanged) {
         _modeChanged(_mode);
     }
+    return true;
 }
 
 void EditorGameView::stepOnce() {
@@ -44,7 +52,7 @@ void EditorGameView::stepOnce() {
     }
 }
 
-void EditorGameView::applyMode(EditorMode mode) {
+bool EditorGameView::applyMode(EditorMode mode) {
     // v0.4 PR-1 (design §6): applyMode 是 EditorMode → EditorPlayRuntime
     // 的 adapter。**不直接**调 SceneManager — SM 入口由
     // _runtime.startPlay()/enterEdit() 头部接管 (F3.a / F3.b；G1/G5 收口)。
@@ -55,20 +63,25 @@ void EditorGameView::applyMode(EditorMode mode) {
     case EditorMode::Edit:
         setRenderClockPaused(false);
         _runtime.enterEdit();
-        break;
+        return true;
     case EditorMode::Play:
         setRenderClockPaused(false);
-        _runtime.startPlay();
-        _runtime.tick();
-        break;
+        // The host owns the frame cadence. Do not tick here: a toolbar click
+        // is dispatched during EditorSession::update(), whose simulation slot
+        // will perform exactly one tick later in the same host frame.
+        return _runtime.startPlay();
     case EditorMode::Paused:
         if (!_runtime.isEngineInitialized()) {
-            _runtime.startPlay();
+            if (!_runtime.startPlay()) {
+                return false;
+            }
         }
         ayt::game::GameLoop::instance().pause();
         setRenderClockPaused(true);
-        break;
+        return true;
     }
+
+    return false;
 }
 
 } // namespace ayt::editor

@@ -525,14 +525,14 @@ void EditorApp::run()
             return handleHostMessage(hwnd, &hostState, msg, wParam, lParam, handled);
         });
 
-    constexpr float kDeltaSeconds = 1.0f / 60.0f;
     // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
     // Reports ms for pollEvents / update / syncViewport / render per
     // frame. Logged once a second (every ~60 frames at 60 FPS, less
     // often at lower FPS) to keep stderr readable. Disabled by
     // default. Set in the shell: set AY_EDITOR_FRAME_TIMING=1 before
     // launching AYEditorShell_Demo.exe.
-    using Clock = std::chrono::high_resolution_clock;
+    using Clock = std::chrono::steady_clock;
+    auto previousHostFrame = Clock::now();
     const bool frameTiming =
         ayt::io::env::get("AY_EDITOR_FRAME_TIMING").has_value();
     uint64_t frameIndex = 0;
@@ -545,10 +545,23 @@ void EditorApp::run()
     // end-to-end (both halves happen via this lambda).
     double uiPassMs = 0.0;
     while (running && window.isWindowValid()) {
+        const auto hostFrameNow = Clock::now();
+        float editorDeltaSeconds = std::chrono::duration<float>(
+            hostFrameNow - previousHostFrame).count();
+        previousHostFrame = hostFrameNow;
+        // Do not inject an arbitrarily large UI/freecam movement after a
+        // debugger break or a dragged modal dialog. Simulation has its own
+        // FrameManager and independently samples the monotonic clock.
+        if (editorDeltaSeconds < 0.0f) {
+            editorDeltaSeconds = 0.0f;
+        } else if (editorDeltaSeconds > 0.25f) {
+            editorDeltaSeconds = 0.25f;
+        }
+
         const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
         _devices->pollEvents();
         const auto t1 = frameTiming ? Clock::now() : Clock::time_point{};
-        session.update(kDeltaSeconds);
+        session.update(editorDeltaSeconds);
         const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
         session.syncViewportIfChanged();
         const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};

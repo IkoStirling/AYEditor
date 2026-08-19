@@ -20,6 +20,7 @@
 #include <AYIO/Path.h>
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -52,7 +53,7 @@ TEST_CASE(extension_of_lowercases_and_strips_dot)
 
 TEST_CASE(is_supported_extension_matches_factory_table)
 {
-    // Mirror the table at AYResource/src/IAYConverter.cpp:30-47.
+    // Mirror AYResource::isImportSupportedExtension().
     CHECK_TRUE(Importer::isSupportedExtension("a.fbx"));
     CHECK_TRUE(Importer::isSupportedExtension("a.glb"));
     CHECK_TRUE(Importer::isSupportedExtension("a.gltf"));
@@ -60,7 +61,9 @@ TEST_CASE(is_supported_extension_matches_factory_table)
     CHECK_TRUE(Importer::isSupportedExtension("a.bmp"));
     CHECK_TRUE(Importer::isSupportedExtension("a.tga"));
     CHECK_TRUE(Importer::isSupportedExtension("a.dds"));
-    CHECK_FALSE(Importer::isSupportedExtension("a.jpg"));
+    CHECK_TRUE(Importer::isSupportedExtension("a.jpg"));
+    CHECK_TRUE(Importer::isSupportedExtension("a.jpeg"));
+    CHECK_TRUE(Importer::isSupportedExtension("a.wav"));
     CHECK_FALSE(Importer::isSupportedExtension("a.mp4"));
     CHECK_FALSE(Importer::isSupportedExtension("a"));
 }
@@ -85,8 +88,9 @@ TEST_CASE(import_unsupported_extension_returns_error_with_supported_list)
 {
     // Create a real on-disk file with an unsupported extension; the
     // extension check runs *after* the file-exists check.
-    const std::string path = "D:/tmp/ayeditor_test_unsupported.jpg";
-    writeStubFile(path, "fake jpeg bytes");
+    const std::string path = (std::filesystem::temp_directory_path()
+        / "ayeditor_test_unsupported.mp4").string();
+    CHECK_TRUE(writeStubFile(path, "fake video bytes"));
 
     Importer::Result r = Importer::importFile(path, "D:/tmp/cache");
     CHECK_FALSE(r.success);

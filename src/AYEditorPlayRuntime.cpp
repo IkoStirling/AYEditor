@@ -913,13 +913,14 @@ bool EditorPlayRuntime::ensurePresentationReady()
         installClientReplicationConnectHandler();
     }
 
-    if (!loop.isPlaySessionActive() && !loop.preparePlaySession()) {
-        std::fprintf(stderr, "[EditorPlayRuntime] preparePlaySession failed\n");
+    if (!loop.isPlaySessionActive() && !loop.prepareHostedSession()) {
+        std::fprintf(stderr, "[EditorPlayRuntime] prepareHostedSession failed\n");
         return false;
     }
 
-    // EditorApp drives presentation via renderCompositeFrame; suppress GameLoop auto-render.
-    loop.setRenderCallback([]() {});
+    // EditorApp drives presentation through renderCompositeFrame(), which
+    // combines the Game View packet with editor chrome in one bgfx frame.
+    loop.setPresentationOwnership(ayt::game::PresentationOwnership::ExternalHost);
 
     loop.pause();
     applyEditorRenderPipeline();
@@ -1675,7 +1676,7 @@ void EditorPlayRuntime::shutdownEngine()
     }
 
     if (_presentationReady) {
-        ayt::game::GameLoop::instance().endPlaySession();
+        ayt::game::GameLoop::instance().endHostedSession();
         _presentationReady = false;
         _pipelineConfigured = false;
     }

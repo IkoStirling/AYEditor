@@ -211,6 +211,21 @@ TEST_CASE(test_editor_session_play_mode_viewport_is_game_surface) {
     session.shutdown();
 }
 
+TEST_CASE(editor_game_view_rejects_play_when_host_bootstrap_fails)
+{
+    // A session without a native host window cannot initialize presentation.
+    // The transport transition must be transactional: failed bootstrap leaves
+    // the editor in Edit instead of presenting a false Play state.
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, ""));
+
+    CHECK_FALSE(session.gameView().trySetMode(EditorMode::Play));
+    CHECK(session.gameView().mode() == EditorMode::Edit);
+
+    session.shutdown();
+}
+
 // === PR-5 (v0.1.2 LM-2) =====================================================
 //
 // 设计依据（design v0.1.1 §7 LM-2）：

@@ -19,14 +19,19 @@ public:
     EditorGameView(ayt::game::IGameLoop& loop, EditorPlayRuntime& runtime);
 
     EditorMode mode() const { return _mode; }
+    // Compatibility command for existing toolbar/UI callers. It leaves the
+    // current mode unchanged if the runtime transition cannot be completed.
     void setMode(EditorMode mode);
+    // Transactional variant for hosts that need to surface a transition
+    // failure to the user.
+    [[nodiscard]] bool trySetMode(EditorMode mode);
     void stepOnce();
 
     using ModeChangedCallback = std::function<void(EditorMode)>;
     void setModeChangedCallback(ModeChangedCallback callback);
 
 private:
-    void applyMode(EditorMode mode);
+    [[nodiscard]] bool applyMode(EditorMode mode);
 
     ayt::game::IGameLoop& _loop;
     EditorPlayRuntime& _runtime;

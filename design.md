@@ -1,7 +1,7 @@
 # AYEditor Design
 
-**Version:** v0.3.0  
-**Date:** 2026-08-06  
+**Version:** v0.3.1
+**Date:** 2026-08-19
 **Status:** E2-composite + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX（v0.3 PR-4；Q-G 收口延续）
 
 > The editor is a **cross-module system**, not a single UI library.  
@@ -42,7 +42,8 @@ AYEditor is the **minimal editor product layer** on top of the runtime:
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│  EditorApp (AYApplication, BuildType::Editor)                     │
+│  EditorApp / EditorShellDemo (host frame loop)                    │
+│    poll input → EditorSession::update(real dt) → composite present │
 ├────────────────────────────────────────────────────────────────────┤
 │  EditorSession                                                      │
 │    ├─ EditorGameView (Mode: Edit | Play | Paused | Simulate)       │
@@ -50,12 +51,20 @@ AYEditor is the **minimal editor product layer** on top of the runtime:
 │    └─ ViewportRect → RendererSubSystem  ← 3D game view             │
 ├────────────────────────────────────────────────────────────────────┤
 │  GameLoop                                                           │
-│    Edit:     pause/stop — no World::update (or static preview only) │
-│    Play:     run() — same path as EngineIntegration_Demo           │
-│    Paused:   pause() — frozen sim, UI still live                    │
-│    Simulate: run logic, optional skip Present (later)               │
+│    PresentationOwnership::ExternalHost                              │
+│    Edit:     prepared + paused — no World::update                  │
+│    Play:     tickOnce() once per host frame                        │
+│    Paused:   pause() — frozen sim, UI still live                   │
+│    Simulate: host tick, optional skip Present (later)              │
 └────────────────────────────────────────────────────────────────────┘
 ```
+
+The editor is the outer host: it owns OS event polling, editor wall-clock
+delta, and the one composite/present call.  `GameLoop` remains the simulation
+clock and phase scheduler.  In hosted mode its Presentation phase builds the
+`RenderScene` packet, but the host consumes that packet together with editor UI
+through `RendererSubSystem::renderCompositeFrame`; `GameLoop` does not submit a
+second standalone render frame.
 
 ### 2.1 Mode matrix
 
@@ -63,23 +72,26 @@ Aligned with [AYExtension/design.md §3.2](../AYExtension/design.md). v0 impleme
 
 | Mode | GameLoop | Entity / World | Renderer (viewport) | AYUI chrome |
 |------|----------|----------------|---------------------|-------------|
-| **Edit** | `stop()` or idle tick | No `update()` | Clear / static scene optional | Always `update` + `render` |
-| **Play** | `run()` or per-frame tick | Normal `update()` | Full 3D + UI overlay | Always `render` |
+| **Edit** | prepared + `pause()`; no tick | No `update()` | Clear / static scene optional | Always `update` + `render` |
+| **Play** | `tickOnce()` once per host frame | Normal `update()` | Full 3D + UI overlay | Always `render` |
 | **Paused** | `pause()` | No `update()` | Last frame frozen | Always `render` |
-| **Simulate** | `run()` without swap | Normal `update()` | Skip Present (deferred) | Optional |
+| **Simulate** | host-driven tick without gameplay input (deferred) | Normal `update()` | Skip Present (deferred) | Optional |
 
-**Time domains:** Editor chrome uses **Unscaled** delta (see [AYGameLoop/design.md](../AYGameLoop/design.md)). Game simulation may use Scaled time inside GameLoop; UI must not slow down when `timeScale != 1`.
+**Time domains:** The host measures editor chrome delta with a monotonic wall
+clock and passes that unscaled value to `EditorSession`.  Game simulation keeps
+its own Scaled/Unscaled/RealWall domains inside `GameLoop`; editor UI must not
+slow down when `timeScale != 1`.
 
 ### 2.2 Frame order (target, U2+)
 
 ```
-1. Poll OS input
-2. EditorSession::update(dt)     // mode machine, toolbar handlers
-3. If Play|Simulate: GameLoop tick (Entity, …)
-4. RendererSubSystem::renderFrame
-     a. 3D into viewport sub-rect
-     b. UIManager::render full window (or chrome-only regions)
-5. Present
+1. Host polls OS input.
+2. Host measures monotonic `realDt` and calls `EditorSession::update(realDt)`.
+3. In Play, `EditorPlayRuntime::tick()` calls `GameLoop::tickOnce()` exactly once.
+4. GameLoop Presentation builds its `RenderScene` packet; it does not present.
+5. `RendererSubSystem::renderCompositeFrame` draws the 3D viewport and AYUI
+   chrome into the same bgfx frame.
+6. bgfx submits/presents that composite frame.
 ```
 
 v0 demo (E0) may use **UI-only window** with a gray `Image`/rect as viewport placeholder.
@@ -123,7 +135,8 @@ Migrating to target = change **bootstrap window handle source** and **UI backend
 **What is already “E2-ready” in engine code (reuse as-is):**
 
 - `RendererSubSystem::setBootstrapViewport` / `setViewportRect` / `resize`
-- `GameLoop::preparePlaySession`, `tickOnce`, `stepOnce`, `getElapsedTime()`
+- `GameLoop::prepareHostedSession`, `tickOnce`, `stepOnce`, `getElapsedTime()`
+- `GameLoop::setPresentationOwnership(PresentationOwnership::ExternalHost)`
 - Persistent shader cache under `ayeditor_cache/`
 - `EditorSession::isChromePoint` (chrome vs viewport hit routing)
 - Play/Stop keeps renderer alive (`enterEdit()` hides viewport; `shutdownEngine()` on session exit)

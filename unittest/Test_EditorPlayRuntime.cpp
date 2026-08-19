@@ -21,8 +21,11 @@
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
+#include <AYIO/File.h>
 
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 
 using namespace ayt::editor;
@@ -44,6 +47,36 @@ struct ImportedCharacterOK {
 ImportedCharacter makeEmpty() {
     return ImportedCharacter{};  // all-empty paths
 }
+
+// The override bridge only validates that the selected asset paths exist; it
+// does not load the files synchronously. Keep those assets local to the test
+// process instead of depending on generated AYResource/test_output folders.
+struct OverrideAssetFixture {
+    const std::string skeletonPath = (std::filesystem::temp_directory_path()
+        / "ayeditor_override_skeleton.ayskel").string();
+    const std::string animationPath = (std::filesystem::temp_directory_path()
+        / "ayeditor_override_animation.ayanm").string();
+
+    ~OverrideAssetFixture() {
+        ayt::io::File::remove(skeletonPath);
+        ayt::io::File::remove(animationPath);
+    }
+
+    bool create() const {
+        return write(skeletonPath, "test skeleton")
+            && write(animationPath, "test animation");
+    }
+
+private:
+    static bool write(const std::string& path, const char* bytes) {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        if (!file) {
+            return false;
+        }
+        file.write(bytes, static_cast<std::streamsize>(std::strlen(bytes)));
+        return file.good();
+    }
+};
 
 } // namespace
 
@@ -226,13 +259,12 @@ TEST_CASE(clear_cube_is_safe_when_no_cube_spawned)
 
 // ED-03: applying overrides to a live spawned entity must
 // mutate SkeletonComponent::skeletonPath and AnimationComponent
-// ::clipPath in place. We stub the file-existence check by
-// using real fixtures that ship in AYResource/test_output
-// (no I/O happens in ImportedCharacterOK::make() so we don't
-// rely on those paths; the override validation reads them
-// directly).
+// ::clipPath in place. The test creates the tiny files required by the
+// validation branch; their contents are intentionally irrelevant here.
 TEST_CASE(inspector_overrides_apply_to_spawned_entity_components)
 {
+    OverrideAssetFixture fixture;
+    CHECK_TRUE(fixture.create());
     World::instance().initialize();
 
     EditorPlayRuntime rt;
@@ -241,10 +273,8 @@ TEST_CASE(inspector_overrides_apply_to_spawned_entity_components)
     CHECK_NOT_NULL(e);
 
     EntityInspectorOverrides ov;
-    ov.skeletonPathOverride =
-        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
-    ov.animationPathOverride =
-        "D:/Projects/AYRuntime/AYResource/test_output_animconv/animations/hero_run.ayanm";
+    ov.skeletonPathOverride = fixture.skeletonPath;
+    ov.animationPathOverride = fixture.animationPath;
     rt.applyComponentOverrides(ov);
 
     auto* skelComp = e->getComponent<SkeletonComponent>();
@@ -266,6 +296,8 @@ TEST_CASE(inspector_overrides_apply_to_spawned_entity_components)
 // assignment in EditorSession for Play mode respawn."
 TEST_CASE(inspector_overrides_persist_across_replace)
 {
+    OverrideAssetFixture fixture;
+    CHECK_TRUE(fixture.create());
     World::instance().initialize();
 
     EditorPlayRuntime rt;
@@ -273,10 +305,8 @@ TEST_CASE(inspector_overrides_persist_across_replace)
     CHECK_TRUE(rt.selectedCharacterEntity() != nullptr);
 
     EntityInspectorOverrides ov;
-    ov.skeletonPathOverride =
-        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
-    ov.animationPathOverride =
-        "D:/Projects/AYRuntime/AYResource/test_output_animconv/animations/hero_run.ayanm";
+    ov.skeletonPathOverride = fixture.skeletonPath;
+    ov.animationPathOverride = fixture.animationPath;
     rt.applyComponentOverrides(ov);
 
     // Hot-swap to another full character (same fixture - the
@@ -331,8 +361,7 @@ TEST_CASE(inspector_overrides_reset_clears_pending)
 {
     EditorPlayRuntime rt;
     EntityInspectorOverrides ov;
-    ov.skeletonPathOverride =
-        "D:/Projects/AYRuntime/AYResource/test_output/skeletons/Sour_Skeleton.ayskel";
+    ov.skeletonPathOverride = "test-skeleton.ayskel";
     rt.applyComponentOverrides(ov);
     CHECK_FALSE(rt.pendingOverrides().isCleared());
 
