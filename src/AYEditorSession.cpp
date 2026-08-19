@@ -154,6 +154,8 @@ std::string showUiJsonSaveDialog(HWND owner) {
 
 EditorSession::EditorSession()
     : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
+    _worldContext.setFallbackWorld(&ayt::entity::World::instance());
+    _playRuntime.setWorldContext(&_worldContext);
 }
 
 EditorSession::~EditorSession() {
@@ -172,6 +174,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
         desc.netClientMode ? NetPlayRole::Client : NetPlayRole::Server);
     _playRuntime.setNetConnectHost(desc.netConnectHost);
     _netClientAutoPlay = desc.netClientMode;
+    auto* host = ayt::app::currentEngineHost();
+    _worldContext.setSceneManager(host != nullptr ? host->scenes() : nullptr);
     // Pre-existing _CrtCheckMemory() failure on session_after_set_host
     // in Debug builds. Commented to keep the build runnable; the four
     // checks later in initialize() remain enabled as debug invariants.
@@ -228,15 +232,13 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // 决策 3a: EditorMode 3 态 vs SceneMode 2 态；本处只 setCurrent 让 Edit
     //         mode 有 Scene 关联；applyMode 仍走 EditorPlayRuntime 私有通路
     // 决策 4a: 不接 hook 拦 beginPlay；UX 弹窗由 caller 决定
-    if (auto* host = ayt::app::currentEngineHost()) {
-        if (auto* sm = host->scenes()) {
-            _editScene = std::make_unique<ayt::scene::Scene>(
-                ayt::scene::SceneMode::Edit, "<editor_default>");
-            sm->setEdit(_editScene.get());
-            sm->setCurrent(_editScene.get());
-            AY_EDITOR_TRACE("initialize: edit scene injected (%s)",
-                            _editScene->name().c_str());
-        }
+    if (auto* sm = _worldContext.sceneManager()) {
+        _editScene = std::make_unique<ayt::scene::Scene>(
+            ayt::scene::SceneMode::Edit, "<editor_default>");
+        sm->setEdit(_editScene.get());
+        sm->setCurrent(_editScene.get());
+        AY_EDITOR_TRACE("initialize: edit scene injected (%s)",
+                        _editScene->name().c_str());
     }
 
     // v0.3+ PR-5 — 首刷 Hierarchy（_editScene 注入后才有 scene name）。
@@ -315,15 +317,14 @@ void EditorSession::shutdown() {
     // v0.3 PR-4 — shutdown reverse setEdit/setCurrent + reset _editScene
     // 顺序：先反注册 scene → 再 reset（EditorSession 析构时 unique_ptr 还会
     // 再 reset 一次；提前 reset 避免 SM 还指向 dangling Scene）
-    if (auto* host = ayt::app::currentEngineHost()) {
-        if (auto* sm = host->scenes()) {
-            if (_editScene) {
-                sm->setCurrent(nullptr);
-                sm->setEdit(nullptr);
-            }
+    if (auto* sm = _worldContext.sceneManager()) {
+        if (_editScene) {
+            sm->setCurrent(nullptr);
+            sm->setEdit(nullptr);
         }
     }
     _editScene.reset();
+    _worldContext.setSceneManager(nullptr);
 }
 
 void EditorSession::setClientSize(float width, float height) {
@@ -800,9 +801,7 @@ void EditorSession::bindTransportBar() {
     // 决策 4a: Save/Discard/Cancel 三选项 Win32 MessageBoxW
     // 决策 5a: lbl_unsaved period refresh（mode changed 时同步）
     bindButton("btn_play", [this]() {
-        auto* host = ayt::app::currentEngineHost();
-        if (!host) return;
-        auto* sm = host->scenes();
+        auto* sm = _worldContext.sceneManager();
         if (!sm || !sm->canBeginPlay()) return;
 
         // Save/Discard/Cancel prompt (PR-3 requireSaveBeforePlay 意图 getter)
@@ -864,15 +863,8 @@ void EditorSession::refreshUnsavedIndicator() {
     auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget);
     if (label == nullptr) return;
 
-    auto* host = ayt::app::currentEngineHost();
-    bool dirty = false;
-    if (host) {
-        if (auto* sm = host->scenes()) {
-            if (sm->isEditDirty()) {
-                dirty = true;
-            }
-        }
-    }
+    auto* sm = _worldContext.sceneManager();
+    const bool dirty = sm != nullptr && sm->isEditDirty();
     label->setText(dirty ? L"•" : L"");
     label->setVisible(dirty);
 }
@@ -880,40 +872,19 @@ void EditorSession::refreshUnsavedIndicator() {
 // =============================================================================
 // v0.3+ PR-5 — Hierarchy / Outliner (design §4.3.y)
 // =============================================================================
-namespace {
-
-// 决策 1b（mode-keyed World 源）：
-//   Edit        → host->scenes()->edit()->world()（canonical；v1 永远空，
-//                 因为没有任何路径往 Edit World 建 entity ——
-//                 见 AYScene.cpp:44 私有 World 实例 vs
-//                 AYEditorPlayRuntime.cpp:454/1224/1632 singleton spawn）
-//   Play/Paused → World::instance()（EditorPlayRuntime 实际 spawn 目标）
-// 返回 const 引用以物理性保证 INV-4（不可能从这里 mutate Scene）。
-const ayt::entity::World* resolveHierarchyWorld(EditorMode mode)
+const ayt::entity::World* EditorSession::hierarchyWorld() const noexcept
 {
-    if (mode == EditorMode::Edit) {
-        auto* host = ayt::app::currentEngineHost();
-        if (host == nullptr) return nullptr;
-        auto* sm = host->scenes();
-        if (sm == nullptr) return nullptr;
-        auto* edit = sm->edit();
-        if (edit == nullptr) return nullptr;
-        return &edit->world();
-    }
-    if (!ayt::entity::World::instance().isInitialized()) {
-        return nullptr;
-    }
-    return &ayt::entity::World::instance();
+    const EditorWorldSlot slot = _gameView.mode() == EditorMode::Edit
+        ? EditorWorldSlot::Edit
+        : EditorWorldSlot::Play;
+    auto* world = _worldContext.world(slot, true);
+    return world != nullptr && world->isInitialized() ? world : nullptr;
 }
 
-// 非 const 版：selection 解析需要 findEntity（AYEntity/World.h:42 非 const）。
-ayt::entity::World* resolveHierarchyWorldMutable(EditorMode mode)
+ayt::entity::World* EditorSession::hierarchyWorldMutable() noexcept
 {
-    return const_cast<ayt::entity::World*>(
-        resolveHierarchyWorld(mode));
+    return const_cast<ayt::entity::World*>(hierarchyWorld());
 }
-
-} // namespace
 
 void EditorSession::bindOutlinerPanel()
 {
@@ -950,8 +921,7 @@ void EditorSession::refreshOutliner()
 
     _outlinerEntityIds.clear();
 
-    const ayt::entity::World* world =
-        resolveHierarchyWorld(_gameView.mode());
+    const ayt::entity::World* world = hierarchyWorld();
     if (world == nullptr) {
         _outliner->clearTree();
         _outlinerSelectedEntityId = 0;
@@ -959,15 +929,15 @@ void EditorSession::refreshOutliner()
         return;
     }
 
-    // 合成 root 节点 label：scene name（host->scenes()->current()）。
-    std::string rootLabel = "<no scene>";
-    if (auto* host = ayt::app::currentEngineHost()) {
-        if (auto* sm = host->scenes()) {
-            if (auto* cur = sm->current()) {
-                rootLabel = cur->name().empty() ? "<unnamed>"
-                                                : cur->name();
-            }
-        }
+    const EditorWorldSlot slot = _gameView.mode() == EditorMode::Edit
+        ? EditorWorldSlot::Edit
+        : EditorWorldSlot::Play;
+    std::string rootLabel = slot == EditorWorldSlot::Play
+        ? "<runtime fallback>"
+        : "<no scene>";
+    if (auto* activeScene = _worldContext.scene(slot)) {
+        rootLabel = activeScene->name().empty() ? "<unnamed>"
+                                                : activeScene->name();
     }
     if (_gameView.mode() != EditorMode::Edit) {
         rootLabel += "  (Play World)";
@@ -1916,7 +1886,7 @@ void EditorSession::refreshInspectorLabels()
     // v0.3+ PR-5 — Hierarchy 选择优先于 PR-4 的 character/cube 二选一。
     // 存 id 不存指针 → 每次重解析，实体没了自动降级（Landmine F）。
     if (_outlinerSelectedEntityId != 0) {
-        if (auto* w = resolveHierarchyWorldMutable(_gameView.mode())) {
+        if (auto* w = hierarchyWorldMutable()) {
             if (ayt::entity::Entity* sel =
                     w->findEntity(_outlinerSelectedEntityId)) {
                 const char* nm = sel->getName();

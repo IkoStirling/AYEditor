@@ -23,6 +23,7 @@
 #include <AYEntity/components/TransformComponent.h>
 
 #include "AYEditor/EditorPlayerController.h"  // INT-01 sample script host
+#include "AYEditor/EditorWorldContext.h"
 
 #include "AYResource/assetsImpl/Material.h"
 #include "AYResource/assetsImpl/Mesh.h"
@@ -1308,21 +1309,39 @@ void releaseOwnedEntity(ayt::entity::Entity*& ptr,
 
 } // namespace
 
+ayt::scene::SceneManager* EditorPlayRuntime::resolveSceneManager() const noexcept
+{
+    if (_worldContext != nullptr && _worldContext->sceneManager() != nullptr) {
+        return _worldContext->sceneManager();
+    }
+
+    // Compatibility path for tests and embedders that construct the runtime
+    // directly instead of receiving EditorSession's explicit context.
+    auto* host = ayt::app::currentEngineHost();
+    return host != nullptr ? host->scenes() : nullptr;
+}
+
 ayt::entity::World* EditorPlayRuntime::resolvePlayWorld() noexcept
 {
-    // v0.4 PR-1 (design §6, G4): 单一 helper 解析 Play World 源。
-    // 优先 host->scenes()->play()->world()（beginPlay 后的 Play Scene World）；
-    // fallback 到 World::instance()（SM 不可达 / beginPlay 未调 / net-client）。
-    //
-    // net-client 路径不调 beginPlay（G9 + 决策 4a），直接走 singleton —
-    // 避免 log 噪音（LM-X2）。Server/未指定角色走 SM 路径。
-    if (_netPlayRole != NetPlayRole::Client) {
-        auto* host = ayt::app::currentEngineHost();
-        auto* sm = (host != nullptr) ? host->scenes() : nullptr;
-        if (sm != nullptr) {
-            if (auto* play = sm->play()) {
-                return &play->world();
+    const bool preferSceneWorld = _netPlayRole != NetPlayRole::Client;
+    if (_worldContext != nullptr) {
+        if (auto* world = _worldContext->world(
+                EditorWorldSlot::Play, preferSceneWorld)) {
+            if (preferSceneWorld
+                && _worldContext->scene(EditorWorldSlot::Play) == nullptr) {
+                std::fprintf(stderr,
+                    "[EditorPlayRuntime] resolvePlayWorld: Play Scene "
+                    "unavailable, using configured fallback World\n");
             }
+            return world;
+        }
+    }
+
+    // Legacy direct-runtime path: retain host lookup when no context was
+    // injected so existing standalone unit tests and embedders keep working.
+    if (preferSceneWorld) {
+        if (auto* sm = resolveSceneManager()) {
+            if (auto* play = sm->play()) return &play->world();
         }
         std::fprintf(stderr,
             "[EditorPlayRuntime] resolvePlayWorld: SM/play unavailable, "
@@ -1552,12 +1571,11 @@ bool EditorPlayRuntime::startPlay()
     //   net-client 路径跳过（client 不持久化；决策 4a + G9）：
     //   client 只 consume 服务端 EntitySpawn，本地不写 tmp 克隆。
     if (_netPlayRole != NetPlayRole::Client) {
-        auto* host = ayt::app::currentEngineHost();
-        auto* sm = (host != nullptr) ? host->scenes() : nullptr;
+        auto* sm = resolveSceneManager();
         if (sm == nullptr || !sm->canBeginPlay()) {
             std::fprintf(stderr,
                 "[EditorPlayRuntime] startPlay: no SceneManager or cannot "
-                "begin play (host=%p sm=%p)\n", (void*)host, (void*)sm);
+                "begin play (sm=%p)\n", (void*)sm);
             return false;
         }
         if (!sm->beginPlay()) {
@@ -1628,26 +1646,26 @@ void EditorPlayRuntime::enterEdit()
     //   shutdownEngine 三处都走此函数；SM 内部 _play==nullptr 时 no-op，
     //   AYScene/SceneManager.h:99-103)。清 tmp 克隆 + 销毁 _play Scene →
     //   Scene 析构 → World 析构 → 无残留 (INV-3)。
-    auto* host = ayt::app::currentEngineHost();
-    auto* sm = (host != nullptr) ? host->scenes() : nullptr;
-    if (sm != nullptr) {
-        sm->endPlay();
-    }
-
     ayt::game::GameLoop::instance().pause();
     stopEditorNetworkListenServer();
     if (_netPlayRole == NetPlayRole::Client) {
         clearClientReplicatedEntities();
         clearGround();
         _simulationActive = false;
+        if (auto* sm = resolveSceneManager()) sm->endPlay();
         return;
     }
+
+    // Runtime-owned pointers still belong to the Play Scene World here.
+    // Release them before endPlay destroys that world; resolving after
+    // endPlay would select the fallback World and leave dangling pointers.
     clearCharacter();
     clearCube();
     clearGround();
     clearGlass();
     clearPlayerController();
     _simulationActive = false;
+    if (auto* sm = resolveSceneManager()) sm->endPlay();
 }
 
 void EditorPlayRuntime::shutdownEngine()

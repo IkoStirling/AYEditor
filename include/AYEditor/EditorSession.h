@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorGameView.h"
 #include "AYEditor/EditorPlayRuntime.h"
+#include "AYEditor/EditorWorldContext.h"
 #include "AYEditor/EditorFreecam.h"
 #include "AYEditor/ImportedCharacterMapper.h"
 #include "AYEditor/ImportDialog.h"
@@ -124,6 +125,8 @@ public:
     // 调 startPlay/enterEdit/setNetPlayRole 等；不暴露给非测试 caller）。
     EditorPlayRuntime& playRuntime() { return _playRuntime; }
     const EditorPlayRuntime& playRuntime() const { return _playRuntime; }
+    EditorWorldContext& worldContext() { return _worldContext; }
+    const EditorWorldContext& worldContext() const { return _worldContext; }
     ayt::ui::UIManager& ui() { return _ui; }
     const ayt::ui::UIManager& ui() const { return _ui; }
 
@@ -225,12 +228,9 @@ private:
     //   绝不 mutate Scene（Scene::_dirty 唯一写者是 clear/load/save，
     //   见 AYScene.h:118 注释）。
     // 决策 1b（mode-keyed World 源）：
-    //   Edit        → host->scenes()->edit()->world()（v1 永远空，
-    //                 因为没有任何路径往 Edit World 建 entity ——
-    //                 见 AYScene.cpp:44 私有 World 实例 vs
-    //                 AYEditorPlayRuntime.cpp:454/1224/1632 singleton spawn）
-    //   Play/Paused → ayt::entity::World::instance()（EditorPlayRuntime
-    //                 实际 spawn 目标）
+    //   Edit        → EditorWorldContext Edit slot（无 fallback）
+    //   Play/Paused → EditorWorldContext Play slot；Scene World 优先，
+    //                 net-client / standalone 才使用显式 fallback World。
     // onOutlinerSelectionChanged: 行点击 → Inspector。flatIndex 0 = 合成
     //   scene root（不可选）；>0 映射 _outlinerEntityIds[flatIndex - 1]。
     //   **Landmine B**：**不得**在此同步调 refreshOutliner()/_ui.layout()，
@@ -239,6 +239,8 @@ private:
     //   随后 deref 已释放的 _hoverWidget → UAF。改置 _outlinerRefreshPending。
     void bindOutlinerPanel();
     void refreshOutliner();
+    const ayt::entity::World* hierarchyWorld() const noexcept;
+    ayt::entity::World* hierarchyWorldMutable() noexcept;
     void onOutlinerSelectionChanged(int flatIndex);
     void syncViewport();
     bool isChromePoint(float x, float y) const;
@@ -249,6 +251,8 @@ private:
     void clearSplitterHovers();
     void syncSplitterRevealToMouse();
 
+    // Declared before the runtime because EditorPlayRuntime borrows it.
+    EditorWorldContext _worldContext;
     EditorPlayRuntime _playRuntime;
     EditorGameView _gameView;
     ayt::ui::UIManager _ui;

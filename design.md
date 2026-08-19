@@ -383,7 +383,7 @@ PR-4 ship 了 `_editScene` ownership + transport bar UX；PR-5 ship 了 Hierarch
 | **G4** | entity spawn 走 `World::instance()` | 新增 `resolvePlayWorld()` helper：Server → `sm->play()->world()`；Client / fallback → `World::instance()` |
 | **G5** | `_runtime.enterEdit` 不调 `sm->endPlay()` | F3.b 头部兜底（与 shutdownEngine 自动覆盖） |
 | **G6** | `_gameView.stepOnce()` 不走 SM | defer v0.4 PR-2（D1） |
-| **G7** | `refreshOutliner` Play mode 仍走 `World::instance()` | defer v0.4 PR-2（D2） |
+| **G7** | `refreshOutliner` Play mode 仍走 `World::instance()` | `EditorWorldContext` Play slot：Scene World 优先、显式 fallback |
 | **G8** | mode label 反映 `EditorMode` 而非 `SceneMode` | defer v0.4 PR-2/3（D3） |
 | **G9** | `--net-client` 走 `autoEnterNetClientPlay` | 同 G1：`sm->beginPlay()` Client 短路 |
 
@@ -393,7 +393,7 @@ PR-4 ship 了 `_editScene` ownership + transport bar UX；PR-5 ship 了 Hierarch
 |----|------|------|
 | **LM-X1** | beginPlay save 失败静默吞错 | startPlay 头部 fprintf stderr + return false；btn_play UX 不动 |
 | **LM-X2** | net-client 路径 fallback 噪音 stderr | helper 优先判 `_netPlayRole == Client` → 直接返 `World::instance()` 静默 |
-| **LM-X3** | endPlay 后 entity 裸指针 dangle | `releaseOwnedEntity(ptr, world&)` 走 resolvePlayWorld；endPlay 后 `sm->play()` 返 nullptr → fallback `World::instance().isInitialized()` 检查 + 置 nullptr |
+| **LM-X3** | endPlay 后 entity 裸指针 dangle | runtime-owned entity 先在 Play World 内释放，再调用 `endPlay()` 销毁 Scene World |
 | **LM-X4** | Tick 路径未切 SM::tick → Play Scene 无独立 tick 入口 | §6 明确"PR-1 不切"；system tick = GameLoop::TickSystems() 遍历 World::instance() 系统注册器 |
 | **LM-X5** | Test runner double-include LNK2005 | main.cpp `#include` only；不进 add_executable（PR-4/5 同 landmine） |
 
@@ -410,12 +410,29 @@ PR-4 ship 了 `_editScene` ownership + transport bar UX；PR-5 ship 了 Hierarch
 **不在 PR-1 范围**（明确 defer）：
 
 - D1: G6 `_gameView.stepOnce()` 不走 SM（v0.4 PR-2）
-- D2: G7 `refreshOutliner()` Play 模式切 `sm->play()->world()`（v0.4 PR-2）
+- D2: G7 已由 `EditorWorldContext` Play slot 收口。
 - D3: G8 mode label 改用 `SceneMode`（v0.4 PR-2/3）
 - D4: G9 net-client 路径显式 beginPlay（v0.5）
-- D5: LM-X3 端到端清理顺序重构（v0.4 PR-2）
+- D5: LM-X3 已收口：清 runtime entity 在前，`endPlay()` 在后。
 
 **AYScene 0 改动**：v0.3 PR-3 已 ship 完整公共契约；本 PR 仅消费 `sm->beginPlay()` / `sm->endPlay()` / `sm->play()` / `sm->canBeginPlay()` / `sm->edit()` / `sm->isEditDirty()` / `sm->currentMode()`。
+
+### 4.3.world Explicit editor world context
+
+`EditorWorldContext` is the non-owning resolution boundary shared by
+`EditorSession`, hierarchy/inspector tools, and `EditorPlayRuntime`:
+
+- Edit resolves only `SceneManager::edit()->world()` and never falls back.
+- Server Play prefers `SceneManager::play()->world()`.
+- Network-client and standalone runtime paths use an explicitly configured
+  process-world fallback.
+- `EditorSession` owns the context and binds the host `SceneManager`; neither
+  the context nor editor tools own a Scene or World.
+- Runtime entities are released while the Play Scene World is still alive,
+  before `SceneManager::endPlay()` destroys it.
+
+This boundary removes per-panel global world lookup and is the injection point
+for future preview worlds and multiple editor viewports.
 
 ---
 

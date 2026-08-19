@@ -25,7 +25,11 @@ namespace ayt::game {
 struct HostedFrameContext;
 }
 
+namespace ayt::scene { class SceneManager; }
+
 namespace ayt::editor {
+
+class EditorWorldContext;
 
 // When set (via setImportedCharacter), the Play mode spawns the
 // imported character instead of the procedural cube.
@@ -66,6 +70,9 @@ public:
     void setHostWindow(HWND hostWindow);
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
+    void setWorldContext(EditorWorldContext* context) noexcept {
+        _worldContext = context;
+    }
     void setNetPlayRole(NetPlayRole role) { _netPlayRole = role; }
     NetPlayRole netPlayRole() const { return _netPlayRole; }
     void setNetConnectHost(std::string host) { _netConnectHost = std::move(host); }
@@ -161,10 +168,10 @@ private:
     void registerUpdateListener();
     void unregisterUpdateListener();
     static void configureShaderToolchainOnce();
-    // v0.4 PR-1 (design §6, G4): 单一 helper 解析 Play World 源。
-    // 优先 host->scenes()->play()->world()（beginPlay 后的 Play Scene World）；
-    // fallback 到 World::instance()（SM 不可达 / beginPlay 未调 / net-client）。
-    // 是 cpp-local 实现；private 因需访问 _netPlayRole 字段。
+    ayt::scene::SceneManager* resolveSceneManager() const noexcept;
+    // Single Play-World resolver. The injected EditorWorldContext is the
+    // primary source; direct-runtime construction retains the legacy host /
+    // process-world compatibility path.
     ayt::entity::World* resolvePlayWorld() noexcept;
 
     // INT-01 (2026-07-15): Logia end-to-end smoke — spawn a fresh
@@ -192,6 +199,7 @@ private:
     ayt::entity::Entity* spawnVisualCubeEntity(uint32_t netId);
 
     HWND _hostWindow = nullptr;
+    EditorWorldContext* _worldContext = nullptr;
     uint32_t _clientWidth = 1280;
     uint32_t _clientHeight = 720;
     ayt::math::FRectangle _viewportBounds{};

@@ -147,7 +147,7 @@ TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
     CHECK(session.initialize(&backend, layoutPath));
     session.setClientSize(1280.0f, 720.0f);
 
-    // Play → Hierarchy 源切到 World::instance()（EditorPlayRuntime spawn 目标）
+    // Play → Hierarchy 源切到 EditorWorldContext Play slot。
     session.gameView().setMode(EditorMode::Play);
     session.update(0.016f);   // 消费 _outlinerRefreshPending
 
@@ -208,8 +208,8 @@ TEST_CASE(editor_hierarchy_refresh_on_mode_change)
     CHECK(editHint.find(L"(Play World)") == std::wstring::npos);
     CHECK(editHint.rfind(L"Scene: ", 0) == 0);
 
-    // Play → source = World::instance()。MockRenderer 下 instance 未
-    // init → null → hint 切到 "Scene: -"。这个**变化**就是 rebuild
+    // Play → source = Play Scene，缺失时回退显式 process World。
+    // MockRenderer 下 fallback 未 init → hint 切到 "Scene: -"。这个变化就是 rebuild
     // 已消费的证据（vs 没消费时 hint 仍是 editHint）。
     session.gameView().setMode(EditorMode::Play);
     session.update(0.016f);                      // 消费 _outlinerRefreshPending

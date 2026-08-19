@@ -11,6 +11,7 @@ set(AY_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader")
 include("${AY_SHADER_ROOT}/cmake/AYBgfx.cmake")
 
 set(SRC_FILES
+    src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
     src/AYEditorGameView.cpp
     src/AYEditorPlayRuntime.cpp
@@ -35,6 +36,7 @@ set(SRC_FILES
 
 set(HEAD_FILES
     AYEditor.h
+    include/AYEditor/EditorWorldContext.h
     include/AYEditor/EditorSession.h
     include/AYEditor/EditorGameView.h
     include/AYEditor/EditorPlayRuntime.h

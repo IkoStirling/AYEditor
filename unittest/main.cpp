@@ -4,6 +4,7 @@
 #include "Test_EditorShell.cpp"
 #include "Test_EditorImporter.cpp"
 #include "Test_EditorPlayRuntime.cpp"
+#include "Test_EditorWorldContext.cpp"
 // D5+.5 (2026-07-26): D5 + ImportedMapper compile as their own TU
 // (CMakeLists); kept #include would duplicate symbols.
 //
