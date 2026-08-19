@@ -53,7 +53,7 @@ AYEditor is the **minimal editor product layer** on top of the runtime:
 │  GameLoop                                                           │
 │    PresentationOwnership::ExternalHost                              │
 │    Edit:     prepared + paused — no World::update                  │
-│    Play:     tickOnce() once per host frame                        │
+│    Play:     tickHostedFrame(host frame) once per host frame       │
 │    Paused:   pause() — frozen sim, UI still live                   │
 │    Simulate: host tick, optional skip Present (later)              │
 └────────────────────────────────────────────────────────────────────┘
@@ -65,6 +65,16 @@ clock and phase scheduler.  In hosted mode its Presentation phase builds the
 `RenderScene` packet, but the host consumes that packet together with editor UI
 through `RendererSubSystem::renderCompositeFrame`; `GameLoop` does not submit a
 second standalone render frame.
+
+Each outer iteration constructs one `HostedFrameContext` *after*
+`DeviceManager::pollEvents() and passes it through `EditorSession` to
+`GameLoop::tickHostedFrame()`.  Its delta is the only time sample used by the
+Play simulation for that host frame; `hostFrameIndex` and `inputFrameIndex`
+are copied into every subsystem `FrameContext`.  The indices establish the
+input-snapshot boundary without coupling AYGameLoop to AYDevice.  The current
+`DeviceInputProvider` remains a named-query adapter over that stable,
+already-polled device state; a future copied/action-mapped input snapshot can
+replace it without changing the GameLoop boundary.
 
 ### 2.1 Mode matrix
 

@@ -561,7 +561,13 @@ void EditorApp::run()
         const auto t0 = frameTiming ? Clock::now() : Clock::time_point{};
         _devices->pollEvents();
         const auto t1 = frameTiming ? Clock::now() : Clock::time_point{};
-        session.update(editorDeltaSeconds);
+        ayt::game::HostedFrameContext hostFrame;
+        hostFrame.realWallDeltaTime = editorDeltaSeconds;
+        hostFrame.hostFrameIndex = frameIndex + 1;
+        // DeviceManager::pollEvents() completed immediately above; this
+        // identifies the stable device state observed by Play subsystems.
+        hostFrame.inputFrameIndex = hostFrame.hostFrameIndex;
+        session.update(hostFrame);
         const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
         session.syncViewportIfChanged();
         const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};

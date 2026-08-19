@@ -335,6 +335,13 @@ void EditorSession::setClientSize(float width, float height) {
 }
 
 void EditorSession::update(float dt) {
+    ayt::game::HostedFrameContext hostFrame;
+    hostFrame.realWallDeltaTime = dt;
+    update(hostFrame);
+}
+
+void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
+    const float dt = hostFrame.realWallDeltaTime;
     syncLayoutEditorLifetime();
     if (_layoutEditor != nullptr) {
         _layoutEditor->pumpDeferred();
@@ -379,7 +386,7 @@ void EditorSession::update(float dt) {
         // Play Scene World 由 startPlay 头部 beginPlay 创建；system tick
         // = GameLoop::TickSystems() 遍历 World::instance() 系统注册器
         // (v0.4 PR-1 不动)。
-        _playRuntime.tick();
+        _playRuntime.tick(hostFrame);
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
     }

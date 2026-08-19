@@ -1690,6 +1690,14 @@ void EditorPlayRuntime::tick() {
     ayt::game::GameLoop::instance().tickOnce();
 }
 
+void EditorPlayRuntime::tick(const ayt::game::HostedFrameContext& hostFrame) {
+    if (!_simulationActive) {
+        return;
+    }
+
+    ayt::game::GameLoop::instance().tickHostedFrame(hostFrame);
+}
+
 // INT-01 (2026-07-15): PlayerController ScriptComponent spawn +
 // <assetRoot>/Scripts/PlayerController.logia binding. Mirrors
 // spawnCubeIfNeeded()/clearCube()'s idempotency contract.

@@ -82,6 +82,10 @@ public:
     void shutdown();
 
     void setClientSize(float width, float height);
+    // Preferred host-facing update path. The input boundary must have been
+    // polled before this call; GameLoop receives the same context in Play.
+    void update(const ayt::game::HostedFrameContext& hostFrame);
+    // Compatibility adapter for callers that only have a delta time.
     void update(float dt);
     void syncViewportIfChanged();
     void render();

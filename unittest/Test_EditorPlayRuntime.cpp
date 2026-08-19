@@ -205,12 +205,16 @@ TEST_CASE(replace_imported_character_respawns_after_previous)
     rt.replaceImportedCharacter(ImportedCharacterOK::make());
     Entity* first = rt.selectedCharacterEntity();
     CHECK_NOT_NULL(first);
+    const uint32_t firstId = first != nullptr ? first->getId() : 0;
 
     // Second import with the same paths: replaces the first.
     rt.replaceImportedCharacter(ImportedCharacterOK::make());
     Entity* second = rt.selectedCharacterEntity();
     CHECK_NOT_NULL(second);
-    CHECK_TRUE(second != first);  // distinct entity instance
+    // `first` was destroyed by the replacement, so its address can be
+    // legitimately reused by the entity allocator. Identity, not pointer
+    // allocation address, is the observable replacement contract.
+    CHECK_TRUE(second != nullptr && second->getId() != firstId);
 
     rt.clearCharacter();
     rt.clearCube();

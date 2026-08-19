@@ -21,6 +21,10 @@ namespace ayt::net {
 class NetConnection;
 }
 
+namespace ayt::game {
+struct HostedFrameContext;
+}
+
 namespace ayt::editor {
 
 // When set (via setImportedCharacter), the Play mode spawns the
@@ -98,6 +102,10 @@ public:
     bool startPlay();
     void enterEdit();
     void shutdownEngine();
+    // Called by EditorSession once the host has polled its input for this
+    // frame. The context is forwarded unchanged to GameLoop.
+    void tick(const ayt::game::HostedFrameContext& hostFrame);
+    // Legacy convenience path for callers without an external host frame.
     void tick();
 
     bool isPresentationReady() const { return _presentationReady; }
