@@ -419,6 +419,10 @@ void EditorApp::run()
             materialPolicy.maskIndices = _maskMaterialIndices;
             materialPolicy.blendIndices = _blendMaterialIndices;
             materialPolicy.doubleSidedIndices = _doubleSidedMaterialIndices;
+            materialPolicy.opaqueNames = _opaqueMaterialNames;
+            materialPolicy.maskNames = _maskMaterialNames;
+            materialPolicy.blendNames = _blendMaterialNames;
+            materialPolicy.doubleSidedNames = _doubleSidedMaterialNames;
             Importer::Result result =
                 Importer::importFile(importPath, assetRoot, materialPolicy);
             if (!result.success) {

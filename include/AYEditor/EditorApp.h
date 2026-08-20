@@ -36,12 +36,20 @@ public:
                                   std::string opaqueIndices,
                                   std::string maskIndices,
                                   std::string blendIndices,
-                                  std::string doubleSidedIndices) {
+                                  std::string doubleSidedIndices,
+                                  std::string opaqueNames,
+                                  std::string maskNames,
+                                  std::string blendNames,
+                                  std::string doubleSidedNames) {
         _materialPolicyTag = std::move(tag);
         _opaqueMaterialIndices = std::move(opaqueIndices);
         _maskMaterialIndices = std::move(maskIndices);
         _blendMaterialIndices = std::move(blendIndices);
         _doubleSidedMaterialIndices = std::move(doubleSidedIndices);
+        _opaqueMaterialNames = std::move(opaqueNames);
+        _maskMaterialNames = std::move(maskNames);
+        _blendMaterialNames = std::move(blendNames);
+        _doubleSidedMaterialNames = std::move(doubleSidedNames);
     }
 
     void registerSubSystems() override;
@@ -68,6 +76,10 @@ private:
     std::string              _maskMaterialIndices;
     std::string              _blendMaterialIndices;
     std::string              _doubleSidedMaterialIndices;
+    std::string              _opaqueMaterialNames;
+    std::string              _maskMaterialNames;
+    std::string              _blendMaterialNames;
+    std::string              _doubleSidedMaterialNames;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

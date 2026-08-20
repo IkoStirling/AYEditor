@@ -20,6 +20,10 @@ public:
         std::string maskIndices;
         std::string blendIndices;
         std::string doubleSidedIndices;
+        std::string opaqueNames;
+        std::string maskNames;
+        std::string blendNames;
+        std::string doubleSidedNames;
     };
     // Run one import. Writes the converted files under `destinationDir`
     // (typically the editor's `ayeditor_cache/assets/` root; see

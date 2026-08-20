@@ -60,6 +60,10 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.materialPolicy.maskIndices = materialPolicy.maskIndices;
     opts.materialPolicy.blendIndices = materialPolicy.blendIndices;
     opts.materialPolicy.doubleSidedIndices = materialPolicy.doubleSidedIndices;
+    opts.materialPolicy.opaqueNames = materialPolicy.opaqueNames;
+    opts.materialPolicy.maskNames = materialPolicy.maskNames;
+    opts.materialPolicy.blendNames = materialPolicy.blendNames;
+    opts.materialPolicy.doubleSidedNames = materialPolicy.doubleSidedNames;
 
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
 

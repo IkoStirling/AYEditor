@@ -26,6 +26,10 @@ constexpr const char* kOpaqueMaterialsKey = "Editor.MaterialPolicy.Opaque";
 constexpr const char* kMaskMaterialsKey = "Editor.MaterialPolicy.Mask";
 constexpr const char* kBlendMaterialsKey = "Editor.MaterialPolicy.Blend";
 constexpr const char* kDoubleSidedMaterialsKey = "Editor.MaterialPolicy.DoubleSided";
+constexpr const char* kOpaqueMaterialNamesKey = "Editor.MaterialPolicy.OpaqueNames";
+constexpr const char* kMaskMaterialNamesKey = "Editor.MaterialPolicy.MaskNames";
+constexpr const char* kBlendMaterialNamesKey = "Editor.MaterialPolicy.BlendNames";
+constexpr const char* kDoubleSidedMaterialNamesKey = "Editor.MaterialPolicy.DoubleSidedNames";
 
 std::string editorConfigPath()
 {
@@ -74,7 +78,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         editorConfig.getString(kOpaqueMaterialsKey),
         editorConfig.getString(kMaskMaterialsKey),
         editorConfig.getString(kBlendMaterialsKey),
-        editorConfig.getString(kDoubleSidedMaterialsKey));
+        editorConfig.getString(kDoubleSidedMaterialsKey),
+        editorConfig.getString(kOpaqueMaterialNamesKey),
+        editorConfig.getString(kMaskMaterialNamesKey),
+        editorConfig.getString(kBlendMaterialNamesKey),
+        editorConfig.getString(kDoubleSidedMaterialNamesKey));
     std::fprintf(stderr,
                  "[EditorShellDemo] config: %s (%s)\n"
                  "[EditorShellDemo] default import: %s\n"
