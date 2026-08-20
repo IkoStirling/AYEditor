@@ -120,6 +120,7 @@ target_include_directories(AYEditorShell_Demo PRIVATE
 
 target_link_libraries(AYEditorShell_Demo PRIVATE
     ${MODULE_NAME}
+    AYConfig
     AYRenderer
     AYEntity
     AYGameLoop
