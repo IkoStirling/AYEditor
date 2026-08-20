@@ -13,9 +13,18 @@
 
 #include <AYConfig.h>
 #include <AYIO/Env.h>
+#include <AYLog.h>
 
 #include <cstdio>
+#include <cstdint>
 #include <filesystem>
+#include <thread>
+
+#if defined(_WIN32)
+#  include <fcntl.h>
+#  include <io.h>
+#  include <share.h>
+#endif
 
 namespace {
 
@@ -30,33 +39,197 @@ constexpr const char* kOpaqueMaterialNamesKey = "Editor.MaterialPolicy.OpaqueNam
 constexpr const char* kMaskMaterialNamesKey = "Editor.MaterialPolicy.MaskNames";
 constexpr const char* kBlendMaterialNamesKey = "Editor.MaterialPolicy.BlendNames";
 constexpr const char* kDoubleSidedMaterialNamesKey = "Editor.MaterialPolicy.DoubleSidedNames";
+constexpr const char* kEditorLogFileEnv = "AY_EDITOR_LOG_FILE";
+constexpr const char* kEditorLogRelativePath = "logs/AYEditorShell_Demo.log";
+FILE* g_editorLogStream = nullptr;
+HANDLE g_logPipeRead = INVALID_HANDLE_VALUE;
+HANDLE g_consoleOutput = INVALID_HANDLE_VALUE;
+std::thread g_logPumpThread;
 
-std::string editorConfigPath()
+void pumpLogToFileAndConsole()
+{
+    char buffer[4096];
+    DWORD bytesRead = 0;
+    while (ReadFile(g_logPipeRead, buffer, sizeof(buffer), &bytesRead, nullptr)
+           && bytesRead != 0) {
+        if (g_editorLogStream != nullptr) {
+            std::fwrite(buffer, 1, bytesRead, g_editorLogStream);
+            std::fflush(g_editorLogStream);
+        }
+        if (g_consoleOutput != INVALID_HANDLE_VALUE) {
+            DWORD bytesWritten = 0;
+            WriteFile(g_consoleOutput, buffer, bytesRead, &bytesWritten, nullptr);
+        }
+    }
+}
+
+void shutdownPersistentLog()
+{
+    ayt::log::flush();
+    std::fflush(stdout);
+    std::fflush(stderr);
+
+    // Closing both CRT writers lets the blocking pump drain the pipe and exit.
+    std::fclose(stdout);
+    std::fclose(stderr);
+    if (g_logPumpThread.joinable()) {
+        g_logPumpThread.join();
+    }
+    if (g_logPipeRead != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_logPipeRead);
+        g_logPipeRead = INVALID_HANDLE_VALUE;
+    }
+    if (g_consoleOutput != INVALID_HANDLE_VALUE) {
+        CloseHandle(g_consoleOutput);
+        g_consoleOutput = INVALID_HANDLE_VALUE;
+    }
+    if (g_editorLogStream != nullptr) {
+        std::fclose(g_editorLogStream);
+        g_editorLogStream = nullptr;
+    }
+}
+
+std::filesystem::path moduleDirectory()
 {
     char modulePath[MAX_PATH]{};
     const DWORD length = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) {
-        return kEditorConfigRelativePath;
+        return std::filesystem::current_path();
+    }
+    return std::filesystem::path(modulePath).parent_path();
+}
+
+std::string editorConfigPath()
+{
+    return (moduleDirectory() / kEditorConfigRelativePath).string();
+}
+
+std::string editorLogPath()
+{
+    const std::string overridePath =
+        ayt::io::env::get(kEditorLogFileEnv).value_or("");
+    if (!overridePath.empty()) {
+        return std::filesystem::absolute(overridePath).string();
+    }
+    return (moduleDirectory() / kEditorLogRelativePath).string();
+}
+
+bool initializePersistentLog(const std::string& logFile)
+{
+    const std::filesystem::path logPath(logFile);
+    std::error_code ec;
+    if (!logPath.parent_path().empty()) {
+        std::filesystem::create_directories(logPath.parent_path(), ec);
     }
 
-    return (std::filesystem::path(modulePath).parent_path()
-            / kEditorConfigRelativePath).string();
+    // A WIN32-subsystem process launched without a debugger may begin with
+    // invalid CRT stdout/stderr FILE objects.  freopen_s on those objects can
+    // trip the UCRT write.cpp handle assertion.  Bootstrap valid CRT streams
+    // through a console first and only then redirect both streams to the
+    // persistent file. Keep a console created by us visible: the shell demo is
+    // a diagnostic executable, and persistent logging must not change its
+    // existing interactive diagnostics behavior.
+    if (GetConsoleWindow() == nullptr) {
+        if (!AttachConsole(ATTACH_PARENT_PROCESS)) {
+            AllocConsole();
+        }
+    }
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+
+    FILE* stream = nullptr;
+    const bool stdoutReady =
+        freopen_s(&stream, "CONOUT$", "w", stdout) == 0;
+    const bool stderrReady =
+        freopen_s(&stream, "CONOUT$", "w", stderr) == 0;
+    if (!stdoutReady || !stderrReady) {
+        return false;
+    }
+
+    // Preserve a console handle before stdout/stderr are routed through the
+    // tee pipe. The pump is the only log-file writer and mirrors every byte to
+    // this console handle.
+    g_consoleOutput = CreateFileW(L"CONOUT$", GENERIC_WRITE,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                                 OPEN_EXISTING, 0, nullptr);
+    g_editorLogStream = _fsopen(logFile.c_str(), "a", _SH_DENYWR);
+    HANDLE pipeWrite = INVALID_HANDLE_VALUE;
+    const bool pipeReady =
+        CreatePipe(&g_logPipeRead, &pipeWrite, nullptr, 0) != FALSE;
+    if (pipeReady) {
+        SetHandleInformation(g_logPipeRead, HANDLE_FLAG_INHERIT, 0);
+        SetHandleInformation(pipeWrite, HANDLE_FLAG_INHERIT, 0);
+    }
+
+    const int pipeFd = pipeReady
+        ? _open_osfhandle(reinterpret_cast<std::intptr_t>(pipeWrite),
+                         _O_WRONLY | _O_BINARY)
+        : -1;
+    const int stdoutFd = _fileno(stdout);
+    const int stderrFd = _fileno(stderr);
+    const bool streamsCaptured = g_editorLogStream != nullptr && pipeFd >= 0
+        && stdoutFd >= 0 && stderrFd >= 0
+        && _dup2(pipeFd, stdoutFd) == 0
+        && _dup2(pipeFd, stderrFd) == 0;
+    if (pipeFd >= 0) {
+        _close(pipeFd);
+    }
+    if (!streamsCaptured) {
+        if (g_logPipeRead != INVALID_HANDLE_VALUE) {
+            CloseHandle(g_logPipeRead);
+            g_logPipeRead = INVALID_HANDLE_VALUE;
+        }
+        if (g_consoleOutput != INVALID_HANDLE_VALUE) {
+            CloseHandle(g_consoleOutput);
+            g_consoleOutput = INVALID_HANDLE_VALUE;
+        }
+        if (g_editorLogStream != nullptr) {
+            fclose(g_editorLogStream);
+            g_editorLogStream = nullptr;
+        }
+        return false;
+    }
+
+    // Diagnostics must be visible while the process is still running.
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    setvbuf(stderr, nullptr, _IONBF, 0);
+    g_logPumpThread = std::thread(pumpLogToFileAndConsole);
+
+    ayt::log::LogConfig logConfig;
+    logConfig.consoleEnabled = true;
+    logConfig.consoleLevel = ayt::log::LogLevel::Trace;
+    logConfig.consoleColorEnabled = false;
+    logConfig.fileEnabled = false;
+    logConfig.flush.policy = ayt::log::FlushPolicy::OnError;
+    ayt::log::initialize(logConfig);
+
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    std::fprintf(stderr,
+                 "\n========== AYEditorShell_Demo session "
+                 "%04u-%02u-%02u %02u:%02u:%02u pid=%lu ==========\n"
+                 "[EditorShellDemo] persistent log: %s\n",
+                 now.wYear, now.wMonth, now.wDay,
+                 now.wHour, now.wMinute, now.wSecond,
+                 static_cast<unsigned long>(GetCurrentProcessId()),
+                 logFile.c_str());
+    return true;
 }
 
 } // namespace
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 {
-    // AY_EDITOR_NO_CONSOLE=1 keeps stdout/stderr on the parent process
-    // pipe (no AllocConsole / CONOUT$ hijack) so `exe 2>file` captures
-    // engine diagnostics. Default: interactive console as before.
-    const bool keepPipe =
-        ayt::io::env::get("AY_EDITOR_NO_CONSOLE").value_or("") == "1";
-    if (!keepPipe) {
+    const std::string logFile = editorLogPath();
+    if (!initializePersistentLog(logFile)) {
+        // Last-resort interactive diagnostics if file setup is unavailable.
         AllocConsole();
         FILE* dummy = nullptr;
         freopen_s(&dummy, "CONOUT$", "w", stdout);
         freopen_s(&dummy, "CONOUT$", "w", stderr);
+        std::fprintf(stderr,
+                     "[EditorShellDemo] persistent log initialization failed: %s\n",
+                     logFile.c_str());
     }
 
     ayt::app::GameDesc desc{};
@@ -112,5 +285,6 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     }
 
     app->run();
+    shutdownPersistentLog();
     return 0;
 }
