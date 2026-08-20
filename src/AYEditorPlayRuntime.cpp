@@ -8,6 +8,7 @@
 #include <AYNetwork/INetwork.h>
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYRenderer/RenderScene.h"
+#include "AYRenderer/PbrShaderSources.h"
 #include "AYScript/ScriptSubSystem.h"
 #include "AYShader/ShadercDriver.h"
 #include "AYRenderer/ShadowConfig.h"
@@ -608,10 +609,12 @@ bool EditorPlayRuntime::ensureAssets() {
 
     const std::string shaderPath       = _assetRoot + "simple_lit.phoskia";
     const std::string shadowShaderPath = _assetRoot + "simple_lit_shadow.phoskia";
+    const std::string pbrShaderPath    = _assetRoot + "pbr.phoskia";
 
     // Always refresh Phoskia sources so shader fixes land without wiping cache.
     if (!writeText(shaderPath, kSimpleLitPhoskia) ||
-        !writeText(shadowShaderPath, ayt::render::kSimpleLitShadowPhoskiaSource)) {
+        !writeText(shadowShaderPath, ayt::render::kSimpleLitShadowPhoskiaSource) ||
+        !writeText(pbrShaderPath, ayt::render::kPbrPhoskiaSource)) {
         return false;
     }
 
@@ -633,6 +636,14 @@ bool EditorPlayRuntime::ensureAssets() {
                          "[EditorPlayRuntime] reloaded %u material(s) for '%s'\n",
                          reloaded,
                          shadowShaderPath.c_str());
+        }
+        const uint32_t pbrReloaded =
+            rendererSub->renderer().reloadMaterialsForShaderFile(pbrShaderPath);
+        if (pbrReloaded > 0) {
+            std::fprintf(stderr,
+                         "[EditorPlayRuntime] reloaded %u PBR material(s) for '%s'\n",
+                         pbrReloaded,
+                         pbrShaderPath.c_str());
         }
     }
 
