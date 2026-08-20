@@ -334,62 +334,10 @@ void EditorApp::run()
     AY_EDITOR_HEAP_CHECK("startup");
     attachDebugConsole();
 
-    onInit();
-    // INT-02 (2026-07-15): _devices is a member (was stack-local
-    // before). Lifetime == *this so the Logia InputProvider that
-    // registerSubSystems() installs can hold a raw pointer into it.
-    _devices = std::make_unique<ayt::device::DeviceManager>();
-    ayt::device::DeviceConfig deviceConfig{};
-    deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
-    deviceConfig.window.width = static_cast<int>(_desc.width);
-    deviceConfig.window.height = static_cast<int>(_desc.height);
-    if (!_devices->initialize(deviceConfig)) {
-        std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
-        _devices.reset();
-        return;
-    }
-    // Provider needs to be installed now that _devices is valid;
-    // onInit() ran before _devices existed so we wire here too.
-    {
-        auto* sub = engineHost().findSubSystem("ayt.script.runtime");
-        if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
-            if (!_inputProvider) {
-                _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(
-                    _devices.get());
-                scriptSub->bridge().setInputProvider(_inputProvider.get());
-            }
-        }
-    }
-    ayt::device::WindowManager& window = _devices->window();
-    HWND hwnd = static_cast<HWND>(window.getWindowHandle());
-    if (hwnd == nullptr) {
-        std::fprintf(stderr, "[EditorApp] host window unavailable\n");
-        _devices->shutdown();
-        _devices.reset();
-        return;
-    }
-
-    EditorHostState hostState{};
-    hostState.clientWidth  = static_cast<int>(_desc.width);
-    hostState.clientHeight = static_cast<int>(_desc.height);
-
-    auto uiBackend = std::make_unique<ayt::render::UIRenderBackend>();
-    ayt::render::RendererSubSystem* rendererSub = nullptr;
-
-    {
-        EditorSession session;
-        hostState.session = &session;
-
-        const std::string layoutPath = resolveLayoutPath();
-
-    // ---- G2: --import <path> bootstrap ----------------------------------
-    // Parse argv for `--import <path.fbx>`. When absent, fall back to
-    // `_defaultImportPath` (AYEditorShell_Demo sets Sour.fbx). When
-    // present, run the ED-01 importer into the editor cache, map the
-    // ConversionResult into an ImportedCharacter via the G1 helper, and
-    // stash it on sessionDesc.importedCharacter so EditorSession::
-    // initialize forwards it to EditorPlayRuntime. On any failure we
-    // log and continue - the cube fallback path remains intact.
+    // Import before registering/initializing runtime and rendering systems.
+    // Asset conversion is a pure offline operation and must not share its
+    // STL allocations with live renderer/device/background services.  This
+    // also gives the debug heap a precise boundary for import corruption.
     ImportedCharacter importedCharacter;
     const std::vector<std::string> cmdTokens =
         tokenizeCommandLine(::GetCommandLineA());
@@ -473,7 +421,56 @@ void EditorApp::run()
             }
         }
     }
-    // ---------------------------------------------------------------------
+    AY_EDITOR_HEAP_CHECK("after_import_before_runtime_init");
+
+    onInit();
+    // INT-02 (2026-07-15): _devices is a member (was stack-local
+    // before). Lifetime == *this so the Logia InputProvider that
+    // registerSubSystems() installs can hold a raw pointer into it.
+    _devices = std::make_unique<ayt::device::DeviceManager>();
+    ayt::device::DeviceConfig deviceConfig{};
+    deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
+    deviceConfig.window.width = static_cast<int>(_desc.width);
+    deviceConfig.window.height = static_cast<int>(_desc.height);
+    if (!_devices->initialize(deviceConfig)) {
+        std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
+        _devices.reset();
+        return;
+    }
+    // Provider needs to be installed now that _devices is valid;
+    // onInit() ran before _devices existed so we wire here too.
+    {
+        auto* sub = engineHost().findSubSystem("ayt.script.runtime");
+        if (auto* scriptSub = dynamic_cast<ayt::script::ScriptSubSystem*>(sub)) {
+            if (!_inputProvider) {
+                _inputProvider = std::make_unique<ayt::device::DeviceInputProvider>(
+                    _devices.get());
+                scriptSub->bridge().setInputProvider(_inputProvider.get());
+            }
+        }
+    }
+    ayt::device::WindowManager& window = _devices->window();
+    HWND hwnd = static_cast<HWND>(window.getWindowHandle());
+    if (hwnd == nullptr) {
+        std::fprintf(stderr, "[EditorApp] host window unavailable\n");
+        _devices->shutdown();
+        _devices.reset();
+        return;
+    }
+
+    EditorHostState hostState{};
+    hostState.clientWidth  = static_cast<int>(_desc.width);
+    hostState.clientHeight = static_cast<int>(_desc.height);
+
+    auto uiBackend = std::make_unique<ayt::render::UIRenderBackend>();
+    ayt::render::RendererSubSystem* rendererSub = nullptr;
+
+    {
+        EditorSession session;
+        hostState.session = &session;
+
+        const std::string layoutPath = resolveLayoutPath();
+
     EditorSessionDesc sessionDesc{};
     sessionDesc.uiBackend = uiBackend.get();
     sessionDesc.importedCharacter = importedCharacter;
