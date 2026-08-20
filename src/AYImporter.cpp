@@ -45,7 +45,8 @@ bool Importer::isSupportedExtension(const std::string& sourcePath)
 }
 
 Importer::Result Importer::importFile(const std::string& sourcePath,
-                                      const std::string& destinationDir)
+                                      const std::string& destinationDir,
+                                      const MaterialPolicy& materialPolicy)
 {
     ayt::resource::ImportOptions opts;
     opts.sourcePath = sourcePath;
@@ -54,6 +55,11 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.requireCharacterAssets = true;
     opts.loadOption = ayt::resource::IConverter::LoadOption::Full;
     opts.cookTextures = cookTexturesRequested();
+    opts.materialPolicy.tag = materialPolicy.tag;
+    opts.materialPolicy.opaqueIndices = materialPolicy.opaqueIndices;
+    opts.materialPolicy.maskIndices = materialPolicy.maskIndices;
+    opts.materialPolicy.blendIndices = materialPolicy.blendIndices;
+    opts.materialPolicy.doubleSidedIndices = materialPolicy.doubleSidedIndices;
 
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
 

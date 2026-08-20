@@ -21,6 +21,11 @@ namespace {
 
 constexpr const char* kEditorConfigRelativePath = "assets/config/editor.json";
 constexpr const char* kDefaultImportPathKey = "Editor.DefaultImportPath";
+constexpr const char* kMaterialPolicyTagKey = "Editor.MaterialPolicy.Tag";
+constexpr const char* kOpaqueMaterialsKey = "Editor.MaterialPolicy.Opaque";
+constexpr const char* kMaskMaterialsKey = "Editor.MaterialPolicy.Mask";
+constexpr const char* kBlendMaterialsKey = "Editor.MaterialPolicy.Blend";
+constexpr const char* kDoubleSidedMaterialsKey = "Editor.MaterialPolicy.DoubleSided";
 
 std::string editorConfigPath()
 {
@@ -64,6 +69,12 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     auto app = ayt::editor::EditorApp::create(desc);
     app->setDefaultImportPath(defaultImportPath);
+    app->setDefaultMaterialPolicy(
+        editorConfig.getString(kMaterialPolicyTagKey),
+        editorConfig.getString(kOpaqueMaterialsKey),
+        editorConfig.getString(kMaskMaterialsKey),
+        editorConfig.getString(kBlendMaterialsKey),
+        editorConfig.getString(kDoubleSidedMaterialsKey));
     std::fprintf(stderr,
                  "[EditorShellDemo] config: %s (%s)\n"
                  "[EditorShellDemo] default import: %s\n"

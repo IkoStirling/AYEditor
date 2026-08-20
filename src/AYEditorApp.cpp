@@ -413,8 +413,14 @@ void EditorApp::run()
                 EditorPlayRuntime::resolvePersistentCacheRoot();
             const std::string assetRoot = cacheRoot + "assets\\";
 
+            Importer::MaterialPolicy materialPolicy;
+            materialPolicy.tag = _materialPolicyTag;
+            materialPolicy.opaqueIndices = _opaqueMaterialIndices;
+            materialPolicy.maskIndices = _maskMaterialIndices;
+            materialPolicy.blendIndices = _blendMaterialIndices;
+            materialPolicy.doubleSidedIndices = _doubleSidedMaterialIndices;
             Importer::Result result =
-                Importer::importFile(importPath, assetRoot);
+                Importer::importFile(importPath, assetRoot, materialPolicy);
             if (!result.success) {
                 std::fprintf(stderr,
                              "[EditorApp] import failed: %s (falling back to cube)\n",
@@ -545,6 +551,9 @@ void EditorApp::run()
     // end-to-end (both halves happen via this lambda).
     double uiPassMs = 0.0;
     while (running && window.isWindowValid()) {
+        // Per-frame value. This used to accumulate for the lifetime of the
+        // process, producing misleading uiPass=20000ms diagnostics.
+        uiPassMs = 0.0;
         const auto hostFrameNow = Clock::now();
         float editorDeltaSeconds = std::chrono::duration<float>(
             hostFrameNow - previousHostFrame).count();
@@ -633,17 +642,38 @@ void EditorApp::run()
 
         if (frameTiming && (frameIndex % 60) == 0) {
             using ms = std::chrono::duration<double, std::milli>;
+            const ayt::render::RenderFrameStats* renderStats =
+                rendererSub != nullptr
+                    ? &rendererSub->renderer().getFrameStats()
+                    : nullptr;
             std::fprintf(stderr,
                 "[EditorApp frame %llu] poll=%5.2fms update=%5.2fms "
                 "syncViewport=%5.2fms render=%6.2fms (uiPass=%5.2fms) "
-                "total=%6.2fms\n",
+                "total=%6.2fms fps=%5.1f avg=%5.2fms p95=%5.2fms "
+                "p99=%5.2fms gpu=%5.2fms dc=%u/%u blit=%u\n",
                 static_cast<unsigned long long>(frameIndex),
                 std::chrono::duration_cast<ms>(t1 - t0).count(),
                 std::chrono::duration_cast<ms>(t2 - t1).count(),
                 std::chrono::duration_cast<ms>(t3 - t2).count(),
                 compositeMs,
                 uiPassMs,
-                std::chrono::duration_cast<ms>(t4 - t0).count());
+                std::chrono::duration_cast<ms>(t4 - t0).count(),
+                renderStats ? renderStats->fps : 0.0f,
+                renderStats ? renderStats->avgFrameTimeMs : 0.0f,
+                renderStats ? renderStats->p95FrameTimeMs : 0.0f,
+                renderStats ? renderStats->p99FrameTimeMs : 0.0f,
+                renderStats ? renderStats->gpuFrameTimeMs : 0.0f,
+                renderStats ? renderStats->drawCalls : 0u,
+                renderStats ? renderStats->backendDrawCalls : 0u,
+                renderStats ? renderStats->backendBlitCalls : 0u);
+            if (renderStats != nullptr) {
+                for (const auto& pass : renderStats->passes) {
+                    std::fprintf(stderr,
+                                 "  [Pass %-14s] dc=%3u cpu=%6.2fms gpu=%6.2fms\n",
+                                 pass.name.c_str(), pass.drawCalls,
+                                 pass.cpuTimeMs, pass.gpuTimeMs);
+                }
+            }
         }
     }
 

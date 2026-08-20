@@ -32,6 +32,17 @@ public:
     // Used by AYEditorShell_Demo to preload a character FBX when the
     // user did not pass `--import <path>`. Empty = no default (cube).
     void setDefaultImportPath(std::string path) { _defaultImportPath = std::move(path); }
+    void setDefaultMaterialPolicy(std::string tag,
+                                  std::string opaqueIndices,
+                                  std::string maskIndices,
+                                  std::string blendIndices,
+                                  std::string doubleSidedIndices) {
+        _materialPolicyTag = std::move(tag);
+        _opaqueMaterialIndices = std::move(opaqueIndices);
+        _maskMaterialIndices = std::move(maskIndices);
+        _blendMaterialIndices = std::move(blendIndices);
+        _doubleSidedMaterialIndices = std::move(doubleSidedIndices);
+    }
 
     void registerSubSystems() override;
     void run() override;
@@ -52,6 +63,11 @@ private:
     ayt::app::GameDesc       _desc;
     ayt::app::AppCommandLine _cmdLine;
     std::string              _defaultImportPath;
+    std::string              _materialPolicyTag;
+    std::string              _opaqueMaterialIndices;
+    std::string              _maskMaterialIndices;
+    std::string              _blendMaterialIndices;
+    std::string              _doubleSidedMaterialIndices;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

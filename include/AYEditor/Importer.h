@@ -14,6 +14,13 @@ namespace ayt::editor
 class Importer
 {
 public:
+    struct MaterialPolicy {
+        std::string tag;
+        std::string opaqueIndices;
+        std::string maskIndices;
+        std::string blendIndices;
+        std::string doubleSidedIndices;
+    };
     // Run one import. Writes the converted files under `destinationDir`
     // (typically the editor's `ayeditor_cache/assets/` root; see
     // EditorPlayRuntime::resolvePersistentCacheRoot). `sourcePath` must
@@ -35,7 +42,8 @@ public:
     // MMD/character FBX). Set env `AY_EDITOR_FORCE_IMPORT=1` to force
     // a full re-convert.
     static Result importFile(const std::string& sourcePath,
-                             const std::string& destinationDir);
+                             const std::string& destinationDir,
+                             const MaterialPolicy& materialPolicy = {});
 
     // Lowercase the extension of `path` (.fbx / .FBX → "fbx"). Returns
     // empty string if no extension found.
