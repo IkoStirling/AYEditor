@@ -47,7 +47,8 @@ public:
     // a full re-convert.
     static Result importFile(const std::string& sourcePath,
                              const std::string& destinationDir,
-                             const MaterialPolicy& materialPolicy = {});
+                             const MaterialPolicy& materialPolicy = {},
+                             const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});
 
     // Lowercase the extension of `path` (.fbx / .FBX → "fbx"). Returns
     // empty string if no extension found.

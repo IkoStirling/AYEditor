@@ -372,7 +372,8 @@ void EditorApp::run()
             materialPolicy.blendNames = _blendMaterialNames;
             materialPolicy.doubleSidedNames = _doubleSidedMaterialNames;
             Importer::Result result =
-                Importer::importFile(importPath, assetRoot, materialPolicy);
+                Importer::importFile(importPath, assetRoot, materialPolicy,
+                                     _sourceCoordinates);
             if (!result.success) {
                 std::fprintf(stderr,
                              "[EditorApp] import failed: %s (falling back to cube)\n",

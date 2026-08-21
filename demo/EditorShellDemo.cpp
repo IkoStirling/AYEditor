@@ -39,12 +39,54 @@ constexpr const char* kOpaqueMaterialNamesKey = "Editor.MaterialPolicy.OpaqueNam
 constexpr const char* kMaskMaterialNamesKey = "Editor.MaterialPolicy.MaskNames";
 constexpr const char* kBlendMaterialNamesKey = "Editor.MaterialPolicy.BlendNames";
 constexpr const char* kDoubleSidedMaterialNamesKey = "Editor.MaterialPolicy.DoubleSidedNames";
+constexpr const char* kSourceCoordinateModeKey = "Editor.Import.SourceCoordinates.Mode";
+constexpr const char* kSourceUpAxisKey = "Editor.Import.SourceCoordinates.Up";
+constexpr const char* kSourceForwardAxisKey = "Editor.Import.SourceCoordinates.Forward";
+constexpr const char* kSourceHandednessKey = "Editor.Import.SourceCoordinates.Handedness";
+constexpr const char* kSourceMetersPerUnitKey = "Editor.Import.SourceCoordinates.MetersPerUnit";
+constexpr const char* kSourceCoordinateTagKey = "Editor.Import.SourceCoordinates.Tag";
 constexpr const char* kEditorLogFileEnv = "AY_EDITOR_LOG_FILE";
 constexpr const char* kEditorLogRelativePath = "logs/AYEditorShell_Demo.log";
 FILE* g_editorLogStream = nullptr;
 HANDLE g_logPipeRead = INVALID_HANDLE_VALUE;
 HANDLE g_consoleOutput = INVALID_HANDLE_VALUE;
 std::thread g_logPumpThread;
+
+ayt::resource::ImportAxis parseImportAxis(const std::string& text,
+                                          ayt::resource::ImportAxis fallback)
+{
+    if (text == "+X" || text == "X") return ayt::resource::ImportAxis::PositiveX;
+    if (text == "-X") return ayt::resource::ImportAxis::NegativeX;
+    if (text == "+Y" || text == "Y") return ayt::resource::ImportAxis::PositiveY;
+    if (text == "-Y") return ayt::resource::ImportAxis::NegativeY;
+    if (text == "+Z" || text == "Z") return ayt::resource::ImportAxis::PositiveZ;
+    if (text == "-Z") return ayt::resource::ImportAxis::NegativeZ;
+    return fallback;
+}
+
+ayt::resource::SourceCoordinatePolicy sourceCoordinatePolicy(
+    const ayt::config::Config& config)
+{
+    ayt::resource::SourceCoordinatePolicy policy;
+    const std::string mode = config.getString(kSourceCoordinateModeKey, "Auto");
+    policy.mode = mode == "Manual" || mode == "manual"
+        ? ayt::resource::SourceCoordinateMode::Manual
+        : ayt::resource::SourceCoordinateMode::Auto;
+    policy.up = parseImportAxis(config.getString(kSourceUpAxisKey, "+Y"),
+                                ayt::resource::ImportAxis::PositiveY);
+    policy.forward = parseImportAxis(
+        config.getString(kSourceForwardAxisKey, "+Z"),
+        ayt::resource::ImportAxis::PositiveZ);
+    const std::string handedness =
+        config.getString(kSourceHandednessKey, "Left");
+    policy.handedness = handedness == "Right" || handedness == "right"
+        ? ayt::resource::ImportHandedness::Right
+        : ayt::resource::ImportHandedness::Left;
+    policy.metersPerUnit = static_cast<float>(
+        config.getFloat(kSourceMetersPerUnitKey, 0.0));
+    policy.tag = config.getString(kSourceCoordinateTagKey);
+    return policy;
+}
 
 void pumpLogToFileAndConsole()
 {
@@ -246,6 +288,9 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 
     auto app = ayt::editor::EditorApp::create(desc);
     app->setDefaultImportPath(defaultImportPath);
+    const ayt::resource::SourceCoordinatePolicy coordinates =
+        sourceCoordinatePolicy(editorConfig);
+    app->setDefaultSourceCoordinates(coordinates);
     app->setDefaultMaterialPolicy(
         editorConfig.getString(kMaterialPolicyTagKey),
         editorConfig.getString(kOpaqueMaterialsKey),
@@ -259,13 +304,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     std::fprintf(stderr,
                  "[EditorShellDemo] config: %s (%s)\n"
                  "[EditorShellDemo] default import: %s\n"
+                 "[EditorShellDemo] source coordinates: %s tag='%s'\n"
                  "[EditorShellDemo] note: model-only FBX → bind-pose; "
                  "first convert ~1–2 min, then cache\n"
                  "[EditorShellDemo] net client: AYEditorShell_Demo.exe --net-client "
                  "[--net-host 127.0.0.1] (start server Play first)\n",
                  configPath.c_str(), configLoaded ? "loaded" : "not found",
                  defaultImportPath.empty() ? "(none; cube fallback)"
-                                           : defaultImportPath.c_str());
+                                           : defaultImportPath.c_str(),
+                 coordinates.mode == ayt::resource::SourceCoordinateMode::Manual
+                     ? "manual" : "auto",
+                 ayt::resource::sourceCoordinatePolicyCacheTag(coordinates).c_str());
 
     // v0.3 PR-4 — 启动日志验证 host->scenes() wiring 通（design §4.2.x）
     // 不影响 demo 行为；仅 stderr 状态打印，便于 v0.3 验收 + 后续 PR debug。

@@ -26,7 +26,9 @@ namespace ayt::editor
 Importer::Result ImportDialog::importFromPath(const std::string& sourcePath,
                                               const std::string& destinationDir)
 {
-    return Importer::importFile(sourcePath, destinationDir);
+    return Importer::importFile(sourcePath, destinationDir,
+                                Importer::MaterialPolicy{},
+                                ayt::resource::SourceCoordinatePolicy{});
 }
 
 std::string ImportDialog::showOpenFileDialog(void* ownerWindowHandle)

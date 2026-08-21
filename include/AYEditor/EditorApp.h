@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYApplication/IApplication.h"
+#include <AYResource/IConverter.h>
 
 #include <memory>
 #include <string>
@@ -32,6 +33,10 @@ public:
     // Used by AYEditorShell_Demo to preload a character FBX when the
     // user did not pass `--import <path>`. Empty = no default (cube).
     void setDefaultImportPath(std::string path) { _defaultImportPath = std::move(path); }
+    void setDefaultSourceCoordinates(
+        ayt::resource::SourceCoordinatePolicy policy) {
+        _sourceCoordinates = std::move(policy);
+    }
     void setDefaultMaterialPolicy(std::string tag,
                                   std::string opaqueIndices,
                                   std::string maskIndices,
@@ -80,6 +85,7 @@ private:
     std::string              _maskMaterialNames;
     std::string              _blendMaterialNames;
     std::string              _doubleSidedMaterialNames;
+    ayt::resource::SourceCoordinatePolicy _sourceCoordinates;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

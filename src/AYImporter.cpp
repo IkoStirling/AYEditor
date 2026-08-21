@@ -46,7 +46,8 @@ bool Importer::isSupportedExtension(const std::string& sourcePath)
 
 Importer::Result Importer::importFile(const std::string& sourcePath,
                                       const std::string& destinationDir,
-                                      const MaterialPolicy& materialPolicy)
+                                      const MaterialPolicy& materialPolicy,
+                                      const ayt::resource::SourceCoordinatePolicy& sourceCoordinates)
 {
     ayt::resource::ImportOptions opts;
     opts.sourcePath = sourcePath;
@@ -64,6 +65,7 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.materialPolicy.maskNames = materialPolicy.maskNames;
     opts.materialPolicy.blendNames = materialPolicy.blendNames;
     opts.materialPolicy.doubleSidedNames = materialPolicy.doubleSidedNames;
+    opts.sourceCoordinates = sourceCoordinates;
 
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
 

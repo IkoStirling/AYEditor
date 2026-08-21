@@ -1,6 +1,16 @@
 {
   "Editor": {
     "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour.fbx",
+    "Import": {
+      "SourceCoordinates": {
+        "Mode": "Manual",
+        "Up": "+Z",
+        "Forward": "-Y",
+        "Handedness": "Right",
+        "MetersPerUnit": 0.0,
+        "Tag": "sour-blender-zup-rh-file-units-v1"
+      }
+    },
     "MaterialPolicy": {
       "Tag": "sour-material-policy-v3-names",
       "Opaque": "",

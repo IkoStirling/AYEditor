@@ -617,6 +617,13 @@ bool EditorPlayRuntime::ensureAssets() {
         !writeText(pbrShaderPath, ayt::render::kPbrPhoskiaSource)) {
         return false;
     }
+    // Keep this marker in the translation unit (rather than only in the
+    // included shader header).  Localized MSVC /showIncludes output can leave
+    // Ninja with a stale dependency graph, so a shader-contract change must
+    // also make the Editor seeding object observably newer.
+    std::fprintf(stderr,
+                 "[EditorPlayRuntime] shader assets refreshed "
+                 "(pbr-material-contract=v2-opacity)\n");
 
     // Dump hand-authored bgfx .sc (Editor isolation path) for inspection.
     const std::string scDir = _assetRoot + "bgfx_sc\\";
@@ -1441,19 +1448,14 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
             characterScale = parsed;
         }
     }
-    // Many FBX/PMX sources are Z-up. Engine + freecam are Y-up, so without
-    // this the character lies flat on XZ and looks like a washed-out top-down
-    // silhouette. Entity rotation keeps skinning in model space correct.
-    const ayt::math::FQuaternion zUpToYUp =
-        ayt::math::FQuaternion::fromAxisAngle(
-            ayt::math::FVector3(1.0f, 0.0f, 0.0f),
-            -MATH_PI * 0.5f);
-    auto applySpawnXform = [characterScale, &zUpToYUp](ayt::entity::Entity* e) {
+    // Axis/handedness/unit conversion belongs to the importer. Cooked .aymesh,
+    // .ayskel and .ayanm assets are already in engine +Y-up/+Z-forward space;
+    // applying a model-specific rotation here would double-convert them.
+    auto applySpawnXform = [characterScale](ayt::entity::Entity* e) {
         if (e == nullptr) return;
         if (auto* xf = e->getComponent<ayt::entity::Transform>()) {
             xf->scale = ayt::math::FVector3(
                 characterScale, characterScale, characterScale);
-            xf->rotation = zUpToYUp;
         }
     };
     applySpawnXform(_characterEntity);
