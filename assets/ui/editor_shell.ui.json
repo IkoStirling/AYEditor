@@ -123,6 +123,7 @@
                 "maxPopupItems": 3
               },
               { "type": "TextLabel", "id": "lbl_render_quality", "text": "Quality", "size": { "w": 200, "h": 22 } },
+              { "type": "CheckBox", "id": "chk_shadows", "text": "Shadows", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "CheckBox", "id": "chk_shadow_pcf", "text": "Shadow PCF", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_shadow_bias", "text": "Shadow Bias  0.003", "size": { "w": 200, "h": 18 } },
               { "type": "Slider", "id": "sld_shadow_bias", "min": 0.0, "max": 0.02, "value": 0.003, "size": { "w": 200, "h": 22 } },

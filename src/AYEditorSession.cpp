@@ -1358,6 +1358,16 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
+    if (auto* w = _ui.findById("chk_shadows")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([rendererOrNull](bool on) {
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setShadowsEnabled(on);
+                }
+            });
+        }
+    }
+
     // Labels in JSON are decorative until Slider min/max/value load;
     // refresh from the live widget values so thumb ↔ text stay aligned.
     auto refreshLabelFromSlider = [this, setLabel](const char* sliderId,
@@ -1454,6 +1464,11 @@ void EditorSession::applyRenderSettingsFromPanel()
     if (auto* w = _ui.findById("chk_shadow_pcf")) {
         if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
             r.setShadowPcfEnabled(chk->isChecked());
+        }
+    }
+    if (auto* w = _ui.findById("chk_shadows")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            r.setShadowsEnabled(chk->isChecked());
         }
     }
 }

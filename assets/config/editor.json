@@ -7,19 +7,20 @@
         "Up": "+Z",
         "Forward": "-Y",
         "Handedness": "Right",
+        "UVOrigin": "BottomLeft",
         "MetersPerUnit": 0.0,
-        "Tag": "sour-blender-zup-rh-file-units-v1"
+        "Tag": "sour-blender-zup-rh-file-units-v2"
       }
     },
     "MaterialPolicy": {
-      "Tag": "sour-material-policy-v3-names",
+      "Tag": "auto-material-surface-v2-explicit-sidedness",
       "Opaque": "",
       "Mask": "",
       "Blend": "",
       "DoubleSided": "",
-      "OpaqueNames": "skin;丝袜+;P;ANIME_HEADWEAR_10_shd;头发HAIR;face;口;耳饰;披肩;BOW1;下裙Corset Dress;抹胸;B-BOW;上衣;H-bow;指甲;鞋子Shoes;眼罩1;眼罩2",
-      "MaskNames": "背包BAG;耳饰+;BOW;袜套;头饰蕾丝;头饰蓝色蝴蝶结;头饰蕾丝2;头饰白色蝴蝶结;项链;绑带;BOW3;安全裤",
-      "BlendNames": "透明;F+;目;目白;瞳;瞳孔;HL;上衣蕾丝",
+      "OpaqueNames": "",
+      "MaskNames": "",
+      "BlendNames": "",
       "DoubleSidedNames": "丝袜+;透明;背包BAG;头发HAIR;F+;目;目白;瞳;瞳孔;HL;耳饰+;BOW;披肩;BOW1;下裙Corset Dress;上衣;上衣蕾丝;袜套;头饰蕾丝;头饰蓝色蝴蝶结;头饰蕾丝2;头饰白色蝴蝶结;项链;绑带;BOW3;安全裤"
     }
   }

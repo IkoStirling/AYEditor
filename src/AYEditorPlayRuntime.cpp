@@ -623,7 +623,7 @@ bool EditorPlayRuntime::ensureAssets() {
     // also make the Editor seeding object observably newer.
     std::fprintf(stderr,
                  "[EditorPlayRuntime] shader assets refreshed "
-                 "(pbr-material-contract=v2-opacity)\n");
+                 "(pbr-material-contract=v5-opacity-source-channel)\n");
 
     // Dump hand-authored bgfx .sc (Editor isolation path) for inspection.
     const std::string scDir = _assetRoot + "bgfx_sc\\";

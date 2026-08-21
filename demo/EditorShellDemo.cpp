@@ -43,8 +43,10 @@ constexpr const char* kSourceCoordinateModeKey = "Editor.Import.SourceCoordinate
 constexpr const char* kSourceUpAxisKey = "Editor.Import.SourceCoordinates.Up";
 constexpr const char* kSourceForwardAxisKey = "Editor.Import.SourceCoordinates.Forward";
 constexpr const char* kSourceHandednessKey = "Editor.Import.SourceCoordinates.Handedness";
+constexpr const char* kSourceUvOriginKey = "Editor.Import.SourceCoordinates.UVOrigin";
 constexpr const char* kSourceMetersPerUnitKey = "Editor.Import.SourceCoordinates.MetersPerUnit";
 constexpr const char* kSourceCoordinateTagKey = "Editor.Import.SourceCoordinates.Tag";
+constexpr const char* kNormalMapYKey = "Editor.Import.Materials.NormalMapY";
 constexpr const char* kEditorLogFileEnv = "AY_EDITOR_LOG_FILE";
 constexpr const char* kEditorLogRelativePath = "logs/AYEditorShell_Demo.log";
 FILE* g_editorLogStream = nullptr;
@@ -82,6 +84,12 @@ ayt::resource::SourceCoordinatePolicy sourceCoordinatePolicy(
     policy.handedness = handedness == "Right" || handedness == "right"
         ? ayt::resource::ImportHandedness::Right
         : ayt::resource::ImportHandedness::Left;
+    const std::string uvOrigin =
+        config.getString(kSourceUvOriginKey, "TopLeft");
+    policy.uvOrigin = uvOrigin == "BottomLeft" || uvOrigin == "bottom-left"
+        || uvOrigin == "bottomleft"
+        ? ayt::resource::ImportUvOrigin::BottomLeft
+        : ayt::resource::ImportUvOrigin::TopLeft;
     policy.metersPerUnit = static_cast<float>(
         config.getFloat(kSourceMetersPerUnitKey, 0.0));
     policy.tag = config.getString(kSourceCoordinateTagKey);
@@ -291,6 +299,11 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     const ayt::resource::SourceCoordinatePolicy coordinates =
         sourceCoordinatePolicy(editorConfig);
     app->setDefaultSourceCoordinates(coordinates);
+    const std::string normalMapY = editorConfig.getString(kNormalMapYKey, "+Y");
+    const float normalMapYSign =
+        normalMapY == "-Y" || normalMapY == "DirectX" || normalMapY == "directx"
+            ? -1.0f : 1.0f;
+    app->setDefaultNormalMapYSign(normalMapYSign);
     app->setDefaultMaterialPolicy(
         editorConfig.getString(kMaterialPolicyTagKey),
         editorConfig.getString(kOpaqueMaterialsKey),
@@ -305,6 +318,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                  "[EditorShellDemo] config: %s (%s)\n"
                  "[EditorShellDemo] default import: %s\n"
                  "[EditorShellDemo] source coordinates: %s tag='%s'\n"
+                 "[EditorShellDemo] source UV origin: %s -> engine TopLeft\n"
+                 "[EditorShellDemo] normal map convention: %s\n"
                  "[EditorShellDemo] note: model-only FBX → bind-pose; "
                  "first convert ~1–2 min, then cache\n"
                  "[EditorShellDemo] net client: AYEditorShell_Demo.exe --net-client "
@@ -314,7 +329,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                                            : defaultImportPath.c_str(),
                  coordinates.mode == ayt::resource::SourceCoordinateMode::Manual
                      ? "manual" : "auto",
-                 ayt::resource::sourceCoordinatePolicyCacheTag(coordinates).c_str());
+                 ayt::resource::sourceCoordinatePolicyCacheTag(coordinates).c_str(),
+                 coordinates.uvOrigin == ayt::resource::ImportUvOrigin::BottomLeft
+                     ? "BottomLeft" : "TopLeft",
+                 normalMapYSign < 0.0f ? "DirectX (-Y)" : "OpenGL/Blender (+Y)");
 
     // v0.3 PR-4 — 启动日志验证 host->scenes() wiring 通（design §4.2.x）
     // 不影响 demo 行为；仅 stderr 状态打印，便于 v0.3 验收 + 后续 PR debug。

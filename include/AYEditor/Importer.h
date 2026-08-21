@@ -24,6 +24,7 @@ public:
         std::string maskNames;
         std::string blendNames;
         std::string doubleSidedNames;
+        float normalMapYSign = 1.0f;
     };
     // Run one import. Writes the converted files under `destinationDir`
     // (typically the editor's `ayeditor_cache/assets/` root; see

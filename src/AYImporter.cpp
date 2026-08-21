@@ -56,7 +56,9 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.requireCharacterAssets = true;
     opts.loadOption = ayt::resource::IConverter::LoadOption::Full;
     opts.cookTextures = cookTexturesRequested();
-    opts.materialPolicy.tag = materialPolicy.tag;
+    opts.materialPolicy.tag = materialPolicy.tag
+        + (materialPolicy.normalMapYSign < 0.0f
+            ? "|normal-map-y=-1" : "|normal-map-y=+1");
     opts.materialPolicy.opaqueIndices = materialPolicy.opaqueIndices;
     opts.materialPolicy.maskIndices = materialPolicy.maskIndices;
     opts.materialPolicy.blendIndices = materialPolicy.blendIndices;
@@ -65,6 +67,7 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     opts.materialPolicy.maskNames = materialPolicy.maskNames;
     opts.materialPolicy.blendNames = materialPolicy.blendNames;
     opts.materialPolicy.doubleSidedNames = materialPolicy.doubleSidedNames;
+    opts.materialPolicy.normalMapYSign = materialPolicy.normalMapYSign;
     opts.sourceCoordinates = sourceCoordinates;
 
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);

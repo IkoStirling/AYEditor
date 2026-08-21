@@ -37,6 +37,9 @@ public:
         ayt::resource::SourceCoordinatePolicy policy) {
         _sourceCoordinates = std::move(policy);
     }
+    void setDefaultNormalMapYSign(float sign) {
+        _normalMapYSign = sign < 0.0f ? -1.0f : 1.0f;
+    }
     void setDefaultMaterialPolicy(std::string tag,
                                   std::string opaqueIndices,
                                   std::string maskIndices,
@@ -86,6 +89,7 @@ private:
     std::string              _blendMaterialNames;
     std::string              _doubleSidedMaterialNames;
     ayt::resource::SourceCoordinatePolicy _sourceCoordinates;
+    float _normalMapYSign = 1.0f;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

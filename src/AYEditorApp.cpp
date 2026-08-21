@@ -371,6 +371,7 @@ void EditorApp::run()
             materialPolicy.maskNames = _maskMaterialNames;
             materialPolicy.blendNames = _blendMaterialNames;
             materialPolicy.doubleSidedNames = _doubleSidedMaterialNames;
+            materialPolicy.normalMapYSign = _normalMapYSign;
             Importer::Result result =
                 Importer::importFile(importPath, assetRoot, materialPolicy,
                                      _sourceCoordinates);
