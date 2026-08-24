@@ -194,7 +194,7 @@ private:
     void installClientReplicationConnectHandler();
     void rebroadcastServerReplicationSpawns(ayt::net::NetConnection* lateJoiner = nullptr);
     void pollClientNetworkReplication();
-    bool trySpawnClientReplicatedEntity(uint32_t netId, uint16_t typeHash);
+    bool trySpawnClientReplicatedEntity(uint32_t netId, uint64_t schemaHash);
     void clearClientReplicatedEntities() noexcept;
     ayt::entity::Entity* spawnVisualCubeEntity(uint32_t netId);
 

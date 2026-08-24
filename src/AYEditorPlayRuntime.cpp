@@ -468,9 +468,9 @@ ayt::entity::Entity* EditorPlayRuntime::spawnVisualCubeEntity(uint32_t /*netId*/
     return entity;
 }
 
-bool EditorPlayRuntime::trySpawnClientReplicatedEntity(uint32_t netId, uint16_t typeHash)
+bool EditorPlayRuntime::trySpawnClientReplicatedEntity(uint32_t netId, uint64_t schemaHash)
 {
-    (void)typeHash;
+    (void)schemaHash;
     if (_clientReplicatedEntities.find(netId) != _clientReplicatedEntities.end()) {
         return false;
     }
@@ -535,11 +535,11 @@ void EditorPlayRuntime::pollClientNetworkReplication()
         if (_clientReplicatedEntities.find(netId) != _clientReplicatedEntities.end()) {
             continue;
         }
-        uint16_t typeHash = 0;
-        if (!mgr->peekSpawnAnnouncement(netId, typeHash)) {
+        uint64_t schemaHash = 0;
+        if (!mgr->peekSpawnAnnouncement(netId, schemaHash)) {
             continue;
         }
-        trySpawnClientReplicatedEntity(netId, typeHash);
+        trySpawnClientReplicatedEntity(netId, schemaHash);
     }
 
     if (!_clientLoggedWaitingSpawn && _clientReplicatedEntities.empty()
