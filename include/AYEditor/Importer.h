@@ -51,6 +51,14 @@ public:
                              const MaterialPolicy& materialPolicy = {},
                              const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});
 
+    // Import an animation source without cooking any scene meshes, materials,
+    // textures or helper geometry. The resulting clip is intended to target a
+    // separately imported character skeleton with identical bone names.
+    static Result importAnimationFile(
+        const std::string& sourcePath,
+        const std::string& destinationDir,
+        const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});
+
     // Lowercase the extension of `path` (.fbx / .FBX → "fbx"). Returns
     // empty string if no extension found.
     static std::string extensionOf(const std::string& path);

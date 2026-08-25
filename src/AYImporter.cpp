@@ -8,6 +8,8 @@
 #include "AYResource/ImportJob.h"
 
 #include <AYIO/Env.h>
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <string>
 
@@ -77,6 +79,50 @@ Importer::Result Importer::importFile(const std::string& sourcePath,
     r.success = core.ok;
     r.usedCache = core.usedCache;
     r.errorMessage = core.error;
+    if (core.cancelled && r.errorMessage.empty()) {
+        r.errorMessage = "import cancelled";
+    }
+    return r;
+}
+
+Importer::Result Importer::importAnimationFile(
+    const std::string& sourcePath,
+    const std::string& destinationDir,
+    const ayt::resource::SourceCoordinatePolicy& sourceCoordinates)
+{
+    ayt::resource::ImportOptions opts;
+    opts.sourcePath = sourcePath;
+    opts.outputDir = destinationDir;
+    opts.force = forceImportRequested();
+    opts.requireCharacterAssets = false;
+    opts.requireAnimationAssets = true;
+    opts.loadOption = ayt::resource::IConverter::LoadOption::AnimationOnly;
+    opts.cookTextures = false;
+    opts.sourceCoordinates = sourceCoordinates;
+
+    const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
+
+    Result r;
+    r.conversion = core.conversion;
+    r.success = core.ok;
+    r.usedCache = core.usedCache;
+    r.errorMessage = core.error;
+    if (r.success) {
+        bool hasAnimation = false;
+        for (const auto& resource : r.conversion.resources) {
+            std::string type = resource.type;
+            std::transform(type.begin(), type.end(), type.begin(),
+                [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+            if (type == "animation" && !resource.path.empty()) {
+                hasAnimation = true;
+                break;
+            }
+        }
+        if (!hasAnimation) {
+            r.success = false;
+            r.errorMessage = "animation source produced no Animation resource";
+        }
+    }
     if (core.cancelled && r.errorMessage.empty()) {
         r.errorMessage = "import cancelled";
     }

@@ -21,7 +21,8 @@
 // ImportedMapper (per the CMakeLists split) — see the test files'
 // TU build for those.
 // Keep this aggregation explicit: CMake compiles main.cpp, so these included
-// test sources share one test-registration translation unit.
+// test sources (including model + external-animation import mapping) share one
+// test-registration translation unit.
 // Changes to an included Test_*.cpp require this TU to rebuild as well; keep
 // this aggregation note adjacent to the includes so that dependency remains
 // visible to maintainers and build-system work.

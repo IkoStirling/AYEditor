@@ -1,8 +1,8 @@
 // AYImportedCharacterMapper.cpp - Phase 1 G1 implementation.
 //
-// Pure helper. Walks a ConversionResult, picks first-of-type (plus all
-// Mesh entries), joins virtual paths against cacheRoot to produce
-// absolute paths.
+// Pure helper. Walks a ConversionResult, selects character-renderable
+// skinned meshes when role metadata is available, and joins virtual paths
+// against cacheRoot to produce absolute paths.
 
 #include "AYEditor/ImportedCharacterMapper.h"
 
@@ -74,10 +74,37 @@ ImportedCharacter mapConversionToImportedCharacter(
 {
     outDiag = ImportedCharacterMapDiagnostics{};
 
-    const std::string& meshRef     = pickFirst(result.resources, "Mesh");
     const std::string& materialRef = pickFirst(result.resources, "Material");
     const std::string& skelRef     = pickFirst(result.resources, "Skeleton");
     const std::string& animRef     = pickFirst(result.resources, "Animation");
+
+    // Modern sidecars classify every converted mesh. Character spawning must
+    // not treat MMD rigid-body/collider helper meshes as renderable body parts.
+    // Legacy sidecars have no role metadata, so preserve their original
+    // first-plus-rest behavior until they are rebuilt.
+    bool hasMeshRoleMetadata = false;
+    std::vector<const ayt::resource::ConversionResult::ConvertedResource*>
+        characterMeshes;
+    for (const auto& res : result.resources) {
+        if (lowerCopy(res.type) != "mesh" || res.path.empty()) {
+            continue;
+        }
+        if (!res.role.empty()) {
+            hasMeshRoleMetadata = true;
+        }
+    }
+    for (const auto& res : result.resources) {
+        if (lowerCopy(res.type) != "mesh" || res.path.empty()) {
+            continue;
+        }
+        if (!hasMeshRoleMetadata || lowerCopy(res.role) == "skinnedmesh") {
+            characterMeshes.push_back(&res);
+        }
+    }
+
+    const std::string meshRef = characterMeshes.empty()
+        ? std::string{}
+        : characterMeshes.front()->path;
 
     ImportedCharacter out;
     if (!meshRef.empty())
@@ -89,17 +116,11 @@ ImportedCharacter mapConversionToImportedCharacter(
     if (!animRef.empty())
         out.animationPath = joinAssetPath(cacheRoot, animRef);
 
-    // Collect every Mesh after the first (MMD body/hair/parts).
-    bool sawFirstMesh = false;
-    for (const auto& res : result.resources) {
-        if (lowerCopy(res.type) != "mesh" || res.path.empty()) {
-            continue;
-        }
-        if (!sawFirstMesh) {
-            sawFirstMesh = true;
-            continue;
-        }
-        out.additionalMeshPaths.push_back(joinAssetPath(cacheRoot, res.path));
+    // Collect every additional skinned body/hair/part. Static helpers are
+    // deliberately excluded when modern role metadata is present.
+    for (size_t i = 1; i < characterMeshes.size(); ++i) {
+        out.additionalMeshPaths.push_back(
+            joinAssetPath(cacheRoot, characterMeshes[i]->path));
     }
 
     if (meshRef.empty())     outDiag.missing.emplace_back("Mesh");
@@ -110,6 +131,16 @@ ImportedCharacter mapConversionToImportedCharacter(
     // Mesh + Skeleton are enough to show a bind-pose skinned character.
     outDiag.success = out.isValid();
     return out;
+}
+
+std::string mapFirstAnimationPath(
+    const ayt::resource::ConversionResult& result,
+    const std::string& cacheRoot)
+{
+    const std::string& animationRef = pickFirst(result.resources, "Animation");
+    return animationRef.empty()
+        ? std::string{}
+        : joinAssetPath(cacheRoot, animationRef);
 }
 
 } // namespace ayt::editor

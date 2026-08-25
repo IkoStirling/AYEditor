@@ -491,6 +491,13 @@ void EditorSession::autoEnterNetClientPlay()
     _gameView.setMode(EditorMode::Play);
 }
 
+void EditorSession::autoEnterImportedAnimationPlay()
+{
+    std::fprintf(stderr,
+        "[EditorSession] animated character ready: auto-entering Play mode\n");
+    _gameView.setMode(EditorMode::Play);
+}
+
 bool EditorSession::getViewportBounds(ayt::math::FRectangle& outBounds) const {
     ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
     if (viewport == nullptr) {

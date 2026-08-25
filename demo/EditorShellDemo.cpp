@@ -1,9 +1,9 @@
 // EditorShellDemo.cpp — E2-composite entry: EditorApp + single-window bgfx composite
 //
-// Default character: Sour Miku FBX (MMD-origin, model only — no clip).
-// First convert can take ~1–2 minutes; later launches reuse
-// ayeditor_cache/.../Sour.aydep.json (bind-pose preview). Override with
-// `--import <other.fbx>`, AY_EDITOR_FORCE_IMPORT=1, or
+// Default character: Sour.fbx owns render assets; SourWithAnim.fbx contributes
+// only the first baked animation clip. Later launches reuse both sidecars.
+// Override with `--import <model.fbx> --animation <clip.fbx>`,
+// AY_EDITOR_FORCE_IMPORT=1, or
 // AY_EDITOR_CHARACTER_SCALE=<float>.
 
 #include "AYEditor/EditorApp.h"
@@ -30,6 +30,10 @@ namespace {
 
 constexpr const char* kEditorConfigRelativePath = "assets/config/editor.json";
 constexpr const char* kDefaultImportPathKey = "Editor.DefaultImportPath";
+constexpr const char* kDefaultAnimationImportPathKey =
+    "Editor.DefaultAnimationImportPath";
+constexpr const char* kAutoPlayImportedAnimationKey =
+    "Editor.AutoPlayImportedAnimation";
 constexpr const char* kMaterialPolicyTagKey = "Editor.MaterialPolicy.Tag";
 constexpr const char* kOpaqueMaterialsKey = "Editor.MaterialPolicy.Opaque";
 constexpr const char* kMaskMaterialsKey = "Editor.MaterialPolicy.Mask";
@@ -293,9 +297,15 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     const bool configLoaded = editorConfig.loadFromFile(configPath);
     const std::string defaultImportPath =
         editorConfig.getString(kDefaultImportPathKey);
+    const std::string defaultAnimationImportPath =
+        editorConfig.getString(kDefaultAnimationImportPathKey);
 
     auto app = ayt::editor::EditorApp::create(desc);
     app->setDefaultImportPath(defaultImportPath);
+    app->setDefaultAnimationImportPath(defaultAnimationImportPath);
+    const bool autoPlayImportedAnimation =
+        editorConfig.getBool(kAutoPlayImportedAnimationKey, false);
+    app->setAutoPlayImportedAnimation(autoPlayImportedAnimation);
     const ayt::resource::SourceCoordinatePolicy coordinates =
         sourceCoordinatePolicy(editorConfig);
     app->setDefaultSourceCoordinates(coordinates);
@@ -317,16 +327,21 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     std::fprintf(stderr,
                  "[EditorShellDemo] config: %s (%s)\n"
                  "[EditorShellDemo] default import: %s\n"
+                 "[EditorShellDemo] default animation: %s\n"
+                 "[EditorShellDemo] auto-play imported animation: %s\n"
                  "[EditorShellDemo] source coordinates: %s tag='%s'\n"
                  "[EditorShellDemo] source UV origin: %s -> engine TopLeft\n"
                  "[EditorShellDemo] normal map convention: %s\n"
-                 "[EditorShellDemo] note: model-only FBX → bind-pose; "
-                 "first convert ~1–2 min, then cache\n"
+                 "[EditorShellDemo] note: first imported animation clip "
+                 "auto-plays; model-only FBX stays in bind pose\n"
                  "[EditorShellDemo] net client: AYEditorShell_Demo.exe --net-client "
                  "[--net-host 127.0.0.1] (start server Play first)\n",
                  configPath.c_str(), configLoaded ? "loaded" : "not found",
                  defaultImportPath.empty() ? "(none; cube fallback)"
                                            : defaultImportPath.c_str(),
+                 defaultAnimationImportPath.empty() ? "(none; bind pose)"
+                                                    : defaultAnimationImportPath.c_str(),
+                 autoPlayImportedAnimation ? "enabled" : "disabled",
                  coordinates.mode == ayt::resource::SourceCoordinateMode::Manual
                      ? "manual" : "auto",
                  ayt::resource::sourceCoordinatePolicyCacheTag(coordinates).c_str(),

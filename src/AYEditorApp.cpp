@@ -225,6 +225,16 @@ std::string findImportPath(const std::vector<std::string>& tokens)
     return std::string{};
 }
 
+std::string findAnimationImportPath(const std::vector<std::string>& tokens)
+{
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (tokens[i] == "--animation") {
+            return i + 1 < tokens.size() ? tokens[i + 1] : std::string{};
+        }
+    }
+    return std::string{};
+}
+
 bool hasNetClientFlag(const std::vector<std::string>& tokens)
 {
     for (const std::string& token : tokens) {
@@ -423,6 +433,49 @@ void EditorApp::run()
             }
         }
     }
+
+    // A model source owns render assets and the target skeleton. A separate
+    // animation source contributes only .ayanm clips, preventing re-exported
+    // animation FBX files from replacing valid model textures/materials.
+    if (!netClientMode && importedCharacter.isValid()) {
+        std::string animationImportPath = findAnimationImportPath(cmdTokens);
+        if (animationImportPath.empty()) {
+            animationImportPath = _defaultAnimationImportPath;
+        }
+        if (!animationImportPath.empty()) {
+            const std::string cacheRoot =
+                EditorPlayRuntime::resolvePersistentCacheRoot();
+            const std::string assetRoot = cacheRoot + "assets\\";
+            std::fprintf(stderr,
+                         "[EditorApp] importing animation source: %s\n",
+                         animationImportPath.c_str());
+            const Importer::Result animationResult =
+                Importer::importAnimationFile(animationImportPath, assetRoot,
+                                              _sourceCoordinates);
+            if (!animationResult.success) {
+                std::fprintf(stderr,
+                             "[EditorApp] animation import failed: %s "
+                             "(character remains in bind pose)\n",
+                             animationResult.errorMessage.c_str());
+                importedCharacter.animationPath.clear();
+            } else {
+                const std::string clipPath = mapFirstAnimationPath(
+                    animationResult.conversion, cacheRoot);
+                if (clipPath.empty()) {
+                    std::fprintf(stderr,
+                                 "[EditorApp] animation source produced no clip "
+                                 "(character remains in bind pose)\n");
+                    importedCharacter.animationPath.clear();
+                } else {
+                    importedCharacter.animationPath = clipPath;
+                    std::fprintf(stderr,
+                                 "[EditorApp] external animation ready: %s%s\n",
+                                 clipPath.c_str(),
+                                 animationResult.usedCache ? " (cache)" : "");
+                }
+            }
+        }
+    }
     AY_EDITOR_HEAP_CHECK("after_import_before_runtime_init");
 
     onInit();
@@ -498,7 +551,13 @@ void EditorApp::run()
         return;
     }
 
-    session.autoEnterNetClientPlay();
+    if (netClientMode) {
+        session.autoEnterNetClientPlay();
+    } else if (_autoPlayImportedAnimation
+               && importedCharacter.isValid()
+               && !importedCharacter.animationPath.empty()) {
+        session.autoEnterImportedAnimationPlay();
+    }
 
         rendererSub = ayt::render::RendererSubSystem::findRegistered();
         if (rendererSub == nullptr) {

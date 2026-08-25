@@ -84,6 +84,14 @@ TEST_CASE(import_missing_file_returns_error)
     CHECK_TRUE(r.errorMessage.find("does not exist") != std::string::npos);
 }
 
+TEST_CASE(import_animation_missing_file_returns_error)
+{
+    Importer::Result r = Importer::importAnimationFile(
+        "D:/no/such/path/missing_animation.fbx", "D:/tmp/cache");
+    CHECK_FALSE(r.success);
+    CHECK_TRUE(r.errorMessage.find("does not exist") != std::string::npos);
+}
+
 TEST_CASE(import_unsupported_extension_returns_error_with_supported_list)
 {
     // Create a real on-disk file with an unsupported extension; the

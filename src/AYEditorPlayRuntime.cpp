@@ -750,16 +750,17 @@ bool EditorPlayRuntime::ensureAssets() {
         return false;
     }
 
-    if (!fileExists(_meshPath)) {
-        ayt::resource::Mesh mesh;
-        mesh.createCube(1.0f);
-        std::vector<ayt::resource::UInt8> meshBinary;
-        if (!mesh.saveToBinary(meshBinary)) {
-            return false;
-        }
-        if (!writeBytes(_meshPath, meshBinary.data(), meshBinary.size())) {
-            return false;
-        }
+    // This is an engine-owned generated cache asset, not user content. Always
+    // refresh it so persisted cubes from the former CCW-front contract cannot
+    // survive an Editor upgrade and be front-face culled.
+    ayt::resource::Mesh mesh;
+    mesh.createCube(1.0f);
+    std::vector<ayt::resource::UInt8> meshBinary;
+    if (!mesh.saveToBinary(meshBinary)) {
+        return false;
+    }
+    if (!writeBytes(_meshPath, meshBinary.data(), meshBinary.size())) {
+        return false;
     }
 
     const std::string shaderDumpDir  = _cacheRoot + "shader_dump\\";

@@ -1,6 +1,8 @@
 {
   "Editor": {
     "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour.fbx",
+    "DefaultAnimationImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/SourWithAnim.fbx",
+    "AutoPlayImportedAnimation": true,
     "Import": {
       "SourceCoordinates": {
         "Mode": "Manual",

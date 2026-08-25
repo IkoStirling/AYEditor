@@ -33,6 +33,16 @@ public:
     // Used by AYEditorShell_Demo to preload a character FBX when the
     // user did not pass `--import <path>`. Empty = no default (cube).
     void setDefaultImportPath(std::string path) { _defaultImportPath = std::move(path); }
+    // Optional second source used only for animation clips. The model source
+    // remains authoritative for mesh, materials, textures and skeleton.
+    void setDefaultAnimationImportPath(std::string path) {
+        _defaultAnimationImportPath = std::move(path);
+    }
+    // Demo convenience: after a character with an animation clip has been
+    // imported, enter Play immediately so the clip can be previewed.
+    void setAutoPlayImportedAnimation(bool enabled) {
+        _autoPlayImportedAnimation = enabled;
+    }
     void setDefaultSourceCoordinates(
         ayt::resource::SourceCoordinatePolicy policy) {
         _sourceCoordinates = std::move(policy);
@@ -79,6 +89,7 @@ private:
     ayt::app::GameDesc       _desc;
     ayt::app::AppCommandLine _cmdLine;
     std::string              _defaultImportPath;
+    std::string              _defaultAnimationImportPath;
     std::string              _materialPolicyTag;
     std::string              _opaqueMaterialIndices;
     std::string              _maskMaterialIndices;
@@ -90,6 +101,7 @@ private:
     std::string              _doubleSidedMaterialNames;
     ayt::resource::SourceCoordinatePolicy _sourceCoordinates;
     float _normalMapYSign = 1.0f;
+    bool _autoPlayImportedAnimation = false;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

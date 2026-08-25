@@ -21,6 +21,7 @@
 using ayt::editor::ImportedCharacter;
 using ayt::editor::ImportedCharacterMapDiagnostics;
 using ayt::editor::mapConversionToImportedCharacter;
+using ayt::editor::mapFirstAnimationPath;
 using ayt::resource::ConversionResult;
 
 namespace {
@@ -147,6 +148,35 @@ TEST_CASE(map_conversion_picks_first_resource_of_each_type_when_duplicates)
         "D:/tmp/ayeditor_cache/assets/meshes/suzanne_collider.aymesh");
 }
 
+TEST_CASE(map_conversion_ignores_static_helpers_when_mesh_roles_are_present)
+{
+    ConversionResult r = makeFullResult();
+    r.resources[0].role = "SkinnedMesh";
+
+    ConversionResult::ConvertedResource rigidBody;
+    rigidBody.type = "Mesh";
+    rigidBody.role = "StaticMesh";
+    rigidBody.path = "meshes/hero_rigid_body.aymesh";
+    r.resources.insert(r.resources.begin(), rigidBody);
+
+    ConversionResult::ConvertedResource hair;
+    hair.type = "Mesh";
+    hair.role = "SkinnedMesh";
+    hair.path = "meshes/hero_hair.aymesh";
+    r.resources.insert(r.resources.begin() + 2, hair);
+
+    ImportedCharacterMapDiagnostics diag;
+    const ImportedCharacter c =
+        mapConversionToImportedCharacter(r, kCacheRoot, diag);
+
+    CHECK_TRUE(diag.success);
+    CHECK_TRUE(c.meshPath ==
+        "D:/tmp/ayeditor_cache/assets/meshes/suzanne_RootNode_Suzanne.aymesh");
+    CHECK_TRUE(c.additionalMeshPaths.size() == 1);
+    CHECK_TRUE(c.additionalMeshPaths[0] ==
+        "D:/tmp/ayeditor_cache/assets/meshes/hero_hair.aymesh");
+}
+
 // Defensive: EditorPlayRuntime::resolvePersistentCacheRoot() and any
 // future caller may pass the cache root with or without a trailing
 // separator. All three forms must produce the same absolute paths.
@@ -197,6 +227,23 @@ TEST_CASE(map_conversion_with_empty_resources_vector_returns_invalid)
     CHECK_TRUE(c.materialPath.empty());
     CHECK_TRUE(c.skeletonPath.empty());
     CHECK_TRUE(c.animationPath.empty());
+}
+
+TEST_CASE(map_dedicated_animation_conversion_resolves_first_clip_only)
+{
+    ConversionResult r;
+    ConversionResult::ConvertedResource helper;
+    helper.type = "Mesh";
+    helper.path = "meshes/animation_export_helper.aymesh";
+    r.resources.push_back(helper);
+
+    ConversionResult::ConvertedResource clip;
+    clip.type = "Animation";
+    clip.path = "animations/hero_walk.ayanm";
+    r.resources.push_back(clip);
+
+    CHECK_TRUE(mapFirstAnimationPath(r, kCacheRoot) ==
+        "D:/tmp/ayeditor_cache/assets/animations/hero_walk.ayanm");
 }
 
 TEST_SUITE_END

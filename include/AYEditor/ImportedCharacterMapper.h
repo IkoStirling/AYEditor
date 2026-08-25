@@ -20,8 +20,9 @@
 // Visibility policy (2026-07-27): Mesh + Skeleton are REQUIRED.
 // Material and Animation are optional (listed in `missing` for
 // diagnostics but do not fail `success`). Empty animation → bind-pose
-// preview. All Mesh entries after the first go into
-// `additionalMeshPaths` (MMD multi-part FBX).
+// preview. Modern sidecars select only Mesh resources whose role is
+// "SkinnedMesh"; this excludes MMD collider/rigid-body helper geometry.
+// Legacy sidecars without role metadata retain first-plus-rest behavior.
 
 #include <AYResource/IConverter.h>
 #include <string>
@@ -49,10 +50,16 @@ struct ImportedCharacterMapDiagnostics {
 //
 // Returns:
 //   * success when Mesh + Skeleton are present (isValid() true).
-//   * All Mesh resources after the first populate additionalMeshPaths.
+//   * Additional SkinnedMesh resources populate additionalMeshPaths.
 ImportedCharacter mapConversionToImportedCharacter(
     const ayt::resource::ConversionResult& result,
     const std::string& cacheRoot,
     ImportedCharacterMapDiagnostics& outDiag);
+
+// Resolve the first Animation resource from a dedicated animation import.
+// Empty means that the conversion did not contain a usable clip.
+std::string mapFirstAnimationPath(
+    const ayt::resource::ConversionResult& result,
+    const std::string& cacheRoot);
 
 } // namespace ayt::editor

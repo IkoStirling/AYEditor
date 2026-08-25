@@ -107,6 +107,9 @@ public:
 
     // `--net-client`: enter Play immediately after presentation bootstrap.
     void autoEnterNetClientPlay();
+    // Demo animation preview: enter Play after a local animated character
+    // has been imported and presentation bootstrap is complete.
+    void autoEnterImportedAnimationPlay();
 
     bool onMouseMove(float x, float y);
     bool onMouseButtonDown(float x, float y, int button);
