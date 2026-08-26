@@ -1,17 +1,17 @@
 {
   "Editor": {
-    "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour.fbx",
+    "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour_fix.fbx",
     "DefaultAnimationImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/SourWithAnim.fbx",
     "AutoPlayImportedAnimation": true,
     "Import": {
       "SourceCoordinates": {
-        "Mode": "Manual",
+        "Mode": "Auto",
         "Up": "+Z",
         "Forward": "-Y",
         "Handedness": "Right",
         "UVOrigin": "BottomLeft",
         "MetersPerUnit": 0.0,
-        "Tag": "sour-blender-zup-rh-file-units-v2"
+        "Tag": "sour-fbx-metadata-auto-v3"
       }
     },
     "MaterialPolicy": {

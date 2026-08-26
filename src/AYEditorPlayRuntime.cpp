@@ -1439,24 +1439,15 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
         return false;
     }
 
-    // Default 1.0 — Assimp FBX often already lands near meters. MMD cm
-    // assets: set AY_EDITOR_CHARACTER_SCALE=0.01. The previous 0.01
-    // default made meter-scale meshes an invisible speck next to the cube.
-    float characterScale = 1.0f;
-    if (const std::string envScale = ayt::io::env::get("AY_EDITOR_CHARACTER_SCALE").value_or(""); !envScale.empty()) {
-        const float parsed = static_cast<float>(std::atof(envScale.c_str()));
-        if (parsed > 0.0f) {
-            characterScale = parsed;
-        }
-    }
     // Axis/handedness/unit conversion belongs to the importer. Cooked .aymesh,
     // .ayskel and .ayanm assets are already in engine +Y-up/+Z-forward space;
-    // applying a model-specific rotation here would double-convert them.
-    auto applySpawnXform = [characterScale](ayt::entity::Entity* e) {
+    // applying a model-specific rotation or scale here would double-convert
+    // them. Source object/armature scale is normalized during import and mesh
+    // vertices are authoritative for the character's real size.
+    auto applySpawnXform = [](ayt::entity::Entity* e) {
         if (e == nullptr) return;
         if (auto* xf = e->getComponent<ayt::entity::Transform>()) {
-            xf->scale = ayt::math::FVector3(
-                characterScale, characterScale, characterScale);
+            xf->scale = ayt::math::FVector3(1.0f, 1.0f, 1.0f);
         }
     };
     applySpawnXform(_characterEntity);
@@ -1474,10 +1465,9 @@ bool EditorPlayRuntime::trySpawnImportedCharacter() {
     }
 
     std::fprintf(stderr,
-        "[EditorPlayRuntime] spawned character meshes=%zu scale=%.4f "
-        "(anim=%s)\n",
+        "[EditorPlayRuntime] spawned character meshes=%zu scale=1.0000 "
+        "(import-size authoritative, anim=%s)\n",
         1u + _additionalCharacterEntities.size(),
-        characterScale,
         _importedCharacter.animationPath.empty() ? "bind-pose"
                                                  : "clip");
 

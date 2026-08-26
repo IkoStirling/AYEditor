@@ -2,9 +2,9 @@
 //
 // Default character: Sour.fbx owns render assets; SourWithAnim.fbx contributes
 // only the first baked animation clip. Later launches reuse both sidecars.
-// Override with `--import <model.fbx> --animation <clip.fbx>`,
-// AY_EDITOR_FORCE_IMPORT=1, or
-// AY_EDITOR_CHARACTER_SCALE=<float>.
+// Override with `--import <model.fbx> --animation <clip.fbx>` or
+// AY_EDITOR_FORCE_IMPORT=1. Imported geometry is already authored at its
+// real engine-space size; the runtime never applies a per-character scale.
 
 #include "AYEditor/EditorApp.h"
 #include "AYGameLoop.h"
