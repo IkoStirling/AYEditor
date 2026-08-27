@@ -43,6 +43,8 @@
 
 #include <AYScript/logia/CompilerError.h>
 
+#include <algorithm>
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -130,6 +132,18 @@ void startEditorNetworkListenServer()
         return;
     }
     if (net->getMode() != ayt::net::ConnectionMode::Disconnected) {
+        return;
+    }
+    if (net->isP2PConfigured()) {
+        net->setP2PHostMigrationEnabled(true);
+        if (!net->listenP2P()) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] P2P listen-server failed\n");
+            return;
+        }
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P listen-server local=%s\n",
+            net->getLocalPeerId().value.c_str());
         return;
     }
     const uint16_t port = resolveEditorPlayNetworkPort();
@@ -342,6 +356,20 @@ void EditorPlayRuntime::startEditorNetworkClient()
     if (net->getMode() != ayt::net::ConnectionMode::Disconnected) {
         return;
     }
+    if (net->isP2PConfigured()) {
+        net->setP2PHostMigrationEnabled(true);
+        if (!net->connectP2P(ayt::net::PeerId{_netConnectHost})) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] P2P client connect failed remote=%s\n",
+                _netConnectHost.c_str());
+            return;
+        }
+        net->setP2PLocalReady(true);
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P client connecting local=%s remote=%s\n",
+            net->getLocalPeerId().value.c_str(), _netConnectHost.c_str());
+        return;
+    }
     const uint16_t port = resolveEditorPlayNetworkPort();
     net->connect(_netConnectHost.c_str(), port);
     std::fprintf(stderr,
@@ -362,7 +390,7 @@ void EditorPlayRuntime::installServerReplicationLateJoinHandler()
     _serverLateJoinHandlerInstalled = true;
     net->onConnectionChange([this](ayt::net::NetConnection* conn, bool connected,
                                    ayt::net::DisconnectReason /*reason*/) {
-        if (!connected || _netPlayRole != NetPlayRole::Server) {
+        if (!connected || !hasNetworkAuthority()) {
             return;
         }
         rebroadcastServerReplicationSpawns(conn);
@@ -381,9 +409,14 @@ void EditorPlayRuntime::installClientReplicationConnectHandler()
         return;
     }
     _clientConnectHandlerInstalled = true;
-    net->onConnectionChange([this](ayt::net::NetConnection* /*conn*/, bool connected,
+    net->onConnectionChange([this](ayt::net::NetConnection* conn, bool connected,
                                    ayt::net::DisconnectReason /*reason*/) {
-        if (!connected || _netPlayRole != NetPlayRole::Client) {
+        if (!connected) {
+            return;
+        }
+        if (hasNetworkAuthority()) {
+            rebroadcastServerReplicationSpawns(conn);
+            _pendingLateJoinConn = conn;
             return;
         }
         std::fprintf(stderr,
@@ -392,27 +425,104 @@ void EditorPlayRuntime::installClientReplicationConnectHandler()
     });
 }
 
+bool EditorPlayRuntime::hasNetworkAuthority() const
+{
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net != nullptr && net->isP2PConfigured()) {
+        const ayt::net::P2PSessionInfo session = net->getP2PSessionInfo();
+        if (session.role != ayt::net::P2PSessionRole::None) {
+            return session.role == ayt::net::P2PSessionRole::Host;
+        }
+    }
+    return _netPlayRole == NetPlayRole::Server;
+}
+
+void EditorPlayRuntime::installP2PSessionLifecycleHandler()
+{
+    if (_p2pSessionListenerId != 0) {
+        return;
+    }
+    auto* net = ayt::net::findRegisteredNetworkSubSystem();
+    if (net == nullptr) {
+        return;
+    }
+    _p2pSessionListenerId = net->addP2PSessionEventListener(
+        [this](const ayt::net::P2PSessionEvent& event) {
+            handleP2PSessionEvent(event);
+        });
+}
+
+void EditorPlayRuntime::removeP2PSessionLifecycleHandler() noexcept
+{
+    if (_p2pSessionListenerId == 0) {
+        return;
+    }
+    if (auto* net = ayt::net::findRegisteredNetworkSubSystem()) {
+        net->removeP2PSessionEventListener(_p2pSessionListenerId);
+    }
+    _p2pSessionListenerId = 0;
+    _networkMigrationActive = false;
+}
+
+void EditorPlayRuntime::promoteReplicatedEntitiesToAuthority()
+{
+    size_t promoted = 0;
+    for (const auto& entry : _clientReplicatedEntities) {
+        ayt::entity::Entity* entity = entry.second;
+        if (entity == nullptr) {
+            continue;
+        }
+        if (auto* component = entity->getComponent<ayt::entity::NetworkComponent>()) {
+            component->setOwner(true);
+            ++promoted;
+        }
+    }
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] P2P authority acquired; retained replication objects=%zu\n",
+        promoted);
+}
+
+void EditorPlayRuntime::handleP2PSessionEvent(
+    const ayt::net::P2PSessionEvent& event)
+{
+    switch (event.type) {
+    case ayt::net::P2PSessionEventType::MigrationStarted:
+        _networkMigrationActive = true;
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P host migration started epoch=%u previous=%s elected=%s\n",
+            event.session.epoch,
+            event.session.previousHostPeerId.value.c_str(),
+            event.session.electedHostPeerId.value.c_str());
+        break;
+    case ayt::net::P2PSessionEventType::AuthorityChanged:
+        _networkMigrationActive = false;
+        if (event.session.role == ayt::net::P2PSessionRole::Host) {
+            promoteReplicatedEntitiesToAuthority();
+        }
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P authority changed epoch=%u host=%s localRole=%s\n",
+            event.session.epoch, event.session.hostPeerId.value.c_str(),
+            event.session.role == ayt::net::P2PSessionRole::Host ? "host" : "client");
+        break;
+    case ayt::net::P2PSessionEventType::MigrationFailed:
+        _networkMigrationActive = false;
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P host migration failed epoch=%u\n",
+            event.session.epoch);
+        break;
+    case ayt::net::P2PSessionEventType::SeatReserved:
+    case ayt::net::P2PSessionEventType::SeatRestored:
+    case ayt::net::P2PSessionEventType::SeatReservationExpired:
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] P2P seat event=%u peer=%s seat=%u\n",
+            static_cast<unsigned>(event.type),
+            event.subjectPeerId.value.c_str(), event.seatId);
+        break;
+    }
+}
+
 void EditorPlayRuntime::rebroadcastServerReplicationSpawns(ayt::net::NetConnection* lateJoiner)
 {
-    if (_cubeEntity == nullptr) {
-        std::fprintf(stderr,
-            "[EditorPlayRuntime] rebroadcast skipped: no cube entity (enter Play on server first)\n");
-        return;
-    }
-    auto* netComp = _cubeEntity->getComponent<ayt::entity::NetworkComponent>();
-    auto* health = _cubeEntity->getComponent<ayt::entity::HealthComponent>();
-    if (netComp == nullptr || health == nullptr) {
-        std::fprintf(stderr,
-            "[EditorPlayRuntime] rebroadcast skipped: cube missing Network/Health component\n");
-        return;
-    }
-    if (!netComp->isReplicationBound()) {
-        std::fprintf(stderr,
-            "[EditorPlayRuntime] rebroadcast skipped: cube replication not bound "
-            "(bindReplication failed at Play start?)\n");
-        return;
-    }
-
     auto* net = ayt::net::findRegisteredNetworkSubSystem();
     if (net == nullptr) {
         return;
@@ -422,26 +532,52 @@ void EditorPlayRuntime::rebroadcastServerReplicationSpawns(ayt::net::NetConnecti
         return;
     }
 
-    const uint32_t netId = netComp->getNetId();
-    if (mgr->rebroadcastEntitySpawn(netId, lateJoiner)) {
-        std::fprintf(stderr,
-            "[EditorPlayRuntime] rebroadcast EntitySpawn netId=%u for late joiner\n",
-            netId);
-    } else {
-        std::fprintf(stderr,
-            "[EditorPlayRuntime] rebroadcast EntitySpawn failed netId=%u "
-            "(no registered replication object?)\n",
-            netId);
+    std::vector<uint32_t> netIds;
+    const auto appendNetId = [&netIds](ayt::entity::Entity* entity) {
+        if (entity == nullptr) {
+            return;
+        }
+        if (auto* component = entity->getComponent<ayt::entity::NetworkComponent>()) {
+            const uint32_t netId = component->getNetId();
+            if (netId != 0 && std::find(netIds.begin(), netIds.end(), netId) == netIds.end()) {
+                netIds.push_back(netId);
+            }
+        }
+    };
+    appendNetId(_cubeEntity);
+    for (const auto& entry : _clientReplicatedEntities) {
+        appendNetId(entry.second);
+    }
+
+    for (uint32_t netId : netIds) {
+        if (mgr->findObject(netId) != nullptr
+            && mgr->rebroadcastEntitySpawn(netId, lateJoiner)) {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] rebroadcast EntitySpawn netId=%u for late joiner\n",
+                netId);
+        } else {
+            std::fprintf(stderr,
+                "[EditorPlayRuntime] rebroadcast EntitySpawn failed netId=%u "
+                "(no registered replication object?)\n",
+                netId);
+        }
     }
 }
 
 void EditorPlayRuntime::clearClientReplicatedEntities() noexcept
 {
-    if (ayt::entity::World::instance().isInitialized()) {
-        for (const auto& entry : _clientReplicatedEntities) {
-            if (entry.second != nullptr) {
-                ayt::entity::World::instance().destroyEntity(entry.second);
-            }
+    ayt::net::ReplicationManager* replication = nullptr;
+    if (auto* net = ayt::net::findRegisteredNetworkSubSystem()) {
+        replication = net->getReplicationManager();
+    }
+    const bool worldInitialized = ayt::entity::World::instance().isInitialized();
+    for (const auto& entry : _clientReplicatedEntities) {
+        if (replication != nullptr) {
+            ayt::net::EntityReplicationAdapter::unregisterEntityComponent(
+                *replication, entry.first);
+        }
+        if (worldInitialized && entry.second != nullptr) {
+            ayt::entity::World::instance().destroyEntity(entry.second);
         }
     }
     _clientReplicatedEntities.clear();
@@ -517,7 +653,7 @@ bool EditorPlayRuntime::trySpawnClientReplicatedEntity(uint32_t netId, uint64_t 
 
 void EditorPlayRuntime::pollClientNetworkReplication()
 {
-    if (_netPlayRole != NetPlayRole::Client || !_simulationActive) {
+    if (hasNetworkAuthority() || !_simulationActive) {
         return;
     }
 
@@ -927,6 +1063,7 @@ bool EditorPlayRuntime::ensurePresentationReady()
     installNetworkComponentBindingsOnce();
     ayt::net::registerNetworkSubSystem();
     ayt::render::RendererSubSystem::registerSubSystem();
+    installP2PSessionLifecycleHandler();
     if (_netPlayRole == NetPlayRole::Server) {
         installServerReplicationLateJoinHandler();
     } else {
@@ -1173,7 +1310,7 @@ void EditorPlayRuntime::registerUpdateListener() {
     }
 
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
-        if (_netPlayRole == NetPlayRole::Client) {
+        if (!hasNetworkAuthority()) {
             pollClientNetworkReplication();
         } else {
             if (_pendingLateJoinConn != nullptr) {
@@ -1628,6 +1765,10 @@ bool EditorPlayRuntime::startPlay()
     spawnGroundIfNeeded();
     spawnGlassIfNeeded();
     wireCubeNetworkReplication(_cubeEntity);
+    if (auto* net = ayt::net::findRegisteredNetworkSubSystem();
+        net != nullptr && net->isP2PConfigured()) {
+        net->setP2PLocalReady(true);
+    }
 
     // INT-01 (2026-07-15): spawn a PlayerController ScriptComponent
     // and bind <assetRoot>/Scripts/PlayerController.logia. The hot
@@ -1690,6 +1831,7 @@ void EditorPlayRuntime::shutdownEngine()
     _sceneLightsStorage.reset();
     _skySourceStorage.reset();
 
+    removeP2PSessionLifecycleHandler();
     enterEdit();
 
     if (_engineInitialized) {

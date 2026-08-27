@@ -434,6 +434,22 @@ PR-4 ship 了 `_editScene` ownership + transport bar UX；PR-5 ship 了 Hierarch
 This boundary removes per-panel global world lookup and is the injection point
 for future preview worlds and multiple editor viewports.
 
+### 4.3.network P2P authority migration
+
+`NetPlayRole` is the immutable launch/world-ownership role. Runtime authority
+is queried from AYNetwork's `P2PSessionInfo`: a client promoted by Host
+Migration becomes authoritative without being reclassified as a server-owned
+Play Scene. This distinction keeps `enterEdit()` teardown on the World that
+originally created each entity.
+
+When AYNetwork is preconfigured for P2P, Play uses `listenP2P()` or
+`connectP2P()` and enables host migration; otherwise the existing IP
+listen/connect path remains unchanged. `EditorPlayRuntime` subscribes to P2P
+session lifecycle events. On `AuthorityChanged` to Host it marks retained
+client replication objects as owned, stops client polling, and rebroadcasts all
+registered spawn announcements to later connections. The listener is removed
+before runtime shutdown so no callback can target a destroyed editor object.
+
 ---
 
 ## 5. Editor chrome (AYUI)

@@ -19,6 +19,7 @@ class World;
 
 namespace ayt::net {
 class NetConnection;
+struct P2PSessionEvent;
 }
 
 namespace ayt::game {
@@ -75,6 +76,10 @@ public:
     }
     void setNetPlayRole(NetPlayRole role) { _netPlayRole = role; }
     NetPlayRole netPlayRole() const { return _netPlayRole; }
+    // The launch role is stable, while P2P host migration can transfer the
+    // live simulation authority to a runtime that launched as a client.
+    bool hasNetworkAuthority() const;
+    bool isNetworkMigrationActive() const { return _networkMigrationActive; }
     void setNetConnectHost(std::string host) { _netConnectHost = std::move(host); }
 
     // Phase 2a: hot-swap. Replaces whatever entity is currently
@@ -192,6 +197,10 @@ private:
     void startEditorNetworkClient();
     void installServerReplicationLateJoinHandler();
     void installClientReplicationConnectHandler();
+    void installP2PSessionLifecycleHandler();
+    void removeP2PSessionLifecycleHandler() noexcept;
+    void handleP2PSessionEvent(const ayt::net::P2PSessionEvent& event);
+    void promoteReplicatedEntitiesToAuthority();
     void rebroadcastServerReplicationSpawns(ayt::net::NetConnection* lateJoiner = nullptr);
     void pollClientNetworkReplication();
     bool trySpawnClientReplicatedEntity(uint32_t netId, uint64_t schemaHash);
@@ -258,6 +267,8 @@ private:
     std::unordered_map<uint32_t, int32_t> _clientReplicatedLastHp;
     bool _serverLateJoinHandlerInstalled = false;
     bool _clientConnectHandlerInstalled = false;
+    uint64_t _p2pSessionListenerId = 0;
+    bool _networkMigrationActive = false;
     ayt::net::NetConnection* _pendingLateJoinConn = nullptr;
     bool _clientLoggedWaitingSpawn = false;
 };
