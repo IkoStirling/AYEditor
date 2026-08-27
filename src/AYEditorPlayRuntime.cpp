@@ -1310,6 +1310,10 @@ void EditorPlayRuntime::registerUpdateListener() {
     }
 
     _updateListenerId = ayt::game::GameLoop::instance().onUpdate([this](float /*deltaTime*/) {
+        if (auto* net = ayt::net::findRegisteredNetworkSubSystem();
+            net != nullptr && net->isP2PMigrationFrozen()) {
+            return;
+        }
         if (!hasNetworkAuthority()) {
             pollClientNetworkReplication();
         } else {

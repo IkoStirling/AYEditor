@@ -449,6 +449,10 @@ session lifecycle events. On `AuthorityChanged` to Host it marks retained
 client replication objects as owned, stops client polling, and rebroadcasts all
 registered spawn announcements to later connections. The listener is removed
 before runtime shutdown so no callback can target a destroyed editor object.
+While AYNetwork reports `isP2PMigrationFrozen()`, the Play runtime update
+listener does not poll replication, rotate demo state, spawn late joins, or run
+other editor-owned authority mutations. Replication's final Full and migration
+control frames continue through the network subsystem independently.
 
 ---
 
