@@ -31,6 +31,8 @@ public:
     void setModeChangedCallback(ModeChangedCallback callback);
 
 private:
+    friend struct EditorGameViewTestAccess;
+
     [[nodiscard]] bool applyMode(EditorMode mode);
 
     ayt::game::IGameLoop& _loop;

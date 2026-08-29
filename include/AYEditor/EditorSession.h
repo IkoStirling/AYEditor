@@ -4,6 +4,9 @@
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorWorldContext.h"
 #include "AYEditor/EditorFreecam.h"
+#include "AYEditor/EditorSceneDocument.h"
+#include "AYEditor/EditorSelection.h"
+#include "AYEditor/EditorCommandStack.h"
 #include "AYEditor/ImportedCharacterMapper.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditor/Importer.h"
@@ -40,7 +43,7 @@ namespace ayt::scene { class Scene; }
 // v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
 // TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
 // 任何 include AYEditor/EditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
-namespace ayt::ui { class TreeView; }
+namespace ayt::ui { class TreeView; class MenuItem; }
 namespace ayt::ui { class LayoutEditorSession; }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
@@ -115,6 +118,9 @@ public:
     bool onMouseButtonDown(float x, float y, int button);
     bool onMouseButtonUp(float x, float y, int button);
     void onMouseLeave();
+    bool onKeyDown(int keyCode);
+    bool onKeyUp(int keyCode);
+    void onWindowFocusChanged(bool focused);
 
     bool isUiHoverInteractive() const;
     ayt::ui::UiCursorHint getUiCursorHint() const;
@@ -132,6 +138,8 @@ public:
     const EditorWorldContext& worldContext() const { return _worldContext; }
     ayt::ui::UIManager& ui() { return _ui; }
     const ayt::ui::UIManager& ui() const { return _ui; }
+    EditorSceneDocument* document() { return _document.get(); }
+    const EditorSceneDocument* document() const { return _document.get(); }
 
     // D5.5 (2026-07-26): accessor for the optional child-window manager
     // so the promote-callback injection (wirePromoteCallback) can route
@@ -149,6 +157,16 @@ private:
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
+    void bindTransformInspector();
+    void refreshTransformInspector();
+    void applyTransformInspector();
+    void newSceneDocument();
+    void openSceneDocument();
+    void saveSceneDocument();
+    void saveSceneDocumentAs();
+    void afterDocumentReload();
+    void createEmptyEntity();
+    void deleteSelectedEntity();
     void applyRenderSettingsFromPanel();
     void setDockCardVisible(const char* cardId, bool visible);
     void toggleDockCard(const char* cardId, bool& visibleFlag);
@@ -260,12 +278,11 @@ private:
     EditorGameView _gameView;
     ayt::ui::UIManager _ui;
 
-    // v0.3 PR-4 — Editor 持 Edit Scene（design §4.2.x）
-    // std::unique_ptr<ayt::scene::Scene>（SceneMode::Edit），与 EditorSession 同寿。
+    // P0: document owns one stable Edit Scene for the whole session.
     // initialize() 末尾走 host->scenes()->setEdit() + setCurrent() 注入；
     // shutdown() 末尾 reverse（setEdit(nullptr) + setCurrent(nullptr) + reset）。
-    // SM 不持 _editScene ownership（PR-3 caller 持 _edit 路径对齐）。
-    std::unique_ptr<ayt::scene::Scene> _editScene;
+    // SceneManager borrows the document Scene; it never owns it.
+    std::unique_ptr<EditorSceneDocument> _document;
 
     // D5+.5 (2026-07-26): optional child-window manager. Late-bound
     // via make_unique in initialize() when desc.childWindowManager
@@ -303,6 +320,7 @@ private:
     ayt::math::FRectangle _cachedViewportBounds{};
     bool _viewportBoundsCached = false;
     bool _shutdown = false;
+    bool _editWorldPrepared = false;
 
     // Last client-space mouse position observed by onMouseMove /
     // onMouseLeave. Used by syncSplitterRevealToMouse() so a missed
@@ -347,13 +365,18 @@ private:
     // _outlinerEntityIds: flatIndex-1 → Entity id（**id 而非 Entity***：
     //   endPlay / World teardown 后裸指针会 dangle；走 World::findEntity
     //   （AYEntity/World.h:42）重解析，miss = 已销毁 → 自动降级 Landmine F）。
-    // _outlinerSelectedEntityId: 0 = 无 Hierarchy 选择（Inspector 退回
-    //   PR-4 的 character/cube 二选一路径）。
+    // Selection is shared by Hierarchy, viewport picking and Inspector.
     // _outlinerRefreshPending: 延迟重建标志；update(dt) 内消费（Landmine B）。
     ayt::ui::TreeView*    _outliner = nullptr;
     std::vector<uint32_t> _outlinerEntityIds;
-    uint32_t              _outlinerSelectedEntityId = 0;
+    EditorSelection       _selection;
     bool                  _outlinerRefreshPending = false;
+
+    EditorCommandStack _commands;
+    bool _updatingTransformInputs = false;
+    bool _controlDown = false;
+    ayt::ui::MenuItem* _undoMenuItem = nullptr;
+    ayt::ui::MenuItem* _redoMenuItem = nullptr;
 
     // PR-5 (v0.1.2 LM-2): Play/Paused 时锁 Inspector 写路径。
     // onModeChanged 切 mode 时同步切换。Inspector 4 button click handler

@@ -1118,7 +1118,13 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         // Key — warm sun; matches ShadowPass / setDirectionalLight.
         const ayt::math::FVector3 keyDir(0.35f, -0.85f, -0.40f);
         const ayt::math::FVector3 keyColor(1.35f, 1.28f, 1.15f);
-        lights.add(ayt::render::Light::directional(keyDir, keyColor));
+        ayt::render::Light keyLight =
+            ayt::render::Light::directional(keyDir, keyColor);
+        keyLight.castShadow = true;
+        // Keep zero as the per-light override so the existing renderer-wide
+        // shadow-bias control remains authoritative during validation.
+        keyLight.shadowBias = 0.0f;
+        lights.add(keyLight);
 
         // Dim cool fill (directional) — keep umbra readable.
         lights.add(ayt::render::Light::directional(
@@ -1231,6 +1237,11 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
     rendererSub->renderer().setPostProcessExposure(1.0f);
     rendererSub->renderer().setPostProcessTonemapMode(
         ayt::render::Renderer::TonemapMode::ACES);
+    // Editor validation scene uses ordinary PBR surfaces rather than a strong
+    // HDR emissive source. Lower extraction threshold makes the existing Bloom
+    // strength control visibly testable without changing Renderer defaults.
+    rendererSub->renderer().setPostProcessBloomThreshold(0.25f);
+    rendererSub->renderer().setPostProcessBloomSoftKnee(0.5f);
     // §P5.5 D acceptance — IBL diffuse slightly raised for visible env tint.
     rendererSub->renderer().setAmbientStrength(0.85f);
     ensureGlassMaterialAlpha();
@@ -1863,6 +1874,14 @@ void EditorPlayRuntime::tick(const ayt::game::HostedFrameContext& hostFrame) {
         return;
     }
 
+    ayt::game::GameLoop::instance().tickHostedFrame(hostFrame);
+}
+
+void EditorPlayRuntime::tickPresentation(
+    const ayt::game::HostedFrameContext& hostFrame) {
+    if (!_presentationReady || _simulationActive) {
+        return;
+    }
     ayt::game::GameLoop::instance().tickHostedFrame(hostFrame);
 }
 

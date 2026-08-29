@@ -9,6 +9,7 @@
 #include "AYEditor/EditorApp.h"
 #include "AYGameLoop.h"
 #include "AYApplication/IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
+#include "AYRenderer/RendererSubSystem.h"
 #include "AYScene/SceneManager.h"   // SceneManager::canBeginPlay/isEditDirty (PR-4 日志块)
 
 #include <AYConfig.h>
@@ -17,7 +18,9 @@
 
 #include <cstdio>
 #include <cstdint>
+#include <cwctype>
 #include <filesystem>
+#include <string_view>
 #include <thread>
 
 #if defined(_WIN32)
@@ -53,6 +56,73 @@ constexpr const char* kSourceCoordinateTagKey = "Editor.Import.SourceCoordinates
 constexpr const char* kNormalMapYKey = "Editor.Import.Materials.NormalMapY";
 constexpr const char* kEditorLogFileEnv = "AY_EDITOR_LOG_FILE";
 constexpr const char* kEditorLogRelativePath = "logs/AYEditorShell_Demo.log";
+
+struct ValidationRendererSelection {
+    ayt::render::Backend backend = ayt::render::Backend::Direct3D11;
+    const char* name = "d3d11";
+    bool usedDefault = true;
+    bool invalidValue = false;
+};
+
+bool equalsIgnoreCase(std::wstring_view lhs, std::wstring_view rhs)
+{
+    if (lhs.size() != rhs.size()) return false;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (std::towlower(lhs[i]) != std::towlower(rhs[i])) return false;
+    }
+    return true;
+}
+
+ValidationRendererSelection validationRendererFromCommandLine(PWSTR commandLine)
+{
+    ValidationRendererSelection selection;
+    if (commandLine == nullptr) return selection;
+
+    const std::wstring_view args(commandLine);
+    constexpr std::wstring_view option = L"--renderer";
+    const size_t optionPos = args.find(option);
+    if (optionPos == std::wstring_view::npos) return selection;
+
+    size_t valueBegin = optionPos + option.size();
+    if (valueBegin < args.size() && args[valueBegin] == L'=') {
+        ++valueBegin;
+    } else {
+        while (valueBegin < args.size()
+               && std::iswspace(static_cast<wint_t>(args[valueBegin])) != 0) {
+            ++valueBegin;
+        }
+    }
+
+    const bool quoted = valueBegin < args.size() && args[valueBegin] == L'"';
+    if (quoted) ++valueBegin;
+    size_t valueEnd = valueBegin;
+    while (valueEnd < args.size()) {
+        const wchar_t ch = args[valueEnd];
+        if ((quoted && ch == L'"')
+            || (!quoted && std::iswspace(static_cast<wint_t>(ch)) != 0)) {
+            break;
+        }
+        ++valueEnd;
+    }
+
+    const std::wstring_view value = args.substr(valueBegin, valueEnd - valueBegin);
+    selection.usedDefault = false;
+    if (equalsIgnoreCase(value, L"d3d12") || equalsIgnoreCase(value, L"dx12")) {
+        selection.backend = ayt::render::Backend::Direct3D12;
+        selection.name = "d3d12";
+        return selection;
+    }
+    if (equalsIgnoreCase(value, L"d3d11") || equalsIgnoreCase(value, L"dx11")) {
+        selection.backend = ayt::render::Backend::Direct3D11;
+        selection.name = "d3d11";
+        return selection;
+    }
+
+    selection.invalidValue = true;
+    selection.backend = ayt::render::Backend::Direct3D11;
+    selection.name = "d3d11";
+    return selection;
+}
 FILE* g_editorLogStream = nullptr;
 HANDLE g_logPipeRead = INVALID_HANDLE_VALUE;
 HANDLE g_consoleOutput = INVALID_HANDLE_VALUE;
@@ -272,7 +342,7 @@ bool initializePersistentLog(const std::string& logFile)
 
 } // namespace
 
-int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
 {
     const std::string logFile = editorLogPath();
     if (!initializePersistentLog(logFile)) {
@@ -291,6 +361,31 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
     desc.width = 1280;
     desc.height = 720;
     desc.enableRenderThread = false;
+
+    // TEMPORARY PASS/GPU VALIDATION OVERRIDE — remove or move into a dedicated
+    // validation launcher after the renderer Pass audit is complete.
+    //
+    // AYEditorShell_Demo currently shares the normal Editor/Renderer bootstrap
+    // path, so this demo-only setting is deliberately placed next to production
+    // startup code. Its sole purpose is to make D3D11/D3D12 RenderDoc captures
+    // deterministic; it is not the product backend policy. The default is
+    // pinned to D3D11 for the first validation baseline. Use either
+    // `--renderer d3d12` or `--renderer=d3d12` for the comparison run. A bgfx
+    // backend cannot be switched while the process is live, so fully exit and
+    // restart the demo between captures.
+    const ValidationRendererSelection validationRenderer =
+        validationRendererFromCommandLine(commandLine);
+    ayt::render::RendererSubSystem::setBootstrapBackend(
+        validationRenderer.backend);
+    std::fprintf(stderr,
+                 "[EditorShellDemo] TEMP GPU validation backend: %s%s\n",
+                 validationRenderer.name,
+                 validationRenderer.usedDefault ? " (default baseline)" : "");
+    if (validationRenderer.invalidValue) {
+        std::fprintf(stderr,
+                     "[EditorShellDemo] unsupported --renderer value; "
+                     "falling back to d3d11 (accepted: d3d11, d3d12)\n");
+    }
 
     const std::string configPath = editorConfigPath();
     ayt::config::Config editorConfig;

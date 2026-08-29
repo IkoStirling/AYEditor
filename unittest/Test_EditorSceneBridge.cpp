@@ -26,6 +26,8 @@
 
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorGameView.h"
+#include "EditorGameViewTestAccess.h"
+#include "AYUI/Button.h"
 
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
@@ -56,6 +58,7 @@ bool sceneBridgeLayoutFileExists(const std::string& path)
 std::string resolveSceneBridgeLayoutPath()
 {
     const std::string candidates[] = {
+        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
         "assets/ui/editor_shell.ui.json",
         "../assets/ui/editor_shell.ui.json",
         "../../assets/ui/editor_shell.ui.json",
@@ -76,6 +79,7 @@ TEST_SUITE(AYEditor_SceneBridge)
 TEST_CASE(editor_scene_bridge_btn_play_invokes_begin_play)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -113,6 +117,7 @@ TEST_CASE(editor_scene_bridge_btn_play_invokes_begin_play)
 TEST_CASE(editor_scene_bridge_btn_stop_invokes_end_play)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -154,6 +159,7 @@ TEST_CASE(editor_scene_bridge_btn_stop_invokes_end_play)
 TEST_CASE(editor_scene_bridge_play_world_resolve_no_panic)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -186,6 +192,7 @@ TEST_CASE(editor_scene_bridge_play_world_resolve_no_panic)
 TEST_CASE(editor_scene_bridge_enter_edit_fallback_calls_end_play)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -217,6 +224,7 @@ TEST_CASE(editor_scene_bridge_enter_edit_fallback_calls_end_play)
 TEST_CASE(editor_scene_bridge_net_client_path_skips_begin_play)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -250,6 +258,7 @@ TEST_CASE(editor_scene_bridge_net_client_path_skips_begin_play)
 TEST_CASE(editor_scene_bridge_end_play_destroys_play_scene_world)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -292,6 +301,7 @@ TEST_CASE(editor_scene_bridge_end_play_destroys_play_scene_world)
 TEST_CASE(editor_scene_bridge_is_edit_dirty_survives_play_round_trip)
 {
     auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -326,6 +336,59 @@ TEST_CASE(editor_scene_bridge_is_edit_dirty_survives_play_round_trip)
     // 不强断；只验证 edit identity + non-null 保持
     CHECK(sm->edit() != nullptr);
     CHECK(sm->edit() == edit);
+    CHECK(sm->play() == nullptr);
+
+    session.shutdown();
+}
+
+// T8: Pause -> Play resumes the current session even though a new Play
+// session is not allowed. This exercises the real toolbar callback and the
+// EditorGameView transition without requiring a native renderer in the test.
+TEST_CASE(editor_scene_bridge_play_button_resumes_from_pause)
+{
+    auto layoutPath = resolveSceneBridgeLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* sm = ayt::app::currentEngineHost()->scenes();
+    CHECK_NOT_NULL(sm);
+    if (sm == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    // Model the observable paused-session gate: beginPlay is unavailable.
+    // The old btn_play handler returned here before reaching EditorGameView.
+    sm->setEdit(nullptr);
+    sm->setCurrent(nullptr);
+    CHECK_FALSE(sm->canBeginPlay());
+    EditorGameViewTestAccess::forceMode(session.gameView(), EditorMode::Paused);
+
+    auto* play = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_play"));
+    CHECK_NOT_NULL(play);
+    if (play == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const ayt::math::FRectangle bounds = play->getWorldBounds();
+    const ayt::math::FVector2 point((bounds.minX + bounds.maxX) * 0.5f,
+                                    (bounds.minY + bounds.maxY) * 0.5f);
+    const ayt::ui::UIMouseEvent click(point, 0);
+    CHECK(play->onMouseButtonDown(click));
+    CHECK(play->onMouseButtonUp(click));
+
+    CHECK(session.gameView().mode() == EditorMode::Play);
+    // Resume must not bootstrap/recreate the runtime or Play Scene.
+    CHECK_FALSE(session.playRuntime().isEngineInitialized());
     CHECK(sm->play() == nullptr);
 
     session.shutdown();

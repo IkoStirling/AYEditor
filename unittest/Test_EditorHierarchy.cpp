@@ -23,11 +23,16 @@
 
 #include "AYTest.h"
 #include "AYEditor/EditorSession.h"
+#include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
+#include "AYUI/Button.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TreeView.h"
 #include "AYUI/DockCard.h"
+#include "AYUI/Menu.h"
+#include "AYUI/MenuBar.h"
+#include "AYUI/MenuItem.h"
 
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
@@ -62,6 +67,7 @@ bool hierarchyLayoutFileExists(const std::string& path)
 std::string resolveHierarchyLayoutPath()
 {
     const std::string candidates[] = {
+        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
         "assets/ui/editor_shell.ui.json",
         "../assets/ui/editor_shell.ui.json",
         "../../assets/ui/editor_shell.ui.json",
@@ -81,6 +87,7 @@ TEST_SUITE(AYEditor_Hierarchy)
 TEST_CASE(editor_hierarchy_panel_created_when_layout_loaded)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -106,6 +113,7 @@ TEST_CASE(editor_hierarchy_panel_created_when_layout_loaded)
 TEST_CASE(editor_hierarchy_node_count_matches_edit_world_entity_count)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -138,6 +146,7 @@ TEST_CASE(editor_hierarchy_node_count_matches_edit_world_entity_count)
 TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -148,7 +157,8 @@ TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
     session.setClientSize(1280.0f, 720.0f);
 
     // Play → Hierarchy 源切到 EditorWorldContext Play slot。
-    session.gameView().setMode(EditorMode::Play);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
     session.update(0.016f);   // 消费 _outlinerRefreshPending
 
     auto* tree = dynamic_cast<TreeView*>(
@@ -184,6 +194,7 @@ TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
 TEST_CASE(editor_hierarchy_refresh_on_mode_change)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -211,13 +222,15 @@ TEST_CASE(editor_hierarchy_refresh_on_mode_change)
     // Play → source = Play Scene，缺失时回退显式 process World。
     // MockRenderer 下 fallback 未 init → hint 切到 "Scene: -"。这个变化就是 rebuild
     // 已消费的证据（vs 没消费时 hint 仍是 editHint）。
-    session.gameView().setMode(EditorMode::Play);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
     session.update(0.016f);                      // 消费 _outlinerRefreshPending
     CHECK(hint->getText() != editHint);
     CHECK(tree->getNodeCount() == 0);
 
     // Edit → 回到原 hint + 合成 root
-    session.gameView().setMode(EditorMode::Edit);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
     session.update(0.016f);
     CHECK(hint->getText() == editHint);
     CHECK(tree->getNodeCount() == editNodes);
@@ -229,6 +242,7 @@ TEST_CASE(editor_hierarchy_refresh_on_mode_change)
 TEST_CASE(editor_hierarchy_empty_when_no_edit_world)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     // 故意 **不** 开 EngineHostScope → currentEngineHost() == nullptr
@@ -247,6 +261,140 @@ TEST_CASE(editor_hierarchy_empty_when_no_edit_world)
         session.ui().findById("outliner_hint"));
     CHECK_NOT_NULL(hint);
     CHECK(hint->getText() == std::wstring(L"Scene: -"));
+
+    session.shutdown();
+}
+
+// Regression: Editor installs a host callback after Menu::addItem().  The
+// Menu's own close callback must survive that assignment, otherwise Create
+// mutates the World but leaves an active popup intercepting all later input.
+TEST_CASE(editor_create_empty_entity_menu_closes_and_refreshes_hierarchy)
+{
+    const std::string layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+
+    auto* sm = ayt::app::currentEngineHost()->scenes();
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    auto* tree = dynamic_cast<TreeView*>(
+        session.ui().findById("tree_outliner"));
+    CHECK_NOT_NULL(sm);
+    CHECK_NOT_NULL(menuBar);
+    CHECK_NOT_NULL(tree);
+    if (sm == nullptr || sm->edit() == nullptr || menuBar == nullptr
+        || tree == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    Menu* editMenu = nullptr;
+    MenuItem* createItem = nullptr;
+    for (size_t menuIndex = 0; menuIndex < menuBar->getMenuCount(); ++menuIndex) {
+        Menu* menu = menuBar->getMenu(menuIndex);
+        if (menu == nullptr) continue;
+        for (size_t itemIndex = 0; itemIndex < menu->getItemCount(); ++itemIndex) {
+            MenuItem* item = menu->getItem(static_cast<int>(itemIndex));
+            if (item != nullptr && item->getText() == L"Create Empty Entity") {
+                editMenu = menu;
+                createItem = item;
+                break;
+            }
+        }
+    }
+    CHECK_NOT_NULL(editMenu);
+    CHECK_NOT_NULL(createItem);
+    if (editMenu == nullptr || createItem == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const size_t before = sm->edit()->world().getAllEntities().size();
+    editMenu->open(menuBar, ayt::math::FVector2(0.0f, 26.0f));
+    CHECK(editMenu->isOpen());
+    CHECK(createItem->handleClick());
+    CHECK_FALSE(editMenu->isOpen());
+    CHECK(sm->edit()->world().getAllEntities().size() == before + 1u);
+
+    session.update(0.016f);
+    CHECK(tree->getNodeCount() == before + 2u); // scene root + entities
+
+    session.shutdown();
+}
+
+// Regression: the editor's five fixed-width menu anchors used to overflow the
+// 240-DIP MenuBar slot.  They still painted, but the flexible spacer (a later
+// HBox sibling) won hit testing over Tools/Help, leaving only a hairline of the
+// visible buttons clickable.  Drive the real EditorSession input path so this
+// also covers viewport/chrome routing and popup mounting.
+TEST_CASE(editor_top_menu_anchors_and_popup_rows_are_fully_hittable)
+{
+    const std::string layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    CHECK_NOT_NULL(menuBar);
+    if (menuBar == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    std::vector<Button*> anchors;
+    for (Widget* child : menuBar->getChildren()) {
+        if (auto* button = dynamic_cast<Button*>(child)) {
+            anchors.push_back(button);
+        }
+    }
+    CHECK(anchors.size() == menuBar->getMenuCount());
+
+    for (size_t i = 0; i < anchors.size(); ++i) {
+        Button* anchor = anchors[i];
+        const ayt::math::FRectangle bounds = anchor->getWorldBounds();
+        const float x = (bounds.minX + bounds.maxX) * 0.5f;
+        const float y = (bounds.minY + bounds.maxY) * 0.5f;
+        session.onMouseMove(x, y);
+        CHECK(anchor->isMouseOver());
+        CHECK(session.onMouseButtonDown(x, y, 0));
+        CHECK(session.onMouseButtonUp(x, y, 0));
+        CHECK(menuBar->getMenu(i)->isOpen());
+        menuBar->closeOpenMenu();
+    }
+
+    // A popup row extends below the top bar and over the central viewport.
+    // It must still receive the real session-level move/down/up sequence.
+    Menu* helpMenu = menuBar->getMenu(menuBar->getMenuCount() - 1u);
+    MenuItem* about = helpMenu != nullptr ? helpMenu->getItem(0) : nullptr;
+    CHECK_NOT_NULL(helpMenu);
+    CHECK_NOT_NULL(about);
+    if (helpMenu != nullptr && about != nullptr) {
+        Button* helpAnchor = anchors.back();
+        const ayt::math::FRectangle anchorBounds = helpAnchor->getWorldBounds();
+        const float anchorX = (anchorBounds.minX + anchorBounds.maxX) * 0.5f;
+        const float anchorY = (anchorBounds.minY + anchorBounds.maxY) * 0.5f;
+        session.onMouseButtonDown(anchorX, anchorY, 0);
+        session.onMouseButtonUp(anchorX, anchorY, 0);
+        session.update(0.016f);
+
+        const ayt::math::FRectangle itemBounds = about->getWorldBounds();
+        const float itemX = (itemBounds.minX + itemBounds.maxX) * 0.5f;
+        const float itemY = (itemBounds.minY + itemBounds.maxY) * 0.5f;
+        CHECK(session.onMouseMove(itemX, itemY));
+        CHECK(about->isMouseOver());
+        CHECK(session.onMouseButtonDown(itemX, itemY, 0));
+        CHECK(session.onMouseButtonUp(itemX, itemY, 0));
+        CHECK_FALSE(helpMenu->isOpen());
+    }
 
     session.shutdown();
 }

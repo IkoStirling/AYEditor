@@ -1,6 +1,5 @@
 #include "AYEditor/EditorGameView.h"
 #include "AYEditor/EditorPlayRuntime.h"
-#include "AYGameLoop.h"
 #include "AYRenderer/RendererSubSystem.h"
 
 namespace ayt::editor {
@@ -66,6 +65,14 @@ bool EditorGameView::applyMode(EditorMode mode) {
         return true;
     case EditorMode::Play:
         setRenderClockPaused(false);
+        if (_mode == EditorMode::Paused) {
+            // Resume the existing hosted Play session. Calling startPlay()
+            // here would try to clone a second Play Scene and fail because
+            // SceneManager::canBeginPlay() is false while the first one is
+            // still alive.
+            _loop.resume();
+            return true;
+        }
         // The host owns the frame cadence. Do not tick here: a toolbar click
         // is dispatched during EditorSession::update(), whose simulation slot
         // will perform exactly one tick later in the same host frame.
@@ -76,7 +83,9 @@ bool EditorGameView::applyMode(EditorMode mode) {
                 return false;
             }
         }
-        ayt::game::GameLoop::instance().pause();
+        // Use the loop supplied to this view; production injects the global
+        // GameLoop, while tests and alternate hosts may provide another loop.
+        _loop.pause();
         setRenderClockPaused(true);
         return true;
     }

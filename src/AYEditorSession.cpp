@@ -13,6 +13,7 @@
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYUI/Slider.h"
 #include "AYUI/TextLabel.h"
+#include "AYUI/TextInput.h"
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYUI/Widget.h"
 #include "AYUI/DockArea.h"
@@ -23,7 +24,7 @@
 #include "AYUI/UIKeyCode.h"
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
-// AYScene 完整 include 因 _editScene 需 SceneMode/Scene 完整类型；
+// AYScene 完整 include 因文档层需 SceneMode/Scene 完整类型；
 // IEngineHost 走 host facade（v0.1.3 PR-6 ship）。
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
@@ -34,9 +35,13 @@
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
+#include <AYEntity/components/TransformComponent.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cwchar>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -150,6 +155,52 @@ std::string showUiJsonSaveDialog(HWND owner) {
     return std::string(path);
 }
 
+std::string showSceneOpenDialog(HWND owner) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "ayscene";
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string showSceneSaveDialog(HWND owner) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "ayscene";
+    return ::GetSaveFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::wstring formatFloat(float value) {
+    wchar_t buffer[32] = {};
+    std::swprintf(buffer, sizeof(buffer) / sizeof(buffer[0]), L"%.3f", value);
+    return buffer;
+}
+
+bool parseFloat(const std::wstring& text, float& value) {
+    const wchar_t* begin = text.c_str();
+    wchar_t* end = nullptr;
+    const float parsed = std::wcstof(begin, &end);
+    while (end != nullptr && *end == L' ') ++end;
+    if (begin == end || end == nullptr || *end != L'\0' || !std::isfinite(parsed)) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
 } // namespace
 
 EditorSession::EditorSession()
@@ -212,6 +263,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     bindTransportBar();
     bindNetworkPanelStub();
     bindRenderSettingsPanel();
+    bindTransformInspector();
 
     // v0.3+ PR-5 — bindOutlinerPanel (design §4.3.y)
     // 一次性 bind（selection callback + itemHeight via setItemHeight;
@@ -228,23 +280,29 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     AY_EDITOR_TRACE("initialize: done");
 
     // v0.3 PR-4 — Editor 持 Edit Scene（design §4.2.x）
-    // 决策 1a: caller 持 _editScene ownership
+    // 决策 1a: caller/document 持 Edit Scene ownership
     // 决策 3a: EditorMode 3 态 vs SceneMode 2 态；本处只 setCurrent 让 Edit
     //         mode 有 Scene 关联；applyMode 仍走 EditorPlayRuntime 私有通路
     // 决策 4a: 不接 hook 拦 beginPlay；UX 弹窗由 caller 决定
+    _document = std::make_unique<EditorSceneDocument>();
+    _commands.setChangedCallback([this]() {
+        if (_document) _document->markDirty();
+        refreshTransformInspector();
+        refreshUnsavedIndicator();
+        if (_repaintCallback) _repaintCallback();
+    });
     if (auto* sm = _worldContext.sceneManager()) {
-        _editScene = std::make_unique<ayt::scene::Scene>(
-            ayt::scene::SceneMode::Edit, "<editor_default>");
-        sm->setEdit(_editScene.get());
-        sm->setCurrent(_editScene.get());
+        sm->setEdit(&_document->scene());
+        sm->setCurrent(&_document->scene());
         AY_EDITOR_TRACE("initialize: edit scene injected (%s)",
-                        _editScene->name().c_str());
+                        _document->title().c_str());
     }
 
-    // v0.3+ PR-5 — 首刷 Hierarchy（_editScene 注入后才有 scene name）。
+    // v0.3+ PR-5 — 首刷 Hierarchy（document Scene 注入后才有 scene name）。
     // Edit World v1 永远空（决策 1b；plan §0.2）；Play 未启动 → tree 仅
     // 含合成 root。INV-4：纯读，Scene::_dirty 不可能被置位。
     refreshOutliner();
+    refreshTransformInspector();
 
     // D5+.5: optional child-window manager for DockCard promotion.
     if (desc.childWindowManager != nullptr) {
@@ -306,24 +364,27 @@ void EditorSession::shutdown() {
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
     // 链上 deref）。
     _outliner = nullptr;
+    _undoMenuItem = nullptr;
+    _redoMenuItem = nullptr;
     _outlinerEntityIds.clear();
-    _outlinerSelectedEntityId = 0;
+    _selection.clear();
     _outlinerRefreshPending = false;
+    _commands.clear();
 
     _ui.shutdown();
     _layoutPath.clear();
     _hostWindow = nullptr;
 
-    // v0.3 PR-4 — shutdown reverse setEdit/setCurrent + reset _editScene
+    // v0.3 PR-4 — shutdown reverse setEdit/setCurrent + reset document
     // 顺序：先反注册 scene → 再 reset（EditorSession 析构时 unique_ptr 还会
     // 再 reset 一次；提前 reset 避免 SM 还指向 dangling Scene）
     if (auto* sm = _worldContext.sceneManager()) {
-        if (_editScene) {
+        if (_document) {
             sm->setCurrent(nullptr);
             sm->setEdit(nullptr);
         }
     }
-    _editScene.reset();
+    _document.reset();
     _worldContext.setSceneManager(nullptr);
 }
 
@@ -360,6 +421,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         _childWindows->tickAll(dt);
     }
     _ui.update(dt);
+    // Scene systems and diagnostic hosts can dirty or replace the Edit Scene
+    // without going through an EditorSession command. Reconcile the document
+    // indicator once per host frame so it cannot remain visually stale.
+    refreshUnsavedIndicator();
 
     // v0.3+ PR-5 — Landmine B: 延迟消费 Outliner 重建（禁止在 TreeNode
     // 事件派发内重建；onOutlinerSelectionChanged 注释）。
@@ -388,6 +453,8 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         // = GameLoop::TickSystems() 遍历 World::instance() 系统注册器
         // (v0.4 PR-1 不动)。
         _playRuntime.tick(hostFrame);
+    } else if (_gameView.mode() == EditorMode::Edit) {
+        _playRuntime.tickPresentation(hostFrame);
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
     }
@@ -400,7 +467,8 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
 bool EditorSession::freecamActive() const
 {
     const EditorMode mode = _gameView.mode();
-    return mode == EditorMode::Play || mode == EditorMode::Paused;
+    return mode == EditorMode::Edit || mode == EditorMode::Play
+        || mode == EditorMode::Paused;
 }
 
 void EditorSession::pushFreecamToRenderer()
@@ -472,13 +540,27 @@ void EditorSession::flushFrame() {
 }
 
 bool EditorSession::shouldCompositeViewport() const {
-    const EditorMode mode = _gameView.mode();
-    return (mode == EditorMode::Play || mode == EditorMode::Paused)
-           && _playRuntime.isPresentationReady();
+    return _playRuntime.isPresentationReady();
 }
 
 bool EditorSession::ensurePresentationReady() {
-    return _playRuntime.ensurePresentationReady();
+    if (!_playRuntime.ensurePresentationReady()) return false;
+    if (!_editWorldPrepared && _document != nullptr) {
+        // Bootstrap registered systems once against the stable Edit World.
+        // Start them while the document is still empty so their renderer
+        // callbacks exist without advancing user scene simulation.
+        _document->scene().tick(0.0f);
+        _editWorldPrepared = true;
+    }
+    // The Render panel is the live source of truth in both Edit and Play.
+    // Renderer defaults intentionally keep Bloom/SSAO/Haze disabled, while
+    // the Editor validation layout starts them enabled. Synchronize after
+    // presentation bootstrap so Edit does not display enabled controls over
+    // a zero-effect renderer, and so a pipeline recreation restores the
+    // current panel values.
+    applyRenderSettingsFromPanel();
+    pushFreecamToRenderer();
+    return true;
 }
 
 void EditorSession::autoEnterNetClientPlay()
@@ -573,10 +655,6 @@ void EditorSession::syncSplitterRevealToMouse()
 }
 
 bool EditorSession::isChromePoint(float x, float y) const {
-    if (_gameView.mode() == EditorMode::Edit) {
-        return true;
-    }
-
     if (_ui.isCapturing()) {
         return true;
     }
@@ -614,6 +692,10 @@ bool EditorSession::viewportAcceptsGameInput() const {
         return false;
     }
     if (::GetForegroundWindow() != _hostWindow) {
+        return false;
+    }
+    const ayt::ui::Widget* focused = _ui.getFocusedWidget();
+    if (focused != nullptr && focused->isTextEditingWidget()) {
         return false;
     }
     // LMB look already started inside the viewport — keep movement.
@@ -658,6 +740,11 @@ bool EditorSession::onMouseMove(float x, float y) {
     }
 
     if (!isChromePoint(x, y)) {
+        // Moving from an Inspector field into the viewport commits the field
+        // and releases text focus before WASD/free-look starts.
+        if (_ui.getFocusedWidget() != nullptr) {
+            _ui.setFocus(nullptr);
+        }
         _ui.clearHover();
         clearSplitterHovers();
         return false;
@@ -702,6 +789,12 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
     }
 
     if (!isChromePoint(x, y)) {
+        // A direct click into the viewport may arrive without a preceding
+        // mouse-move (for example after keyboard editing). Drop text focus so
+        // the field commits before free-look or selection starts.
+        if (_ui.getFocusedWidget() != nullptr) {
+            _ui.setFocus(nullptr);
+        }
         _ui.clearHover();
 
         if (button == 0 && freecamActive()) {
@@ -753,6 +846,60 @@ void EditorSession::onMouseLeave() {
     _hasLastMouse = false;
     _ui.onMouseLeave();
     clearSplitterHovers();
+}
+
+bool EditorSession::onKeyDown(int keyCode)
+{
+    if (keyCode == ayt::ui::UIKey_Control) {
+        _controlDown = true;
+    }
+    const ayt::ui::Widget* focused = _ui.getFocusedWidget();
+    const bool textEditing = focused != nullptr && focused->isTextEditingWidget();
+    if (!textEditing && _controlDown && _gameView.mode() == EditorMode::Edit) {
+        if (keyCode == ayt::ui::UIKey_Z) return _commands.undo();
+        if (keyCode == ayt::ui::UIKey_Y) return _commands.redo();
+        if (keyCode == ayt::ui::UIKey_S) {
+            saveSceneDocument();
+            return true;
+        }
+    }
+    if (!textEditing && keyCode == ayt::ui::UIKey_Delete) {
+        deleteSelectedEntity();
+        return true;
+    }
+    return _ui.onKeyDown(keyCode);
+}
+
+bool EditorSession::onKeyUp(int keyCode)
+{
+    const bool handled = _ui.onKeyUp(keyCode);
+    if (keyCode == ayt::ui::UIKey_Control) {
+        _controlDown = false;
+    }
+    return handled;
+}
+
+void EditorSession::onWindowFocusChanged(bool focused)
+{
+    if (focused) return;
+
+    // Win32 is allowed to omit key-up messages after Alt-Tab/focus transfer.
+    // Reset both Editor-owned and UIManager-owned modifier state so a later
+    // plain Z/Y/S cannot be interpreted as a Ctrl shortcut.
+    _controlDown = false;
+    _ui.onKeyUp(ayt::ui::UIKey_Control);
+    _ui.onKeyUp(ayt::ui::UIKey_Shift);
+    _ui.onKeyUp(ayt::ui::UIKey_Alt);
+    _ui.cancelCapture();
+    if (_ui.getFocusedWidget() != nullptr) {
+        _ui.setFocus(nullptr);
+    }
+    if (_freecam.isLooking()) {
+        _freecam.endLook();
+    }
+    _viewportLmbPending = false;
+    _viewportLmbDragged = false;
+    onMouseLeave();
 }
 
 bool EditorSession::isUiHoverInteractive() const {
@@ -808,11 +955,20 @@ void EditorSession::bindTransportBar() {
     // 决策 4a: Save/Discard/Cancel 三选项 Win32 MessageBoxW
     // 决策 5a: lbl_unsaved period refresh（mode changed 时同步）
     bindButton("btn_play", [this]() {
+        // Paused -> Play is a resume command for the existing Play Scene,
+        // not a request to begin a second session. In this state
+        // SceneManager::canBeginPlay() is intentionally false, so resume must
+        // bypass both that gate and the Edit-scene save prompt.
+        if (_gameView.mode() == EditorMode::Paused) {
+            (void)_gameView.trySetMode(EditorMode::Play);
+            return;
+        }
+
         auto* sm = _worldContext.sceneManager();
         if (!sm || !sm->canBeginPlay()) return;
 
         // Save/Discard/Cancel prompt (PR-3 requireSaveBeforePlay 意图 getter)
-        if (sm->requireSaveBeforePlay()) {
+        if (_document != nullptr && _document->isDirty()) {
             int choice = ::MessageBoxW(
                 _hostWindow,
                 L"Scene has unsaved changes.\n\nSave before Play?",
@@ -820,21 +976,8 @@ void EditorSession::bindTransportBar() {
                 MB_YESNOCANCEL | MB_ICONWARNING);
             if (choice == IDCANCEL) return;  // Cancel: 早返
             if (choice == IDYES) {
-                auto* edit = sm->edit();
-                if (edit == nullptr) return;
-                // 编辑场景路径为空时不强行 save（避免无意义空文件）；提示错误
-                if (edit->path().empty()) {
-                    ::MessageBoxW(_hostWindow,
-                        L"Scene has no path. Use File > Save first.",
-                        L"AYEditor", MB_OK | MB_ICONERROR);
-                    return;
-                }
-                if (!edit->save(edit->path())) {
-                    ::MessageBoxW(_hostWindow,
-                        L"Save failed. Cannot start Play.",
-                        L"AYEditor", MB_OK | MB_ICONERROR);
-                    return;
-                }
+                saveSceneDocument();
+                if (_document->isDirty()) return;
             }
             // IDNO = Discard：继续
         }
@@ -860,20 +1003,26 @@ void EditorSession::bindTransportBar() {
 
     // v0.3 PR-4 — lbl_unsaved 初始 refresh（design §4.3.x 决策 5a）
     refreshUnsavedIndicator();
+    refreshTransformInspector();
 }
 
 // helper：刷新 lbl_unsaved TextLabel（visible + text）
-// 决策 5a: mode changed / save / clear 触发点 refresh；不每帧轮询
 void EditorSession::refreshUnsavedIndicator() {
     auto* widget = _ui.findById("lbl_unsaved");
     if (widget == nullptr) return;
     auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget);
     if (label == nullptr) return;
 
-    auto* sm = _worldContext.sceneManager();
-    const bool dirty = sm != nullptr && sm->isEditDirty();
-    label->setText(dirty ? L"•" : L"");
-    label->setVisible(dirty);
+    bool dirty = _document != nullptr && _document->isDirty();
+    if (auto* sm = _worldContext.sceneManager(); sm != nullptr
+        && _document != nullptr && sm->edit() != &_document->scene()) {
+        // Preserve diagnostic hosts that temporarily substitute the Edit
+        // scene behind the session.
+        dirty = sm->isEditDirty();
+    }
+    const std::wstring desiredText = dirty ? L"•" : L"";
+    if (label->getText() != desiredText) label->setText(desiredText);
+    if (label->isVisible() != dirty) label->setVisible(dirty);
 }
 
 // =============================================================================
@@ -931,7 +1080,7 @@ void EditorSession::refreshOutliner()
     const ayt::entity::World* world = hierarchyWorld();
     if (world == nullptr) {
         _outliner->clearTree();
-        _outlinerSelectedEntityId = 0;
+        _selection.clear();
         setUtf8("outliner_hint", "Scene: -");
         return;
     }
@@ -942,7 +1091,9 @@ void EditorSession::refreshOutliner()
     std::string rootLabel = slot == EditorWorldSlot::Play
         ? "<runtime fallback>"
         : "<no scene>";
-    if (auto* activeScene = _worldContext.scene(slot)) {
+    if (slot == EditorWorldSlot::Edit && _document) {
+        rootLabel = _document->title();
+    } else if (auto* activeScene = _worldContext.scene(slot)) {
         rootLabel = activeScene->name().empty() ? "<unnamed>"
                                                 : activeScene->name();
     }
@@ -986,16 +1137,16 @@ void EditorSession::refreshOutliner()
     _outliner->setTree(nodes);
 
     // 选择保持：id 仍在列表里就把高亮放回去（flatIndex = 序号 + 1）。
-    if (_outlinerSelectedEntityId != 0) {
+    if (!_selection.empty()) {
         int flat = -1;
         for (size_t i = 0; i < _outlinerEntityIds.size(); ++i) {
-            if (_outlinerEntityIds[i] == _outlinerSelectedEntityId) {
+            if (_outlinerEntityIds[i] == _selection.entityId()) {
                 flat = static_cast<int>(i) + 1;
                 break;
             }
         }
         if (flat < 0) {
-            _outlinerSelectedEntityId = 0;  // 实体已销毁（endPlay 等）
+            _selection.clear();  // 实体已销毁（endPlay 等）
         } else {
             _outliner->setSelectedIndex(flat);
         }
@@ -1006,8 +1157,9 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
 {
     // flat 0 = 合成 scene root：清 Hierarchy 选择，Inspector 退回 PR-4 路径。
     if (flatIndex <= 0) {
-        _outlinerSelectedEntityId = 0;
+        _selection.clear();
         refreshInspectorLabels();
+        refreshTransformInspector();
         if (_repaintCallback) _repaintCallback();
         return;
     }
@@ -1015,13 +1167,14 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
     if (idx >= _outlinerEntityIds.size()) {
         return;
     }
-    _outlinerSelectedEntityId = _outlinerEntityIds[idx];
+    _selection.select(_outlinerEntityIds[idx]);
 
     // **Landmine B**：不**在此调 refreshOutliner()/_ui.layout()：会
     // delete 正在派发事件的 TreeNode（AYTreeView.cpp:80-85/194）→
     // UIManager::onMouseButtonUp:1339 UAF。只刷 Inspector（纯
     // TextLabel setText） + repaint。
     refreshInspectorLabels();
+    refreshTransformInspector();
     if (_repaintCallback) {
         _repaintCallback();
     }
@@ -1480,6 +1633,125 @@ void EditorSession::applyRenderSettingsFromPanel()
     }
 }
 
+void EditorSession::newSceneDocument()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    if (_document->isDirty()) {
+        const int choice = ::MessageBoxW(
+            _hostWindow,
+            L"The current scene has unsaved changes.\n\nDiscard them and create a new scene?",
+            L"AYEditor", MB_YESNO | MB_ICONWARNING);
+        if (choice != IDYES) return;
+    }
+    _document->newScene();
+    afterDocumentReload();
+}
+
+void EditorSession::openSceneDocument()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    if (_document->isDirty()) {
+        const int choice = ::MessageBoxW(
+            _hostWindow,
+            L"The current scene has unsaved changes.\n\nDiscard them and open another scene?",
+            L"AYEditor", MB_YESNO | MB_ICONWARNING);
+        if (choice != IDYES) return;
+    }
+    const std::string path = showSceneOpenDialog(_hostWindow);
+    if (path.empty()) return;
+
+    std::string error;
+    if (!_document->open(path, &error)) {
+        const std::wstring message(error.begin(), error.end());
+        ::MessageBoxW(_hostWindow, message.c_str(), L"Open Scene Failed",
+                      MB_OK | MB_ICONERROR);
+        return;
+    }
+    afterDocumentReload();
+}
+
+void EditorSession::saveSceneDocument()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    if (_document->path().empty()) {
+        saveSceneDocumentAs();
+        return;
+    }
+    std::string error;
+    if (!_document->save(&error)) {
+        const std::wstring message(error.begin(), error.end());
+        ::MessageBoxW(_hostWindow, message.c_str(), L"Save Scene Failed",
+                      MB_OK | MB_ICONERROR);
+        return;
+    }
+    refreshUnsavedIndicator();
+}
+
+void EditorSession::saveSceneDocumentAs()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    const std::string path = showSceneSaveDialog(_hostWindow);
+    if (path.empty()) return;
+    std::string error;
+    if (!_document->saveAs(path, &error)) {
+        const std::wstring message(error.begin(), error.end());
+        ::MessageBoxW(_hostWindow, message.c_str(), L"Save Scene Failed",
+                      MB_OK | MB_ICONERROR);
+        return;
+    }
+    refreshOutliner();
+    refreshUnsavedIndicator();
+}
+
+void EditorSession::afterDocumentReload()
+{
+    _selection.clear();
+    _commands.clear();
+    refreshOutliner();
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::createEmptyEntity()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    if (world == nullptr) return;
+    ayt::entity::Entity* entity = world->createEntity();
+    if (entity == nullptr) return;
+    const std::string name = "Entity "
+        + std::to_string(static_cast<unsigned>(world->getAllEntities().size()));
+    entity->setName(name.c_str());
+    entity->addComponent<ayt::entity::Transform>();
+    _selection.select(entity->getId());
+    _commands.clear();
+    _document->markDirty();
+    _outlinerRefreshPending = true;
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::deleteSelectedEntity()
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    if (world == nullptr || entity == nullptr) return;
+    world->destroyEntity(entity);
+    _selection.clear();
+    _commands.clear();
+    _document->markDirty();
+    _outlinerRefreshPending = true;
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+
 void EditorSession::bindMenuBar() {
     auto* widget = _ui.findById("menubar");
     auto* menuBar = dynamic_cast<ayt::ui::MenuBar*>(widget);
@@ -1487,13 +1759,27 @@ void EditorSession::bindMenuBar() {
         return;
     }
 
+    // The editor adds five top-level menus.  MenuBar's generic default uses
+    // 80-DIP fixed anchors, while editor_shell.ui.json deliberately leaves a
+    // flexible spacer after the menu slot.  Fixed anchors overflowed that
+    // slot and were still painted, but the later spacer won reverse-order hit
+    // testing over Tools/Help.  Text-sized anchors keep painted and hittable
+    // geometry inside the slot.
+    menuBar->setAnchorAutoWidth(true);
+
     ayt::ui::Menu* fileMenu = menuBar->addMenu(L"File");
     if (fileMenu != nullptr) {
         if (auto* item = fileMenu->addItem(L"New")) {
-            item->setOnActivate([]() {});
+            item->setOnActivate([this]() { newSceneDocument(); });
         }
         if (auto* item = fileMenu->addItem(L"Open...")) {
-            item->setOnActivate([]() {});
+            item->setOnActivate([this]() { openSceneDocument(); });
+        }
+        if (auto* item = fileMenu->addItem(L"Save")) {
+            item->setOnActivate([this]() { saveSceneDocument(); });
+        }
+        if (auto* item = fileMenu->addItem(L"Save As...")) {
+            item->setOnActivate([this]() { saveSceneDocumentAs(); });
         }
         if (auto* item = fileMenu->addItem(L"Import...")) {
             item->setOnActivate([this]() { importCharacterFromDialog(); });
@@ -1501,6 +1787,29 @@ void EditorSession::bindMenuBar() {
         fileMenu->addSeparator();
         if (auto* item = fileMenu->addItem(L"Exit")) {
             item->setOnActivate([this]() { requestHostClose(); });
+        }
+    }
+
+    ayt::ui::Menu* editMenu = menuBar->addMenu(L"Edit");
+    if (editMenu != nullptr) {
+        if (auto* item = editMenu->addItem(L"Undo")) {
+            _undoMenuItem = item;
+            item->setOnActivate([this]() {
+                if (_gameView.mode() == EditorMode::Edit) _commands.undo();
+            });
+        }
+        if (auto* item = editMenu->addItem(L"Redo")) {
+            _redoMenuItem = item;
+            item->setOnActivate([this]() {
+                if (_gameView.mode() == EditorMode::Edit) _commands.redo();
+            });
+        }
+        editMenu->addSeparator();
+        if (auto* item = editMenu->addItem(L"Create Empty Entity")) {
+            item->setOnActivate([this]() { createEmptyEntity(); });
+        }
+        if (auto* item = editMenu->addItem(L"Delete Selected")) {
+            item->setOnActivate([this]() { deleteSelectedEntity(); });
         }
     }
 
@@ -1907,10 +2216,9 @@ void EditorSession::refreshInspectorLabels()
 
     // v0.3+ PR-5 — Hierarchy 选择优先于 PR-4 的 character/cube 二选一。
     // 存 id 不存指针 → 每次重解析，实体没了自动降级（Landmine F）。
-    if (_outlinerSelectedEntityId != 0) {
+    if (!_selection.empty()) {
         if (auto* w = hierarchyWorldMutable()) {
-            if (ayt::entity::Entity* sel =
-                    w->findEntity(_outlinerSelectedEntityId)) {
+            if (ayt::entity::Entity* sel = _selection.resolve(w)) {
                 const char* nm = sel->getName();
                 setUtf8("inspector_hint",
                         std::string("Hierarchy: ")
@@ -1935,7 +2243,7 @@ void EditorSession::refreshInspectorLabels()
                 return;
             }
         }
-        _outlinerSelectedEntityId = 0;  // 已销毁 → 降级到 PR-4 路径
+        _selection.clear();  // 已销毁 → 降级到 PR-4 路径
     }
 
     ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
@@ -1983,8 +2291,167 @@ void EditorSession::refreshInspectorLabels()
     }
 }
 
+void EditorSession::bindTransformInspector()
+{
+    const char* ids[] = {
+        "transform_px", "transform_py", "transform_pz",
+        "transform_rx", "transform_ry", "transform_rz",
+        "transform_sx", "transform_sy", "transform_sz",
+    };
+    for (const char* id : ids) {
+        auto* input = dynamic_cast<ayt::ui::TextInput*>(_ui.findById(id));
+        if (input == nullptr) continue;
+        input->setOnSubmit([this](const std::wstring&) {
+            if (!_updatingTransformInputs) applyTransformInspector();
+        });
+        input->setOnFocusLostNotify([this]() {
+            if (!_updatingTransformInputs) applyTransformInspector();
+        });
+    }
+    _ui.bindEvent("btn_transform_apply", "onClick",
+                  [this]() { applyTransformInspector(); });
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_transform_apply"))) {
+        button->setOnClicked([this]() { applyTransformInspector(); });
+    }
+}
+
+void EditorSession::refreshTransformInspector()
+{
+    const char* ids[] = {
+        "transform_px", "transform_py", "transform_pz",
+        "transform_rx", "transform_ry", "transform_rz",
+        "transform_sx", "transform_sy", "transform_sz",
+    };
+    auto setAll = [this, &ids](const std::wstring (&values)[9], bool readOnly) {
+        _updatingTransformInputs = true;
+        for (size_t i = 0; i < 9; ++i) {
+            if (auto* input = dynamic_cast<ayt::ui::TextInput*>(
+                    _ui.findById(ids[i]))) {
+                input->setText(values[i]);
+                input->setReadOnly(readOnly);
+            }
+        }
+        _updatingTransformInputs = false;
+    };
+
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (_gameView.mode() != EditorMode::Edit || transform == nullptr) {
+        const std::wstring empty[9] = {
+            L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-"
+        };
+        setAll(empty, true);
+        return;
+    }
+
+    constexpr float radiansToDegrees = 57.29577951308232f;
+    const ayt::math::FVector3 euler = transform->rotation.toEulerAngles();
+    const std::wstring values[9] = {
+        formatFloat(transform->position.x), formatFloat(transform->position.y),
+        formatFloat(transform->position.z), formatFloat(euler.x * radiansToDegrees),
+        formatFloat(euler.y * radiansToDegrees), formatFloat(euler.z * radiansToDegrees),
+        formatFloat(transform->scale.x), formatFloat(transform->scale.y),
+        formatFloat(transform->scale.z),
+    };
+    setAll(values, false);
+}
+
+void EditorSession::applyTransformInspector()
+{
+    if (_updatingTransformInputs || _gameView.mode() != EditorMode::Edit) return;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    if (world == nullptr || entity == nullptr
+        || entity->getComponent<ayt::entity::Transform>() == nullptr) {
+        return;
+    }
+
+    const char* ids[] = {
+        "transform_px", "transform_py", "transform_pz",
+        "transform_rx", "transform_ry", "transform_rz",
+        "transform_sx", "transform_sy", "transform_sz",
+    };
+    float values[9] = {};
+    for (size_t i = 0; i < 9; ++i) {
+        auto* input = dynamic_cast<ayt::ui::TextInput*>(_ui.findById(ids[i]));
+        if (input == nullptr || !parseFloat(input->getText(), values[i])) {
+            refreshTransformInspector();
+            return;
+        }
+    }
+
+    constexpr float degreesToRadians = 0.017453292519943295f;
+    EditorTransformState state;
+    state.position = {values[0], values[1], values[2]};
+    state.rotation = ayt::math::FQuaternion::fromEulerAngles({
+        values[3] * degreesToRadians,
+        values[4] * degreesToRadians,
+        values[5] * degreesToRadians,
+    });
+    state.scale = {values[6], values[7], values[8]};
+    _commands.executeTransform(*world, entity->getId(), state);
+}
+
 void EditorSession::selectPlayEntityFromViewport()
 {
+    if (_gameView.mode() == EditorMode::Edit) {
+        ayt::entity::World* world = hierarchyWorldMutable();
+        ayt::math::FRectangle viewport{};
+        if (world == nullptr || !getViewportBounds(viewport)
+            || viewport.width() <= 0.0f || viewport.height() <= 0.0f) {
+            return;
+        }
+
+        const float ndcX = 2.0f * ((_viewportLmbX - viewport.minX)
+                                      / viewport.width()) - 1.0f;
+        const float ndcY = 1.0f - 2.0f * ((_viewportLmbY - viewport.minY)
+                                           / viewport.height());
+        constexpr float degreesToRadians = 0.017453292519943295f;
+        const float tanHalfFov = std::tan(
+            _freecam.fovYDegrees() * degreesToRadians * 0.5f);
+        const float aspect = viewport.width() / viewport.height();
+        const ayt::math::FVector3 direction =
+            (_freecam.forward()
+             + _freecam.right() * (ndcX * aspect * tanHalfFov)
+             + _freecam.up() * (ndcY * tanHalfFov)).normalize();
+        const ayt::math::FVector3 origin = _freecam.eye();
+
+        uint32_t bestId = 0;
+        float bestDistance = 1.0e30f;
+        for (ayt::entity::Entity* entity : world->getAllEntities()) {
+            auto* transform = entity != nullptr
+                ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+            if (transform == nullptr) continue;
+
+            const float radius = 0.75f * std::max({
+                std::fabs(transform->scale.x), std::fabs(transform->scale.y),
+                std::fabs(transform->scale.z), 0.1f});
+            const ayt::math::FVector3 toCenter = transform->position - origin;
+            const float projected = toCenter.dot(direction);
+            if (projected < 0.0f) continue;
+            const float perpendicularSq = toCenter.dot(toCenter)
+                - projected * projected;
+            const float radiusSq = radius * radius;
+            if (perpendicularSq > radiusSq) continue;
+            const float distance = projected
+                - std::sqrt(std::max(0.0f, radiusSq - perpendicularSq));
+            if (distance < bestDistance) {
+                bestDistance = distance;
+                bestId = entity->getId();
+            }
+        }
+
+        if (bestId != 0) _selection.select(bestId);
+        else _selection.clear();
+        _outlinerRefreshPending = true;
+        refreshInspectorLabels();
+        refreshTransformInspector();
+        if (_repaintCallback) _repaintCallback();
+        return;
+    }
+
     // Cycle Character ↔ opaque cube so Inspector labels change on
     // every short click (ray-pick not required yet).
     ++_viewportClickCount;
@@ -2258,9 +2725,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
         // PR-5 (LM-2): Inspector 写权限恢复 + hint 文案恢复。
         _allowInspectorEdit = true;
         setInspectorHint(L"Click buttons to configure.");
-        if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
-            sub->clearCameraOverride();
-        }
+        pushFreecamToRenderer();
         break;
     case EditorMode::Play:
         setModeLabel(_netClientAutoPlay ? L"PLAY (NET CLIENT)" : L"PLAY");
@@ -2283,15 +2748,20 @@ void EditorSession::onModeChanged(EditorMode mode) {
         break;
     }
 
-    // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）
-    refreshUnsavedIndicator();
+    const bool editCommandsEnabled = mode == EditorMode::Edit;
+    if (_undoMenuItem != nullptr) _undoMenuItem->setEnabled(editCommandsEnabled);
+    if (_redoMenuItem != nullptr) _redoMenuItem->setEnabled(editCommandsEnabled);
 
     // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）且
     // 可能销毁 Play 实体 → 清选择 + 排队重建。延迟到 update() 消费
     // 是因为 btn_play/btn_stop click handler 仍在 UIManager 事件派发栈内
     // （Landmine B）。
-    _outlinerSelectedEntityId = 0;
+    _selection.clear();
     _outlinerRefreshPending = true;
+
+    // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）
+    refreshUnsavedIndicator();
+    refreshTransformInspector();
 
     _ui.invalidateLayout();
     _ui.layout();

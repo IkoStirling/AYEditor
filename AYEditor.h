@@ -2,6 +2,9 @@
 
 #include <AYEditor/EditorApp.h>
 #include <AYEditor/EditorFreecam.h>
+#include <AYEditor/EditorSceneDocument.h>
+#include <AYEditor/EditorSelection.h>
+#include <AYEditor/EditorCommandStack.h>
 #include <AYEditor/EditorGameView.h>
 #include <AYEditor/EditorPlayRuntime.h>
 #include <AYEditor/EditorPlayerController.h>

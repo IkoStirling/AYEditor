@@ -1,5 +1,6 @@
 #include "AYTest.h"
 #include "AYEditor/EditorSession.h"
+#include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
 #include "AYUI/DockArea.h"
@@ -7,6 +8,8 @@
 #include "AYUI/Button.h"
 #include "AYUI/TextLabel.h"  // PR-5 LM-2 test: hint TextLabel observe
 #include "AYUI/Image.h"
+#include "AYUI/MenuBar.h"
+#include "AYUI/TextInput.h"
 
 #include <sys/stat.h>
 #include <string>
@@ -20,6 +23,19 @@ bool fileExists(const std::string& path)
 {
     struct stat st;
     return !path.empty() && ::stat(path.c_str(), &st) == 0;
+}
+
+std::string resolveEditorShellLayoutPath()
+{
+    const std::string candidates[] = {
+        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
+        "assets/ui/editor_shell.ui.json",
+        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
+    };
+    for (const std::string& path : candidates) {
+        if (fileExists(path)) return path;
+    }
+    return {};
 }
 
 } // namespace
@@ -66,22 +82,9 @@ TEST_CASE(test_editor_shell_layout_ids) {
 }
 
 TEST_CASE(test_editor_session_loads_shell_json) {
-    const std::string candidates[] = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    std::string layoutPath;
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            layoutPath = path;
-            break;
-        }
-    }
-
-    if (layoutPath.empty()) {
-        return;
-    }
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     MockRenderer backend;
     EditorSession session;
@@ -98,22 +101,9 @@ TEST_CASE(test_editor_session_loads_shell_json) {
 }
 
 TEST_CASE(inspector_panel_renders_pick_apply_reset_widgets) {
-    const std::string candidates[] = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    std::string layoutPath;
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            layoutPath = path;
-            break;
-        }
-    }
-
-    if (layoutPath.empty()) {
-        return;
-    }
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     MockRenderer backend;
     EditorSession session;
@@ -139,22 +129,9 @@ TEST_CASE(inspector_panel_renders_pick_apply_reset_widgets) {
 }
 
 TEST_CASE(test_editor_session_dock_cards_floatable) {
-    const std::string candidates[] = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    std::string layoutPath;
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            layoutPath = path;
-            break;
-        }
-    }
-
-    if (layoutPath.empty()) {
-        return;
-    }
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     MockRenderer backend;
     EditorSession session;
@@ -174,28 +151,16 @@ TEST_CASE(test_editor_session_dock_cards_floatable) {
 }
 
 TEST_CASE(test_editor_session_play_mode_viewport_is_game_surface) {
-    const std::string candidates[] = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    std::string layoutPath;
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            layoutPath = path;
-            break;
-        }
-    }
-
-    if (layoutPath.empty()) {
-        return;
-    }
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     MockRenderer backend;
     EditorSession session;
     CHECK(session.initialize(&backend, layoutPath));
     session.setClientSize(1280.0f, 720.0f);
-    session.gameView().setMode(EditorMode::Play);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
 
     auto* viewport = dynamic_cast<Image*>(session.ui().findById("panel_viewport"));
     CHECK(viewport != nullptr);
@@ -226,6 +191,102 @@ TEST_CASE(editor_game_view_rejects_play_when_host_bootstrap_fails)
     session.shutdown();
 }
 
+TEST_CASE(editor_focus_loss_clears_shortcut_modifiers)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.onKeyDown(UIKey_Control);
+    session.onWindowFocusChanged(false);
+    CHECK_FALSE(session.onKeyDown(UIKey_Z));
+    session.shutdown();
+}
+
+TEST_CASE(editor_viewport_click_commits_text_focus)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* input = dynamic_cast<TextInput*>(
+        session.ui().findById("transform_px"));
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(input != nullptr);
+    CHECK(viewport != nullptr);
+    if (input == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    session.ui().setFocus(input);
+    CHECK(session.ui().getFocusedWidget() == input);
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.ui().getFocusedWidget() == nullptr);
+    session.onMouseButtonUp(x, y, 0);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    CHECK(menuBar != nullptr);
+    MenuItem* undo = nullptr;
+    MenuItem* redo = nullptr;
+    if (menuBar != nullptr) {
+        for (size_t menuIndex = 0; menuIndex < menuBar->getMenuCount(); ++menuIndex) {
+            Menu* menu = menuBar->getMenu(menuIndex);
+            if (menu == nullptr) continue;
+            for (size_t itemIndex = 0; itemIndex < menu->getItemCount(); ++itemIndex) {
+                MenuItem* item = menu->getItem(itemIndex);
+                if (item == nullptr) continue;
+                if (item->getText() == L"Undo") undo = item;
+                if (item->getText() == L"Redo") redo = item;
+            }
+        }
+    }
+    CHECK(undo != nullptr);
+    CHECK(redo != nullptr);
+    if (undo == nullptr || redo == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    CHECK(undo->isEnabled());
+    CHECK(redo->isEnabled());
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
+    CHECK(!undo->isEnabled());
+    CHECK(!redo->isEnabled());
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
+    CHECK(undo->isEnabled());
+    CHECK(redo->isEnabled());
+
+    session.shutdown();
+}
+
 // === PR-5 (v0.1.2 LM-2) =====================================================
 //
 // 设计依据（design v0.1.1 §7 LM-2）：
@@ -246,23 +307,9 @@ TEST_CASE(editor_game_view_rejects_play_when_host_bootstrap_fails)
 
 TEST_CASE(editor_inspector_locked_during_play_LM2)
 {
-    // 找 layout 路径（同 test_editor_session_loads_shell_json 模式）。
-    const std::string candidates[] = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-    std::string layoutPath;
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            layoutPath = path;
-            break;
-        }
-    }
-    if (layoutPath.empty()) {
-        // 与 test_editor_session_loads_shell_json 一致：layout 路径不可达
-        // (VS Test config working dir 未配) 时静默跳过整 case，不假阳性 fail。
-        return;
-    }
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     MockRenderer backend;
     EditorSessionDesc desc{};
@@ -287,7 +334,8 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
     }
 
     // 切 Play → onModeChanged 应当 fire；hint 文案应当切到 "Locked during Play."
-    session.gameView().setMode(EditorMode::Play);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
     if (auto* w = session.ui().findById("inspector_hint")) {
         if (auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(w)) {
             CHECK(lbl->getText() == std::wstring(L"Locked during Play."));
@@ -295,7 +343,8 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
     }
 
     // 切回 Edit → hint 恢复。
-    session.gameView().setMode(EditorMode::Edit);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
     if (auto* w = session.ui().findById("inspector_hint")) {
         if (auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(w)) {
             CHECK(lbl->getText() == std::wstring(L"Click buttons to configure."));
@@ -303,7 +352,8 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
     }
 
     // 切 Paused → 也锁。
-    session.gameView().setMode(EditorMode::Paused);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Paused);
     if (auto* w = session.ui().findById("inspector_hint")) {
         if (auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(w)) {
             CHECK(lbl->getText() == std::wstring(L"Locked during Play."));

@@ -18,6 +18,9 @@ set(SRC_FILES
     src/AYEditorApp.cpp
     src/AYRegisterDefaultEditorModules.cpp
     src/AYEditorFreecam.cpp
+    src/AYEditorSceneDocument.cpp
+    src/AYEditorSelection.cpp
+    src/AYEditorCommandStack.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
@@ -43,6 +46,9 @@ set(HEAD_FILES
     include/AYEditor/EditorApp.h
     include/AYEditor/RegisterDefaultEditorModules.h
     include/AYEditor/EditorFreecam.h
+    include/AYEditor/EditorSceneDocument.h
+    include/AYEditor/EditorSelection.h
+    include/AYEditor/EditorCommandStack.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
     include/AYEditor/ImportedCharacterMapper.h

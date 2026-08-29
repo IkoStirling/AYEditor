@@ -22,6 +22,7 @@
 
 #include "AYTest.h"
 #include "AYEditor/EditorSession.h"
+#include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
 #include "AYUI/Button.h"
@@ -52,6 +53,7 @@ bool layoutFileExists(const std::string& path)
 std::string resolveLayoutPath()
 {
     const std::string candidates[] = {
+        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
         "assets/ui/editor_shell.ui.json",
         "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
     };
@@ -69,10 +71,8 @@ TEST_SUITE(AYEditor_TransportDirtyPrompt)
 TEST_CASE(editor_transport_edit_scene_injected_after_initialize)
 {
     auto layoutPath = resolveLayoutPath();
-    if (layoutPath.empty()) {
-        // layout 不在 → 跳过（与 Test_EditorShell 同模式）
-        return;
-    }
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
 
@@ -103,6 +103,7 @@ TEST_CASE(editor_transport_edit_scene_injected_after_initialize)
 TEST_CASE(editor_transport_can_begin_play_true_after_initialize)
 {
     auto layoutPath = resolveLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -120,11 +121,11 @@ TEST_CASE(editor_transport_can_begin_play_true_after_initialize)
 }
 
 // case 3: lbl_unsaved 在 edit dirty 时显 "•"
-//   触发方式：mode flip Edit→Play→Edit，onModeChanged 调 refreshUnsavedIndicator。
-//   避免 friend accessor 暴露 private 方法。
+//   触发方式：外部 Scene dirty 后由 EditorSession::update 对账。
 TEST_CASE(editor_transport_lbl_unsaved_visible_when_edit_dirty)
 {
     auto layoutPath = resolveLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -149,9 +150,9 @@ TEST_CASE(editor_transport_lbl_unsaved_visible_when_edit_dirty)
     CHECK(sm->isEditDirty());
     CHECK(sm->requireSaveBeforePlay());
 
-    // mode flip Edit→Play→Edit 触发 onModeChanged → refreshUnsavedIndicator
-    session.gameView().setMode(ayt::editor::EditorMode::Play);
-    session.gameView().setMode(ayt::editor::EditorMode::Edit);
+    // The document may also be dirtied outside EditorSession's own commands.
+    // Per-frame reconciliation must keep the indicator synchronized.
+    session.update(0.0f);
 
     auto* lblDirty = dynamic_cast<ayt::ui::TextLabel*>(
         session.ui().findById("lbl_unsaved"));
@@ -163,10 +164,11 @@ TEST_CASE(editor_transport_lbl_unsaved_visible_when_edit_dirty)
 }
 
 // case 4: lbl_unsaved 在 clean 时隐藏
-//   触发方式：mode flip（onModeChanged → refreshUnsavedIndicator）。
+//   触发方式：外部替换 clean Edit Scene 后由 update 对账。
 TEST_CASE(editor_transport_lbl_unsaved_hidden_when_edit_clean)
 {
     auto layoutPath = resolveLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -179,16 +181,15 @@ TEST_CASE(editor_transport_lbl_unsaved_hidden_when_edit_clean)
     auto* edit = sm->edit();
     CHECK(edit != nullptr);
 
-    // 制造 dirty → mode flip → lbl 显
+    // 制造 dirty → update reconciliation → lbl 显
     edit->clear();
-    session.gameView().setMode(ayt::editor::EditorMode::Play);
-    session.gameView().setMode(ayt::editor::EditorMode::Edit);
+    session.update(0.0f);
     auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(
         session.ui().findById("lbl_unsaved"));
     CHECK(lbl != nullptr);
     CHECK(lbl->isVisible());
 
-    // 替换 _edit 为新 Scene（clean）→ mode flip → lbl 隐
+    // 替换 _edit 为新 Scene（clean）→ update reconciliation → lbl 隐
     auto freshEdit = std::make_unique<ayt::scene::Scene>(
         ayt::scene::SceneMode::Edit, "<test_clean_post>");
     sm->setEdit(freshEdit.get());
@@ -198,8 +199,7 @@ TEST_CASE(editor_transport_lbl_unsaved_hidden_when_edit_clean)
     CHECK(!sm->isEditDirty());
     CHECK(!sm->requireSaveBeforePlay());
 
-    session.gameView().setMode(ayt::editor::EditorMode::Play);
-    session.gameView().setMode(ayt::editor::EditorMode::Edit);
+    session.update(0.0f);
 
     auto* lblClean = dynamic_cast<ayt::ui::TextLabel*>(
         session.ui().findById("lbl_unsaved"));
@@ -218,6 +218,7 @@ TEST_CASE(editor_transport_lbl_unsaved_hidden_when_edit_clean)
 TEST_CASE(editor_transport_lbl_unsaved_follows_on_mode_changed)
 {
     auto layoutPath = resolveLayoutPath();
+    CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
@@ -234,7 +235,8 @@ TEST_CASE(editor_transport_lbl_unsaved_follows_on_mode_changed)
     edit->clear();
 
     // 切到 Play → onModeChanged fires → refreshUnsavedIndicator
-    session.gameView().setMode(ayt::editor::EditorMode::Play);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), ayt::editor::EditorMode::Play);
     CHECK(session.gameView().mode() == ayt::editor::EditorMode::Play);
 
     auto* lblAfterMode = dynamic_cast<ayt::ui::TextLabel*>(
@@ -244,7 +246,8 @@ TEST_CASE(editor_transport_lbl_unsaved_follows_on_mode_changed)
     CHECK(lblAfterMode->getText() == L"•");
 
     // 切回 Edit → onModeChanged 又 fire → refresh（仍 dirty，因为 _edit 没动）
-    session.gameView().setMode(ayt::editor::EditorMode::Edit);
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), ayt::editor::EditorMode::Edit);
     auto* lblAfterEdit = dynamic_cast<ayt::ui::TextLabel*>(
         session.ui().findById("lbl_unsaved"));
     CHECK(lblAfterEdit != nullptr);

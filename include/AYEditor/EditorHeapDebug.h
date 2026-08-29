@@ -23,10 +23,14 @@
           }                                                                                 \
       } while (0)
 
-#  define AY_EDITOR_TRACE(label)                                                          \
-      std::fprintf(stderr, "[EditorTrace] %s\n", (label))
+#  define AY_EDITOR_TRACE(...)                                                            \
+      do {                                                                                \
+          std::fprintf(stderr, "[EditorTrace] ");                                        \
+          std::fprintf(stderr, __VA_ARGS__);                                              \
+          std::fputc('\n', stderr);                                                       \
+      } while (0)
 #else
 #  define AY_EDITOR_HEAP_DEBUG_INIT() ((void)0)
 #  define AY_EDITOR_HEAP_CHECK(label) ((void)0)
-#  define AY_EDITOR_TRACE(label) ((void)0)
+#  define AY_EDITOR_TRACE(...) ((void)0)
 #endif

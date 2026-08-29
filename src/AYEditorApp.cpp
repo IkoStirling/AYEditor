@@ -12,6 +12,7 @@
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYScript/ScriptSubSystem.h"
 #include "AYRenderer/UIRenderBackend.h"
+#include "AYUI/UIKeyCode.h"
 
 #include <AYApplication/IEngineHost.h>
 
@@ -81,6 +82,18 @@ struct EditorHostState {
     int clientHeight = 0;
 };
 
+int uiKeyFromVirtualKey(std::uintptr_t virtualKey) noexcept
+{
+    // Most UIKeyCode values intentionally match Win32 VK values. PageUp and
+    // PageDown are the documented exceptions and must be translated at the
+    // host boundary instead of being passed through as raw VK_PRIOR/VK_NEXT.
+    switch (virtualKey) {
+    case VK_PRIOR: return ayt::ui::UIKey_PageUp;
+    case VK_NEXT:  return ayt::ui::UIKey_PageDown;
+    default:       return static_cast<int>(virtualKey);
+    }
+}
+
 std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
                                 std::uintptr_t wParam, std::intptr_t lParam, bool& handled)
 {
@@ -97,6 +110,14 @@ std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
                                       static_cast<float>(state->clientHeight));
         handled = true;
         return 0;
+    case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:
+        handled = state->session->onKeyDown(uiKeyFromVirtualKey(wParam));
+        return handled ? 0 : 0;
+    case WM_KEYUP:
+    case WM_SYSKEYUP:
+        handled = state->session->onKeyUp(uiKeyFromVirtualKey(wParam));
+        return handled ? 0 : 0;
     case WM_MOUSEMOVE: {
         TRACKMOUSEEVENT trackLeave{};
         trackLeave.cbSize = sizeof(trackLeave);
@@ -541,6 +562,25 @@ void EditorApp::run()
         return;
     }
 
+    // Primary-window TextInput/IME bridge. Child windows already install the
+    // same bridge through EditorChildWindowManager.
+    session.ui().onTextEditingFocusChanged = [this](bool editing) {
+        _devices->textInput().setEnabled(editing);
+    };
+    _devices->textInput().onCommit = [&session](const std::string& chunk) {
+        if (!chunk.empty()) {
+            session.ui().onDeviceChar(chunk.data(), static_cast<int>(chunk.size()));
+        }
+    };
+    _devices->textInput().onCompositionUpdate =
+        [&session, this](const std::string& text, int caret) {
+            if (text.empty() && !_devices->textInput().isComposing()) {
+                session.ui().onDeviceCompositionEnd("");
+                return;
+            }
+            session.ui().onDeviceCompositionUpdate(text, caret);
+        };
+
     session.setClientSize(static_cast<float>(hostState.clientWidth),
                           static_cast<float>(hostState.clientHeight));
 
@@ -587,6 +627,9 @@ void EditorApp::run()
     bool running = true;
     bool loggedFirstFrameHeap = false;
     window.setWindowCloseCallback([&running]() { running = false; });
+    window.setWindowFocusCallback([&session](bool focused) {
+        session.onWindowFocusChanged(focused);
+    });
     window.setWindowMessageCallback(
         [hwnd, &hostState](unsigned msg, std::uintptr_t wParam, std::intptr_t lParam,
                            bool& handled) -> std::intptr_t {
@@ -603,6 +646,29 @@ void EditorApp::run()
     auto previousHostFrame = Clock::now();
     const bool frameTiming =
         ayt::io::env::get("AY_EDITOR_FRAME_TIMING").has_value();
+    // TEMPORARY PASS/GPU VALIDATION HOOK — remove with the backend override in
+    // EditorShellDemo after the Pass audit. When the environment variable is
+    // absent this is a zero-behavior branch. When set, one paused D3D11 run
+    // captures stable Bloom off/on, Shadow Bias min/max, and ambient-only SSAO
+    // off/strong/default pairs through Renderer::captureScreenshot; no UI
+    // automation is involved. The caller supplies a path *base* without an
+    // extension.
+    const std::string passCaptureBase =
+        ayt::io::env::get("AY_EDITOR_PASS_CAPTURE_BASE").value_or("");
+    if (!passCaptureBase.empty()) {
+        ayt::render::Renderer& validationRenderer = rendererSub->renderer();
+        validationRenderer.setDepthHazeEnabled(false);
+        validationRenderer.setDepthHazeStrength(0.0f);
+        validationRenderer.setSsaoEnabled(false);
+        validationRenderer.setSsaoStrength(0.0f);
+        validationRenderer.setPostProcessBloomStrength(0.0f);
+        // Pin the Editor validation threshold so a later preset drift cannot
+        // silently return this ordinary, non-emissive scene to a no-op Bloom.
+        validationRenderer.setPostProcessBloomThreshold(0.25f);
+        std::fprintf(stderr,
+                     "[EditorApp] TEMP pass capture sequence armed: %s_*\n",
+                     passCaptureBase.c_str());
+    }
     uint64_t frameIndex = 0;
     double compositeMs = 0.0;
     // uiPassMs measures the host-side lambda that drives
@@ -690,6 +756,68 @@ void EditorApp::run()
             if (frameTiming) {
                 compositeMs = std::chrono::duration<double, std::milli>(
                     tRenderEnd - tRenderBegin).count();
+            }
+
+            if (!passCaptureBase.empty()) {
+                ayt::render::Renderer& validationRenderer =
+                    rendererSub->renderer();
+                auto queueCapture = [&](const char* suffix) {
+                    const std::string base = passCaptureBase + suffix;
+                    const bool queued = validationRenderer.captureScreenshot(base);
+                    std::fprintf(stderr,
+                                 "[EditorApp] TEMP pass capture %s: %s\n",
+                                 queued ? "queued" : "FAILED", base.c_str());
+                };
+
+                // Leave several submitted frames between every state change
+                // and capture so bgfx readback cannot sample the next state.
+                if (frameIndex == 30) {
+                    // Let render systems publish a real Scene before freezing;
+                    // pausing at frame zero leaves the viewport intentionally
+                    // empty because no presentation snapshot exists yet.
+                    ayt::game::GameLoop::instance().pause();
+                } else if (frameIndex == 60) {
+                    queueCapture("_bloom_off");
+                } else if (frameIndex == 70) {
+                    validationRenderer.setPostProcessBloomStrength(1.5f);
+                } else if (frameIndex == 85) {
+                    queueCapture("_bloom_on");
+                } else if (frameIndex == 95) {
+                    validationRenderer.setPostProcessBloomStrength(0.0f);
+                    validationRenderer.setShadowBias(0.0f);
+                } else if (frameIndex == 110) {
+                    queueCapture("_shadow_bias_0000");
+                } else if (frameIndex == 120) {
+                    validationRenderer.setShadowBias(0.02f);
+                } else if (frameIndex == 135) {
+                    queueCapture("_shadow_bias_0020");
+                } else if (frameIndex == 145) {
+                    // Isolate ambient occlusion from direct-light changes.
+                    validationRenderer.setSsaoEnabled(false);
+                    validationRenderer.setSsaoStrength(0.0f);
+                    validationRenderer.setSceneLights(nullptr);
+                    validationRenderer.setDirectionalLight(
+                        ayt::math::FVector3(0.35f, -0.85f, -0.40f),
+                        ayt::math::FVector3(0.0f, 0.0f, 0.0f));
+                    validationRenderer.setAmbientStrength(1.5f);
+                } else if (frameIndex == 160) {
+                    queueCapture("_ssao_off");
+                } else if (frameIndex == 170) {
+                    validationRenderer.setSsaoEnabled(true);
+                    validationRenderer.setSsaoStrength(1.0f);
+                    validationRenderer.setSsaoParams(0.8f, 0.02f);
+                } else if (frameIndex == 185) {
+                    queueCapture("_ssao_on");
+                } else if (frameIndex == 195) {
+                    // Match the values shipped by editor_shell.ui.json after
+                    // the strong profile has established spatial correctness.
+                    validationRenderer.setSsaoStrength(0.45f);
+                    validationRenderer.setSsaoParams(0.4f, 0.04f);
+                } else if (frameIndex == 210) {
+                    queueCapture("_ssao_default_on");
+                } else if (frameIndex == 225) {
+                    running = false;
+                }
             }
         }
         const auto t4 = frameTiming ? Clock::now() : Clock::time_point{};

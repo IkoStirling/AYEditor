@@ -117,6 +117,9 @@ public:
     // Called by EditorSession once the host has polled its input for this
     // frame. The context is forwarded unchanged to GameLoop.
     void tick(const ayt::game::HostedFrameContext& hostFrame);
+    // Edit mode: drive the paused GameLoop's presentation phases without
+    // advancing simulation/world systems.
+    void tickPresentation(const ayt::game::HostedFrameContext& hostFrame);
     // Legacy convenience path for callers without an external host frame.
     void tick();
 

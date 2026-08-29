@@ -21,8 +21,8 @@
         {
           "type": "MenuBar",
           "id": "menubar",
-          "size": { "w": 240, "h": 26 },
-          "slot": { "width": 240 }
+          "size": { "w": 260, "h": 26 },
+          "slot": { "width": 260 }
         },
         {
           "type": "TextLabel",
@@ -87,11 +87,17 @@
           "title": "Render",
           "floatable": true,
           "content": {
-            "type": "VBox",
-            "id": "panel_render_body",
-            "spacing": 2,
-            "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
-            "children": [
+            "type": "ScrollView",
+            "id": "panel_render_scroll",
+            "size": { "w": 0, "h": 0 },
+            "verticalScrollBar": true,
+            "horizontalScrollBar": false,
+            "content": {
+              "type": "VBox",
+              "id": "panel_render_body",
+              "spacing": 2,
+              "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
+              "children": [
               { "type": "TextLabel", "id": "lbl_render_hdr", "text": "Post / Look", "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_gamma", "text": "Gamma  2.20", "size": { "w": 200, "h": 18 } },
               { "type": "Slider", "id": "sld_gamma", "min": 1.0, "max": 3.0, "value": 2.2, "size": { "w": 200, "h": 22 } },
@@ -127,8 +133,9 @@
               { "type": "CheckBox", "id": "chk_shadow_pcf", "text": "Shadow PCF", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_shadow_bias", "text": "Shadow Bias  0.003", "size": { "w": 200, "h": 18 } },
               { "type": "Slider", "id": "sld_shadow_bias", "min": 0.0, "max": 0.02, "value": 0.003, "size": { "w": 200, "h": 22 } },
-              { "type": "TextLabel", "id": "lbl_render_hint", "text": "Live after Play starts", "size": { "w": 200, "h": 18 } }
-            ]
+                { "type": "TextLabel", "id": "lbl_render_hint", "text": "Live in Edit and Play", "size": { "w": 200, "h": 18 } }
+              ]
+            }
           }
         },
         {
@@ -156,6 +163,20 @@
             "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
             "children": [
               { "type": "TextLabel", "id": "inspector_hint", "text": "Click buttons to configure.", "size": { "w": 240, "h": 24 } },
+              { "type": "TextLabel", "id": "inspector_transform_header", "text": "Transform", "size": { "w": 240, "h": 20 } },
+              { "type": "TextLabel", "id": "inspector_position_label", "text": "Position X / Y / Z", "size": { "w": 240, "h": 18 } },
+              { "type": "TextInput", "id": "transform_px", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_py", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_pz", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextLabel", "id": "inspector_rotation_label", "text": "Rotation degrees X / Y / Z", "size": { "w": 240, "h": 18 } },
+              { "type": "TextInput", "id": "transform_rx", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_ry", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_rz", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextLabel", "id": "inspector_scale_label", "text": "Scale X / Y / Z", "size": { "w": 240, "h": 18 } },
+              { "type": "TextInput", "id": "transform_sx", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_sy", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "TextInput", "id": "transform_sz", "text": "-", "size": { "w": 240, "h": 24 } },
+              { "type": "Button", "id": "btn_transform_apply", "text": "Apply Transform", "size": { "w": 140, "h": 24 } },
               { "type": "TextLabel", "id": "inspector_mesh", "text": "mesh: -", "size": { "w": 240, "h": 20 } },
               { "type": "TextLabel", "id": "inspector_skel", "text": "skel: -", "size": { "w": 240, "h": 20 } },
               { "type": "TextLabel", "id": "inspector_anim", "text": "anim: -", "size": { "w": 240, "h": 20 } },
