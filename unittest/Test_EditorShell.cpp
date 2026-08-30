@@ -6,10 +6,19 @@
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
 #include "AYUI/Button.h"
+#include "AYUI/CheckBox.h"
+#include "AYUI/ComboBox.h"
+#include "AYUI/Slider.h"
 #include "AYUI/TextLabel.h"  // PR-5 LM-2 test: hint TextLabel observe
 #include "AYUI/Image.h"
 #include "AYUI/MenuBar.h"
 #include "AYUI/TextInput.h"
+#include "AYEntity.h"
+#include <AYEntity/components/MeshComponent.h>
+#include "AYApplication/IEngineHost.h"
+#include "AYApplication.h"
+#include "AYScene.h"
+#include "AYScene/SceneManager.h"
 
 #include <sys/stat.h>
 #include <string>
@@ -36,6 +45,18 @@ std::string resolveEditorShellLayoutPath()
         if (fileExists(path)) return path;
     }
     return {};
+}
+
+bool clickButton(Button* button)
+{
+    if (button == nullptr) return false;
+    const auto bounds = button->getWorldBounds();
+    const UIMouseEvent event(
+        ayt::math::FVector2((bounds.minX + bounds.maxX) * 0.5f,
+                           (bounds.minY + bounds.maxY) * 0.5f),
+        0);
+    return button->onMouseButtonDown(event) &&
+           button->onMouseButtonUp(event);
 }
 
 } // namespace
@@ -97,6 +118,168 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(session.ui().findById("main_dock") != nullptr);
     CHECK(session.ui().findById("card_render") != nullptr);
     CHECK(session.ui().findById("card_inspector") != nullptr);
+    CHECK(session.ui().findById("workspace_toolbar") != nullptr);
+    CHECK(session.ui().findById("viewport_toolbar") != nullptr);
+    CHECK(session.ui().findById("card_assets") != nullptr);
+    CHECK(session.ui().findById("card_console") != nullptr);
+    CHECK(session.ui().findById("editor_status_bar") != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_depth_haze")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_color_grading")) != nullptr);
+    CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_grading_preset")) != nullptr);
+    CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_color_grading_strength")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_shadows")) != nullptr);
+    session.shutdown();
+}
+
+TEST_CASE(editor_color_grading_enable_promotes_neutral_to_visible_warm_preset) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    auto* enabled = dynamic_cast<CheckBox*>(
+        session.ui().findById("chk_color_grading"));
+    auto* preset = dynamic_cast<ComboBox*>(
+        session.ui().findById("cmb_color_grading_preset"));
+    CHECK_NOT_NULL(enabled);
+    CHECK_NOT_NULL(preset);
+    if (enabled != nullptr && preset != nullptr) {
+        enabled->setChecked(false);
+        preset->setSelectedIndex(0);
+        CHECK(preset->getSelectedItem() == L"Neutral (Bypass)");
+        enabled->setChecked(true);
+        CHECK(preset->getSelectedIndex() == 1);
+        CHECK(preset->getSelectedItem() == L"Warm");
+    }
+    session.shutdown();
+}
+
+TEST_CASE(editor_freecam_wheel_zoom_dollies_along_view_direction) {
+    EditorFreecam camera;
+    const ayt::math::FVector3 initialEye = camera.eye();
+    const ayt::math::FVector3 viewDirection = camera.forward();
+
+    camera.zoom(1.0f);
+    const ayt::math::FVector3 forwardDelta = camera.eye() - initialEye;
+    CHECK_FLOAT_EQ(forwardDelta.dot(viewDirection), 0.75f, 1.0e-5f);
+    CHECK_FLOAT_EQ(forwardDelta.lengthSq(), 0.5625f, 1.0e-5f);
+
+    camera.zoom(-1.0f);
+    const ayt::math::FVector3 restoredEye = camera.eye();
+    CHECK_FLOAT_EQ(restoredEye.x, initialEye.x, 1.0e-5f);
+    CHECK_FLOAT_EQ(restoredEye.y, initialEye.y, 1.0e-5f);
+    CHECK_FLOAT_EQ(restoredEye.z, initialEye.z, 1.0e-5f);
+}
+
+TEST_CASE(editor_freecam_wheel_zoom_can_anchor_to_cursor_ray) {
+    EditorFreecam camera;
+    const ayt::math::FVector3 initialEye = camera.eye();
+    const ayt::math::FVector3 cursorRay(2.0f, -1.0f, -2.0f);
+    const ayt::math::FVector3 direction = cursorRay.normalize();
+
+    camera.zoomToward(0.5f, cursorRay);
+    const ayt::math::FVector3 delta = camera.eye() - initialEye;
+    CHECK_FLOAT_EQ(delta.x, direction.x * 0.375f, 1.0e-5f);
+    CHECK_FLOAT_EQ(delta.y, direction.y * 0.375f, 1.0e-5f);
+    CHECK_FLOAT_EQ(delta.z, direction.z * 0.375f, 1.0e-5f);
+}
+
+TEST_CASE(editor_shell_v2_has_stable_workspace_regions) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    Widget* menuRow = session.ui().findById("menubar_row");
+    Widget* toolbar = session.ui().findById("workspace_toolbar");
+    Widget* dockWidget = session.ui().findById("main_dock");
+    Widget* status = session.ui().findById("editor_status_bar");
+    Widget* viewportToolbar = session.ui().findById("viewport_toolbar");
+    Widget* viewport = session.ui().findById("panel_viewport");
+    CHECK_NOT_NULL(menuRow);
+    CHECK_NOT_NULL(toolbar);
+    CHECK_NOT_NULL(dockWidget);
+    CHECK_NOT_NULL(status);
+    CHECK_NOT_NULL(viewportToolbar);
+    CHECK_NOT_NULL(viewport);
+    if (menuRow && toolbar && dockWidget && status
+        && viewportToolbar && viewport) {
+        CHECK(menuRow->getWorldBounds().maxY <= toolbar->getWorldBounds().minY);
+        CHECK(toolbar->getWorldBounds().maxY <= dockWidget->getWorldBounds().minY);
+        CHECK(dockWidget->getWorldBounds().maxY <= status->getWorldBounds().minY);
+        CHECK(viewportToolbar->getWorldBounds().maxY <= viewport->getWorldBounds().minY);
+        CHECK(viewport->getSize().x > 0.0f);
+        CHECK(viewport->getSize().y > 0.0f);
+    }
+
+    auto* dock = dynamic_cast<DockArea*>(dockWidget);
+    CHECK_NOT_NULL(dock);
+    if (dock != nullptr) {
+        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Left), 0.20f, 1e-5f);
+        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Right), 0.25f, 1e-5f);
+        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Center), 0.55f, 1e-5f);
+        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Bottom), 0.22f, 1e-5f);
+
+        auto* render = dock->findCard("card_render");
+        auto* inspector = dock->findCard("card_inspector");
+        auto* assets = dock->findCard("card_assets");
+        auto* console = dock->findCard("card_console");
+        CHECK_NOT_NULL(render);
+        CHECK_NOT_NULL(inspector);
+        CHECK_NOT_NULL(assets);
+        CHECK_NOT_NULL(console);
+        if (render && inspector) CHECK(render->getParent() == inspector->getParent());
+        if (assets && console) CHECK(assets->getParent() == console->getParent());
+        if (assets) {
+            CHECK(assets->isClosable());
+            CHECK_FALSE(assets->isFloatable());
+        }
+        if (console) {
+            CHECK(console->isClosable());
+            CHECK_FALSE(console->isFloatable());
+        }
+    }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_menu_bar_stays_inside_top_chrome_row) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    Widget* row = session.ui().findById("menubar_row");
+    auto* bar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    CHECK_NOT_NULL(row);
+    CHECK_NOT_NULL(bar);
+    if (row != nullptr && bar != nullptr) {
+        const auto rowBounds = row->getWorldBounds();
+        const auto barBounds = bar->getWorldBounds();
+        CHECK(bar->getSize().y == 22.0f);
+        CHECK(barBounds.minY >= rowBounds.minY);
+        CHECK(barBounds.maxY <= rowBounds.maxY);
+        for (Widget* child : bar->getChildren()) {
+            if (auto* anchor = dynamic_cast<Button*>(child)) {
+                CHECK(anchor->getSize().y == 22.0f);
+                CHECK(anchor->getWorldBounds().maxY <= rowBounds.maxY);
+            }
+        }
+    }
+
     session.shutdown();
 }
 
@@ -150,6 +333,93 @@ TEST_CASE(test_editor_session_dock_cards_floatable) {
     session.shutdown();
 }
 
+TEST_CASE(renderer_settings_close_and_window_menu_reopen_keeps_live_card) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* dock = dynamic_cast<DockArea*>(session.ui().findById("main_dock"));
+    auto* render = dynamic_cast<DockCard*>(session.ui().findById("card_render"));
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    CHECK_NOT_NULL(dock);
+    CHECK_NOT_NULL(render);
+    CHECK_NOT_NULL(menuBar);
+    if (dock == nullptr || render == nullptr || menuBar == nullptr) {
+        session.shutdown();
+        return;
+    }
+    Widget* const renderContent = render->getContent();
+
+    CHECK(dock->requestCloseCard(render));
+    CHECK_FALSE(render->isVisible());
+    CHECK(dock->findCard("card_render") == render);
+    CHECK(session.ui().findById("card_render") == render);
+    CHECK(render->getContent() == renderContent);
+
+    Menu* windowMenu = nullptr;
+    for (size_t i = 0; i < menuBar->getMenuCount(); ++i) {
+        if (menuBar->getMenuTitle(i) == L"Window") {
+            windowMenu = menuBar->getMenu(i);
+            break;
+        }
+    }
+    CHECK_NOT_NULL(windowMenu);
+    if (windowMenu != nullptr) {
+        MenuItem* reopen = windowMenu->getItem(0);
+        CHECK_NOT_NULL(reopen);
+        if (reopen != nullptr) {
+            CHECK(reopen->getText() == L"Render Settings");
+            CHECK(reopen->handleClick());
+        }
+    }
+
+    CHECK(render->isVisible());
+    CHECK(dock->findCard("card_render") == render);
+    CHECK(session.ui().findById("card_render") == render);
+    CHECK(render->getContent() == renderContent);
+    CHECK(dynamic_cast<DockTabGroup*>(render->getParent()) != nullptr);
+
+    struct PersistentPanelCase {
+        const char* id;
+        size_t menuItem;
+    };
+    const PersistentPanelCase panels[] = {
+        {"card_render", 0},
+        {"card_inspector", 1},
+        {"card_outliner", 2},
+        {"card_network", 3},
+        {"card_console", 4},
+        {"card_assets", 5},
+    };
+    for (const auto& panel : panels) {
+        auto* card = dynamic_cast<DockCard*>(session.ui().findById(panel.id));
+        CHECK_NOT_NULL(card);
+        if (card == nullptr || windowMenu == nullptr) continue;
+        Widget* const content = card->getContent();
+        MenuItem* const reopen = windowMenu->getItem(panel.menuItem);
+        CHECK_NOT_NULL(reopen);
+        if (reopen == nullptr) continue;
+
+        for (int cycle = 0; cycle < 8; ++cycle) {
+            CHECK(dock->requestCloseCard(card));
+            CHECK(dock->findCard(panel.id) == card);
+            CHECK(session.ui().findById(panel.id) == card);
+            CHECK(card->getContent() == content);
+            CHECK(reopen->handleClick());
+            CHECK(dock->findCard(panel.id) == card);
+            CHECK(card->getContent() == content);
+            CHECK(dynamic_cast<DockTabGroup*>(card->getParent()) != nullptr);
+        }
+    }
+
+    session.shutdown();
+}
+
 TEST_CASE(test_editor_session_play_mode_viewport_is_game_surface) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
@@ -171,6 +441,7 @@ TEST_CASE(test_editor_session_play_mode_viewport_is_game_surface) {
         (viewport->getWorldBounds().minY + viewport->getWorldBounds().maxY) * 0.5f;
 
     CHECK(!session.onMouseMove(centerX, centerY));
+    CHECK(session.onMouseWheel(centerX, centerY, 1.0f));
     CHECK(session.getUiCursorHint() == UiCursorHint::Default);
 
     session.shutdown();
@@ -240,6 +511,211 @@ TEST_CASE(editor_viewport_click_commits_text_focus)
     session.shutdown();
 }
 
+TEST_CASE(editor_viewport_first_click_recovers_stale_ui_capture_after_arrow_key)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* input = dynamic_cast<TextInput*>(
+        session.ui().findById("transform_px"));
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(input != nullptr);
+    CHECK(viewport != nullptr);
+    if (input == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const auto inputBounds = input->getWorldBounds();
+    const float inputX = (inputBounds.minX + inputBounds.maxX) * 0.5f;
+    const float inputY = (inputBounds.minY + inputBounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(inputX, inputY, 0));
+    CHECK(session.ui().isCapturing());
+
+    session.onKeyDown(UIKey_Right);
+    session.onKeyUp(UIKey_Right);
+
+    const auto viewportBounds = viewport->getWorldBounds();
+    const float viewportX =
+        (viewportBounds.minX + viewportBounds.maxX) * 0.5f;
+    const float viewportY =
+        (viewportBounds.minY + viewportBounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(viewportX, viewportY, 0));
+    CHECK_FALSE(session.ui().isCapturing());
+    CHECK(session.onMouseButtonUp(viewportX, viewportY, 0));
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_viewport_wheel_converts_ui_pixels_and_anchors_at_pointer)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(viewport != nullptr);
+    if (viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = bounds.maxX - bounds.width() * 0.15f;
+    const float y = bounds.minY + bounds.height() * 0.35f;
+    const ayt::math::FVector3 initialEye = session.freecam().eye();
+
+    // One native wheel notch reaches EditorSession as -40 AYUI pixels.
+    CHECK(session.onMouseWheel(x, y, -40.0f));
+    const ayt::math::FVector3 delta = session.freecam().eye() - initialEye;
+    CHECK_FLOAT_EQ(delta.lengthSq(), 0.5625f, 1.0e-4f);
+    // Off-centre cursor anchoring must include a lateral component; a legacy
+    // forward-only dolly has zero projection onto screen-right.
+    CHECK(delta.dot(session.freecam().right()) > 0.1f);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_viewport_click_selects_active_world_entity_and_clears_outline)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(world != nullptr);
+    CHECK(viewport != nullptr);
+    if (world == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("Viewport Pick Target");
+    entity->addComponent<ayt::entity::Transform>();
+    auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
+
+    const auto bounds = viewport->getWorldBounds();
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerY = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(centerX, centerY, 0));
+    CHECK(session.onMouseButtonUp(centerX, centerY, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+    CHECK(mesh != nullptr);
+    if (mesh != nullptr) CHECK(mesh->outlineHull);
+
+    const float emptyX = bounds.minX + 2.0f;
+    const float emptyY = bounds.minY + 2.0f;
+    CHECK(session.onMouseButtonDown(emptyX, emptyY, 0));
+    CHECK(session.onMouseButtonUp(emptyX, emptyY, 0));
+    CHECK(session.selectedEntityId() == 0u);
+    if (mesh != nullptr) CHECK_FALSE(mesh->outlineHull);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_viewport_click_selects_entity_in_play_world)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* scenes = ayt::app::currentEngineHost()->scenes();
+    ayt::entity::World* editWorld =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    CHECK(scenes != nullptr);
+    CHECK(editWorld != nullptr);
+    if (scenes == nullptr || editWorld == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* source = editWorld->createEntity();
+    CHECK(source != nullptr);
+    if (source == nullptr) {
+        session.shutdown();
+        return;
+    }
+    source->setName("Play Viewport Pick Target");
+    source->addComponent<ayt::entity::Transform>();
+    source->addComponent<ayt::entity::MeshComponent>();
+
+    CHECK(scenes->beginPlay());
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
+    ayt::entity::World* playWorld =
+        session.worldContext().world(EditorWorldSlot::Play, true);
+    ayt::entity::Entity* clone = playWorld != nullptr
+        ? playWorld->findEntity("Play Viewport Pick Target") : nullptr;
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(playWorld != nullptr);
+    CHECK(clone != nullptr);
+    CHECK(viewport != nullptr);
+    if (playWorld != nullptr && clone != nullptr && viewport != nullptr) {
+        const auto bounds = viewport->getWorldBounds();
+        const float x = (bounds.minX + bounds.maxX) * 0.5f;
+        const float y = (bounds.minY + bounds.maxY) * 0.5f;
+        CHECK(session.onMouseButtonDown(x, y, 0));
+        CHECK(session.onMouseButtonUp(x, y, 0));
+        CHECK(session.selectedEntityId() == clone->getId());
+        auto* mesh = clone->getComponent<ayt::entity::MeshComponent>();
+        CHECK(mesh != nullptr);
+        if (mesh != nullptr) CHECK(mesh->outlineHull);
+        auto* hint = dynamic_cast<TextLabel*>(
+            session.ui().findById("inspector_hint"));
+        CHECK(hint != nullptr);
+        if (hint != nullptr) {
+            CHECK(hint->getText().rfind(L"Play selection: ", 0) == 0);
+        }
+        auto* positionX = dynamic_cast<TextInput*>(
+            session.ui().findById("transform_px"));
+        CHECK(positionX != nullptr);
+        if (positionX != nullptr) {
+            CHECK(positionX->getText() != L"-");
+            CHECK(positionX->isReadOnly());
+        }
+    }
+
+    scenes->endPlay();
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
+    session.shutdown();
+}
+
 TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();
@@ -283,6 +759,59 @@ TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
         session.gameView(), EditorMode::Edit);
     CHECK(undo->isEnabled());
     CHECK(redo->isEnabled());
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_view_menu_toggles_viewport_orientation_axis)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    bool persistedVisible = true;
+    int persistenceCalls = 0;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.viewportOrientationAxisVisible = true;
+    desc.onViewportOrientationAxisVisibilityChanged =
+        [&](bool visible) {
+            persistedVisible = visible;
+            ++persistenceCalls;
+        };
+    CHECK(session.initialize(desc));
+
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    CHECK(menuBar != nullptr);
+    MenuItem* axisItem = nullptr;
+    if (menuBar != nullptr) {
+        for (size_t menuIndex = 0; menuIndex < menuBar->getMenuCount(); ++menuIndex) {
+            if (menuBar->getMenuTitle(menuIndex) != L"View") continue;
+            Menu* viewMenu = menuBar->getMenu(menuIndex);
+            if (viewMenu != nullptr && viewMenu->getItemCount() != 0) {
+                axisItem = viewMenu->getItem(0);
+            }
+            break;
+        }
+    }
+
+    CHECK(axisItem != nullptr);
+    CHECK(session.viewportOrientationAxisVisible());
+    if (axisItem != nullptr) {
+        CHECK(axisItem->getText() == L"[x] Viewport Orientation Axis");
+        CHECK(axisItem->handleClick());
+        CHECK_FALSE(session.viewportOrientationAxisVisible());
+        CHECK_FALSE(persistedVisible);
+        CHECK(persistenceCalls == 1);
+        CHECK(axisItem->getText() == L"[ ] Viewport Orientation Axis");
+        CHECK(axisItem->handleClick());
+        CHECK(session.viewportOrientationAxisVisible());
+        CHECK(persistedVisible);
+        CHECK(persistenceCalls == 2);
+    }
 
     session.shutdown();
 }
@@ -359,6 +888,213 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
             CHECK(lbl->getText() == std::wstring(L"Locked during Play."));
         }
     }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorPreferences requested;
+    requested.viewportOrientationAxisVisible = false;
+    requested.panelNetworkVisible = true;
+    requested.cameraPoseValid = true;
+    requested.cameraEye = {1.0f, 2.0f, 3.0f};
+    requested.cameraYawRadians = 0.35f;
+    requested.cameraPitchRadians = -0.2f;
+    requested.cameraMoveSpeed = 9.0f;
+    requested.activeTool = EditorTool::Move;
+    requested.localTransformSpace = true;
+    requested.gamma = 2.0f;
+    requested.bloomEnabled = false;
+
+    EditorPreferences persisted;
+    int persistenceCalls = 0;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.viewportOrientationAxisVisible =
+        requested.viewportOrientationAxisVisible;
+    desc.preferences = requested;
+    desc.onPreferencesChanged =
+        [&](const EditorPreferences& value) {
+            persisted = value;
+            ++persistenceCalls;
+        };
+
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    CHECK(session.activeTool() == EditorTool::Move);
+    CHECK_FALSE(session.viewportOrientationAxisVisible());
+    CHECK_FLOAT_EQ(session.freecam().eye().x, 1.0f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.freecam().eye().y, 2.0f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.freecam().eye().z, 3.0f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.freecam().yawRadians(), 0.35f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.freecam().pitchRadians(), -0.2f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.freecam().moveSpeed(), 9.0f, 1.0e-5f);
+
+    auto* network = dynamic_cast<DockCard*>(
+        session.ui().findById("card_network"));
+    auto* toolLabel = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_active_tool"));
+    auto* gamma = dynamic_cast<Slider*>(session.ui().findById("sld_gamma"));
+    auto* bloom = dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom"));
+    CHECK(network != nullptr);
+    CHECK(toolLabel != nullptr);
+    CHECK(gamma != nullptr);
+    CHECK(bloom != nullptr);
+    if (network != nullptr) CHECK(network->isVisible());
+    if (toolLabel != nullptr) CHECK(toolLabel->getText() == L"Move");
+    if (gamma != nullptr) CHECK_FLOAT_EQ(gamma->getValue(), 2.0f, 1.0e-5f);
+    if (bloom != nullptr) CHECK_FALSE(bloom->isChecked());
+
+    session.savePreferencesNow();
+    CHECK(persistenceCalls == 1);
+    CHECK(persisted.activeTool == EditorTool::Move);
+    CHECK(persisted.localTransformSpace);
+    CHECK(persisted.panelNetworkVisible);
+    CHECK_FALSE(persisted.bloomEnabled);
+    CHECK(!persisted.dockTree.empty());
+
+    auto* select = dynamic_cast<Button*>(
+        session.ui().findById("btn_tool_select"));
+    CHECK(select != nullptr);
+    if (select != nullptr) CHECK(clickButton(select));
+    session.savePreferencesNow();
+    CHECK(persistenceCalls == 2);
+    CHECK(persisted.activeTool == EditorTool::Select);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(world != nullptr);
+    CHECK(viewport != nullptr);
+    if (world == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("Editable Transform");
+    auto* transform = entity->addComponent<ayt::entity::Transform>();
+    entity->addComponent<ayt::entity::MeshComponent>();
+    CHECK(transform != nullptr);
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseButtonUp(x, y, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+
+    auto* positionX = dynamic_cast<TextInput*>(
+        session.ui().findById("transform_px"));
+    auto* apply = dynamic_cast<Button*>(
+        session.ui().findById("btn_transform_apply"));
+    CHECK(positionX != nullptr);
+    CHECK(apply != nullptr);
+    if (positionX != nullptr && apply != nullptr && transform != nullptr) {
+        CHECK_FALSE(positionX->isReadOnly());
+        positionX->setText(L"2.500");
+        CHECK(clickButton(apply));
+        CHECK_FLOAT_EQ(transform->position.x, 2.5f, 1.0e-5f);
+        CHECK(session.document() != nullptr);
+        if (session.document() != nullptr) CHECK(session.document()->isDirty());
+
+        session.onKeyDown(UIKey_Control);
+        CHECK(session.onKeyDown(UIKey_Z));
+        session.onKeyUp(UIKey_Control);
+        CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1.0e-5f);
+    }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_move_tool_drags_on_camera_plane_as_one_undoable_command)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    auto* move = dynamic_cast<Button*>(
+        session.ui().findById("btn_tool_move"));
+    CHECK(world != nullptr);
+    CHECK(viewport != nullptr);
+    CHECK(move != nullptr);
+    if (world == nullptr || viewport == nullptr || move == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("Move Target");
+    auto* transform = entity->addComponent<ayt::entity::Transform>();
+    entity->addComponent<ayt::entity::MeshComponent>();
+    CHECK(transform != nullptr);
+    if (transform == nullptr) {
+        session.shutdown();
+        return;
+    }
+    const ayt::math::FVector3 before = transform->position;
+    CHECK(clickButton(move));
+    CHECK(session.activeTool() == EditorTool::Move);
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseMove(x + 96.0f, y));
+    CHECK(session.onMouseButtonUp(x + 96.0f, y, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+    CHECK((transform->position - before).lengthSq() > 0.01f);
+
+    session.onKeyDown(UIKey_Control);
+    CHECK(session.onKeyDown(UIKey_Z));
+    CHECK_FALSE(session.onKeyDown(UIKey_Z));
+    session.onKeyUp(UIKey_Control);
+    CHECK_FLOAT_EQ(transform->position.x, before.x, 1.0e-5f);
+    CHECK_FLOAT_EQ(transform->position.y, before.y, 1.0e-5f);
+    CHECK_FLOAT_EQ(transform->position.z, before.z, 1.0e-5f);
 
     session.shutdown();
 }

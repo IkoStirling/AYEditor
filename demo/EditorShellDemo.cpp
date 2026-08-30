@@ -16,6 +16,8 @@
 #include <AYIO/Env.h>
 #include <AYLog.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <cwctype>
@@ -37,6 +39,8 @@ constexpr const char* kDefaultAnimationImportPathKey =
     "Editor.DefaultAnimationImportPath";
 constexpr const char* kAutoPlayImportedAnimationKey =
     "Editor.AutoPlayImportedAnimation";
+constexpr const char* kViewportOrientationAxisVisibleKey =
+    "Editor.Viewport.OrientationAxisVisible";
 constexpr const char* kMaterialPolicyTagKey = "Editor.MaterialPolicy.Tag";
 constexpr const char* kOpaqueMaterialsKey = "Editor.MaterialPolicy.Opaque";
 constexpr const char* kMaskMaterialsKey = "Editor.MaterialPolicy.Mask";
@@ -228,6 +232,190 @@ std::string editorConfigPath()
     return (moduleDirectory() / kEditorConfigRelativePath).string();
 }
 
+std::string editorPreferencesPath()
+{
+    char localAppData[MAX_PATH]{};
+    const DWORD length = GetEnvironmentVariableA(
+        "LOCALAPPDATA", localAppData, MAX_PATH);
+    const std::filesystem::path root = length > 0 && length < MAX_PATH
+        ? std::filesystem::path(localAppData)
+        : moduleDirectory();
+    return (root / "Aliyat" / "AYEditor" / "preferences.json").string();
+}
+
+float preferenceFloat(const ayt::config::Config& config, const char* key,
+                       float fallback)
+{
+    const double value = config.getFloat(key, fallback);
+    return std::isfinite(value) ? static_cast<float>(value) : fallback;
+}
+
+ayt::editor::EditorPreferences loadEditorPreferences(
+    const ayt::config::Config& editorConfig,
+    const ayt::config::Config& saved,
+    bool savedLoaded)
+{
+    using ayt::editor::EditorPreferences;
+    using ayt::editor::EditorTool;
+    EditorPreferences out;
+    out.viewportOrientationAxisVisible = editorConfig.getBool(
+        kViewportOrientationAxisVisibleKey, true);
+    if (!savedLoaded) return out;
+
+    // Reading older files is a migration into the current in-memory schema;
+    // the next save must not keep advertising the stale version.
+    out.schemaVersion = EditorPreferences::kCurrentSchemaVersion;
+    out.windowWidth = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Window.Width", out.windowWidth)), 960, 7680);
+    out.windowHeight = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Window.Height", out.windowHeight)), 600, 4320);
+    out.windowMaximized = saved.getBool(
+        "Editor.Window.Maximized", out.windowMaximized);
+
+    out.dockTree = saved.getString("Editor.Workspace.DockTree", out.dockTree);
+    out.panelRenderVisible = saved.getBool(
+        "Editor.Workspace.Panel.Render", out.panelRenderVisible);
+    out.panelInspectorVisible = saved.getBool(
+        "Editor.Workspace.Panel.Inspector", out.panelInspectorVisible);
+    out.panelNetworkVisible = saved.getBool(
+        "Editor.Workspace.Panel.Network", out.panelNetworkVisible);
+    out.panelOutlinerVisible = saved.getBool(
+        "Editor.Workspace.Panel.Hierarchy", out.panelOutlinerVisible);
+    out.panelConsoleVisible = saved.getBool(
+        "Editor.Workspace.Panel.Console", out.panelConsoleVisible);
+    out.panelAssetsVisible = saved.getBool(
+        "Editor.Workspace.Panel.Assets", out.panelAssetsVisible);
+
+    out.viewportOrientationAxisVisible = saved.getBool(
+        kViewportOrientationAxisVisibleKey,
+        out.viewportOrientationAxisVisible);
+    out.cameraPoseValid = saved.getBool(
+        "Editor.Viewport.Camera.Valid", out.cameraPoseValid);
+    out.cameraEye.x = preferenceFloat(
+        saved, "Editor.Viewport.Camera.EyeX", out.cameraEye.x);
+    out.cameraEye.y = preferenceFloat(
+        saved, "Editor.Viewport.Camera.EyeY", out.cameraEye.y);
+    out.cameraEye.z = preferenceFloat(
+        saved, "Editor.Viewport.Camera.EyeZ", out.cameraEye.z);
+    out.cameraYawRadians = preferenceFloat(
+        saved, "Editor.Viewport.Camera.Yaw", out.cameraYawRadians);
+    out.cameraPitchRadians = preferenceFloat(
+        saved, "Editor.Viewport.Camera.Pitch", out.cameraPitchRadians);
+    out.cameraMoveSpeed = preferenceFloat(
+        saved, "Editor.Viewport.Camera.MoveSpeed", out.cameraMoveSpeed);
+    const int tool = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Tools.Active", static_cast<int>(out.activeTool))), 0, 3);
+    out.activeTool = static_cast<EditorTool>(tool);
+    out.localTransformSpace = saved.getBool(
+        "Editor.Tools.LocalSpace", out.localTransformSpace);
+    out.orthographicView = saved.getBool(
+        "Editor.Viewport.Orthographic", out.orthographicView);
+    out.wireframeView = saved.getBool(
+        "Editor.Viewport.Wireframe", out.wireframeView);
+
+    out.gamma = preferenceFloat(saved, "Editor.Render.Gamma", out.gamma);
+    out.exposure = preferenceFloat(
+        saved, "Editor.Render.Exposure", out.exposure);
+    out.bloomEnabled = saved.getBool(
+        "Editor.Render.Bloom.Enabled", out.bloomEnabled);
+    out.bloomStrength = preferenceFloat(
+        saved, "Editor.Render.Bloom.Strength", out.bloomStrength);
+    out.depthHazeEnabled = saved.getBool(
+        "Editor.Render.DepthHaze.Enabled", out.depthHazeEnabled);
+    out.depthHazeStrength = preferenceFloat(
+        saved, "Editor.Render.DepthHaze.Strength", out.depthHazeStrength);
+    out.depthHazeDensity = preferenceFloat(
+        saved, "Editor.Render.DepthHaze.Density", out.depthHazeDensity);
+    out.ssaoEnabled = saved.getBool(
+        "Editor.Render.SSAO.Enabled", out.ssaoEnabled);
+    out.ssaoStrength = preferenceFloat(
+        saved, "Editor.Render.SSAO.Strength", out.ssaoStrength);
+    out.ssaoRadius = preferenceFloat(
+        saved, "Editor.Render.SSAO.Radius", out.ssaoRadius);
+    out.ssaoBias = preferenceFloat(
+        saved, "Editor.Render.SSAO.Bias", out.ssaoBias);
+    out.ambientStrength = preferenceFloat(
+        saved, "Editor.Render.AmbientStrength", out.ambientStrength);
+    out.shadowBias = preferenceFloat(
+        saved, "Editor.Render.ShadowBias", out.shadowBias);
+    out.tonemapMode = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Render.Tonemap", out.tonemapMode)), 0, 3);
+    out.fxaaEnabled = saved.getBool(
+        "Editor.Render.FXAA", out.fxaaEnabled);
+    out.colorGradingEnabled = saved.getBool(
+        "Editor.Render.ColorGrading.Enabled", out.colorGradingEnabled);
+    out.colorGradingPreset = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Render.ColorGrading.Preset", out.colorGradingPreset)), 0, 3);
+    out.colorGradingStrength = preferenceFloat(
+        saved, "Editor.Render.ColorGrading.Strength",
+        out.colorGradingStrength);
+    out.shadowsEnabled = saved.getBool(
+        "Editor.Render.Shadows.Enabled", out.shadowsEnabled);
+    out.shadowPcfEnabled = saved.getBool(
+        "Editor.Render.Shadows.PCF", out.shadowPcfEnabled);
+    return out;
+}
+
+bool saveEditorPreferences(const std::string& path,
+                           const ayt::editor::EditorPreferences& value)
+{
+    ayt::config::Config config;
+    (void)config.loadFromFile(path);
+    config.setInt("Editor.Preferences.SchemaVersion", value.schemaVersion);
+    config.setInt("Editor.Window.Width", value.windowWidth);
+    config.setInt("Editor.Window.Height", value.windowHeight);
+    config.setBool("Editor.Window.Maximized", value.windowMaximized);
+    config.setString("Editor.Workspace.DockTree", value.dockTree);
+    config.setBool("Editor.Workspace.Panel.Render", value.panelRenderVisible);
+    config.setBool("Editor.Workspace.Panel.Inspector", value.panelInspectorVisible);
+    config.setBool("Editor.Workspace.Panel.Network", value.panelNetworkVisible);
+    config.setBool("Editor.Workspace.Panel.Hierarchy", value.panelOutlinerVisible);
+    config.setBool("Editor.Workspace.Panel.Console", value.panelConsoleVisible);
+    config.setBool("Editor.Workspace.Panel.Assets", value.panelAssetsVisible);
+    config.setBool(kViewportOrientationAxisVisibleKey,
+                   value.viewportOrientationAxisVisible);
+    config.setBool("Editor.Viewport.Camera.Valid", value.cameraPoseValid);
+    config.setFloat("Editor.Viewport.Camera.EyeX", value.cameraEye.x);
+    config.setFloat("Editor.Viewport.Camera.EyeY", value.cameraEye.y);
+    config.setFloat("Editor.Viewport.Camera.EyeZ", value.cameraEye.z);
+    config.setFloat("Editor.Viewport.Camera.Yaw", value.cameraYawRadians);
+    config.setFloat("Editor.Viewport.Camera.Pitch", value.cameraPitchRadians);
+    config.setFloat("Editor.Viewport.Camera.MoveSpeed", value.cameraMoveSpeed);
+    config.setInt("Editor.Tools.Active", static_cast<int>(value.activeTool));
+    config.setBool("Editor.Tools.LocalSpace", value.localTransformSpace);
+    config.setBool("Editor.Viewport.Orthographic", value.orthographicView);
+    config.setBool("Editor.Viewport.Wireframe", value.wireframeView);
+    config.setFloat("Editor.Render.Gamma", value.gamma);
+    config.setFloat("Editor.Render.Exposure", value.exposure);
+    config.setBool("Editor.Render.Bloom.Enabled", value.bloomEnabled);
+    config.setFloat("Editor.Render.Bloom.Strength", value.bloomStrength);
+    config.setBool("Editor.Render.DepthHaze.Enabled", value.depthHazeEnabled);
+    config.setFloat("Editor.Render.DepthHaze.Strength", value.depthHazeStrength);
+    config.setFloat("Editor.Render.DepthHaze.Density", value.depthHazeDensity);
+    config.setBool("Editor.Render.SSAO.Enabled", value.ssaoEnabled);
+    config.setFloat("Editor.Render.SSAO.Strength", value.ssaoStrength);
+    config.setFloat("Editor.Render.SSAO.Radius", value.ssaoRadius);
+    config.setFloat("Editor.Render.SSAO.Bias", value.ssaoBias);
+    config.setFloat("Editor.Render.AmbientStrength", value.ambientStrength);
+    config.setFloat("Editor.Render.ShadowBias", value.shadowBias);
+    config.setInt("Editor.Render.Tonemap", value.tonemapMode);
+    config.setBool("Editor.Render.FXAA", value.fxaaEnabled);
+    config.setBool("Editor.Render.ColorGrading.Enabled",
+                   value.colorGradingEnabled);
+    config.setInt("Editor.Render.ColorGrading.Preset",
+                  value.colorGradingPreset);
+    config.setFloat("Editor.Render.ColorGrading.Strength",
+                    value.colorGradingStrength);
+    config.setBool("Editor.Render.Shadows.Enabled", value.shadowsEnabled);
+    config.setBool("Editor.Render.Shadows.PCF", value.shadowPcfEnabled);
+
+    std::error_code ec;
+    const std::filesystem::path parent =
+        std::filesystem::path(path).parent_path();
+    if (!parent.empty()) std::filesystem::create_directories(parent, ec);
+    return !ec && config.saveToFile(path);
+}
+
 std::string editorLogPath()
 {
     const std::string overridePath =
@@ -395,12 +583,30 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
     const std::string defaultAnimationImportPath =
         editorConfig.getString(kDefaultAnimationImportPathKey);
 
+    const std::string preferencesPath = editorPreferencesPath();
+    ayt::config::Config savedPreferences;
+    const bool preferencesLoaded =
+        savedPreferences.loadFromFile(preferencesPath);
+    const ayt::editor::EditorPreferences editorPreferences =
+        loadEditorPreferences(editorConfig, savedPreferences, preferencesLoaded);
+    desc.width = static_cast<uint32_t>(editorPreferences.windowWidth);
+    desc.height = static_cast<uint32_t>(editorPreferences.windowHeight);
+
     auto app = ayt::editor::EditorApp::create(desc);
     app->setDefaultImportPath(defaultImportPath);
     app->setDefaultAnimationImportPath(defaultAnimationImportPath);
     const bool autoPlayImportedAnimation =
         editorConfig.getBool(kAutoPlayImportedAnimationKey, false);
     app->setAutoPlayImportedAnimation(autoPlayImportedAnimation);
+    app->setEditorPreferences(
+        editorPreferences,
+        [preferencesPath](const ayt::editor::EditorPreferences& preferences) {
+            if (!saveEditorPreferences(preferencesPath, preferences)) {
+                std::fprintf(stderr,
+                    "[EditorShellDemo] failed to persist editor preferences: "
+                    "%s\n", preferencesPath.c_str());
+            }
+        });
     const ayt::resource::SourceCoordinatePolicy coordinates =
         sourceCoordinatePolicy(editorConfig);
     app->setDefaultSourceCoordinates(coordinates);

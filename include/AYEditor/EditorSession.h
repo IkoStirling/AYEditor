@@ -7,6 +7,7 @@
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorCommandStack.h"
+#include "AYEditor/EditorPreferences.h"
 #include "AYEditor/ImportedCharacterMapper.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditor/Importer.h"
@@ -26,7 +27,7 @@
 struct HWND__;
 using HWND = HWND__*;
 
-namespace ayt::device { class WindowManager; }
+namespace ayt::device { class DeviceManager; class WindowManager; }
 
 // v0.3 PR-4 — forward decl Scene（design §4.2.x）
 // Scene 完整定义在 .cpp 引入（AYScene.h），避免把 AYScene 完整 lib 暴露到
@@ -57,6 +58,10 @@ namespace ayt::editor {
 struct EditorSessionDesc {
     ayt::ui::IRenderBackend* uiBackend = nullptr;
     std::string layoutPath;
+    // Optional SVG icon directory containing Tabler's outline/ and filled/
+    // folders. Empty keeps the JSON text placeholders, which makes embedded
+    // and headless hosts independent from editor-only visual assets.
+    std::string iconRootPath;
     HWND hostWindow = nullptr;
     ImportedCharacter importedCharacter;  // empty = fall back to cube
 
@@ -70,7 +75,16 @@ struct EditorSessionDesc {
     // is non-empty, EditorSession parses the JSON + opens each entry
     // through the manager after primary UIManager is initialized.
     ayt::device::WindowManager* childWindowManager = nullptr;
+    ayt::device::DeviceManager* deviceManager = nullptr;
     std::string childWindowConfigPath;
+
+    // Editor preference supplied by the shell host. The callback persists
+    // user changes outside scene documents; empty keeps embedded/test hosts
+    // fully in-memory.
+    bool viewportOrientationAxisVisible = true;
+    std::function<void(bool)> onViewportOrientationAxisVisibilityChanged;
+    EditorPreferences preferences;
+    std::function<void(const EditorPreferences&)> onPreferencesChanged;
 };
 
 class EditorSession {
@@ -117,6 +131,7 @@ public:
     bool onMouseMove(float x, float y);
     bool onMouseButtonDown(float x, float y, int button);
     bool onMouseButtonUp(float x, float y, int button);
+    bool onMouseWheel(float x, float y, float deltaY);
     void onMouseLeave();
     bool onKeyDown(int keyCode);
     bool onKeyUp(int keyCode);
@@ -140,6 +155,14 @@ public:
     const ayt::ui::UIManager& ui() const { return _ui; }
     EditorSceneDocument* document() { return _document.get(); }
     const EditorSceneDocument* document() const { return _document.get(); }
+    bool viewportOrientationAxisVisible() const noexcept {
+        return _viewportOrientationAxisVisible;
+    }
+    uint32_t selectedEntityId() const noexcept { return _selection.entityId(); }
+    const EditorFreecam& freecam() const noexcept { return _freecam; }
+    EditorTool activeTool() const noexcept { return _activeTool; }
+    EditorPreferences currentPreferences() const;
+    void savePreferencesNow();
 
     // D5.5 (2026-07-26): accessor for the optional child-window manager
     // so the promote-callback injection (wirePromoteCallback) can route
@@ -149,6 +172,7 @@ public:
 
 private:
     void bindToolbar();
+    void bindShellIcons(const std::string& iconRootPath);
     void bindMenuBar();
     void openLayoutEditorWindow();
     void syncLayoutEditorLifetime();
@@ -168,6 +192,13 @@ private:
     void createEmptyEntity();
     void deleteSelectedEntity();
     void applyRenderSettingsFromPanel();
+    void applyPreferences(const EditorPreferences& preferences);
+    EditorPreferences capturePreferences() const;
+    void pollPreferences(float dtSeconds);
+    void resetWorkspacePreferences();
+    void setActiveTool(EditorTool tool);
+    void setLocalTransformSpace(bool local);
+    void setViewportOrientationAxisVisible(bool visible);
     void setDockCardVisible(const char* cardId, bool visible);
     void toggleDockCard(const char* cardId, bool& visibleFlag);
     void pushFreecamToRenderer();
@@ -197,8 +228,17 @@ private:
     // something. Triggers a label refresh.
     void selectCharacter();
 
-    // Viewport LMB click (no drag) → select primary Play entity.
+    // Viewport LMB click (no drag) → ray-pick the active Edit/Play world.
     void selectPlayEntityFromViewport();
+    ayt::entity::Entity* pickEntityFromViewport(float x, float y);
+    void applyViewportSelection(ayt::entity::World* world,
+                                ayt::entity::Entity* entity);
+    bool beginEntityMoveDrag(float x, float y);
+    bool updateEntityMoveDrag(float x, float y);
+    void finishEntityMoveDrag(bool commit);
+    void setSelectedEntity(ayt::entity::World* world,
+                           ayt::entity::Entity* entity);
+    void clearSelectedEntity(bool clearOutline = true);
 
     // ED-03: commit the picked paths to the live character
     // (and to the runtime's pending-overrides buffer so a
@@ -264,10 +304,13 @@ private:
     ayt::entity::World* hierarchyWorldMutable() noexcept;
     void onOutlinerSelectionChanged(int flatIndex);
     void syncViewport();
+    bool isViewportSurfacePoint(float x, float y) const;
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
-    // Freecam WASD uses GetAsyncKeyState (global). Gate on host HWND
-    // foreground + viewport hover (or active LMB look).
+    bool viewportRayDirection(float x, float y,
+                              ayt::math::FVector3& outDirection) const;
+    // Freecam reads AYDevice keyboard state. Gate on typed window focus +
+    // viewport hover (or active LMB look).
     bool viewportAcceptsGameInput() const;
     void clearSplitterHovers();
     void syncSplitterRevealToMouse();
@@ -302,6 +345,8 @@ private:
     EditorChildWindowManager::Handle _audioEditorHandle = nullptr;
 
     HWND _hostWindow = nullptr;
+    ayt::device::DeviceManager* _devices = nullptr;
+    bool _hostFocused = false;
     std::string _layoutPath;
     RepaintCallback _repaintCallback;
 
@@ -338,6 +383,19 @@ private:
     float _viewportLmbX = 0.0f;
     float _viewportLmbY = 0.0f;
 
+    EditorTool _activeTool = EditorTool::Select;
+    bool _localTransformSpace = false;
+    bool _orthographicView = false;
+    bool _wireframeView = false;
+
+    bool _entityMoveCandidate = false;
+    bool _entityMoveDragActive = false;
+    uint32_t _entityMoveId = 0;
+    ayt::entity::World* _entityMoveWorld = nullptr;
+    EditorTransformState _entityMoveBefore;
+    ayt::math::FVector3 _entityMovePlaneNormal{};
+    ayt::math::FVector3 _entityMoveStartHit{};
+
     // ED-03: staged Inspector pick state. Populated by
     // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
     // applyInspectorOverrides to build the EntityInspector
@@ -358,6 +416,8 @@ private:
     bool _panelInspectorVisible = true;
     bool _panelNetworkVisible = false;
     bool _panelOutlinerVisible = true;  // v0.3+ PR-5
+    bool _panelConsoleVisible = true;
+    bool _panelAssetsVisible = true;
 
     // v0.3+ PR-5 — Outliner state。
     // _outliner: 非持有（UIManager/DockCard 持树 ownership）；shutdown()
@@ -370,6 +430,7 @@ private:
     ayt::ui::TreeView*    _outliner = nullptr;
     std::vector<uint32_t> _outlinerEntityIds;
     EditorSelection       _selection;
+    ayt::entity::World*    _selectionWorld = nullptr;
     bool                  _outlinerRefreshPending = false;
 
     EditorCommandStack _commands;
@@ -377,6 +438,19 @@ private:
     bool _controlDown = false;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;
     ayt::ui::MenuItem* _redoMenuItem = nullptr;
+    ayt::ui::MenuItem* _viewportOrientationAxisMenuItem = nullptr;
+    // Session-persistent editor preference. Renderer itself defaults off so
+    // non-editor hosts never receive the widget accidentally.
+    bool _viewportOrientationAxisVisible = true;
+    std::function<void(bool)> _onViewportOrientationAxisVisibilityChanged;
+
+    EditorPreferences _preferences;
+    EditorPreferences _lastObservedPreferences;
+    std::function<void(const EditorPreferences&)> _onPreferencesChanged;
+    float _preferencesPollCountdown = 0.0f;
+    float _preferencesSaveCountdown = 0.0f;
+    bool _preferencesDirty = false;
+    bool _applyingPreferences = false;
 
     // PR-5 (v0.1.2 LM-2): Play/Paused 时锁 Inspector 写路径。
     // onModeChanged 切 mode 时同步切换。Inspector 4 button click handler

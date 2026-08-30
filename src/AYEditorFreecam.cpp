@@ -1,14 +1,8 @@
 #include "AYEditor/EditorFreecam.h"
+#include "AYDevice/KeyboardDevice.h"
 
+#include <algorithm>
 #include <cmath>
-
-#ifndef WIN32_LEAN_AND_MEAN
-#  define WIN32_LEAN_AND_MEAN
-#endif
-#ifndef NOMINMAX
-#  define NOMINMAX
-#endif
-#include <Windows.h>
 
 namespace ayt::editor {
 namespace {
@@ -17,9 +11,10 @@ constexpr float kPi = 3.14159265358979323846f;
 constexpr float kHalfPi = kPi * 0.5f;
 constexpr float kPitchLimit = kHalfPi - 0.05f;
 
-bool keyDown(int vk)
+bool keyDown(const ayt::device::KeyboardDevice& keyboard,
+             ayt::device::KeyCode key)
 {
-    return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    return keyboard.isKeyPressed(key);
 }
 
 } // namespace
@@ -101,14 +96,56 @@ void EditorFreecam::endLook()
     _looking = false;
 }
 
-void EditorFreecam::updateMovement(float dtSeconds)
+void EditorFreecam::zoom(float wheelNotches)
+{
+    zoomToward(wheelNotches, forward());
+}
+
+void EditorFreecam::zoomToward(
+    float wheelNotches, const ayt::math::FVector3& worldDirection)
+{
+    if (!std::isfinite(wheelNotches) || wheelNotches == 0.0f) {
+        return;
+    }
+    if (!std::isfinite(worldDirection.x)
+        || !std::isfinite(worldDirection.y)
+        || !std::isfinite(worldDirection.z)
+        || worldDirection.lengthSq() < 1.0e-8f) {
+        return;
+    }
+    // Precision trackpads provide fractional notches. Keep those intact while
+    // bounding malformed/batched native input to a predictable single event.
+    const float notches = std::clamp(wheelNotches, -8.0f, 8.0f);
+    const ayt::math::FVector3 direction = worldDirection.normalize();
+    _eye = _eye + direction * (_moveSpeed * _wheelMoveScale * notches);
+}
+
+void EditorFreecam::setPose(const ayt::math::FVector3& eye,
+                            float yawRadians,
+                            float pitchRadians)
+{
+    if (!std::isfinite(eye.x) || !std::isfinite(eye.y)
+        || !std::isfinite(eye.z) || !std::isfinite(yawRadians)
+        || !std::isfinite(pitchRadians)) {
+        return;
+    }
+    _eye = eye;
+    _yawRad = yawRadians;
+    _pitchRad = pitchRadians;
+    clampPitch();
+    _looking = false;
+}
+
+void EditorFreecam::updateMovement(
+    float dtSeconds, const ayt::device::KeyboardDevice& keyboard)
 {
     if (dtSeconds <= 0.0f) {
         return;
     }
-    // Skip typed text focus: if a text field had focus we'd still move —
-    // acceptable for v1 Editor freecam (no TextInput in shell yet).
-    const float boost = keyDown(VK_SHIFT) ? 2.5f : 1.0f;
+    using ayt::device::KeyCode;
+    const bool shift = keyDown(keyboard, KeyCode::LeftShift)
+                    || keyDown(keyboard, KeyCode::RightShift);
+    const float boost = shift ? 2.5f : 1.0f;
     const float speed = _moveSpeed * boost * dtSeconds;
 
     ayt::math::FVector3 f = forward();
@@ -123,22 +160,24 @@ void EditorFreecam::updateMovement(float dtSeconds)
     const ayt::math::FVector3 worldUp(0.0f, 1.0f, 0.0f);
 
     ayt::math::FVector3 delta(0.0f, 0.0f, 0.0f);
-    if (keyDown('W')) {
+    if (keyDown(keyboard, KeyCode::W)) {
         delta = delta + flat;
     }
-    if (keyDown('S')) {
+    if (keyDown(keyboard, KeyCode::S)) {
         delta = delta - flat;
     }
-    if (keyDown('D')) {
+    if (keyDown(keyboard, KeyCode::D)) {
         delta = delta + r;
     }
-    if (keyDown('A')) {
+    if (keyDown(keyboard, KeyCode::A)) {
         delta = delta - r;
     }
-    if (keyDown('E') || keyDown(VK_SPACE)) {
+    if (keyDown(keyboard, KeyCode::E) || keyDown(keyboard, KeyCode::Space)) {
         delta = delta + worldUp;
     }
-    if (keyDown('Q') || keyDown(VK_CONTROL)) {
+    if (keyDown(keyboard, KeyCode::Q)
+        || keyDown(keyboard, KeyCode::LeftControl)
+        || keyDown(keyboard, KeyCode::RightControl)) {
         delta = delta - worldUp;
     }
 

@@ -1,8 +1,11 @@
 {
   "Editor": {
-    "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour_fix.fbx",
-    "DefaultAnimationImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/SourWithAnim.fbx",
-    "AutoPlayImportedAnimation": true,
+    "DefaultImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour_fix_0830.fbx",
+    "DefaultAnimationImportPath": "D:/Aliyat/AliyatRenderer/assets/core/models/sour-miku-Creamy/Sour_fix_0830.fbx",
+    "AutoPlayImportedAnimation": false,
+    "Viewport": {
+      "OrientationAxisVisible": true
+    },
     "Import": {
       "SourceCoordinates": {
         "Mode": "Auto",

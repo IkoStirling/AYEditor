@@ -111,6 +111,13 @@ public:
     }
 
     bool ensurePresentationReady();
+    // Seed the initial demo content into the persistent Edit Scene. Play then
+    // clones these authored entities instead of creating an unrelated runtime-
+    // only scene, which keeps Inspector edits and viewport manipulation useful.
+    bool prepareEditScene();
+    // Called after New/Open replaces document contents. Runtime-only demo
+    // bindings are discarded; subsequent Play uses the document as-is.
+    void forgetEditScenePreview() noexcept;
     bool startPlay();
     void enterEdit();
     void shutdownEngine();
@@ -181,6 +188,10 @@ private:
     // primary source; direct-runtime construction retains the legacy host /
     // process-world compatibility path.
     ayt::entity::World* resolvePlayWorld() noexcept;
+    void rememberEditPreviewEntities() noexcept;
+    void bindEditPreviewEntities() noexcept;
+    void bindPlayPreviewEntities() noexcept;
+    void clearPreviewPointersOnly() noexcept;
 
     // INT-01 (2026-07-15): Logia end-to-end smoke — spawn a fresh
     // Entity with the EditorPlayerController ScriptComponent, bind
@@ -241,6 +252,15 @@ private:
     ayt::entity::Entity* _playerEntity = nullptr;
     bool _playerScriptBound = false;
     uint64_t _updateListenerId = 0;
+
+    ayt::entity::World* _entityWorldOverride = nullptr;
+    bool _useEditSceneAsAuthoringSource = false;
+    bool _editPreviewPrepared = false;
+    uint32_t _editCubeId = 0;
+    uint32_t _editGroundId = 0;
+    uint32_t _editGlassId = 0;
+    uint32_t _editCharacterId = 0;
+    std::vector<uint32_t> _editAdditionalCharacterIds;
 
     // B7+ multi-light storage lives in the .cpp (unique_ptr to a
     // complete type defined there) so this header does not pull

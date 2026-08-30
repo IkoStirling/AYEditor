@@ -44,6 +44,7 @@ set(HEAD_FILES
     include/AYEditor/EditorGameView.h
     include/AYEditor/EditorPlayRuntime.h
     include/AYEditor/EditorApp.h
+    include/AYEditor/EditorPreferences.h
     include/AYEditor/RegisterDefaultEditorModules.h
     include/AYEditor/EditorFreecam.h
     include/AYEditor/EditorSceneDocument.h

@@ -1,8 +1,10 @@
 #pragma once
 
 #include "AYApplication/IApplication.h"
+#include "AYEditor/EditorPreferences.h"
 #include <AYResource/IConverter.h>
 
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -42,6 +44,20 @@ public:
     // imported, enter Play immediately so the clip can be previewed.
     void setAutoPlayImportedAnimation(bool enabled) {
         _autoPlayImportedAnimation = enabled;
+    }
+    void setViewportOrientationAxisPreference(
+        bool visible,
+        std::function<void(bool)> onChanged = {}) {
+        _viewportOrientationAxisVisible = visible;
+        _onViewportOrientationAxisVisibilityChanged = std::move(onChanged);
+    }
+    void setEditorPreferences(
+        EditorPreferences preferences,
+        std::function<void(const EditorPreferences&)> onChanged = {}) {
+        _editorPreferences = std::move(preferences);
+        _viewportOrientationAxisVisible =
+            _editorPreferences.viewportOrientationAxisVisible;
+        _onEditorPreferencesChanged = std::move(onChanged);
     }
     void setDefaultSourceCoordinates(
         ayt::resource::SourceCoordinatePolicy policy) {
@@ -102,6 +118,10 @@ private:
     ayt::resource::SourceCoordinatePolicy _sourceCoordinates;
     float _normalMapYSign = 1.0f;
     bool _autoPlayImportedAnimation = false;
+    bool _viewportOrientationAxisVisible = true;
+    std::function<void(bool)> _onViewportOrientationAxisVisibilityChanged;
+    EditorPreferences _editorPreferences;
+    std::function<void(const EditorPreferences&)> _onEditorPreferencesChanged;
 
     // INT-02 (2026-07-15): hoist DeviceManager to a member so its
     // lifetime == EditorApp's lifetime. The Logia InputProvider

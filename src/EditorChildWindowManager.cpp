@@ -1,6 +1,7 @@
 #include "AYEditor/EditorChildWindowManager.h"
 
 #include "AYUI/DockCard.h"
+#include "AYUI/DeviceInputBridge.h"
 
 #if defined(_WIN32)
 #  include "GdiRenderBackend.h"
@@ -129,10 +130,7 @@ EditorChildWindowManager::~EditorChildWindowManager() {
     // a potentially-null child, so destroying the manager here
     // (with primary still alive) avoids an UAF cleanup race.
     for (auto& e : _entries) {
-        if (e.handle != nullptr) {
-            _wm.destroyTopLevelWindow(e.handle);
-            e.handle = nullptr;
-        }
+        teardownEntry(e);
     }
     _entries.clear();
 }
@@ -170,6 +168,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     e.handle     = h;
     e.ui         = std::make_shared<ayt::ui::UIManager>();
     e.layoutPath = cfg.layoutPath;
+    e.beforeClose = cfg.beforeClose;
 #if defined(_WIN32)
     // PR-Dock-TearOff: per-HWND GDI backend — the promoted card renders
     // into THIS window's DC (bgfx is process-singleton-bound to the
@@ -212,6 +211,12 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
                 }
             },
             this);
+        // A promoted card no longer belongs to its source DockArea. Its
+        // chrome X must close this host window, and must not retain or
+        // invoke the source DockArea's close callback after reparenting.
+        e.card->setOnCloseRequested([this, h](ayt::ui::DockCard*) {
+            requestCloseChildWindow(h);
+        });
         e.ui->root()->addChild(e.card);
         e.ui->layout();
     } else if (!cfg.layoutPath.empty()) {
@@ -226,7 +231,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     // by shared_ptr; the lambda runs on the Win32 message thread,
     // NOT concurrent with our tick (single-threaded editor v1).
     cbs.onCloseRequested = [this, h]() {
-        this->closeChildWindow(h);
+        this->requestCloseChildWindow(h);
     };
 
     // PR-Dock-TearOff: input forwarding. Every callback grabs its own
@@ -253,6 +258,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     const auto beforeMove = cfg.beforeMouseMove;
     const auto beforeWheel = cfg.beforeMouseWheel;
     const auto beforeKey = cfg.beforeKey;
+    const auto focusChanged = cfg.onFocusChanged;
     const auto resolveCursor = cfg.resolveCursorHint;
     auto mousePos = std::make_shared<ayt::math::FVector2>(0.0f, 0.0f);
     cbs.onMouseMove = [ui, beforeMove, mousePos](float x, float y) {
@@ -298,8 +304,22 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ui->onDeviceChar(utf8, byteCount);
     };
-#if defined(_WIN32)
-    cbs.onSetCursor = [ui, resolveCursor, mousePos]() -> bool {
+    cbs.onFocusChanged = [ui, focusChanged](bool focused) {
+        ayt::ui::UIManager::ActiveScope guard(ui.get());
+        if (!focused) {
+            ui->onDeviceKeyUp(ayt::device::KeyCode::LeftControl);
+            ui->onDeviceKeyUp(ayt::device::KeyCode::RightControl);
+            ui->onDeviceKeyUp(ayt::device::KeyCode::LeftShift);
+            ui->onDeviceKeyUp(ayt::device::KeyCode::RightShift);
+            ui->onDeviceKeyUp(ayt::device::KeyCode::LeftAlt);
+            ui->onDeviceKeyUp(ayt::device::KeyCode::RightAlt);
+            ui->cancelCapture();
+        }
+        if (focusChanged) {
+            focusChanged(*ui, focused);
+        }
+    };
+    cbs.cursorShape = [ui, resolveCursor, mousePos]() {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ayt::ui::UiCursorHint hint = ayt::ui::UiCursorHint::Default;
         if (resolveCursor) {
@@ -308,33 +328,8 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         if (hint == ayt::ui::UiCursorHint::Default) {
             hint = ui->getCursorHint();
         }
-        static const HCURSOR arrow = ::LoadCursor(nullptr, IDC_ARROW);
-        static const HCURSOR hand  = ::LoadCursor(nullptr, IDC_HAND);
-        static const HCURSOR we    = ::LoadCursor(nullptr, IDC_SIZEWE);
-        static const HCURSOR ns    = ::LoadCursor(nullptr, IDC_SIZENS);
-        static const HCURSOR nwse  = ::LoadCursor(nullptr, IDC_SIZENWSE);
-        static const HCURSOR nesw  = ::LoadCursor(nullptr, IDC_SIZENESW);
-        static const HCURSOR move  = ::LoadCursor(nullptr, IDC_SIZEALL);
-        static const HCURSOR beam  = ::LoadCursor(nullptr, IDC_IBEAM);
-        HCURSOR c = arrow;
-        switch (hint) {
-        case ayt::ui::UiCursorHint::Hand: c = hand; break;
-        case ayt::ui::UiCursorHint::SizeWe:
-        case ayt::ui::UiCursorHint::SizeHorizontal: c = we; break;
-        case ayt::ui::UiCursorHint::SizeNs:
-        case ayt::ui::UiCursorHint::SizeVertical: c = ns; break;
-        case ayt::ui::UiCursorHint::SizeNwse: c = nwse; break;
-        case ayt::ui::UiCursorHint::SizeNesw: c = nesw; break;
-        case ayt::ui::UiCursorHint::Move: c = move; break;
-        case ayt::ui::UiCursorHint::Beam: c = beam; break;
-        default: break;
-        }
-        ::SetCursor(c);
-        return true;
+        return ayt::ui::systemCursorFromUi(hint);
     };
-#endif
-    _wm.setTopLevelCallbacks(h, cbs);
-
 #if defined(_WIN32)
     if (e.backend && e.handle != nullptr) {
         if (HDC hdc = ::GetDC(static_cast<HWND>(e.handle))) {
@@ -348,9 +343,13 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         }
     }
 #endif
+    // Publish the entry before callbacks/visibility. ShowWindow can
+    // synchronously dispatch messages; every callback must be able to
+    // find its entry even during the first show.
+    _entries.push_back(std::move(e));
+    _wm.setTopLevelCallbacks(h, cbs);
     _wm.setTopLevelVisible(h, true);
 
-    _entries.push_back(std::move(e));
     outHandle = h;
     return true;
 }
@@ -377,14 +376,54 @@ bool EditorChildWindowManager::promoteCard(ayt::ui::DockCard* card,
 }
 
 void EditorChildWindowManager::closeChildWindow(Handle h) {
+    closeChildWindowNow(h);
+}
+
+void EditorChildWindowManager::requestCloseChildWindow(Handle h) {
+    for (auto& entry : _entries) {
+        if (entry.handle == h) {
+            entry.closeRequested = true;
+            return;
+        }
+    }
+}
+
+void EditorChildWindowManager::teardownEntry(Entry& entry) {
+    const Handle handle = entry.handle;
+    entry.handle = nullptr;
+
+    // Stop new platform dispatch first. TopLevelWndProc may still hold its
+    // current local callback copy, so the UI is explicitly shut down while
+    // both its backend and HWND remain valid.
+    if (handle != nullptr) {
+        _wm.setTopLevelCallbacks(handle, {});
+    }
+
+    auto beforeClose = std::move(entry.beforeClose);
+    entry.beforeClose = {};
+    if (entry.ui != nullptr) {
+        ayt::ui::UIManager::ActiveScope guard(entry.ui.get());
+        if (beforeClose) {
+            beforeClose(*entry.ui);
+        }
+        if (entry.card != nullptr) {
+            entry.card->clearMaximizeHandler();
+            entry.card->setOnCloseRequested({});
+        }
+        entry.ui->shutdown();
+    }
+    if (handle != nullptr) {
+        _wm.destroyTopLevelWindow(handle);
+    }
+    entry.card = nullptr;
+    entry.ui.reset();
+    entry.backend.reset();
+}
+
+void EditorChildWindowManager::closeChildWindowNow(Handle h) {
     for (auto it = _entries.begin(); it != _entries.end(); ++it) {
         if (it->handle == h) {
-            if (it->handle != nullptr) {
-                _wm.destroyTopLevelWindow(it->handle);
-            }
-            // shared_ptr<UIManager> drops here — ~UIManager::shutdown
-            // clears g_active if the child held it. Always re-claim the
-            // editor primary so the next tryGet() is not nullptr.
+            teardownEntry(*it);
             _entries.erase(it);
             ayt::ui::UIManager::makeActive(&_primary);
             return;
@@ -392,7 +431,22 @@ void EditorChildWindowManager::closeChildWindow(Handle h) {
     }
 }
 
+void EditorChildWindowManager::drainCloseRequests() {
+    for (size_t i = 0; i < _entries.size();) {
+        if (!_entries[i].closeRequested) {
+            ++i;
+            continue;
+        }
+        teardownEntry(_entries[i]);
+        _entries.erase(_entries.begin() + static_cast<std::ptrdiff_t>(i));
+    }
+    ayt::ui::UIManager::makeActive(&_primary);
+}
+
 void EditorChildWindowManager::tickAll(float dt) {
+    // Close requests originate in WindowManager/UIManager callbacks. Drain
+    // only after their dispatch stack has unwound, before iterating entries.
+    drainCloseRequests();
     for (auto& e : _entries) {
         if (!e.ui) continue;
         // D5 — pushActive swaps g_activeUIManager for the duration of
@@ -421,6 +475,9 @@ void EditorChildWindowManager::tickAll(float dt) {
         e.ui->render();  // nullptr backend → populateFrame/flushFrame guard
 #endif
     }
+    // Also cover a future widget/update callback that requests close while
+    // this tick is running; erasure remains outside the range-for loop.
+    drainCloseRequests();
 }
 
 bool EditorChildWindowManager::routeKey(Handle h, ::ayt::device::KeyCode kc) {

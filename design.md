@@ -1,8 +1,8 @@
 # AYEditor Design
 
-**Version:** v0.3.1
-**Date:** 2026-08-19
-**Status:** E2-composite + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX（v0.3 PR-4；Q-G 收口延续）
+**Version:** v0.3.2
+**Date:** 2026-08-31
+**Status:** E2-composite + native SVG shell icons + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -527,6 +527,58 @@ E0: Hierarchy/Inspector show static labels. E4+: bind to entity selection and re
 
 `EditorSession` updates `lbl_mode` text (`EDIT` / `PLAY` / `PAUSED`) from code when `setMode` runs — not from simulation state.
 
+### 5.4 Render Settings verification contract
+
+Every user-visible rendering effect mounted by an Editor pipeline must retain a
+direct verification control in `Render Settings`. One visual effect maps to one
+enable switch even when it owns multiple implementation passes (for example
+Bloom Extract + Blur). The current panel exposes Bloom, Depth Haze, SSAO, FXAA,
+LUT Color Grading and Shadows; Tonemap uses its `None` mode as the disabled
+state. Color Grading exposes Neutral/Warm/Cool/Cinematic presets plus strength
+and defaults off. Controls remain live in Edit/Play and are reapplied after
+presentation or pipeline recreation.
+
+### 5.5 FreeCam wheel navigation
+
+Mouse wheel input over the unobstructed 3D viewport dollies FreeCam along the
+world ray under the pointer. This makes the pointer the visible zoom anchor and
+does not change FOV. AYUI logical wheel pixels are converted back to native
+notches before navigation so high-resolution touchpads preserve fractional
+motion without multiplying sensitivity. UI overlays, menus and scrollable
+panels retain wheel priority, so camera navigation cannot consume their input.
+
+### 5.6 Native SVG shell icons
+
+AYEditor owns command-to-icon semantics while AYUI owns SVG parsing, retained
+path recording and rendering. `EditorSession::bindShellIcons` maps the window
+controls, Select/Move/Rotate/Scale tools, Play/Pause/Step/Stop transport and
+viewport-options button to shared immutable `AYUI::SvgDocument` instances. A
+button's JSON text is cleared only after its SVG parses successfully; failures
+retain the existing text placeholder. Icon-only buttons set explicit
+accessibility labels, so replacing visible text does not remove their command
+names from UI Automation.
+
+The development lookup order is:
+
+1. `AY_EDITOR_ICON_ROOT` (must contain `outline/` and `filled/`),
+2. packaged `assets/icons/tabler` or `assets/icons/tabler-icons-3.46.0/icons`
+   beside an executable/repository ancestor,
+3. the current sibling development repository
+   `AssetRepo/icons/tabler-icons-3.46.0/icons`.
+
+This is intentionally a direct SVG path, not SVG→PNG conversion: icons remain
+resolution-independent and no raster cache or SVG converter belongs in
+AYEditor. The current `AssetRepo` is an external development source and no
+Tabler files are copied into AliyatEngine by this change. When the selected
+icons become fixed engine assets, move them under the packaged editor asset
+root and include Tabler's MIT license/copyright notice in the repository's
+third-party notices (for example `licenses/Tabler-Icons-MIT.txt`). The present
+download does not contain a LICENSE file, so it must not be vendored as-is.
+
+The supported SVG grammar and explicit rejection boundary are authoritative in
+[AYUI design](../AYUI/design.md); AYEditor must not grow a second parser or a
+private NanoSVG-style rasterizer.
+
 ---
 
 ## 6. Application & subsystems
@@ -631,6 +683,9 @@ Long term, [AYExtension/Editor](../AYExtension/design.md) may thin-wrap or re-ex
 | 2026-07-03 | Viewport native ownership migrates to **AYDevice** at E3; interim Win32 encapsulated in demo + `EditorPlayRuntime` |
 | 2026-07-03 | AYDevice **WindowManager skeleton** recommended before E3; full input/XR not required for editor shell |
 | 2026-08-06 | v0.3 PR-4 Editor 持 _editScene + transport bar UX（决策 1a/2a/3a/4a/5a/6a/7a） |
+| 2026-08-30 | Render Settings 保留每个可见效果的验证开关；FreeCam 视口滚轮使用沿视线 dolly |
+| 2026-08-30 | Render Settings 新增 LUT Color Grading 开关、四种预设与强度实时验证控件 |
+| 2026-08-31 | Shell 图标改用 AYUI 原生 SVG path；AYEditor 只保留语义映射、资产查找和文字降级 |
 
 ---
 

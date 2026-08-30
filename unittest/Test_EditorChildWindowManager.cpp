@@ -116,6 +116,54 @@ TEST_CASE(test_open_close_lifecycle) {
     primary.shutdown();
     wm.destroyWindow();
 }
+
+TEST_CASE(test_os_close_is_deferred_and_primary_survives) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "D5 Editor Primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+    const HWND primaryHwnd = static_cast<HWND>(wm.getWindowHandle());
+
+    MockRenderer backend;
+    UIManager primary;
+    primary.initialize(&backend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    EditorChildWindowManager mgr(wm, primary);
+    ChildWindowConfig cfg;
+    cfg.title = "Deferred close child";
+    cfg.width = 320;
+    cfg.height = 240;
+    bool beforeCloseCalled = false;
+    bool beforeCloseSawLiveRoot = false;
+    cfg.beforeClose = [&](UIManager& childUi) {
+        beforeCloseCalled = true;
+        beforeCloseSawLiveRoot = childUi.root() != nullptr;
+    };
+
+    EditorChildWindowManager::Handle h = nullptr;
+    CHECK(mgr.openChildWindow(cfg, h));
+    const HWND childHwnd = static_cast<HWND>(h);
+
+    ::SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+    CHECK(mgr.count() == 1);
+    CHECK(mgr.entries()[0].closeRequested);
+    CHECK(::IsWindow(childHwnd));
+    CHECK(::IsWindow(primaryHwnd));
+
+    mgr.tickAll(0.0f);
+    CHECK(mgr.count() == 0);
+    CHECK(beforeCloseCalled);
+    CHECK(beforeCloseSawLiveRoot);
+    CHECK_FALSE(::IsWindow(childHwnd));
+    CHECK(::IsWindow(primaryHwnd));
+
+    primary.shutdown();
+    wm.destroyWindow();
+}
 #endif
 
 // -------------------------------------------------------------------------
@@ -329,10 +377,23 @@ TEST_CASE(test_promote_live_card_migration) {
     // tickAll renders into the window without crashing (GetDC path).
     mgr.tickAll(0.016f);
 
-    // Closing the child window destroys the entry; the card is freed
-    // with the child root's widget tree.
-    mgr.closeChildWindow(entry.handle);
+    // The promoted DockCard's own X closes only its host. Dispatch is
+    // deferred until tickAll so neither the UI callback nor its HWND
+    // destroys itself while still on the message stack.
+    const HWND primaryHwnd = static_cast<HWND>(wm.getWindowHandle());
+    const HWND childHwnd = static_cast<HWND>(entry.handle);
+    const int closeX = static_cast<int>(profiler->getSize().x) - 5;
+    ::SendMessageW(childHwnd, WM_LBUTTONDOWN, MK_LBUTTON,
+                   MAKELPARAM(closeX, 5));
+    ::SendMessageW(childHwnd, WM_LBUTTONUP, 0, MAKELPARAM(closeX, 5));
+    CHECK(mgr.count() == 1);
+    CHECK(mgr.entries()[0].closeRequested);
+    CHECK(::IsWindow(primaryHwnd));
+
+    mgr.tickAll(0.0f);
     CHECK(mgr.count() == 0);
+    CHECK_FALSE(::IsWindow(childHwnd));
+    CHECK(::IsWindow(primaryHwnd));
 
     primary.shutdown();
     wm.destroyWindow();

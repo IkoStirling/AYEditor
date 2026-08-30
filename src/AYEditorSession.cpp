@@ -12,6 +12,7 @@
 #include "AYUI/MenuItem.h"
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYUI/Slider.h"
+#include "AYUI/SvgIcon.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
@@ -22,6 +23,7 @@
 #include "AudioEditorSession.h"
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
+#include "AYDevice/DeviceManager.h"
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因文档层需 SceneMode/Scene 完整类型；
@@ -36,12 +38,16 @@
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
 #include <AYEntity/components/TransformComponent.h>
+#include <AYMath/MathTransform.h>
+#include <AYResource/ResourceManager.h>
+#include <AYResource/assetsDefs/IMesh.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
+#include <filesystem>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -58,13 +64,75 @@ namespace ayt::editor {
 
 namespace {
 
+// DeviceInputBridge converts wheel notches to AYUI logical pixels before it
+// reaches EditorSession. Keep the inverse conversion explicit here: treating
+// the default 40 pixels as 40 notches made one physical notch hit Freecam's
+// eight-notch safety clamp and produced the touchpad sensitivity spike.
+constexpr float kWheelLogicalPixelsPerNotch = 40.0f;
+constexpr float kViewportLookDragSlopPixels = 8.0f;
+
+bool intersectRaySphere(const ayt::math::FVector3& origin,
+                        const ayt::math::FVector3& direction,
+                        const ayt::math::FVector3& center,
+                        float radius,
+                        float& outDistance)
+{
+    const ayt::math::FVector3 toCenter = center - origin;
+    const float projected = toCenter.dot(direction);
+    if (projected < 0.0f) return false;
+    const float perpendicularSq = toCenter.dot(toCenter) - projected * projected;
+    const float radiusSq = radius * radius;
+    if (perpendicularSq > radiusSq) return false;
+    outDistance = projected - std::sqrt(std::max(0.0f, radiusSq - perpendicularSq));
+    return true;
+}
+
+bool intersectRayAabb(const ayt::math::FVector3& origin,
+                      const ayt::math::FVector3& direction,
+                      const ayt::math::FVector3& boundsMin,
+                      const ayt::math::FVector3& boundsMax,
+                      float& outDistance)
+{
+    float nearDistance = 0.0f;
+    float farDistance = 1.0e30f;
+    for (int axis = 0; axis < 3; ++axis) {
+        const float rayOrigin = origin[axis];
+        const float rayDirection = direction[axis];
+        if (std::fabs(rayDirection) < 1.0e-7f) {
+            if (rayOrigin < boundsMin[axis] || rayOrigin > boundsMax[axis]) {
+                return false;
+            }
+            continue;
+        }
+        float first = (boundsMin[axis] - rayOrigin) / rayDirection;
+        float second = (boundsMax[axis] - rayOrigin) / rayDirection;
+        if (first > second) std::swap(first, second);
+        nearDistance = std::max(nearDistance, first);
+        farDistance = std::min(farDistance, second);
+        if (nearDistance > farDistance) return false;
+    }
+    outDistance = nearDistance;
+    return farDistance >= 0.0f;
+}
+
 bool layoutEditorFileExists(const std::string& path) {
     struct stat st {};
     return !path.empty() && ::stat(path.c_str(), &st) == 0;
 }
 
+std::filesystem::path editorExecutableDirectory() {
+    char modulePath[MAX_PATH]{};
+    const DWORD length = ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    return length > 0 && length < MAX_PATH
+        ? std::filesystem::path(modulePath).parent_path()
+        : std::filesystem::path{};
+}
+
 std::string resolveLayoutEditorChromePath() {
+    const std::filesystem::path executableDirectory =
+        editorExecutableDirectory();
     const std::vector<std::string> candidates = {
+        (executableDirectory / "assets/ui/layout_editor.ui.json").string(),
         "assets/ui/layout_editor.ui.json",
         "AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
         "../AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
@@ -81,7 +149,10 @@ std::string resolveLayoutEditorChromePath() {
 }
 
 std::string resolveAudioEditorChromePath() {
+    const std::filesystem::path executableDirectory =
+        editorExecutableDirectory();
     const std::vector<std::string> candidates = {
+        (executableDirectory / "assets/ui/audio_editor.ui.json").string(),
         "assets/ui/audio_editor.ui.json",
         "AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
         "../AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
@@ -216,7 +287,17 @@ EditorSession::~EditorSession() {
 bool EditorSession::initialize(const EditorSessionDesc& desc) {
     AY_EDITOR_TRACE("initialize: begin");
     _hostWindow = desc.hostWindow;
+    _devices = desc.deviceManager;
+    _hostFocused = _devices != nullptr && _devices->window().isFocused();
     _layoutPath = desc.layoutPath;
+    _preferences = desc.preferences;
+    _preferences.viewportOrientationAxisVisible =
+        desc.viewportOrientationAxisVisible;
+    _viewportOrientationAxisVisible =
+        _preferences.viewportOrientationAxisVisible;
+    _onViewportOrientationAxisVisibilityChanged =
+        desc.onViewportOrientationAxisVisibilityChanged;
+    _onPreferencesChanged = desc.onPreferencesChanged;
     _playRuntime.setHostWindow(_hostWindow);
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
@@ -259,6 +340,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     AY_EDITOR_TRACE("initialize: layout loaded");
 
     bindToolbar();
+    bindShellIcons(desc.iconRootPath);
     bindMenuBar();
     bindTransportBar();
     bindNetworkPanelStub();
@@ -271,7 +353,51 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     bindOutlinerPanel();
 
     _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
+    if (_mainDock != nullptr) {
+        _mainDock->setOnCardCloseRequested(
+            [this](ayt::ui::DockCard* card) {
+                if (card == nullptr || _mainDock == nullptr) {
+                    return false;
+                }
+                const std::string& id = card->getId();
+                ayt::ui::DockArea::Slot slot = ayt::ui::DockArea::Slot::Center;
+                bool* visible = nullptr;
+                if (id == "card_render") {
+                    slot = ayt::ui::DockArea::Slot::Right;
+                    visible = &_panelRenderVisible;
+                } else if (id == "card_outliner") {
+                    slot = ayt::ui::DockArea::Slot::Left;
+                    visible = &_panelOutlinerVisible;
+                } else if (id == "card_inspector") {
+                    slot = ayt::ui::DockArea::Slot::Right;
+                    visible = &_panelInspectorVisible;
+                } else if (id == "card_network") {
+                    slot = ayt::ui::DockArea::Slot::Bottom;
+                    visible = &_panelNetworkVisible;
+                } else if (id == "card_console") {
+                    slot = ayt::ui::DockArea::Slot::Bottom;
+                    visible = &_panelConsoleVisible;
+                } else if (id == "card_assets") {
+                    slot = ayt::ui::DockArea::Slot::Bottom;
+                    visible = &_panelAssetsVisible;
+                } else {
+                    return false;
+                }
+                if (!_mainDock->setCardVisible(id, false, slot)) {
+                    return false;
+                }
+                *visible = false;
+                _ui.invalidateLayout();
+                if (_repaintCallback) {
+                    _repaintCallback();
+                }
+                return true;
+            });
+    }
     setDockCardVisible("card_network", false);
+    applyPreferences(_preferences);
+    _lastObservedPreferences = capturePreferences();
+    _preferences = _lastObservedPreferences;
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
@@ -303,6 +429,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // 含合成 root。INV-4：纯读，Scene::_dirty 不可能被置位。
     refreshOutliner();
     refreshTransformInspector();
+    refreshUnsavedIndicator();
 
     // D5+.5: optional child-window manager for DockCard promotion.
     if (desc.childWindowManager != nullptr) {
@@ -341,6 +468,9 @@ void EditorSession::shutdown() {
     }
     _shutdown = true;
 
+    finishEntityMoveDrag(false);
+    savePreferencesNow();
+
     _gameView.setModeChangedCallback({});
     _repaintCallback = nullptr;
     // K-INV-D5-6: tear down child HWNDs BEFORE primary UIManager
@@ -366,14 +496,19 @@ void EditorSession::shutdown() {
     _outliner = nullptr;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
+    _viewportOrientationAxisMenuItem = nullptr;
+    _onViewportOrientationAxisVisibilityChanged = {};
+    _onPreferencesChanged = {};
     _outlinerEntityIds.clear();
-    _selection.clear();
+    clearSelectedEntity(false);
     _outlinerRefreshPending = false;
     _commands.clear();
 
     _ui.shutdown();
     _layoutPath.clear();
     _hostWindow = nullptr;
+    _devices = nullptr;
+    _hostFocused = false;
 
     // v0.3 PR-4 — shutdown reverse setEdit/setCurrent + reset document
     // 顺序：先反注册 scene → 再 reset（EditorSession 析构时 unique_ptr 还会
@@ -434,12 +569,17 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     }
     // Per-frame reconcile: if the last known cursor is not on a splitter
     // band, force every SplitterHandle un-revealed. Leave events alone
-    // are not sufficient (capture path / skipped WM_MOUSEMOVE).
+    // are not sufficient (capture path / coalesced pointer movement).
     syncSplitterRevealToMouse();
 
     if (freecamActive()) {
         if (viewportAcceptsGameInput()) {
-            _freecam.updateMovement(dt);
+            if (_devices != nullptr) {
+                if (const ayt::device::KeyboardDevice* keyboard =
+                        _devices->keyboard()) {
+                    _freecam.updateMovement(dt, *keyboard);
+                }
+            }
         }
         pushFreecamToRenderer();
     }
@@ -462,6 +602,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     // Splitter drag updates HBox slot widths; keep the 3D viewport rect
     // in sync every frame so render composite tracks panel resize.
     syncViewportIfChanged();
+    pollPreferences(dt);
 }
 
 bool EditorSession::freecamActive() const
@@ -550,7 +691,14 @@ bool EditorSession::ensurePresentationReady() {
         // Start them while the document is still empty so their renderer
         // callbacks exist without advancing user scene simulation.
         _document->scene().tick(0.0f);
+        if (!_netClientAutoPlay && !_playRuntime.prepareEditScene()) {
+            std::fprintf(stderr,
+                "[EditorSession] unable to prepare persistent Edit scene\n");
+            return false;
+        }
         _editWorldPrepared = true;
+        refreshOutliner();
+        refreshTransformInspector();
     }
     // The Render panel is the live source of truth in both Edit and Play.
     // Renderer defaults intentionally keep Bloom/SSAO/Haze disabled, while
@@ -654,13 +802,9 @@ void EditorSession::syncSplitterRevealToMouse()
     }
 }
 
-bool EditorSession::isChromePoint(float x, float y) const {
-    if (_ui.isCapturing()) {
-        return true;
-    }
-
+bool EditorSession::isViewportSurfacePoint(float x, float y) const {
     if (isSplitHandlePoint(x, y)) {
-        return true;
+        return false;
     }
 
     // Open menus / combo popups live on the overlay and often extend into
@@ -673,25 +817,52 @@ bool EditorSession::isChromePoint(float x, float y) const {
                 continue;
             }
             if (child->getWorldBounds().contains(pos)) {
-                return true;
+                return false;
             }
         }
     }
 
     ayt::math::FRectangle viewport{};
     if (!getViewportBounds(viewport)) {
-        return true;
+        return false;
     }
 
-    return x < viewport.minX || x >= viewport.maxX
-        || y < viewport.minY || y >= viewport.maxY;
+    return x >= viewport.minX && x < viewport.maxX
+        && y >= viewport.minY && y < viewport.maxY;
+}
+
+bool EditorSession::isChromePoint(float x, float y) const {
+    return _ui.isCapturing() || !isViewportSurfacePoint(x, y);
+}
+
+bool EditorSession::viewportRayDirection(
+    float x, float y, ayt::math::FVector3& outDirection) const
+{
+    ayt::math::FRectangle viewport{};
+    if (!getViewportBounds(viewport)
+        || viewport.width() <= 0.0f || viewport.height() <= 0.0f
+        || !std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    const float ndcX = 2.0f * ((x - viewport.minX) / viewport.width()) - 1.0f;
+    const float ndcY = 1.0f - 2.0f * ((y - viewport.minY) / viewport.height());
+    constexpr float degreesToRadians = 0.017453292519943295f;
+    const float tanHalfFov = std::tan(
+        _freecam.fovYDegrees() * degreesToRadians * 0.5f);
+    const float aspect = viewport.width() / viewport.height();
+    outDirection = _freecam.forward()
+        + _freecam.right() * (ndcX * aspect * tanHalfFov)
+        + _freecam.up() * (ndcY * tanHalfFov);
+    if (outDirection.lengthSq() < 1.0e-8f) {
+        return false;
+    }
+    outDirection = outDirection.normalize();
+    return true;
 }
 
 bool EditorSession::viewportAcceptsGameInput() const {
-    if (_hostWindow == nullptr) {
-        return false;
-    }
-    if (::GetForegroundWindow() != _hostWindow) {
+    if (!_hostFocused || _devices == nullptr) {
         return false;
     }
     const ayt::ui::Widget* focused = _ui.getFocusedWidget();
@@ -713,12 +884,23 @@ bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseY = y;
     _hasLastMouse = true;
 
-    // Armed viewport LMB: past slop → freecam look (not a click-select).
+    if (_entityMoveDragActive) {
+        return updateEntityMoveDrag(x, y);
+    }
+
+    // Armed viewport LMB: past slop → move the selected Edit entity when
+    // Move is active; otherwise begin freecam look.
     if (_viewportLmbPending && !_viewportLmbDragged && !_freecam.isLooking()) {
         const float dx = x - _viewportLmbX;
         const float dy = y - _viewportLmbY;
-        if ((dx * dx + dy * dy) >= (5.0f * 5.0f)) {
+        if ((dx * dx + dy * dy)
+            >= (kViewportLookDragSlopPixels * kViewportLookDragSlopPixels)) {
             _viewportLmbDragged = true;
+            if (_entityMoveCandidate
+                && beginEntityMoveDrag(_viewportLmbX, _viewportLmbY)) {
+                updateEntityMoveDrag(x, y);
+                return true;
+            }
             _freecam.beginLook(_viewportLmbX, _viewportLmbY);
             _freecam.updateLook(x, y);
             pushFreecamToRenderer();
@@ -784,11 +966,21 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
         }
     }
 
+    const bool onViewportSurface = isViewportSurfacePoint(x, y);
     if (_ui.isCapturing()) {
-        return _ui.onMouseButtonDown(x, y, button);
+        if (button != 0 || !onViewportSurface) {
+            return _ui.onMouseButtonDown(x, y, button);
+        }
+        // A second LMB-down cannot belong to the old LMB gesture: a matching
+        // up would have cleared UIManager capture first. Precision touchpads
+        // can lose that up while keyboard focus changes, leaving the next
+        // viewport click routed to the old Inspector/Hierarchy widget. Treat
+        // a fresh viewport LMB-down as the recovery boundary so its very first
+        // click can select instead of merely clearing stale capture.
+        _ui.cancelCapture();
     }
 
-    if (!isChromePoint(x, y)) {
+    if (onViewportSurface) {
         // A direct click into the viewport may arrive without a preceding
         // mouse-move (for example after keyboard editing). Drop text focus so
         // the field commits before free-look or selection starts.
@@ -803,7 +995,16 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
             _viewportLmbDragged = false;
             _viewportLmbX = x;
             _viewportLmbY = y;
-            return true; // host should SetCapture
+            _entityMoveCandidate = false;
+            if (_gameView.mode() == EditorMode::Edit
+                && _activeTool == EditorTool::Move) {
+                ayt::entity::World* world = hierarchyWorldMutable();
+                if (ayt::entity::Entity* hit = pickEntityFromViewport(x, y)) {
+                    applyViewportSelection(world, hit);
+                    _entityMoveCandidate = true;
+                }
+            }
+            return true; // AYDevice already owns capture for the pressed button.
         }
         return false;
     }
@@ -812,6 +1013,15 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
+    if (button == 0 && _entityMoveDragActive) {
+        updateEntityMoveDrag(x, y);
+        finishEntityMoveDrag(true);
+        _viewportLmbPending = false;
+        _viewportLmbDragged = false;
+        _entityMoveCandidate = false;
+        return true;
+    }
+
     if (button == 0 && _viewportLmbPending) {
         const bool wasClick = !_viewportLmbDragged && !_freecam.isLooking();
         _viewportLmbPending = false;
@@ -819,9 +1029,10 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
         if (_freecam.isLooking()) {
             _freecam.endLook();
         }
-        if (wasClick) {
+        if (wasClick && !_entityMoveCandidate) {
             selectPlayEntityFromViewport();
         }
+        _entityMoveCandidate = false;
         return true;
     }
 
@@ -842,8 +1053,35 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
     return _ui.onMouseButtonUp(x, y, button);
 }
 
+bool EditorSession::onMouseWheel(float x, float y, float deltaY) {
+    if (_ui.isCapturing() || isChromePoint(x, y)) {
+        return _ui.onMouseWheel(x, y, deltaY);
+    }
+    if (!freecamActive() || !std::isfinite(deltaY) || deltaY == 0.0f) {
+        return false;
+    }
+    ayt::math::FVector3 direction{};
+    if (!viewportRayDirection(x, y, direction)) {
+        return false;
+    }
+    // DeviceInputBridge's UI convention is opposite to native wheel notches
+    // (+pixels reveals lower content). Convert back before navigating, then
+    // dolly along the pointer ray instead of the screen-center forward vector.
+    const float wheelNotches = -deltaY / kWheelLogicalPixelsPerNotch;
+    _freecam.zoomToward(wheelNotches, direction);
+    pushFreecamToRenderer();
+    if (_repaintCallback) {
+        _repaintCallback();
+    }
+    return true;
+}
+
 void EditorSession::onMouseLeave() {
     _hasLastMouse = false;
+    if (_entityMoveDragActive) {
+        finishEntityMoveDrag(false);
+    }
+    _entityMoveCandidate = false;
     _ui.onMouseLeave();
     clearSplitterHovers();
 }
@@ -881,6 +1119,7 @@ bool EditorSession::onKeyUp(int keyCode)
 
 void EditorSession::onWindowFocusChanged(bool focused)
 {
+    _hostFocused = focused;
     if (focused) return;
 
     // Win32 is allowed to omit key-up messages after Alt-Tab/focus transfer.
@@ -891,6 +1130,8 @@ void EditorSession::onWindowFocusChanged(bool focused)
     _ui.onKeyUp(ayt::ui::UIKey_Shift);
     _ui.onKeyUp(ayt::ui::UIKey_Alt);
     _ui.cancelCapture();
+    finishEntityMoveDrag(false);
+    _entityMoveCandidate = false;
     if (_ui.getFocusedWidget() != nullptr) {
         _ui.setFocus(nullptr);
     }
@@ -907,6 +1148,13 @@ bool EditorSession::isUiHoverInteractive() const {
 }
 
 ayt::ui::UiCursorHint EditorSession::getUiCursorHint() const {
+    if (_gameView.mode() == EditorMode::Edit
+        && _activeTool == EditorTool::Move
+        && (_entityMoveDragActive
+            || (_hasLastMouse
+                && isViewportSurfacePoint(_lastMouseX, _lastMouseY)))) {
+        return ayt::ui::UiCursorHint::Move;
+    }
     return _ui.getCursorHint();
 }
 
@@ -933,11 +1181,165 @@ void EditorSession::bindToolbar() {
     bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
     bindButton("btn_inspector_reset", [this]() { resetInspectorOverrides(); });
 
-    if (auto* widget = _ui.findById("lbl_mode")) {
-        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
-            label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.10f, 0.11f, 1.0f));
+    // Shell V2 workspace tools. The short labels are deliberate icon
+    // placeholders and live in editor_shell.ui.json, so replacing them with
+    // real assets later does not touch editor behavior.
+    bindButton("btn_tool_select", [this]() { setActiveTool(EditorTool::Select); });
+    bindButton("btn_tool_move", [this]() { setActiveTool(EditorTool::Move); });
+    bindButton("btn_tool_rotate", [this]() { setActiveTool(EditorTool::Rotate); });
+    bindButton("btn_tool_scale", [this]() { setActiveTool(EditorTool::Scale); });
+    bindButton("btn_tool_space", [this]() {
+        setLocalTransformSpace(!_localTransformSpace);
+    });
+    bindButton("btn_view_camera", [this]() {
+        _orthographicView = !_orthographicView;
+        if (auto* widget = _ui.findById("btn_view_camera")) {
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
+                button->setText(_orthographicView ? L"Orthographic" : L"Perspective");
+            }
+        }
+        if (_repaintCallback) _repaintCallback();
+    });
+    bindButton("btn_view_shading", [this]() {
+        _wireframeView = !_wireframeView;
+        if (auto* widget = _ui.findById("btn_view_shading")) {
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
+                button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
+            }
+        }
+        if (_repaintCallback) _repaintCallback();
+    });
+    bindButton("btn_console_clear", [this]() {
+        if (auto* widget = _ui.findById("console_output")) {
+            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
+                label->setText(L"");
+            }
+        }
+        if (_repaintCallback) _repaintCallback();
+    });
+    bindButton("btn_assets_view", [this]() {
+        if (auto* widget = _ui.findById("btn_assets_view")) {
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
+                button->setText(button->getText() == L"Grid" ? L"List" : L"Grid");
+            }
+        }
+        if (_repaintCallback) _repaintCallback();
+    });
+
+    const ayt::math::FVector4 accent(0.16f, 0.40f, 0.70f, 1.0f);
+    const ayt::math::FVector4 muted(0.68f, 0.71f, 0.76f, 1.0f);
+    const char* accentButtons[] = {
+        "btn_tool_select", "btn_tool_move", "btn_tool_rotate", "btn_tool_scale",
+        "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
+        "btn_view_camera", "btn_view_shading", "btn_view_options"
+    };
+    for (const char* id : accentButtons) {
+        if (auto* button = dynamic_cast<ayt::ui::Button*>(_ui.findById(id))) {
+            button->setFallbackHoverColor(accent);
         }
     }
+
+    auto styleLabel = [this](const char* id,
+                             const ayt::math::FVector4& text,
+                             bool centered) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(_ui.findById(id))) {
+            label->setTextColor(text);
+            label->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
+            if (centered) {
+                label->setHorizontalAlignment(ayt::ui::TextLabel::HAlignment::Center);
+            }
+        }
+    };
+    styleLabel("lbl_workspace", ayt::math::FVector4(0.90f, 0.95f, 1.0f, 1.0f), true);
+    styleLabel("lbl_mode", ayt::math::FVector4(0.42f, 0.72f, 1.0f, 1.0f), true);
+    styleLabel("lbl_document_title", muted, false);
+    styleLabel("lbl_active_tool", muted, true);
+    styleLabel("lbl_viewport_scene", muted, false);
+    styleLabel("toolbar_divider_left", muted, true);
+    styleLabel("lbl_status_scene", muted, false);
+    styleLabel("lbl_status_network", muted, false);
+    styleLabel("lbl_status_renderer", muted, false);
+    styleLabel("lbl_status_fps", muted, false);
+
+    if (auto* widget = _ui.findById("lbl_mode")) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
+            label->setBackgroundColor(ayt::math::FVector4(0.09f, 0.16f, 0.25f, 1.0f));
+        }
+    }
+    if (auto* widget = _ui.findById("lbl_workspace")) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
+            label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.29f, 0.50f, 1.0f));
+        }
+    }
+}
+
+void EditorSession::bindShellIcons(const std::string& iconRootPath)
+{
+    if (iconRootPath.empty()) {
+        return;
+    }
+
+    struct IconBinding {
+        const char* buttonId;
+        const char* relativePath;
+        const wchar_t* accessibleLabel;
+        float iconSize;
+        float horizontalPadding;
+        float verticalPadding;
+    };
+
+    // Keep this mapping semantic and editor-owned. AYUI owns SVG parsing and
+    // drawing; AYEditor decides which visual communicates each command.
+    static constexpr IconBinding bindings[] = {
+        {"btn_minimize",    "outline/minus.svg",             L"Minimize",            13.0f, 5.0f, 3.0f},
+        {"btn_maximize",    "outline/maximize.svg",          L"Maximize or restore",  13.0f, 5.0f, 3.0f},
+        {"btn_close",       "outline/x.svg",                 L"Close editor",         13.0f, 5.0f, 3.0f},
+        {"btn_tool_select", "outline/pointer.svg",           L"Select tool (Q)",       17.0f, 8.0f, 4.0f},
+        {"btn_tool_move",   "outline/arrows-move.svg",       L"Move tool (W)",         17.0f, 8.0f, 4.0f},
+        {"btn_tool_rotate", "outline/rotate.svg",            L"Rotate tool (E)",       17.0f, 8.0f, 4.0f},
+        {"btn_tool_scale",  "outline/arrows-diagonal-2.svg", L"Scale tool (R)",        17.0f, 8.0f, 4.0f},
+        {"btn_play",        "filled/player-play.svg",        L"Play",                  16.0f, 8.0f, 4.0f},
+        {"btn_pause",       "filled/player-pause.svg",       L"Pause",                 16.0f, 8.0f, 4.0f},
+        {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
+        {"btn_stop",        "filled/player-stop.svg",        L"Stop",                  16.0f, 8.0f, 4.0f},
+        {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
+    };
+
+    const std::filesystem::path root(iconRootPath);
+    const ayt::math::FVector4 iconColor(0.88f, 0.90f, 0.94f, 1.0f);
+    size_t loadedCount = 0;
+    for (const IconBinding& binding : bindings) {
+        auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById(binding.buttonId));
+        if (button == nullptr) {
+            continue;
+        }
+
+        std::string error;
+        const std::filesystem::path path = root / binding.relativePath;
+        auto document = ayt::ui::SvgDocument::loadFromFile(path, &error);
+        if (document == nullptr) {
+            std::fprintf(stderr,
+                         "[EditorSession] SVG icon '%s' unavailable: %s (%s)\n",
+                         binding.buttonId, path.string().c_str(), error.c_str());
+            continue;
+        }
+
+        // Clear the visible placeholder only after parsing succeeds. Explicit
+        // accessibility metadata preserves the command name for icon-only UI.
+        button->setAccessibilityLabel(binding.accessibleLabel);
+        button->setText(L"");
+        button->setIconDocument(std::move(document));
+        button->setIconSize(binding.iconSize);
+        button->setIconColor(iconColor);
+        button->setPadding(binding.horizontalPadding, binding.verticalPadding,
+                           binding.horizontalPadding, binding.verticalPadding);
+        ++loadedCount;
+    }
+
+    std::fprintf(stderr,
+                 "[EditorSession] native SVG icons: %zu/%zu loaded from %s\n",
+                 loadedCount, std::size(bindings), root.string().c_str());
 }
 
 void EditorSession::bindTransportBar() {
@@ -1008,11 +1410,6 @@ void EditorSession::bindTransportBar() {
 
 // helper：刷新 lbl_unsaved TextLabel（visible + text）
 void EditorSession::refreshUnsavedIndicator() {
-    auto* widget = _ui.findById("lbl_unsaved");
-    if (widget == nullptr) return;
-    auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget);
-    if (label == nullptr) return;
-
     bool dirty = _document != nullptr && _document->isDirty();
     if (auto* sm = _worldContext.sceneManager(); sm != nullptr
         && _document != nullptr && sm->edit() != &_document->scene()) {
@@ -1020,9 +1417,27 @@ void EditorSession::refreshUnsavedIndicator() {
         // scene behind the session.
         dirty = sm->isEditDirty();
     }
-    const std::wstring desiredText = dirty ? L"•" : L"";
-    if (label->getText() != desiredText) label->setText(desiredText);
-    if (label->isVisible() != dirty) label->setVisible(dirty);
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_unsaved"))) {
+        const std::wstring desiredText = dirty ? L"•" : L"";
+        if (label->getText() != desiredText) label->setText(desiredText);
+        if (label->isVisible() != dirty) label->setVisible(dirty);
+        label->setTextColor(ayt::math::FVector4(1.0f, 0.68f, 0.18f, 1.0f));
+        label->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
+        label->setHorizontalAlignment(ayt::ui::TextLabel::HAlignment::Center);
+    }
+
+    const std::string documentTitle = _document != nullptr
+        ? _document->title() : std::string("Untitled");
+    const std::wstring wideTitle(documentTitle.begin(), documentTitle.end());
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_document_title"))) {
+        label->setText(wideTitle + L"  —  Aliyat Editor");
+    }
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_status_scene"))) {
+        label->setText(L"Scene: " + wideTitle);
+    }
 }
 
 // =============================================================================
@@ -1040,6 +1455,43 @@ const ayt::entity::World* EditorSession::hierarchyWorld() const noexcept
 ayt::entity::World* EditorSession::hierarchyWorldMutable() noexcept
 {
     return const_cast<ayt::entity::World*>(hierarchyWorld());
+}
+
+void EditorSession::clearSelectedEntity(bool clearOutline)
+{
+    if (clearOutline && _selectionWorld != nullptr && !_selection.empty()) {
+        // Only dereference worlds still advertised by EditorWorldContext.
+        // enterEdit() destroys the Play scene before onModeChanged(Edit), so
+        // an old Play pointer must be treated as an opaque identity only.
+        ayt::entity::World* editWorld =
+            _worldContext.world(EditorWorldSlot::Edit, true);
+        ayt::entity::World* playWorld =
+            _worldContext.world(EditorWorldSlot::Play, true);
+        if (_selectionWorld == editWorld || _selectionWorld == playWorld) {
+            if (ayt::entity::Entity* entity = _selection.resolve(_selectionWorld)) {
+                if (auto* mesh = entity->getComponent<ayt::entity::MeshComponent>()) {
+                    mesh->outlineHull = false;
+                }
+            }
+        }
+    }
+    _selection.clear();
+    _selectionWorld = nullptr;
+}
+
+void EditorSession::setSelectedEntity(ayt::entity::World* world,
+                                      ayt::entity::Entity* entity)
+{
+    if (world == nullptr || entity == nullptr || entity->getWorld() != world) {
+        clearSelectedEntity();
+        return;
+    }
+    clearSelectedEntity();
+    _selection.select(entity->getId());
+    _selectionWorld = world;
+    if (auto* mesh = entity->getComponent<ayt::entity::MeshComponent>()) {
+        mesh->outlineHull = true;
+    }
 }
 
 void EditorSession::bindOutlinerPanel()
@@ -1080,7 +1532,7 @@ void EditorSession::refreshOutliner()
     const ayt::entity::World* world = hierarchyWorld();
     if (world == nullptr) {
         _outliner->clearTree();
-        _selection.clear();
+        clearSelectedEntity(false);
         setUtf8("outliner_hint", "Scene: -");
         return;
     }
@@ -1146,7 +1598,7 @@ void EditorSession::refreshOutliner()
             }
         }
         if (flat < 0) {
-            _selection.clear();  // 实体已销毁（endPlay 等）
+            clearSelectedEntity();  // 实体已销毁（endPlay 等）
         } else {
             _outliner->setSelectedIndex(flat);
         }
@@ -1157,7 +1609,7 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
 {
     // flat 0 = 合成 scene root：清 Hierarchy 选择，Inspector 退回 PR-4 路径。
     if (flatIndex <= 0) {
-        _selection.clear();
+        clearSelectedEntity();
         refreshInspectorLabels();
         refreshTransformInspector();
         if (_repaintCallback) _repaintCallback();
@@ -1167,7 +1619,9 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
     if (idx >= _outlinerEntityIds.size()) {
         return;
     }
-    _selection.select(_outlinerEntityIds[idx]);
+    ayt::entity::World* world = hierarchyWorldMutable();
+    setSelectedEntity(world, world != nullptr
+        ? world->findEntity(_outlinerEntityIds[idx]) : nullptr);
 
     // **Landmine B**：不**在此调 refreshOutliner()/_ui.layout()：会
     // delete 正在派发事件的 TreeNode（AYTreeView.cpp:80-85/194）→
@@ -1181,15 +1635,19 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
 }
 
 void EditorSession::setDockCardVisible(const char* cardId, bool visible) {
-    ayt::ui::DockCard* card = nullptr;
+    ayt::ui::DockArea::Slot slot = ayt::ui::DockArea::Slot::Center;
+    if (std::strcmp(cardId, "card_outliner") == 0) {
+        slot = ayt::ui::DockArea::Slot::Left;
+    } else if (std::strcmp(cardId, "card_render") == 0
+               || std::strcmp(cardId, "card_inspector") == 0) {
+        slot = ayt::ui::DockArea::Slot::Right;
+    } else if (std::strcmp(cardId, "card_network") == 0
+               || std::strcmp(cardId, "card_console") == 0
+               || std::strcmp(cardId, "card_assets") == 0) {
+        slot = ayt::ui::DockArea::Slot::Bottom;
+    }
     if (_mainDock != nullptr) {
-        card = _mainDock->findCard(cardId);
-    }
-    if (card == nullptr) {
-        card = dynamic_cast<ayt::ui::DockCard*>(_ui.findById(cardId));
-    }
-    if (card != nullptr) {
-        card->setVisible(visible);
+        _mainDock->setCardVisible(cardId, visible, slot);
     }
     _ui.invalidateLayout();
     _ui.layout();
@@ -1284,14 +1742,36 @@ void EditorSession::bindRenderSettingsPanel()
         }
     });
 
-    bindSlider("sld_bloom", [rendererOrNull, setLabel](float v) {
+    bindSlider("sld_bloom", [this, rendererOrNull, setLabel](float v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "Bloom  %.2f", static_cast<double>(v));
         setLabel("lbl_bloom", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
-            r->setPostProcessBloomStrength(v);
+            bool enabled = true;
+            if (auto* w = _ui.findById("chk_bloom")) {
+                if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+                    enabled = chk->isChecked();
+                }
+            }
+            r->setPostProcessBloomStrength(enabled ? v : 0.0f);
         }
     });
+
+    if (auto* w = _ui.findById("chk_bloom")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([this, rendererOrNull](bool on) {
+                float strength = 0.3f;
+                if (auto* sw = _ui.findById("sld_bloom")) {
+                    if (auto* slider = dynamic_cast<ayt::ui::Slider*>(sw)) {
+                        strength = slider->getValue();
+                    }
+                }
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setPostProcessBloomStrength(on ? strength : 0.0f);
+                }
+            });
+        }
+    }
 
     // §S4d — Depth Haze (default slightly on in UI JSON).
     auto applyHazeParams = [rendererOrNull](bool enabled, float strength, float density) {
@@ -1528,6 +2008,87 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
+    if (auto* w = _ui.findById("chk_fxaa")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([rendererOrNull](bool on) {
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setFxaaEnabled(on);
+                }
+            });
+        }
+    }
+
+    // Color grading is an optional final LDR look pass. Neutral is retained as
+    // an explicit identity/bypass preset, but enabling the effect while that
+    // preset is selected promotes the UI to Warm so the checkbox always gives
+    // immediate visual feedback.
+    auto applyColorGrading = [this, rendererOrNull]() {
+        bool enabled = false;
+        float strength = 0.75f;
+        int presetIndex = 1;
+        if (auto* w = _ui.findById("chk_color_grading")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+                enabled = chk->isChecked();
+            }
+        }
+        if (auto* w = _ui.findById("sld_color_grading_strength")) {
+            if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
+                strength = slider->getValue();
+            }
+        }
+        if (auto* w = _ui.findById("cmb_color_grading_preset")) {
+            if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
+                presetIndex = combo->getSelectedIndex();
+            }
+        }
+
+        using Preset = ayt::render::ColorGradingPreset;
+        Preset preset = Preset::Neutral;
+        switch (presetIndex) {
+        case 1: preset = Preset::Warm; break;
+        case 2: preset = Preset::Cool; break;
+        case 3: preset = Preset::Cinematic; break;
+        default: break;
+        }
+        if (ayt::render::Renderer* r = rendererOrNull()) {
+            r->setColorGradingPreset(preset);
+            r->setColorGradingStrength(strength);
+            r->setColorGradingEnabled(enabled);
+        }
+    };
+
+    if (auto* w = _ui.findById("chk_color_grading")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([this, applyColorGrading](bool enabled) {
+                if (enabled) {
+                    if (auto* presetWidget =
+                            _ui.findById("cmb_color_grading_preset")) {
+                        if (auto* combo =
+                                dynamic_cast<ayt::ui::ComboBox*>(presetWidget);
+                            combo != nullptr && combo->getSelectedIndex() == 0) {
+                            combo->setSelectedIndex(1);
+                        }
+                    }
+                }
+                applyColorGrading();
+            });
+        }
+    }
+    if (auto* w = _ui.findById("cmb_color_grading_preset")) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
+            combo->setOnSelectionChanged(
+                [applyColorGrading](int) { applyColorGrading(); });
+        }
+    }
+    bindSlider("sld_color_grading_strength",
+               [setLabel, applyColorGrading](float value) {
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "Color Grade Strength  %.2f",
+                      static_cast<double>(value));
+        setLabel("lbl_color_grading_strength", buf);
+        applyColorGrading();
+    });
+
     // Labels in JSON are decorative until Slider min/max/value load;
     // refresh from the live widget values so thumb ↔ text stay aligned.
     auto refreshLabelFromSlider = [this, setLabel](const char* sliderId,
@@ -1552,6 +2113,9 @@ void EditorSession::bindRenderSettingsPanel()
     refreshLabelFromSlider("sld_ssao_bias", "lbl_ssao_bias", "SSAO Bias  %.3f");
     refreshLabelFromSlider("sld_ambient", "lbl_ambient", "IBL Ambient  %.2f");
     refreshLabelFromSlider("sld_shadow_bias", "lbl_shadow_bias", "Shadow Bias  %.4f");
+    refreshLabelFromSlider("sld_color_grading_strength",
+                           "lbl_color_grading_strength",
+                           "Color Grade Strength  %.2f");
 }
 
 void EditorSession::applyRenderSettingsFromPanel()
@@ -1573,7 +2137,14 @@ void EditorSession::applyRenderSettingsFromPanel()
 
     r.setPostProcessGamma(sliderValue("sld_gamma", 2.2f));
     r.setPostProcessExposure(sliderValue("sld_exposure", 1.0f));
-    r.setPostProcessBloomStrength(sliderValue("sld_bloom", 0.3f));
+    bool bloomOn = true;
+    if (auto* w = _ui.findById("chk_bloom")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            bloomOn = chk->isChecked();
+        }
+    }
+    r.setPostProcessBloomStrength(
+        bloomOn ? sliderValue("sld_bloom", 0.3f) : 0.0f);
     r.setAmbientStrength(sliderValue("sld_ambient", 0.85f));
     r.setShadowBias(sliderValue("sld_shadow_bias", 0.003f));
 
@@ -1630,6 +2201,322 @@ void EditorSession::applyRenderSettingsFromPanel()
         if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
             r.setShadowsEnabled(chk->isChecked());
         }
+    }
+    if (auto* w = _ui.findById("chk_fxaa")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            r.setFxaaEnabled(chk->isChecked());
+        }
+    }
+    {
+        bool enabled = false;
+        if (auto* w = _ui.findById("chk_color_grading")) {
+            if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+                enabled = chk->isChecked();
+            }
+        }
+        int presetIndex = 1;
+        if (auto* w = _ui.findById("cmb_color_grading_preset")) {
+            if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(w)) {
+                presetIndex = combo->getSelectedIndex();
+            }
+        }
+        using Preset = ayt::render::ColorGradingPreset;
+        Preset preset = Preset::Neutral;
+        switch (presetIndex) {
+        case 1: preset = Preset::Warm; break;
+        case 2: preset = Preset::Cool; break;
+        case 3: preset = Preset::Cinematic; break;
+        default: break;
+        }
+        r.setColorGradingPreset(preset);
+        r.setColorGradingStrength(
+            sliderValue("sld_color_grading_strength", 0.75f));
+        r.setColorGradingEnabled(enabled);
+    }
+    r.setViewportOrientationAxisEnabled(_viewportOrientationAxisVisible);
+}
+
+void EditorSession::applyPreferences(const EditorPreferences& preferences)
+{
+    _applyingPreferences = true;
+    _preferences = preferences;
+
+    _viewportOrientationAxisVisible =
+        preferences.viewportOrientationAxisVisible;
+    if (_viewportOrientationAxisMenuItem != nullptr) {
+        _viewportOrientationAxisMenuItem->setText(
+            _viewportOrientationAxisVisible
+                ? L"[x] Viewport Orientation Axis"
+                : L"[ ] Viewport Orientation Axis");
+    }
+    if (preferences.cameraPoseValid) {
+        _freecam.setPose(preferences.cameraEye,
+                         preferences.cameraYawRadians,
+                         preferences.cameraPitchRadians);
+    }
+    if (std::isfinite(preferences.cameraMoveSpeed)
+        && preferences.cameraMoveSpeed > 0.01f) {
+        _freecam.setMoveSpeed(preferences.cameraMoveSpeed);
+    }
+    setActiveTool(preferences.activeTool);
+    setLocalTransformSpace(preferences.localTransformSpace);
+    _orthographicView = preferences.orthographicView;
+    _wireframeView = preferences.wireframeView;
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_camera"))) {
+        button->setText(_orthographicView ? L"Orthographic" : L"Perspective");
+    }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_shading"))) {
+        button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
+    }
+
+    auto setSlider = [this](const char* id, float value) {
+        if (auto* slider = dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) {
+            slider->setValue(value);
+        }
+    };
+    auto setCheck = [this](const char* id, bool checked) {
+        if (auto* check = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById(id))) {
+            check->setChecked(checked);
+        }
+    };
+    auto setCombo = [this](const char* id, int index) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(_ui.findById(id))) {
+            combo->setSelectedIndex(index);
+        }
+    };
+
+    setSlider("sld_gamma", preferences.gamma);
+    setSlider("sld_exposure", preferences.exposure);
+    setCheck("chk_bloom", preferences.bloomEnabled);
+    setSlider("sld_bloom", preferences.bloomStrength);
+    setCheck("chk_depth_haze", preferences.depthHazeEnabled);
+    setSlider("sld_haze_strength", preferences.depthHazeStrength);
+    setSlider("sld_haze_density", preferences.depthHazeDensity);
+    setCheck("chk_ssao", preferences.ssaoEnabled);
+    setSlider("sld_ssao_strength", preferences.ssaoStrength);
+    setSlider("sld_ssao_radius", preferences.ssaoRadius);
+    setSlider("sld_ssao_bias", preferences.ssaoBias);
+    setSlider("sld_ambient", preferences.ambientStrength);
+    setSlider("sld_shadow_bias", preferences.shadowBias);
+    setCombo("cmb_tonemap", preferences.tonemapMode);
+    setCheck("chk_fxaa", preferences.fxaaEnabled);
+    // Migrate the ambiguous persisted state `enabled + Neutral` to the visible
+    // Warm look. Off already represents an identity transform, so preserving
+    // that pair would make the checkbox appear broken on the next launch.
+    const int colorGradingPreset = preferences.colorGradingEnabled
+        && preferences.colorGradingPreset == 0
+        ? 1
+        : preferences.colorGradingPreset;
+    setCombo("cmb_color_grading_preset", colorGradingPreset);
+    setCheck("chk_color_grading", preferences.colorGradingEnabled);
+    setSlider("sld_color_grading_strength",
+              preferences.colorGradingStrength);
+    setCheck("chk_shadows", preferences.shadowsEnabled);
+    setCheck("chk_shadow_pcf", preferences.shadowPcfEnabled);
+
+    if (_mainDock != nullptr && !preferences.dockTree.empty()
+        && !_mainDock->applyDockTree(preferences.dockTree)) {
+        std::fprintf(stderr,
+            "[EditorSession] ignored malformed saved Dock layout\n");
+    }
+    _panelRenderVisible = preferences.panelRenderVisible;
+    _panelInspectorVisible = preferences.panelInspectorVisible;
+    _panelNetworkVisible = preferences.panelNetworkVisible;
+    _panelOutlinerVisible = preferences.panelOutlinerVisible;
+    _panelConsoleVisible = preferences.panelConsoleVisible;
+    _panelAssetsVisible = preferences.panelAssetsVisible;
+    // setCardVisible(true) also activates that tab. Only cross the hidden/open
+    // boundary here so applying visibility flags does not overwrite the active
+    // tab that applyDockTree() just restored.
+    auto applyPanelVisibility = [this](const char* id, bool visible) {
+        if (_mainDock == nullptr) return;
+        ayt::ui::DockCard* card = _mainDock->findCard(id);
+        if (card == nullptr) return;
+        const bool parkedHidden = card->getParent() == _mainDock;
+        if (visible == parkedHidden) {
+            setDockCardVisible(id, visible);
+        }
+    };
+    applyPanelVisibility("card_render", _panelRenderVisible);
+    applyPanelVisibility("card_inspector", _panelInspectorVisible);
+    applyPanelVisibility("card_network", _panelNetworkVisible);
+    applyPanelVisibility("card_outliner", _panelOutlinerVisible);
+    applyPanelVisibility("card_console", _panelConsoleVisible);
+    applyPanelVisibility("card_assets", _panelAssetsVisible);
+
+    _ui.invalidateLayout();
+    _ui.layout();
+    syncViewport();
+    applyRenderSettingsFromPanel();
+    pushFreecamToRenderer();
+    _applyingPreferences = false;
+}
+
+EditorPreferences EditorSession::capturePreferences() const
+{
+    EditorPreferences out = _preferences;
+    out.viewportOrientationAxisVisible = _viewportOrientationAxisVisible;
+    out.panelRenderVisible = _panelRenderVisible;
+    out.panelInspectorVisible = _panelInspectorVisible;
+    out.panelNetworkVisible = _panelNetworkVisible;
+    out.panelOutlinerVisible = _panelOutlinerVisible;
+    out.panelConsoleVisible = _panelConsoleVisible;
+    out.panelAssetsVisible = _panelAssetsVisible;
+    if (_mainDock != nullptr) {
+        out.dockTree = _mainDock->serializeDockTree();
+    }
+    out.cameraPoseValid = true;
+    out.cameraEye = _freecam.eye();
+    out.cameraYawRadians = _freecam.yawRadians();
+    out.cameraPitchRadians = _freecam.pitchRadians();
+    out.cameraMoveSpeed = _freecam.moveSpeed();
+    out.activeTool = _activeTool;
+    out.localTransformSpace = _localTransformSpace;
+    out.orthographicView = _orthographicView;
+    out.wireframeView = _wireframeView;
+
+    auto sliderValue = [this](const char* id, float fallback) {
+        if (auto* slider = dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) {
+            return slider->getValue();
+        }
+        return fallback;
+    };
+    auto checkValue = [this](const char* id, bool fallback) {
+        if (auto* check = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById(id))) {
+            return check->isChecked();
+        }
+        return fallback;
+    };
+    auto comboValue = [this](const char* id, int fallback) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(_ui.findById(id))) {
+            return combo->getSelectedIndex();
+        }
+        return fallback;
+    };
+    out.gamma = sliderValue("sld_gamma", out.gamma);
+    out.exposure = sliderValue("sld_exposure", out.exposure);
+    out.bloomEnabled = checkValue("chk_bloom", out.bloomEnabled);
+    out.bloomStrength = sliderValue("sld_bloom", out.bloomStrength);
+    out.depthHazeEnabled = checkValue("chk_depth_haze", out.depthHazeEnabled);
+    out.depthHazeStrength = sliderValue(
+        "sld_haze_strength", out.depthHazeStrength);
+    out.depthHazeDensity = sliderValue(
+        "sld_haze_density", out.depthHazeDensity);
+    out.ssaoEnabled = checkValue("chk_ssao", out.ssaoEnabled);
+    out.ssaoStrength = sliderValue("sld_ssao_strength", out.ssaoStrength);
+    out.ssaoRadius = sliderValue("sld_ssao_radius", out.ssaoRadius);
+    out.ssaoBias = sliderValue("sld_ssao_bias", out.ssaoBias);
+    out.ambientStrength = sliderValue("sld_ambient", out.ambientStrength);
+    out.shadowBias = sliderValue("sld_shadow_bias", out.shadowBias);
+    out.tonemapMode = comboValue("cmb_tonemap", out.tonemapMode);
+    out.fxaaEnabled = checkValue("chk_fxaa", out.fxaaEnabled);
+    out.colorGradingEnabled = checkValue(
+        "chk_color_grading", out.colorGradingEnabled);
+    out.colorGradingPreset = comboValue(
+        "cmb_color_grading_preset", out.colorGradingPreset);
+    out.colorGradingStrength = sliderValue(
+        "sld_color_grading_strength", out.colorGradingStrength);
+    out.shadowsEnabled = checkValue("chk_shadows", out.shadowsEnabled);
+    out.shadowPcfEnabled = checkValue(
+        "chk_shadow_pcf", out.shadowPcfEnabled);
+    return out;
+}
+
+EditorPreferences EditorSession::currentPreferences() const
+{
+    return capturePreferences();
+}
+
+void EditorSession::savePreferencesNow()
+{
+    if (_applyingPreferences) return;
+    _preferences = capturePreferences();
+    _lastObservedPreferences = _preferences;
+    _preferencesDirty = false;
+    _preferencesSaveCountdown = 0.0f;
+    if (_onPreferencesChanged) {
+        _onPreferencesChanged(_preferences);
+    }
+}
+
+void EditorSession::pollPreferences(float dtSeconds)
+{
+    if (_applyingPreferences || !_onPreferencesChanged) return;
+    _preferencesPollCountdown -= std::max(dtSeconds, 0.0f);
+    if (_preferencesPollCountdown <= 0.0f) {
+        _preferencesPollCountdown = 0.20f;
+        const EditorPreferences observed = capturePreferences();
+        if (observed != _lastObservedPreferences) {
+            _lastObservedPreferences = observed;
+            _preferencesDirty = true;
+            _preferencesSaveCountdown = 0.45f;
+        }
+    }
+    if (_preferencesDirty) {
+        _preferencesSaveCountdown -= std::max(dtSeconds, 0.0f);
+        if (_preferencesSaveCountdown <= 0.0f) {
+            savePreferencesNow();
+        }
+    }
+}
+
+void EditorSession::resetWorkspacePreferences()
+{
+    EditorPreferences defaults;
+    // Reset Workspace intentionally leaves the host window dimensions alone.
+    defaults.windowWidth = _preferences.windowWidth;
+    defaults.windowHeight = _preferences.windowHeight;
+    defaults.windowMaximized = _preferences.windowMaximized;
+    applyPreferences(defaults);
+    savePreferencesNow();
+}
+
+void EditorSession::setActiveTool(EditorTool tool)
+{
+    _activeTool = tool;
+    const wchar_t* name = L"Select";
+    switch (tool) {
+    case EditorTool::Move: name = L"Move"; break;
+    case EditorTool::Rotate: name = L"Rotate"; break;
+    case EditorTool::Scale: name = L"Scale"; break;
+    default: break;
+    }
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_active_tool"))) {
+        label->setText(name);
+    }
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::setLocalTransformSpace(bool local)
+{
+    _localTransformSpace = local;
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_tool_space"))) {
+        button->setText(local ? L"Local" : L"World");
+    }
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::setViewportOrientationAxisVisible(bool visible)
+{
+    const bool changed = _viewportOrientationAxisVisible != visible;
+    _viewportOrientationAxisVisible = visible;
+    if (_viewportOrientationAxisMenuItem != nullptr) {
+        _viewportOrientationAxisMenuItem->setText(
+            visible ? L"[x] Viewport Orientation Axis"
+                    : L"[ ] Viewport Orientation Axis");
+    }
+    if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        sub->renderer().setViewportOrientationAxisEnabled(visible);
+    }
+    if (changed && _onViewportOrientationAxisVisibilityChanged) {
+        _onViewportOrientationAxisVisibilityChanged(visible);
+    }
+    if (_repaintCallback) {
+        _repaintCallback();
     }
 }
 
@@ -1705,7 +2592,8 @@ void EditorSession::saveSceneDocumentAs()
 
 void EditorSession::afterDocumentReload()
 {
-    _selection.clear();
+    clearSelectedEntity(false);
+    _playRuntime.forgetEditScenePreview();
     _commands.clear();
     refreshOutliner();
     refreshInspectorLabels();
@@ -1725,7 +2613,7 @@ void EditorSession::createEmptyEntity()
         + std::to_string(static_cast<unsigned>(world->getAllEntities().size()));
     entity->setName(name.c_str());
     entity->addComponent<ayt::entity::Transform>();
-    _selection.select(entity->getId());
+    setSelectedEntity(world, entity);
     _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
@@ -1741,8 +2629,8 @@ void EditorSession::deleteSelectedEntity()
     ayt::entity::World* world = hierarchyWorldMutable();
     ayt::entity::Entity* entity = _selection.resolve(world);
     if (world == nullptr || entity == nullptr) return;
+    clearSelectedEntity();
     world->destroyEntity(entity);
-    _selection.clear();
     _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
@@ -1759,7 +2647,7 @@ void EditorSession::bindMenuBar() {
         return;
     }
 
-    // The editor adds five top-level menus.  MenuBar's generic default uses
+    // The editor adds six top-level menus.  MenuBar's generic default uses
     // 80-DIP fixed anchors, while editor_shell.ui.json deliberately leaves a
     // flexible spacer after the menu slot.  Fixed anchors overflowed that
     // slot and were still painted, but the later spacer won reverse-order hit
@@ -1813,6 +2701,20 @@ void EditorSession::bindMenuBar() {
         }
     }
 
+    ayt::ui::Menu* viewMenu = menuBar->addMenu(L"View");
+    if (viewMenu != nullptr) {
+        if (auto* item = viewMenu->addItem(L"Viewport Orientation Axis")) {
+            _viewportOrientationAxisMenuItem = item;
+            item->setOnActivate([this]() {
+                setViewportOrientationAxisVisible(
+                    !_viewportOrientationAxisVisible);
+            });
+            item->setText(_viewportOrientationAxisVisible
+                              ? L"[x] Viewport Orientation Axis"
+                              : L"[ ] Viewport Orientation Axis");
+        }
+    }
+
     ayt::ui::Menu* windowMenu = menuBar->addMenu(L"Window");
     if (windowMenu != nullptr) {
         if (auto* item = windowMenu->addItem(L"Render Settings")) {
@@ -1835,6 +2737,23 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() {
                 toggleDockCard("card_network", _panelNetworkVisible);
             });
+        }
+        if (auto* item = windowMenu->addItem(L"Console")) {
+            item->setOnActivate([this]() {
+                toggleDockCard("card_console", _panelConsoleVisible);
+            });
+        }
+        if (auto* item = windowMenu->addItem(L"Assets")) {
+            item->setOnActivate([this]() {
+                toggleDockCard("card_assets", _panelAssetsVisible);
+            });
+        }
+        windowMenu->addSeparator();
+        if (auto* item = windowMenu->addItem(L"Save Workspace")) {
+            item->setOnActivate([this]() { savePreferencesNow(); });
+        }
+        if (auto* item = windowMenu->addItem(L"Reset Workspace Layout")) {
+            item->setOnActivate([this]() { resetWorkspacePreferences(); });
         }
         windowMenu->addSeparator();
         if (auto* item = windowMenu->addItem(L"Select Character")) {
@@ -1929,17 +2848,27 @@ void EditorSession::openLayoutEditorWindow() {
     cfg.beforeKey =
         [this](ayt::ui::UIManager& /*ui*/, ayt::device::KeyCode kc,
                bool pressed) -> bool {
-            if (!pressed || _layoutEditor == nullptr) {
+            if (_layoutEditor == nullptr) {
                 return false;
             }
             const int uiKey =
                 static_cast<int>(ayt::ui::fromDeviceKey(kc));
+            if (!pressed) {
+                _layoutEditor->onKeyUp(uiKey);
+                return false;
+            }
             if (uiKey == ayt::ui::UIKey_Shift ||
                 uiKey == ayt::ui::UIKey_Control ||
                 uiKey == ayt::ui::UIKey_Alt) {
                 return false;
             }
             return _layoutEditor->onKeyDown(uiKey);
+        };
+    cfg.onFocusChanged =
+        [this](ayt::ui::UIManager& /*ui*/, bool focused) {
+            if (!focused && _layoutEditor != nullptr) {
+                _layoutEditor->onKeyUp(ayt::ui::UIKey_Space);
+            }
         };
     cfg.resolveCursorHint =
         [this](ayt::ui::UIManager& /*ui*/, float x, float y) {
@@ -1948,6 +2877,13 @@ void EditorSession::openLayoutEditorWindow() {
             }
             return _layoutEditor->canvasCursorHint(ayt::math::FVector2(x, y));
         };
+    cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
+        if (_layoutEditor != nullptr) {
+            _layoutEditor->detach();
+            _layoutEditor.reset();
+        }
+        _layoutEditorHandle = nullptr;
+    };
 
     EditorChildWindowManager::Handle handle = nullptr;
     if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
@@ -2024,6 +2960,13 @@ void EditorSession::openAudioEditorWindow() {
     cfg.y = 100;
     cfg.width = 960;
     cfg.height = 640;
+    cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
+        if (_audioEditor != nullptr) {
+            _audioEditor->detach();
+            _audioEditor.reset();
+        }
+        _audioEditorHandle = nullptr;
+    };
 
     EditorChildWindowManager::Handle handle = nullptr;
     if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
@@ -2172,6 +3115,13 @@ void EditorSession::importCharacterFromDialog()
     }
 
     _playRuntime.replaceImportedCharacter(mapped);
+    if (_gameView.mode() == EditorMode::Edit) {
+        if (_document != nullptr) _document->markDirty();
+        _outlinerRefreshPending = true;
+        selectCharacter();
+        refreshTransformInspector();
+        refreshUnsavedIndicator();
+    }
     std::fprintf(stderr,
                  "[EditorSession] imported character ready "
                  "(mesh=%s, skel=%s, anim=%s)\n",
@@ -2202,10 +3152,6 @@ void EditorSession::importCharacterFromDialog()
 // baseline 同样 fail）。Edit 模式行为不变。
 void EditorSession::refreshInspectorLabels()
 {
-    if (_gameView.mode() != EditorMode::Edit) {
-        return;
-    }
-
     auto setUtf8 = [this](const char* id, const std::string& utf8) {
         if (auto* w = _ui.findById(id)) {
             if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
@@ -2221,7 +3167,8 @@ void EditorSession::refreshInspectorLabels()
             if (ayt::entity::Entity* sel = _selection.resolve(w)) {
                 const char* nm = sel->getName();
                 setUtf8("inspector_hint",
-                        std::string("Hierarchy: ")
+                        std::string(_gameView.mode() == EditorMode::Edit
+                                        ? "Hierarchy: " : "Play selection: ")
                         + ((nm && nm[0]) ? nm : "entity"));
                 if (auto* meshC = sel->getComponent<ayt::entity::MeshComponent>()) {
                     setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
@@ -2243,7 +3190,15 @@ void EditorSession::refreshInspectorLabels()
                 return;
             }
         }
-        _selection.clear();  // 已销毁 → 降级到 PR-4 路径
+        clearSelectedEntity(false);  // 已销毁 → 降级到 PR-4 路径
+    }
+
+    if (_gameView.mode() != EditorMode::Edit) {
+        setUtf8("inspector_hint", "Locked during Play.");
+        setUtf8("inspector_mesh", "mesh: -");
+        setUtf8("inspector_skel", "skel: -");
+        setUtf8("inspector_anim", "anim: -");
+        return;
     }
 
     ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
@@ -2338,7 +3293,7 @@ void EditorSession::refreshTransformInspector()
     ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
     auto* transform = entity != nullptr
         ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-    if (_gameView.mode() != EditorMode::Edit || transform == nullptr) {
+    if (transform == nullptr) {
         const std::wstring empty[9] = {
             L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-"
         };
@@ -2355,7 +3310,9 @@ void EditorSession::refreshTransformInspector()
         formatFloat(transform->scale.x), formatFloat(transform->scale.y),
         formatFloat(transform->scale.z),
     };
-    setAll(values, false);
+    // Runtime clones remain inspectable during Play/Paused, but edits stay
+    // locked so Inspector cannot mutate simulation state behind the host.
+    setAll(values, _gameView.mode() != EditorMode::Edit);
 }
 
 void EditorSession::applyTransformInspector()
@@ -2396,72 +3353,214 @@ void EditorSession::applyTransformInspector()
 
 void EditorSession::selectPlayEntityFromViewport()
 {
-    if (_gameView.mode() == EditorMode::Edit) {
-        ayt::entity::World* world = hierarchyWorldMutable();
-        ayt::math::FRectangle viewport{};
-        if (world == nullptr || !getViewportBounds(viewport)
-            || viewport.width() <= 0.0f || viewport.height() <= 0.0f) {
-            return;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    applyViewportSelection(world,
+                           pickEntityFromViewport(_viewportLmbX, _viewportLmbY));
+}
+
+ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
+{
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::math::FRectangle viewport{};
+    if (world == nullptr || !getViewportBounds(viewport)
+        || viewport.width() <= 0.0f || viewport.height() <= 0.0f) {
+        return nullptr;
+    }
+
+    ayt::math::FVector3 direction{};
+    if (!viewportRayDirection(x, y, direction)) {
+        return nullptr;
+    }
+    const ayt::math::FVector3 origin = _freecam.eye();
+
+    ayt::entity::Entity* bestEntity = nullptr;
+    float bestDistance = 1.0e30f;
+    for (ayt::entity::Entity* entity : world->getAllEntities()) {
+        auto* transform = entity != nullptr
+            ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+        auto* meshComponent = entity != nullptr
+            ? entity->getComponent<ayt::entity::MeshComponent>() : nullptr;
+        if (transform == nullptr || (meshComponent != nullptr
+                                     && !meshComponent->visible)) {
+            continue;
         }
 
-        const float ndcX = 2.0f * ((_viewportLmbX - viewport.minX)
-                                      / viewport.width()) - 1.0f;
-        const float ndcY = 1.0f - 2.0f * ((_viewportLmbY - viewport.minY)
-                                           / viewport.height());
-        constexpr float degreesToRadians = 0.017453292519943295f;
-        const float tanHalfFov = std::tan(
-            _freecam.fovYDegrees() * degreesToRadians * 0.5f);
-        const float aspect = viewport.width() / viewport.height();
-        const ayt::math::FVector3 direction =
-            (_freecam.forward()
-             + _freecam.right() * (ndcX * aspect * tanHalfFov)
-             + _freecam.up() * (ndcY * tanHalfFov)).normalize();
-        const ayt::math::FVector3 origin = _freecam.eye();
-
-        uint32_t bestId = 0;
-        float bestDistance = 1.0e30f;
-        for (ayt::entity::Entity* entity : world->getAllEntities()) {
-            auto* transform = entity != nullptr
-                ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-            if (transform == nullptr) continue;
-
-            const float radius = 0.75f * std::max({
-                std::fabs(transform->scale.x), std::fabs(transform->scale.y),
-                std::fabs(transform->scale.z), 0.1f});
-            const ayt::math::FVector3 toCenter = transform->position - origin;
-            const float projected = toCenter.dot(direction);
-            if (projected < 0.0f) continue;
-            const float perpendicularSq = toCenter.dot(toCenter)
-                - projected * projected;
-            const float radiusSq = radius * radius;
-            if (perpendicularSq > radiusSq) continue;
-            const float distance = projected
-                - std::sqrt(std::max(0.0f, radiusSq - perpendicularSq));
-            if (distance < bestDistance) {
-                bestDistance = distance;
-                bestId = entity->getId();
+        float distance = 0.0f;
+        bool hit = false;
+        bool hasMeshBounds = false;
+        if (meshComponent != nullptr && !meshComponent->meshPath.empty()) {
+            const auto mesh = ayt::resource::ResourceManager::instance()
+                .load<ayt::resource::IMesh>(meshComponent->meshPath);
+            if (mesh != nullptr && mesh->hasBounds()) {
+                hasMeshBounds = true;
+                const ayt::math::Float4x4 worldMatrix =
+                    ayt::math::Transform::getMatrix(
+                        transform->position, transform->rotation, transform->scale);
+                const ayt::math::Float4x4 inverseWorld = worldMatrix.inverse_fast();
+                const ayt::math::FVector3 localOrigin =
+                    inverseWorld.transformPoint(origin);
+                ayt::math::FVector3 localDirection =
+                    inverseWorld.transformDirection(direction);
+                if (localDirection.lengthSq() > 1.0e-10f) {
+                    localDirection = localDirection.normalize();
+                    float localDistance = 0.0f;
+                    const ayt::resource::Bounds bounds = mesh->getBounds();
+                    if (intersectRayAabb(localOrigin, localDirection,
+                                         bounds.getMin(), bounds.getMax(),
+                                         localDistance)) {
+                        const ayt::math::FVector3 localHit =
+                            localOrigin + localDirection * localDistance;
+                        const ayt::math::FVector3 worldHit =
+                            worldMatrix.transformPoint(localHit);
+                        distance = (worldHit - origin).dot(direction);
+                        hit = distance >= 0.0f;
+                    }
+                }
             }
         }
 
-        if (bestId != 0) _selection.select(bestId);
-        else _selection.clear();
-        _outlinerRefreshPending = true;
-        refreshInspectorLabels();
-        refreshTransformInspector();
-        if (_repaintCallback) _repaintCallback();
+        // Transform-only entities and resources without cooked bounds remain
+        // selectable. Do not use the fallback after an AABB miss: that would
+        // make large sparse meshes steal clicks outside their visible bounds.
+        if (!hasMeshBounds) {
+            const float radius = 0.75f * std::max({
+                std::fabs(transform->scale.x), std::fabs(transform->scale.y),
+                std::fabs(transform->scale.z), 0.1f});
+            hit = intersectRaySphere(origin, direction, transform->position,
+                                     radius, distance);
+        }
+        if (hit && distance < bestDistance) {
+            bestDistance = distance;
+            bestEntity = entity;
+        }
+    }
+
+    return bestEntity;
+}
+
+void EditorSession::applyViewportSelection(ayt::entity::World* world,
+                                           ayt::entity::Entity* entity)
+{
+    setSelectedEntity(world, entity);
+    ++_viewportClickCount;
+    _outlinerRefreshPending = true;
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    if (_repaintCallback) _repaintCallback();
+}
+
+bool EditorSession::beginEntityMoveDrag(float x, float y)
+{
+    if (_gameView.mode() != EditorMode::Edit
+        || _activeTool != EditorTool::Move) {
+        return false;
+    }
+
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (world == nullptr || entity == nullptr || transform == nullptr) {
+        return false;
+    }
+
+    ayt::math::FVector3 direction{};
+    if (!viewportRayDirection(x, y, direction)) {
+        return false;
+    }
+    const ayt::math::FVector3 normal = _freecam.forward().normalize();
+    const float denominator = direction.dot(normal);
+    if (std::fabs(denominator) <= 1.0e-5f) {
+        return false;
+    }
+    const ayt::math::FVector3 origin = _freecam.eye();
+    const float distance = (transform->position - origin).dot(normal)
+        / denominator;
+    if (!std::isfinite(distance) || distance < 0.0f) {
+        return false;
+    }
+
+    _entityMoveWorld = world;
+    _entityMoveId = entity->getId();
+    _entityMoveBefore = {
+        transform->position, transform->rotation, transform->scale};
+    _entityMovePlaneNormal = normal;
+    _entityMoveStartHit = origin + direction * distance;
+    _entityMoveDragActive = true;
+    return true;
+}
+
+bool EditorSession::updateEntityMoveDrag(float x, float y)
+{
+    if (!_entityMoveDragActive || _entityMoveWorld == nullptr) {
+        return false;
+    }
+    ayt::entity::Entity* entity = _entityMoveWorld->findEntity(_entityMoveId);
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (transform == nullptr) {
+        finishEntityMoveDrag(false);
+        return false;
+    }
+
+    ayt::math::FVector3 direction{};
+    if (!viewportRayDirection(x, y, direction)) {
+        return true;
+    }
+    const float denominator = direction.dot(_entityMovePlaneNormal);
+    if (std::fabs(denominator) <= 1.0e-5f) {
+        return true;
+    }
+    const ayt::math::FVector3 origin = _freecam.eye();
+    const float distance = (_entityMoveBefore.position - origin)
+        .dot(_entityMovePlaneNormal) / denominator;
+    if (!std::isfinite(distance) || distance < 0.0f) {
+        return true;
+    }
+
+    const ayt::math::FVector3 hit = origin + direction * distance;
+    const ayt::math::FVector3 position =
+        _entityMoveBefore.position + (hit - _entityMoveStartHit);
+    transform->setPosition(position.x, position.y, position.z);
+    refreshTransformInspector();
+    if (_repaintCallback) _repaintCallback();
+    return true;
+}
+
+void EditorSession::finishEntityMoveDrag(bool commit)
+{
+    if (!_entityMoveDragActive) {
         return;
     }
 
-    // Cycle Character ↔ opaque cube so Inspector labels change on
-    // every short click (ray-pick not required yet).
-    ++_viewportClickCount;
-    if (_playRuntime.selectedCharacterEntity() != nullptr
-        && _playRuntime.cubeEntity() != nullptr) {
-        _inspectorPreferCube = !_inspectorPreferCube;
-    } else {
-        _inspectorPreferCube = (_playRuntime.selectedCharacterEntity() == nullptr);
+    ayt::entity::World* world = _entityMoveWorld;
+    const uint32_t entityId = _entityMoveId;
+    const EditorTransformState before = _entityMoveBefore;
+    _entityMoveDragActive = false;
+    _entityMoveWorld = nullptr;
+    _entityMoveId = 0;
+
+    ayt::entity::Entity* entity = world != nullptr
+        ? world->findEntity(entityId) : nullptr;
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (transform == nullptr) {
+        return;
     }
-    selectCharacter();
+
+    const EditorTransformState after{
+        transform->position, transform->rotation, transform->scale};
+    transform->setPosition(before.position.x, before.position.y,
+                           before.position.z);
+    transform->setRotation(before.rotation.x, before.rotation.y,
+                           before.rotation.z, before.rotation.w);
+    transform->setScale(before.scale.x, before.scale.y, before.scale.z);
+    if (commit) {
+        _commands.executeTransform(*world, entityId, after);
+    } else {
+        refreshTransformInspector();
+        if (_repaintCallback) _repaintCallback();
+    }
 }
 
 // ED-03: [Select] handler. Snapshots paths into the inspector.
@@ -2486,6 +3585,8 @@ void EditorSession::selectCharacter()
         refreshInspectorLabels();
         return;
     }
+
+    setSelectedEntity(hierarchyWorldMutable(), e);
 
     if (e == character) {
         if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
@@ -2715,8 +3816,20 @@ void EditorSession::setInspectorHint(const std::wstring& text) {
 
 void EditorSession::onModeChanged(EditorMode mode) {
     _ui.cancelCapture();
+    finishEntityMoveDrag(false);
+    _entityMoveCandidate = false;
     if (_freecam.isLooking()) {
         _freecam.endLook();
+    }
+
+    ayt::entity::World* activeWorld = hierarchyWorldMutable();
+    if (mode == EditorMode::Edit) {
+        // enterEdit() has already destroyed the Play scene.
+        clearSelectedEntity(false);
+    } else if (_selectionWorld != activeWorld) {
+        // Entering Play swaps from the persistent Edit world to its clone.
+        // The Edit world is still alive, so its outline can be removed.
+        clearSelectedEntity();
     }
 
     switch (mode) {
@@ -2734,9 +3847,9 @@ void EditorSession::onModeChanged(EditorMode mode) {
         setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
-        // Auto-select whatever Play just spawned so Inspector is never
-        // stuck on "No selection" while the viewport shows a cube.
-        selectCharacter();
+        // Auto-select the initial runtime subject, but preserve a viewport
+        // selection when resuming Play from Paused.
+        if (_selection.empty()) selectCharacter();
         break;
     case EditorMode::Paused:
         setModeLabel(L"PAUSED");
@@ -2752,11 +3865,10 @@ void EditorSession::onModeChanged(EditorMode mode) {
     if (_undoMenuItem != nullptr) _undoMenuItem->setEnabled(editCommandsEnabled);
     if (_redoMenuItem != nullptr) _redoMenuItem->setEnabled(editCommandsEnabled);
 
-    // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）且
-    // 可能销毁 Play 实体 → 清选择 + 排队重建。延迟到 update() 消费
+    // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）。
+    // 选择在上方按 World 生命期切换；这里只排队重建。延迟到 update() 消费
     // 是因为 btn_play/btn_stop click handler 仍在 UIManager 事件派发栈内
     // （Landmine B）。
-    _selection.clear();
     _outlinerRefreshPending = true;
 
     // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）

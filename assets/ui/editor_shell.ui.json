@@ -21,13 +21,13 @@
         {
           "type": "MenuBar",
           "id": "menubar",
-          "size": { "w": 260, "h": 26 },
-          "slot": { "width": 260 }
+          "size": { "w": 340, "h": 22 },
+          "slot": { "width": 340 }
         },
         {
           "type": "TextLabel",
-          "id": "menubar_spacer",
-          "text": "",
+          "id": "lbl_document_title",
+          "text": "Untitled  —  Aliyat Editor",
           "size": { "w": 0, "h": 22 }
         },
         {
@@ -40,7 +40,7 @@
         {
           "type": "Button",
           "id": "btn_maximize",
-          "text": "口",
+          "text": "[]",
           "size": { "w": 28, "h": 22 },
           "slot": { "width": 28 }
         },
@@ -54,15 +54,51 @@
       ]
     },
     {
+      "type": "HBox",
+      "id": "workspace_toolbar",
+      "size": { "h": 38 },
+      "spacing": 4,
+      "padding": { "left": 8, "top": 5, "right": 8, "bottom": 5 },
+      "children": [
+        { "type": "TextLabel", "id": "lbl_workspace", "text": "SCENE", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } },
+        { "type": "Button", "id": "btn_tool_select", "text": "[Q]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_tool_move", "text": "[W]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_tool_rotate", "text": "[E]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_tool_scale", "text": "[R]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "TextLabel", "id": "toolbar_divider_left", "text": "|", "size": { "w": 12, "h": 28 }, "slot": { "width": 12 } },
+        { "type": "Button", "id": "btn_tool_space", "text": "World", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } },
+        { "type": "TextLabel", "id": "toolbar_spacer_left", "text": "", "size": { "w": 0, "h": 28 } },
+        { "type": "Button", "id": "btn_play", "text": ">", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_pause", "text": "||", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_step", "text": ">|", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "Button", "id": "btn_stop", "text": "[]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
+        { "type": "TextLabel", "id": "toolbar_spacer_right", "text": "", "size": { "w": 0, "h": 28 } },
+        { "type": "TextLabel", "id": "lbl_active_tool", "text": "Select", "size": { "w": 74, "h": 28 }, "slot": { "width": 74 } },
+        { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } }
+      ]
+    },
+    {
+      "type": "Image",
+      "id": "toolbar_bottom_rule",
+      "size": { "h": 1 },
+      "color": [0.16, 0.40, 0.70, 1.0]
+    },
+    {
       "type": "DockArea",
       "id": "main_dock",
       "size": { "h": 0 },
       "slotWeights": {
-        "Left": 0.22,
-        "Right": 0.28,
-        "Center": 0.50,
+        "Left": 0.20,
+        "Right": 0.25,
+        "Center": 0.55,
         "Top": 1e-6,
-        "Bottom": 1e-6
+        "Bottom": 0.22
+      },
+      "slotMinSizes": {
+        "Left": 190,
+        "Right": 230,
+        "Center": 360,
+        "Bottom": 112
       },
       "cards": [
         {
@@ -82,9 +118,9 @@
           }
         },
         {
-          "slot": "Left",
+          "slot": "Right",
           "id": "card_render",
-          "title": "Render",
+          "title": "Render Settings",
           "floatable": true,
           "content": {
             "type": "ScrollView",
@@ -103,6 +139,7 @@
               { "type": "Slider", "id": "sld_gamma", "min": 1.0, "max": 3.0, "value": 2.2, "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_exposure", "text": "Exposure  1.00", "size": { "w": 200, "h": 18 } },
               { "type": "Slider", "id": "sld_exposure", "min": 0.2, "max": 3.0, "value": 1.0, "size": { "w": 200, "h": 22 } },
+              { "type": "CheckBox", "id": "chk_bloom", "text": "Bloom", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_bloom", "text": "Bloom  0.30", "size": { "w": 200, "h": 18 } },
               { "type": "Slider", "id": "sld_bloom", "min": 0.0, "max": 1.5, "value": 0.3, "size": { "w": 200, "h": 22 } },
               { "type": "CheckBox", "id": "chk_depth_haze", "text": "Depth Haze", "checked": true, "size": { "w": 200, "h": 22 } },
@@ -128,6 +165,18 @@
                 "selectedIndex": 2,
                 "maxPopupItems": 3
               },
+              { "type": "CheckBox", "id": "chk_fxaa", "text": "FXAA", "checked": true, "size": { "w": 200, "h": 22 } },
+              { "type": "CheckBox", "id": "chk_color_grading", "text": "Color Grading", "checked": false, "size": { "w": 200, "h": 22 } },
+              {
+                "type": "ComboBox",
+                "id": "cmb_color_grading_preset",
+                "size": { "w": 200, "h": 24 },
+                "items": ["Neutral (Bypass)", "Warm", "Cool", "Cinematic"],
+                "selectedIndex": 1,
+                "maxPopupItems": 4
+              },
+              { "type": "TextLabel", "id": "lbl_color_grading_strength", "text": "Color Grade Strength  0.75", "size": { "w": 200, "h": 18 } },
+              { "type": "Slider", "id": "sld_color_grading_strength", "min": 0.0, "max": 1.0, "value": 0.75, "size": { "w": 200, "h": 22 } },
               { "type": "TextLabel", "id": "lbl_render_quality", "text": "Quality", "size": { "w": 200, "h": 22 } },
               { "type": "CheckBox", "id": "chk_shadows", "text": "Shadows", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "CheckBox", "id": "chk_shadow_pcf", "text": "Shadow PCF", "checked": true, "size": { "w": 200, "h": 22 } },
@@ -145,10 +194,31 @@
           "floatable": false,
           "headerHeight": 0,
           "content": {
-            "type": "Image",
-            "id": "panel_viewport",
-            "size": { "w": 0, "h": 0 },
-            "color": [0.08, 0.09, 0.11, 1.0]
+            "type": "VBox",
+            "id": "viewport_workspace",
+            "spacing": 0,
+            "children": [
+              {
+                "type": "HBox",
+                "id": "viewport_toolbar",
+                "size": { "h": 28 },
+                "spacing": 4,
+                "padding": { "left": 6, "top": 2, "right": 6, "bottom": 2 },
+                "children": [
+                  { "type": "TextLabel", "id": "lbl_viewport_scene", "text": "SCENE VIEW", "size": { "w": 92, "h": 24 }, "slot": { "width": 92 } },
+                  { "type": "TextLabel", "id": "viewport_toolbar_spacer", "text": "", "size": { "w": 0, "h": 24 } },
+                  { "type": "Button", "id": "btn_view_camera", "text": "Perspective", "size": { "w": 86, "h": 24 }, "slot": { "width": 86 } },
+                  { "type": "Button", "id": "btn_view_shading", "text": "Shaded", "size": { "w": 64, "h": 24 }, "slot": { "width": 64 } },
+                  { "type": "Button", "id": "btn_view_options", "text": "...", "size": { "w": 30, "h": 24 }, "slot": { "width": 30 } }
+                ]
+              },
+              {
+                "type": "Image",
+                "id": "panel_viewport",
+                "size": { "h": 0 },
+                "color": [0.08, 0.09, 0.11, 1.0]
+              }
+            ]
           }
         },
         {
@@ -188,7 +258,65 @@
           }
         },
         {
-          "slot": "Right",
+          "slot": "Bottom",
+          "id": "card_console",
+          "title": "Console",
+          "closable": true,
+          "floatable": false,
+          "content": {
+            "type": "VBox",
+            "id": "panel_console_body",
+            "spacing": 4,
+            "padding": { "left": 8, "top": 5, "right": 8, "bottom": 5 },
+            "children": [
+              {
+                "type": "HBox",
+                "id": "console_toolbar",
+                "size": { "h": 26 },
+                "spacing": 4,
+                "children": [
+                  { "type": "Button", "id": "btn_console_clear", "text": "Clear", "size": { "w": 54, "h": 24 }, "slot": { "width": 54 } },
+                  { "type": "Button", "id": "btn_console_filter", "text": "All", "size": { "w": 44, "h": 24 }, "slot": { "width": 44 } },
+                  { "type": "TextInput", "id": "console_search", "text": "Filter console...", "size": { "w": 180, "h": 24 }, "slot": { "width": 180 } },
+                  { "type": "TextLabel", "id": "console_toolbar_spacer", "text": "", "size": { "w": 0, "h": 24 } },
+                  { "type": "TextLabel", "id": "lbl_console_counts", "text": "0 errors   0 warnings", "size": { "w": 142, "h": 24 }, "slot": { "width": 142 } }
+                ]
+              },
+              { "type": "TextLabel", "id": "console_output", "text": "Console ready. Runtime messages will appear here.", "size": { "w": 600, "h": 56 } }
+            ]
+          }
+        },
+        {
+          "slot": "Bottom",
+          "id": "card_assets",
+          "title": "Assets",
+          "closable": true,
+          "floatable": false,
+          "content": {
+            "type": "VBox",
+            "id": "panel_assets_body",
+            "spacing": 4,
+            "padding": { "left": 8, "top": 5, "right": 8, "bottom": 5 },
+            "children": [
+              {
+                "type": "HBox",
+                "id": "assets_toolbar",
+                "size": { "h": 26 },
+                "spacing": 4,
+                "children": [
+                  { "type": "Button", "id": "btn_assets_add", "text": "+", "size": { "w": 32, "h": 24 }, "slot": { "width": 32 } },
+                  { "type": "TextLabel", "id": "lbl_asset_path", "text": "Assets /", "size": { "w": 220, "h": 24 }, "slot": { "width": 220 } },
+                  { "type": "TextLabel", "id": "assets_toolbar_spacer", "text": "", "size": { "w": 0, "h": 24 } },
+                  { "type": "TextInput", "id": "assets_search", "text": "Search assets...", "size": { "w": 180, "h": 24 }, "slot": { "width": 180 } },
+                  { "type": "Button", "id": "btn_assets_view", "text": "Grid", "size": { "w": 46, "h": 24 }, "slot": { "width": 46 } }
+                ]
+              },
+              { "type": "TextLabel", "id": "assets_empty_state", "text": "[ ]  Drop files here or use + to import assets", "size": { "w": 520, "h": 56 } }
+            ]
+          }
+        },
+        {
+          "slot": "Bottom",
           "id": "card_network",
           "title": "Network",
           "floatable": true,
@@ -211,18 +339,17 @@
     },
     {
       "type": "HBox",
-      "id": "transport_bar",
-      "size": { "h": 30 },
-      "spacing": 4,
-      "padding": { "left": 8, "top": 3, "right": 8, "bottom": 3 },
+      "id": "editor_status_bar",
+      "size": { "h": 22 },
+      "spacing": 10,
+      "padding": { "left": 8, "top": 2, "right": 8, "bottom": 2 },
       "children": [
-        { "type": "Button", "id": "btn_play", "text": "Play", "size": { "w": 52, "h": 24 }, "slot": { "width": 52 } },
-        { "type": "Button", "id": "btn_pause", "text": "Pause", "size": { "w": 56, "h": 24 }, "slot": { "width": 56 } },
-        { "type": "Button", "id": "btn_step", "text": "Step", "size": { "w": 48, "h": 24 }, "slot": { "width": 48 } },
-        { "type": "Button", "id": "btn_stop", "text": "Stop", "size": { "w": 48, "h": 24 }, "slot": { "width": 48 } },
-        { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 120, "h": 24 }, "slot": { "width": 120 } },
-        { "type": "TextLabel", "id": "lbl_unsaved", "text": "", "size": { "w": 24, "h": 24 }, "slot": { "width": 24 }, "background_color": [0.85, 0.55, 0.10, 1.0] },
-        { "type": "TextLabel", "id": "transport_spacer", "text": "", "size": { "w": 0, "h": 24 } }
+        { "type": "TextLabel", "id": "lbl_status_scene", "text": "Scene: Untitled", "size": { "w": 180, "h": 18 }, "slot": { "width": 180 } },
+        { "type": "TextLabel", "id": "lbl_unsaved", "text": "", "size": { "w": 18, "h": 18 }, "slot": { "width": 18 } },
+        { "type": "TextLabel", "id": "status_spacer", "text": "", "size": { "w": 0, "h": 18 } },
+        { "type": "TextLabel", "id": "lbl_status_network", "text": "Network: Offline", "size": { "w": 116, "h": 18 }, "slot": { "width": 116 } },
+        { "type": "TextLabel", "id": "lbl_status_renderer", "text": "Renderer: Ready", "size": { "w": 110, "h": 18 }, "slot": { "width": 110 } },
+        { "type": "TextLabel", "id": "lbl_status_fps", "text": "FPS --", "size": { "w": 48, "h": 18 }, "slot": { "width": 48 } }
       ]
     }
   ]

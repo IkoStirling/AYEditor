@@ -50,6 +50,11 @@ struct ChildWindowConfig {
         beforeMouseWheel;
     std::function<bool(ayt::ui::UIManager& ui, ayt::device::KeyCode kc,
                        bool pressed)> beforeKey;
+    std::function<void(ayt::ui::UIManager& ui, bool focused)> onFocusChanged;
+    // Runs at the deferred close safe point while the child UI tree and
+    // backend are still alive. Tool sessions use this to detach callbacks
+    // and raw widget pointers before UIManager::shutdown destroys them.
+    std::function<void(ayt::ui::UIManager& ui)> beforeClose;
     // Optional cursor override (Layout Editor resize/move hints).
     // Return Default to fall back to UIManager::getCursorHint().
     std::function<ayt::ui::UiCursorHint(ayt::ui::UIManager& ui, float x, float y)>
@@ -120,11 +125,20 @@ public:
         std::unique_ptr<ayt::ui::IRenderBackend> backend;
         // Live promoted card (null for config-file children).
         ayt::ui::DockCard*                card = nullptr;
+        std::function<void(ayt::ui::UIManager& ui)> beforeClose;
         bool                              needsDraw = false;
+        // Window/card close callbacks run inside Win32/UI dispatch. They
+        // only mark the entry; tickAll tears it down after dispatch returns.
+        bool                              closeRequested = false;
     };
     const std::vector<Entry>& entries() const { return _entries; }
 
 private:
+    void requestCloseChildWindow(Handle h);
+    void closeChildWindowNow(Handle h);
+    void teardownEntry(Entry& entry);
+    void drainCloseRequests();
+
     ayt::device::WindowManager& _wm;
     ayt::ui::UIManager&         _primary;
     std::vector<Entry>          _entries;

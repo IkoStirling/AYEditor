@@ -12,7 +12,10 @@
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYScript/ScriptSubSystem.h"
 #include "AYRenderer/UIRenderBackend.h"
+#include "AYUI/DeviceInputBridge.h"
 #include "AYUI/UIKeyCode.h"
+#include "AYEntity.h"
+#include <AYEntity/components/MeshComponent.h>
 
 #include <AYApplication/IEngineHost.h>
 
@@ -23,9 +26,11 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <sys/stat.h>
+#include <utility>
 #include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -35,7 +40,6 @@
 #  define NOMINMAX
 #endif
 #include <Windows.h>
-#include <windowsx.h>
 
 namespace ayt::editor {
 
@@ -61,7 +65,15 @@ void attachDebugConsole()
 
 std::string resolveLayoutPath()
 {
+    char modulePath[MAX_PATH]{};
+    const DWORD moduleLength =
+        ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    const std::filesystem::path executableDirectory =
+        moduleLength > 0 && moduleLength < MAX_PATH
+            ? std::filesystem::path(modulePath).parent_path()
+            : std::filesystem::path{};
     const std::vector<std::string> candidates = {
+        (executableDirectory / "assets/ui/editor_shell.ui.json").string(),
         "assets/ui/editor_shell.ui.json",
         "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
         "../AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
@@ -76,125 +88,62 @@ std::string resolveLayoutPath()
     return candidates.front();
 }
 
-struct EditorHostState {
-    EditorSession* session = nullptr;
-    int clientWidth = 0;
-    int clientHeight = 0;
-};
-
-int uiKeyFromVirtualKey(std::uintptr_t virtualKey) noexcept
+bool isEditorIconRoot(const std::filesystem::path& root)
 {
-    // Most UIKeyCode values intentionally match Win32 VK values. PageUp and
-    // PageDown are the documented exceptions and must be translated at the
-    // host boundary instead of being passed through as raw VK_PRIOR/VK_NEXT.
-    switch (virtualKey) {
-    case VK_PRIOR: return ayt::ui::UIKey_PageUp;
-    case VK_NEXT:  return ayt::ui::UIKey_PageDown;
-    default:       return static_cast<int>(virtualKey);
+    std::error_code error;
+    const bool hasOutline = std::filesystem::is_regular_file(
+        root / "outline/pointer.svg", error);
+    error.clear();
+    const bool hasFilled = std::filesystem::is_regular_file(
+        root / "filled/player-play.svg", error);
+    return hasOutline && hasFilled;
+}
+
+void appendEditorIconCandidates(std::vector<std::filesystem::path>& candidates,
+                                const std::filesystem::path& start)
+{
+    std::filesystem::path cursor = start;
+    for (int depth = 0; depth < 10 && !cursor.empty(); ++depth) {
+        // Future packaged/in-repository location.
+        candidates.push_back(cursor / "assets/icons/tabler");
+        candidates.push_back(
+            cursor / "assets/icons/tabler-icons-3.46.0/icons");
+        // Current development AssetRepo location (sibling of AliyatEngine).
+        candidates.push_back(
+            cursor / "AssetRepo/icons/tabler-icons-3.46.0/icons");
+
+        const std::filesystem::path parent = cursor.parent_path();
+        if (parent == cursor) break;
+        cursor = parent;
     }
 }
 
-std::intptr_t handleHostMessage(HWND hwnd, EditorHostState* state, unsigned msg,
-                                std::uintptr_t wParam, std::intptr_t lParam, bool& handled)
+std::string resolveEditorIconRoot()
 {
-    handled = false;
-    if (state == nullptr || state->session == nullptr) {
-        return 0;
+    std::vector<std::filesystem::path> candidates;
+    if (const auto configured = ayt::io::env::get("AY_EDITOR_ICON_ROOT");
+        configured.has_value() && !configured->empty()) {
+        const std::filesystem::path root(*configured);
+        candidates.push_back(root);
+        candidates.push_back(root / "icons");
+        candidates.push_back(root / "tabler-icons-3.46.0/icons");
     }
 
-    switch (msg) {
-    case WM_SIZE:
-        state->clientWidth  = LOWORD(lParam);
-        state->clientHeight = HIWORD(lParam);
-        state->session->setClientSize(static_cast<float>(state->clientWidth),
-                                      static_cast<float>(state->clientHeight));
-        handled = true;
-        return 0;
-    case WM_KEYDOWN:
-    case WM_SYSKEYDOWN:
-        handled = state->session->onKeyDown(uiKeyFromVirtualKey(wParam));
-        return handled ? 0 : 0;
-    case WM_KEYUP:
-    case WM_SYSKEYUP:
-        handled = state->session->onKeyUp(uiKeyFromVirtualKey(wParam));
-        return handled ? 0 : 0;
-    case WM_MOUSEMOVE: {
-        TRACKMOUSEEVENT trackLeave{};
-        trackLeave.cbSize = sizeof(trackLeave);
-        trackLeave.dwFlags = TME_LEAVE;
-        trackLeave.hwndTrack = hwnd;
-        TrackMouseEvent(&trackLeave);
+    char modulePath[MAX_PATH]{};
+    const DWORD moduleLength =
+        ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    if (moduleLength > 0 && moduleLength < MAX_PATH) {
+        appendEditorIconCandidates(
+            candidates, std::filesystem::path(modulePath).parent_path());
+    }
+    appendEditorIconCandidates(candidates, std::filesystem::current_path());
 
-        const float x = static_cast<float>(GET_X_LPARAM(lParam));
-        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-        state->session->onMouseMove(x, y);
-        switch (state->session->getUiCursorHint()) {
-        case ayt::ui::UiCursorHint::Hand:
-            SetCursor(LoadCursor(nullptr, IDC_HAND));
-            break;
-        case ayt::ui::UiCursorHint::SizeHorizontal:
-            SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
-            break;
-        case ayt::ui::UiCursorHint::Move:
-            SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
-            break;
-        default:
-            SetCursor(LoadCursor(nullptr, IDC_ARROW));
-            break;
+    for (const std::filesystem::path& candidate : candidates) {
+        if (isEditorIconRoot(candidate)) {
+            return candidate.lexically_normal().string();
         }
-        handled = true;
-        return 0;
     }
-    case WM_MOUSELEAVE:
-        if (GetCapture() != hwnd) {
-            state->session->onMouseLeave();
-            SetCursor(LoadCursor(nullptr, IDC_ARROW));
-        }
-        handled = true;
-        return 0;
-    case WM_SETCURSOR:
-        if (LOWORD(lParam) == HTCLIENT) {
-            switch (state->session->getUiCursorHint()) {
-            case ayt::ui::UiCursorHint::Hand:
-                SetCursor(LoadCursor(nullptr, IDC_HAND));
-                handled = true;
-                return TRUE;
-            case ayt::ui::UiCursorHint::SizeHorizontal:
-                SetCursor(LoadCursor(nullptr, IDC_SIZEWE));
-                handled = true;
-                return TRUE;
-            case ayt::ui::UiCursorHint::Move:
-                SetCursor(LoadCursor(nullptr, IDC_SIZEALL));
-                handled = true;
-                return TRUE;
-            default:
-                break;
-            }
-        }
-        break;
-    case WM_LBUTTONDOWN: {
-        const float x = static_cast<float>(GET_X_LPARAM(lParam));
-        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-        // Capture for UI drag OR freecam look (both return true).
-        if (state->session->onMouseButtonDown(x, y, 0)) {
-            SetCapture(hwnd);
-        }
-        handled = true;
-        return 0;
-    }
-    case WM_LBUTTONUP: {
-        const float x = static_cast<float>(GET_X_LPARAM(lParam));
-        const float y = static_cast<float>(GET_Y_LPARAM(lParam));
-        state->session->onMouseButtonUp(x, y, 0);
-        ReleaseCapture();
-        handled = true;
-        return 0;
-    }
-    default:
-        break;
-    }
-
-    return 0;
+    return {};
 }
 
 // G2: split the Win32 command line into whitespace-separated tokens.
@@ -508,6 +457,7 @@ void EditorApp::run()
     deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
     deviceConfig.window.width = static_cast<int>(_desc.width);
     deviceConfig.window.height = static_cast<int>(_desc.height);
+    deviceConfig.enableTouch = true;
     if (!_devices->initialize(deviceConfig)) {
         std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
         _devices.reset();
@@ -534,16 +484,19 @@ void EditorApp::run()
         return;
     }
 
-    EditorHostState hostState{};
-    hostState.clientWidth  = static_cast<int>(_desc.width);
-    hostState.clientHeight = static_cast<int>(_desc.height);
+    if (_editorPreferences.windowMaximized
+        && !window.isTopLevelMaximized(hwnd)) {
+        window.toggleTopLevelMaximized(hwnd);
+    }
+
+    int clientWidth = window.getWidth();
+    int clientHeight = window.getHeight();
 
     auto uiBackend = std::make_unique<ayt::render::UIRenderBackend>();
     ayt::render::RendererSubSystem* rendererSub = nullptr;
 
     {
         EditorSession session;
-        hostState.session = &session;
 
         const std::string layoutPath = resolveLayoutPath();
 
@@ -551,10 +504,40 @@ void EditorApp::run()
     sessionDesc.uiBackend = uiBackend.get();
     sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.layoutPath = layoutPath;
+    sessionDesc.iconRootPath = resolveEditorIconRoot();
     sessionDesc.hostWindow = hwnd;
+    sessionDesc.deviceManager = _devices.get();
     sessionDesc.netClientMode = netClientMode;
     sessionDesc.netConnectHost = netConnectHost;
     sessionDesc.childWindowManager = &_devices->window();
+    sessionDesc.preferences = _editorPreferences;
+    sessionDesc.viewportOrientationAxisVisible =
+        _editorPreferences.viewportOrientationAxisVisible;
+    sessionDesc.onViewportOrientationAxisVisibilityChanged =
+        _onViewportOrientationAxisVisibilityChanged;
+    auto persistEditorPreferences =
+        [this, &window, hwnd](const EditorPreferences& current) {
+            EditorPreferences preferences = current;
+            preferences.windowMaximized = window.isTopLevelMaximized(hwnd);
+            if (!preferences.windowMaximized) {
+                preferences.windowWidth = window.getWidth();
+                preferences.windowHeight = window.getHeight();
+            } else {
+                // Session state intentionally does not churn on every host
+                // resize. Preserve the last normal-window dimensions held by
+                // the app while maximized, so a later toolbar/render change
+                // cannot overwrite the restore size with stale startup data.
+                preferences.windowWidth = _editorPreferences.windowWidth;
+                preferences.windowHeight = _editorPreferences.windowHeight;
+            }
+            _editorPreferences = preferences;
+            _viewportOrientationAxisVisible =
+                preferences.viewportOrientationAxisVisible;
+            if (_onEditorPreferencesChanged) {
+                _onEditorPreferencesChanged(preferences);
+            }
+        };
+    sessionDesc.onPreferencesChanged = persistEditorPreferences;
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
@@ -562,27 +545,8 @@ void EditorApp::run()
         return;
     }
 
-    // Primary-window TextInput/IME bridge. Child windows already install the
-    // same bridge through EditorChildWindowManager.
-    session.ui().onTextEditingFocusChanged = [this](bool editing) {
-        _devices->textInput().setEnabled(editing);
-    };
-    _devices->textInput().onCommit = [&session](const std::string& chunk) {
-        if (!chunk.empty()) {
-            session.ui().onDeviceChar(chunk.data(), static_cast<int>(chunk.size()));
-        }
-    };
-    _devices->textInput().onCompositionUpdate =
-        [&session, this](const std::string& text, int caret) {
-            if (text.empty() && !_devices->textInput().isComposing()) {
-                session.ui().onDeviceCompositionEnd("");
-                return;
-            }
-            session.ui().onDeviceCompositionUpdate(text, caret);
-        };
-
-    session.setClientSize(static_cast<float>(hostState.clientWidth),
-                          static_cast<float>(hostState.clientHeight));
+    session.setClientSize(static_cast<float>(clientWidth),
+                          static_cast<float>(clientHeight));
 
     if (!session.ensurePresentationReady()) {
         std::fprintf(stderr, "[EditorApp] presentation bootstrap failed\n");
@@ -593,9 +557,11 @@ void EditorApp::run()
 
     if (netClientMode) {
         session.autoEnterNetClientPlay();
-    } else if (_autoPlayImportedAnimation
+    } else if (ayt::io::env::get("AY_EDITOR_SELECTION_CAPTURE_BASE")
+                   .has_value()
+               || (_autoPlayImportedAnimation
                && importedCharacter.isValid()
-               && !importedCharacter.animationPath.empty()) {
+               && !importedCharacter.animationPath.empty())) {
         session.autoEnterImportedAnimationPlay();
     }
 
@@ -626,15 +592,75 @@ void EditorApp::run()
 
     bool running = true;
     bool loggedFirstFrameHeap = false;
+    bool windowPreferencesDirty = false;
+    float windowPreferencesSaveCountdown = 0.0f;
     window.setWindowCloseCallback([&running]() { running = false; });
+    window.setWindowResizeCallback([&session, &clientWidth, &clientHeight,
+                                    &windowPreferencesDirty,
+                                    &windowPreferencesSaveCountdown](int width,
+                                                                      int height) {
+        clientWidth = width;
+        clientHeight = height;
+        session.setClientSize(static_cast<float>(width), static_cast<float>(height));
+        if (width > 0 && height > 0) {
+            windowPreferencesDirty = true;
+            windowPreferencesSaveCountdown = 0.5f;
+        }
+    });
     window.setWindowFocusCallback([&session](bool focused) {
         session.onWindowFocusChanged(focused);
     });
-    window.setWindowMessageCallback(
-        [hwnd, &hostState](unsigned msg, std::uintptr_t wParam, std::intptr_t lParam,
-                           bool& handled) -> std::intptr_t {
-            return handleHostMessage(hwnd, &hostState, msg, wParam, lParam, handled);
-        });
+
+    ayt::ui::DeviceInputBridge::Callbacks inputCallbacks{};
+    inputCallbacks.onMouseMove = [&session, &window](float x, float y) {
+        const bool handled = session.onMouseMove(x, y);
+        window.setCursorShape(ayt::ui::systemCursorFromUi(session.getUiCursorHint()));
+        return handled;
+    };
+    inputCallbacks.onMouseLeave = [&session, &window]() {
+        session.onMouseLeave();
+        window.setCursorShape(ayt::device::SystemCursorShape::Arrow);
+    };
+    inputCallbacks.onMouseButton = [&session, &window](float x, float y,
+                                                        int button, bool pressed) {
+        const bool handled = pressed
+            ? session.onMouseButtonDown(x, y, button)
+            : session.onMouseButtonUp(x, y, button);
+        window.setCursorShape(ayt::ui::systemCursorFromUi(session.getUiCursorHint()));
+        return handled;
+    };
+    inputCallbacks.onMouseWheel = [&session](float x, float y, float deltaY) {
+        return session.onMouseWheel(x, y, deltaY);
+    };
+    inputCallbacks.onKey = [&session](ayt::device::KeyCode key, bool pressed,
+                                      bool /*repeat*/) {
+        const int uiKey = static_cast<int>(ayt::ui::fromDeviceKey(key));
+        return pressed ? session.onKeyDown(uiKey) : session.onKeyUp(uiKey);
+    };
+    inputCallbacks.onTextCommit = [&session](const std::string& text) {
+        return !text.empty()
+            && session.ui().onDeviceChar(text.data(), static_cast<int>(text.size()));
+    };
+    inputCallbacks.onComposition = [&session](
+        ayt::device::DeviceInputEventType type, const std::string& text, int caret) {
+        switch (type) {
+        case ayt::device::DeviceInputEventType::CompositionStart:
+            session.ui().onDeviceCompositionStart(text, caret);
+            break;
+        case ayt::device::DeviceInputEventType::CompositionUpdate:
+            session.ui().onDeviceCompositionUpdate(text, caret);
+            break;
+        case ayt::device::DeviceInputEventType::CompositionEnd:
+            session.ui().onDeviceCompositionEnd("");
+            break;
+        default:
+            break;
+        }
+    };
+    ayt::ui::DeviceInputBridge inputBridge(std::move(inputCallbacks));
+    inputBridge.connect(*_devices);
+    inputBridge.bindTextInputFocus(session.ui());
+    window.setCursorShape(ayt::ui::systemCursorFromUi(session.getUiCursorHint()));
 
     // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
     // Reports ms for pollEvents / update / syncViewport / render per
@@ -655,6 +681,14 @@ void EditorApp::run()
     // extension.
     const std::string passCaptureBase =
         ayt::io::env::get("AY_EDITOR_PASS_CAPTURE_BASE").value_or("");
+    // Deterministic visual regression hook for editor selection. The normal
+    // interactive path is unchanged when the variable is absent. A capture
+    // run enters Play above, freezes the scene after its first presentation,
+    // and records the same camera with no selection, the scaled ground, and
+    // the opaque cube selected. This intentionally uses the real backbuffer
+    // and production pass graph rather than a headless contract-only test.
+    const std::string selectionCaptureBase =
+        ayt::io::env::get("AY_EDITOR_SELECTION_CAPTURE_BASE").value_or("");
     if (!passCaptureBase.empty()) {
         ayt::render::Renderer& validationRenderer = rendererSub->renderer();
         validationRenderer.setDepthHazeEnabled(false);
@@ -705,6 +739,13 @@ void EditorApp::run()
         // identifies the stable device state observed by Play subsystems.
         hostFrame.inputFrameIndex = hostFrame.hostFrameIndex;
         session.update(hostFrame);
+        if (windowPreferencesDirty) {
+            windowPreferencesSaveCountdown -= editorDeltaSeconds;
+            if (windowPreferencesSaveCountdown <= 0.0f) {
+                persistEditorPreferences(session.currentPreferences());
+                windowPreferencesDirty = false;
+            }
+        }
         const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
         session.syncViewportIfChanged();
         const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};
@@ -758,7 +799,70 @@ void EditorApp::run()
                     tRenderEnd - tRenderBegin).count();
             }
 
-            if (!passCaptureBase.empty()) {
+            if (!selectionCaptureBase.empty()) {
+                ayt::render::Renderer& validationRenderer =
+                    rendererSub->renderer();
+                auto queueSelectionCapture = [&](const char* suffix) {
+                    const std::string base = selectionCaptureBase + suffix;
+                    const bool queued = validationRenderer.captureScreenshot(base);
+                    std::fprintf(stderr,
+                                 "[EditorApp] selection capture %s: %s\n",
+                                 queued ? "queued" : "FAILED", base.c_str());
+                };
+                auto selectCaptureTarget = [&](const char* materialNeedle) {
+                    ayt::entity::World* world = session.worldContext().world(
+                        EditorWorldSlot::Play, true);
+                    ayt::entity::Entity* target = nullptr;
+                    if (world != nullptr) {
+                        for (ayt::entity::Entity* entity : world->getAllEntities()) {
+                            auto* mesh = entity != nullptr
+                                ? entity->getComponent<ayt::entity::MeshComponent>()
+                                : nullptr;
+                            if (mesh == nullptr) {
+                                continue;
+                            }
+                            mesh->outlineHull = false;
+                            if (materialNeedle != nullptr
+                                && mesh->materialPath.find(materialNeedle)
+                                    != std::string::npos) {
+                                target = entity;
+                            }
+                        }
+                    }
+                    if (target != nullptr) {
+                        target->getComponent<ayt::entity::MeshComponent>()
+                            ->outlineHull = true;
+                    }
+                    std::fprintf(stderr,
+                                 "[EditorApp] selection capture target '%s': %s\n",
+                                 materialNeedle != nullptr ? materialNeedle : "none",
+                                 target != nullptr ? "found" : "not found");
+                };
+
+                if (frameIndex == 30) {
+                    selectCaptureTarget(nullptr);
+                } else if (frameIndex == 35) {
+                    ayt::game::GameLoop::instance().pause();
+                } else if (frameIndex == 50) {
+                    queueSelectionCapture("_none");
+                } else if (frameIndex == 60) {
+                    ayt::game::GameLoop::instance().resume();
+                    selectCaptureTarget("ground_shadow.aymat");
+                } else if (frameIndex == 65) {
+                    ayt::game::GameLoop::instance().pause();
+                } else if (frameIndex == 80) {
+                    queueSelectionCapture("_ground");
+                } else if (frameIndex == 90) {
+                    ayt::game::GameLoop::instance().resume();
+                    selectCaptureTarget("cube_shadow.aymat");
+                } else if (frameIndex == 95) {
+                    ayt::game::GameLoop::instance().pause();
+                } else if (frameIndex == 105) {
+                    queueSelectionCapture("_cube");
+                } else if (frameIndex == 125) {
+                    running = false;
+                }
+            } else if (!passCaptureBase.empty()) {
                 ayt::render::Renderer& validationRenderer =
                     rendererSub->renderer();
                 auto queueCapture = [&](const char* suffix) {
@@ -867,8 +971,8 @@ void EditorApp::run()
         }
     }
 
+    persistEditorPreferences(session.currentPreferences());
     onPreShutdown();
-    hostState.session = nullptr;
 
     // UI GPU resources (font atlas, UiGpuContext) must be released while bgfx is
     // still alive. session.shutdown() calls endPlaySession() which shuts down

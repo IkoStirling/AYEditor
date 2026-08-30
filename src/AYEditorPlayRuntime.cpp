@@ -1104,7 +1104,7 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
 
     if (useDeferred) {
         rendererSub->renderer().configurePipeline(
-            ayt::render::RenderPipelineDesc::makeDeferred());
+            ayt::render::RenderPipelineDesc::makeEditorDeferred());
         // §P5.5 A — multi-light DataSource (host-owned). LightingPass
         // borrows the pointer each frame. Light[0] is the key that
         // shares ShadowPass (must match setDirectionalLight / shadow
@@ -1225,7 +1225,7 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
         }
     } else {
         rendererSub->renderer().configurePipeline(
-            ayt::render::RenderPipelineDesc::makeForwardWithShadows());
+            ayt::render::RenderPipelineDesc::makeEditorForward());
         rendererSub->renderer().setSceneLights(nullptr);
         rendererSub->renderer().setSkySource(nullptr);
         rendererSub->renderer().setSkySourceCube({});
@@ -1252,14 +1252,16 @@ void EditorPlayRuntime::applyEditorRenderPipeline()
                                : 0u;
         std::fprintf(stderr,
             "[EditorPlayRuntime] render pipeline: Deferred "
-            "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP → UI) "
+            "(Shadow → Skybox → GBuffer → Lighting → Transparent → PP "
+            "→ EditorOverlay → UI) "
             "default; AY_DEFERRED=%s; P5.5 sceneLights=%u "
             "(keyDir+fillDir+point+spot; key-only shadow; IBL cube)\n",
             deferredEnv.empty() ? "(unset)" : deferredEnv.c_str(), n);
     } else {
         std::fprintf(stderr,
             "[EditorPlayRuntime] render pipeline: Forward "
-            "(Shadow → FO → Transparent → PP → UI) via AY_DEFERRED=0; "
+            "(Shadow → FO → Transparent → PP → EditorOverlay → UI) "
+            "via AY_DEFERRED=0; "
             "unset AY_DEFERRED (or =1) for Deferred + skybox + multi-light\n");
     }
 }
@@ -1333,7 +1335,7 @@ void EditorPlayRuntime::registerUpdateListener() {
                 _pendingLateJoinConn = nullptr;
                 rebroadcastServerReplicationSpawns(conn);
             }
-            if (_simulationActive) {
+            if (_simulationActive && !_useEditSceneAsAuthoringSource) {
                 spawnCubeIfNeeded();
             }
         }
@@ -1494,8 +1496,21 @@ ayt::scene::SceneManager* EditorPlayRuntime::resolveSceneManager() const noexcep
 
 ayt::entity::World* EditorPlayRuntime::resolvePlayWorld() noexcept
 {
+    if (_entityWorldOverride != nullptr) {
+        return _entityWorldOverride;
+    }
     const bool preferSceneWorld = _netPlayRole != NetPlayRole::Client;
     if (_worldContext != nullptr) {
+        // Outside Play, preview helpers operate on the persistent Edit World.
+        // This branch is enabled only after the Editor explicitly adopts its
+        // document as the authoring source; direct-runtime tests retain their
+        // historical process-World fallback.
+        if (_useEditSceneAsAuthoringSource
+            && _worldContext->scene(EditorWorldSlot::Play) == nullptr) {
+            if (auto* editWorld = _worldContext->world(EditorWorldSlot::Edit)) {
+                return editWorld;
+            }
+        }
         if (auto* world = _worldContext->world(
                 EditorWorldSlot::Play, preferSceneWorld)) {
             if (preferSceneWorld
@@ -1521,6 +1536,130 @@ ayt::entity::World* EditorPlayRuntime::resolvePlayWorld() noexcept
     return &ayt::entity::World::instance();
 }
 
+void EditorPlayRuntime::clearPreviewPointersOnly() noexcept
+{
+    _cubeEntity = nullptr;
+    _groundEntity = nullptr;
+    _glassEntity = nullptr;
+    _characterEntity = nullptr;
+    _additionalCharacterEntities.clear();
+}
+
+void EditorPlayRuntime::rememberEditPreviewEntities() noexcept
+{
+    _editCubeId = _cubeEntity != nullptr ? _cubeEntity->getId() : 0;
+    _editGroundId = _groundEntity != nullptr ? _groundEntity->getId() : 0;
+    _editGlassId = _glassEntity != nullptr ? _glassEntity->getId() : 0;
+    _editCharacterId = _characterEntity != nullptr
+        ? _characterEntity->getId() : 0;
+    _editAdditionalCharacterIds.clear();
+    _editAdditionalCharacterIds.reserve(_additionalCharacterEntities.size());
+    for (ayt::entity::Entity* entity : _additionalCharacterEntities) {
+        if (entity != nullptr) {
+            _editAdditionalCharacterIds.push_back(entity->getId());
+        }
+    }
+}
+
+void EditorPlayRuntime::bindEditPreviewEntities() noexcept
+{
+    clearPreviewPointersOnly();
+    if (!_editPreviewPrepared || _worldContext == nullptr) return;
+    ayt::entity::World* world = _worldContext->world(EditorWorldSlot::Edit);
+    if (world == nullptr || !world->isInitialized()) return;
+    _cubeEntity = _editCubeId != 0 ? world->findEntity(_editCubeId) : nullptr;
+    _groundEntity = _editGroundId != 0 ? world->findEntity(_editGroundId) : nullptr;
+    _glassEntity = _editGlassId != 0 ? world->findEntity(_editGlassId) : nullptr;
+    _characterEntity = _editCharacterId != 0
+        ? world->findEntity(_editCharacterId) : nullptr;
+    for (uint32_t id : _editAdditionalCharacterIds) {
+        if (ayt::entity::Entity* entity = world->findEntity(id)) {
+            _additionalCharacterEntities.push_back(entity);
+        }
+    }
+}
+
+void EditorPlayRuntime::bindPlayPreviewEntities() noexcept
+{
+    clearPreviewPointersOnly();
+    if (!_editPreviewPrepared || _worldContext == nullptr) return;
+    ayt::entity::World* world = _worldContext->world(EditorWorldSlot::Play, true);
+    if (world == nullptr || !world->isInitialized()) return;
+    _cubeEntity = _editCubeId != 0 ? world->findEntity(_editCubeId) : nullptr;
+    _groundEntity = _editGroundId != 0 ? world->findEntity(_editGroundId) : nullptr;
+    _glassEntity = _editGlassId != 0 ? world->findEntity(_editGlassId) : nullptr;
+    _characterEntity = _editCharacterId != 0
+        ? world->findEntity(_editCharacterId) : nullptr;
+    for (uint32_t id : _editAdditionalCharacterIds) {
+        if (ayt::entity::Entity* entity = world->findEntity(id)) {
+            _additionalCharacterEntities.push_back(entity);
+        }
+    }
+}
+
+bool EditorPlayRuntime::prepareEditScene()
+{
+    _useEditSceneAsAuthoringSource = true;
+    if (_netPlayRole == NetPlayRole::Client) return true;
+    if (!ensurePresentationReady() || _worldContext == nullptr) return false;
+
+    ayt::entity::World* editWorld = _worldContext->world(EditorWorldSlot::Edit);
+    if (editWorld == nullptr || !editWorld->isInitialized()) return false;
+    if (_editPreviewPrepared) {
+        bindEditPreviewEntities();
+        return true;
+    }
+
+    // A loaded/non-empty document is already authoritative. Seed only the
+    // pristine startup document; New/Open remain free of demo-only objects.
+    if (!editWorld->getAllEntities().empty()) {
+        return true;
+    }
+
+    _entityWorldOverride = editWorld;
+    const bool hasCharacter = trySpawnImportedCharacter();
+    spawnCubeIfNeeded();
+    if (hasCharacter && _cubeEntity != nullptr) {
+        if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
+            xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+        }
+    }
+    spawnGroundIfNeeded();
+    spawnGlassIfNeeded();
+
+    if (_characterEntity != nullptr) _characterEntity->setName("Character");
+    for (size_t i = 0; i < _additionalCharacterEntities.size(); ++i) {
+        if (_additionalCharacterEntities[i] != nullptr) {
+            const std::string name = "Character Part " + std::to_string(i + 2);
+            _additionalCharacterEntities[i]->setName(name.c_str());
+        }
+    }
+    if (_cubeEntity != nullptr) _cubeEntity->setName("Reference Cube");
+    if (_groundEntity != nullptr) _groundEntity->setName("Ground");
+    if (_glassEntity != nullptr) _glassEntity->setName("Glass");
+
+    rememberEditPreviewEntities();
+    _editPreviewPrepared = true;
+    _entityWorldOverride = nullptr;
+    std::fprintf(stderr,
+        "[EditorPlayRuntime] authored startup preview in Edit Scene "
+        "(character=%s, entities=%zu)\n",
+        hasCharacter ? "yes" : "no", editWorld->getAllEntities().size());
+    return true;
+}
+
+void EditorPlayRuntime::forgetEditScenePreview() noexcept
+{
+    _useEditSceneAsAuthoringSource = true;
+    _editPreviewPrepared = false;
+    _editCubeId = 0;
+    _editGroundId = 0;
+    _editGlassId = 0;
+    _editCharacterId = 0;
+    _editAdditionalCharacterIds.clear();
+    clearPreviewPointersOnly();
+}
+
 void EditorPlayRuntime::clearCube() noexcept {
     releaseOwnedEntity(_cubeEntity, *resolvePlayWorld());
 }
@@ -1541,6 +1680,36 @@ void EditorPlayRuntime::clearGlass() noexcept {
 void EditorPlayRuntime::replaceImportedCharacter(const ImportedCharacter& character)
 {
     setImportedCharacter(character);
+
+    // In Edit mode the preview entities are the authored scene, not a hidden
+    // runtime fallback. Replace them in that World so Save and the next Play
+    // clone see the same character the viewport shows.
+    const bool editingAuthoringScene = _useEditSceneAsAuthoringSource
+        && !_simulationActive && _worldContext != nullptr
+        && _worldContext->scene(EditorWorldSlot::Play) == nullptr;
+    if (editingAuthoringScene) {
+        ayt::entity::World* editWorld =
+            _worldContext->world(EditorWorldSlot::Edit);
+        if (editWorld == nullptr) return;
+        _entityWorldOverride = editWorld;
+        bindEditPreviewEntities();
+        clearCharacter();
+        clearCube();
+        const bool hasCharacter = trySpawnImportedCharacter();
+        spawnCubeIfNeeded();
+        if (hasCharacter && _cubeEntity != nullptr) {
+            if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
+                xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+            }
+        }
+        if (_characterEntity != nullptr) _characterEntity->setName("Character");
+        if (_cubeEntity != nullptr) _cubeEntity->setName("Reference Cube");
+        rememberEditPreviewEntities();
+        _editPreviewPrepared = true;
+        _entityWorldOverride = nullptr;
+        return;
+    }
+
     clearCharacter();
     clearCube();
     const bool hasCharacter = trySpawnImportedCharacter();
@@ -1734,7 +1903,13 @@ bool EditorPlayRuntime::startPlay()
                 "begin play (sm=%p)\n", (void*)sm);
             return false;
         }
+        if (_useEditSceneAsAuthoringSource) {
+            // These pointers still identify persistent Edit entities. The
+            // SceneManager is about to clone/destroy a different World.
+            clearPreviewPointersOnly();
+        }
         if (!sm->beginPlay()) {
+            bindEditPreviewEntities();
             std::fprintf(stderr,
                 "[EditorPlayRuntime] startPlay: sm->beginPlay() failed\n");
             return false;
@@ -1744,6 +1919,9 @@ bool EditorPlayRuntime::startPlay()
         // land on that World (first bootstrap during ensureEngineInitialized
         // targeted the process fallback).
         ayt::entity::bootstrapModule();
+        if (_useEditSceneAsAuthoringSource) {
+            bindPlayPreviewEntities();
+        }
     }
 
     if (auto* rendererSub = ayt::render::RendererSubSystem::findRegistered()) {
@@ -1768,17 +1946,19 @@ bool EditorPlayRuntime::startPlay()
     //      (offset aside when a character is present) so a failed /
     //      invisible character cannot be mistaken for "cube removed".
     //   3. Glass (Transparent) + ground still spawn every Play.
-    const bool hasCharacter = trySpawnImportedCharacter();
-    spawnCubeIfNeeded();
-    if (hasCharacter && _cubeEntity != nullptr) {
-        if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
-            // Keep the opaque cube visible beside the character so the
-            // Deferred opaque path can be verified independently of skinning.
-            xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+    if (!_useEditSceneAsAuthoringSource) {
+        const bool hasCharacter = trySpawnImportedCharacter();
+        spawnCubeIfNeeded();
+        if (hasCharacter && _cubeEntity != nullptr) {
+            if (auto* xf = _cubeEntity->getComponent<ayt::entity::Transform>()) {
+                // Keep the opaque cube visible beside the character so the
+                // Deferred opaque path can be verified independently of skinning.
+                xf->position = ayt::math::FVector3(-2.5f, 0.85f, 0.0f);
+            }
         }
+        spawnGroundIfNeeded();
+        spawnGlassIfNeeded();
     }
-    spawnGroundIfNeeded();
-    spawnGlassIfNeeded();
     wireCubeNetworkReplication(_cubeEntity);
     if (auto* net = ayt::net::findRegisteredNetworkSubSystem();
         net != nullptr && net->isP2PConfigured()) {
@@ -1826,6 +2006,7 @@ void EditorPlayRuntime::enterEdit()
     clearPlayerController();
     _simulationActive = false;
     if (auto* sm = resolveSceneManager()) sm->endPlay();
+    bindEditPreviewEntities();
 }
 
 void EditorPlayRuntime::shutdownEngine()
