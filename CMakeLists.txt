@@ -21,6 +21,10 @@ set(SRC_FILES
     src/AYEditorSceneDocument.cpp
     src/AYEditorSelection.cpp
     src/AYEditorCommandStack.cpp
+    src/AYEditorTransformGizmo.cpp
+    src/AYEditorVisualStyle.cpp
+    src/AYEditorAssetDatabase.cpp
+    src/AYEditorAssetListView.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
@@ -50,6 +54,10 @@ set(HEAD_FILES
     include/AYEditor/EditorSceneDocument.h
     include/AYEditor/EditorSelection.h
     include/AYEditor/EditorCommandStack.h
+    include/AYEditor/EditorTransformGizmo.h
+    include/AYEditor/EditorVisualStyle.h
+    include/AYEditor/EditorAssetDatabase.h
+    include/AYEditor/EditorAssetListView.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
     include/AYEditor/ImportedCharacterMapper.h
@@ -81,7 +89,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
-    PRIVATE AYEntity AYRenderer AYResource AYIO AYScript AYPlatform AYNetwork
+    PRIVATE AYEntity AYRenderer AYResource AYIO AYProject AYScript AYPlatform AYNetwork
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
     # 暴露 SceneManager 类型。
@@ -153,6 +161,18 @@ target_compile_definitions(AYEditorShell_Demo PRIVATE
     AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
 )
 
+# UI layouts, SVG icons, and editor configuration are runtime inputs. Make
+# them link dependencies so an asset-only edit re-runs the existing POST_BUILD
+# copy instead of leaving a stale assets directory beside the executable.
+file(GLOB_RECURSE AYEDITOR_RUNTIME_ASSET_FILES
+    CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/*"
+)
+set_property(TARGET AYEditorShell_Demo APPEND PROPERTY
+    LINK_DEPENDS "${AYEDITOR_RUNTIME_ASSET_FILES}"
+)
+
 add_custom_command(TARGET AYEditorShell_Demo POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_CURRENT_SOURCE_DIR}/assets
@@ -195,6 +215,10 @@ target_compile_definitions(AYEditorShutdownRepro PRIVATE
     AY_SHADER_BGFX_COMMON_HINT="${AY_SHADER_BGFX_COMMON_DIR}"
     AY_SHADER_BGFX_SRC_HINT="${AY_SHADER_BGFX_SRC_DIR}"
     AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
+)
+
+set_property(TARGET AYEditorShutdownRepro APPEND PROPERTY
+    LINK_DEPENDS "${AYEDITOR_RUNTIME_ASSET_FILES}"
 )
 
 add_custom_command(TARGET AYEditorShutdownRepro POST_BUILD

@@ -40,6 +40,7 @@ public:
     void setDefaultAnimationImportPath(std::string path) {
         _defaultAnimationImportPath = std::move(path);
     }
+    void setProjectRoot(std::string path) { _projectRoot = std::move(path); }
     // Demo convenience: after a character with an animation clip has been
     // imported, enter Play immediately so the clip can be previewed.
     void setAutoPlayImportedAnimation(bool enabled) {
@@ -106,6 +107,7 @@ private:
     ayt::app::AppCommandLine _cmdLine;
     std::string              _defaultImportPath;
     std::string              _defaultAnimationImportPath;
+    std::string              _projectRoot;
     std::string              _materialPolicyTag;
     std::string              _opaqueMaterialIndices;
     std::string              _maskMaterialIndices;

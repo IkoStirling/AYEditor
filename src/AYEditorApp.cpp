@@ -21,6 +21,7 @@
 
 #include <AYEventSystem/EventBus.h>
 #include <AYIO/Env.h>
+#include <AYProject/Project.h>
 #include <AYPlatform/Console.h>
 
 #include <chrono>
@@ -44,6 +45,141 @@
 namespace ayt::editor {
 
 namespace {
+
+constexpr int kEditorChromeHeight = 24;
+constexpr int kEditorChromeDragLeft = 360;
+constexpr int kEditorChromeButtonsWidth = 92;
+constexpr int kEditorResizeBorder = 6;
+
+std::intptr_t handleEditorBorderlessMessage(HWND hwnd, unsigned msg,
+                                             std::uintptr_t wParam,
+                                             std::intptr_t lParam,
+                                             bool& handled)
+{
+    switch (msg) {
+    case WM_NCCALCSIZE:
+        // The whole HWND is editor client area. While maximized, constrain it
+        // to the monitor work area so the taskbar remains reachable.
+        if (::IsZoomed(hwnd) != FALSE) {
+            RECT* proposed = nullptr;
+            if (lParam != 0) {
+                proposed = wParam != 0
+                    ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam)->rgrc[0]
+                    : reinterpret_cast<RECT*>(lParam);
+            }
+            MONITORINFO monitorInfo{};
+            monitorInfo.cbSize = sizeof(monitorInfo);
+            const HMONITOR monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            if (proposed != nullptr
+                && ::GetMonitorInfoW(monitor, &monitorInfo) != FALSE) {
+                *proposed = monitorInfo.rcWork;
+            }
+        }
+        handled = true;
+        return 0;
+
+    case WM_NCHITTEST: {
+        POINT screenPoint{
+            static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
+            static_cast<LONG>(static_cast<short>(HIWORD(lParam)))};
+        RECT windowRect{};
+        ::GetWindowRect(hwnd, &windowRect);
+        if (::IsZoomed(hwnd) == FALSE) {
+            const bool left = screenPoint.x < windowRect.left + kEditorResizeBorder;
+            const bool right = screenPoint.x >= windowRect.right - kEditorResizeBorder;
+            const bool top = screenPoint.y < windowRect.top + kEditorResizeBorder;
+            const bool bottom = screenPoint.y >= windowRect.bottom - kEditorResizeBorder;
+            if (top && left) return HTTOPLEFT;
+            if (top && right) return HTTOPRIGHT;
+            if (bottom && left) return HTBOTTOMLEFT;
+            if (bottom && right) return HTBOTTOMRIGHT;
+            if (left) return HTLEFT;
+            if (right) return HTRIGHT;
+            if (top) return HTTOP;
+            if (bottom) return HTBOTTOM;
+        }
+
+        POINT clientPoint = screenPoint;
+        ::ScreenToClient(hwnd, &clientPoint);
+        RECT clientRect{};
+        ::GetClientRect(hwnd, &clientRect);
+        const bool inDragRegion = clientPoint.y >= 0
+            && clientPoint.y < kEditorChromeHeight
+            && clientPoint.x >= kEditorChromeDragLeft
+            && clientPoint.x < clientRect.right - kEditorChromeButtonsWidth;
+        handled = true;
+        return inDragRegion ? HTCAPTION : HTCLIENT;
+    }
+
+    case WM_GETMINMAXINFO: {
+        auto* limits = reinterpret_cast<MINMAXINFO*>(lParam);
+        if (limits != nullptr) {
+            limits->ptMinTrackSize.x = 960;
+            limits->ptMinTrackSize.y = 600;
+        }
+        handled = true;
+        return 0;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+void applyEditorDwmFrame(HWND hwnd)
+{
+    constexpr DWORD kDwmwaUseImmersiveDarkMode = 20;
+    constexpr DWORD kDwmwaWindowCornerPreference = 33;
+    constexpr DWORD kDwmwcpDoNotRound = 1;
+    constexpr DWORD kDwmwaBorderColor = 34;
+    constexpr DWORD kDwmwaCaptionColor = 35;
+    const BOOL darkMode = TRUE;
+    const DWORD corner = kDwmwcpDoNotRound;
+    const COLORREF frameColor = RGB(0x18, 0x19, 0x1C);
+    using DwmSetWindowAttributeFn =
+        HRESULT (WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    if (HMODULE dwm = ::LoadLibraryW(L"dwmapi.dll")) {
+        if (auto* setAttribute = reinterpret_cast<DwmSetWindowAttributeFn>(
+                ::GetProcAddress(dwm, "DwmSetWindowAttribute"))) {
+            setAttribute(hwnd, kDwmwaUseImmersiveDarkMode,
+                         &darkMode, sizeof(darkMode));
+            setAttribute(hwnd, kDwmwaWindowCornerPreference,
+                         &corner, sizeof(corner));
+            setAttribute(hwnd, kDwmwaBorderColor,
+                         &frameColor, sizeof(frameColor));
+            setAttribute(hwnd, kDwmwaCaptionColor,
+                         &frameColor, sizeof(frameColor));
+        }
+        ::FreeLibrary(dwm);
+    }
+}
+
+bool installEditorBorderlessChrome(ayt::device::WindowManager& window,
+                                   HWND hwnd, int width, int height)
+{
+    if (hwnd == nullptr) return false;
+    window.setWindowMessageCallback(
+        [hwnd](unsigned msg, std::uintptr_t wParam, std::intptr_t lParam,
+               bool& handled) {
+            return handleEditorBorderlessMessage(
+                hwnd, msg, wParam, lParam, handled);
+        });
+
+    ::SetLastError(ERROR_SUCCESS);
+    LONG_PTR style = ::GetWindowLongPtrW(hwnd, GWL_STYLE);
+    if (style == 0 && ::GetLastError() != ERROR_SUCCESS) return false;
+    style &= ~static_cast<LONG_PTR>(WS_CAPTION);
+    style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+    ::SetLastError(ERROR_SUCCESS);
+    if (::SetWindowLongPtrW(hwnd, GWL_STYLE, style) == 0
+        && ::GetLastError() != ERROR_SUCCESS) {
+        return false;
+    }
+    applyEditorDwmFrame(hwnd);
+    return ::SetWindowPos(hwnd, nullptr, 0, 0, width, height,
+                          SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE
+                              | SWP_FRAMECHANGED) != FALSE;
+}
 
 bool fileExists(const std::string& path)
 {
@@ -146,11 +282,9 @@ std::string resolveEditorIconRoot()
     return {};
 }
 
-// G2: split the Win32 command line into whitespace-separated tokens.
-// Returns an empty vector on null input or all-whitespace input.
-// Phase 1 only: does NOT honor double-quoted strings. Use
-// `--import <path-without-spaces>` form. Quoted paths with spaces
-// fall back to the cube (logged as a parse failure).
+// Split the Win32 command line while preserving quoted paths. This remains a
+// deliberately small parser (Windows already supplies the complete command
+// line here), but project/import paths containing spaces are now first-class.
 std::vector<std::string> tokenizeCommandLine(const char* cmdLine)
 {
     std::vector<std::string> out;
@@ -164,9 +298,12 @@ std::vector<std::string> tokenizeCommandLine(const char* cmdLine)
             token.clear();
         }
     };
+    bool quoted = false;
     for (const char* p = cmdLine; *p != '\0'; ++p) {
         const unsigned char c = static_cast<unsigned char>(*p);
-        if (std::isspace(c) != 0) {
+        if (c == '"') {
+            quoted = !quoted;
+        } else if (!quoted && std::isspace(c) != 0) {
             flush();
         } else {
             token.push_back(static_cast<char>(c));
@@ -203,6 +340,44 @@ std::string findAnimationImportPath(const std::vector<std::string>& tokens)
         }
     }
     return std::string{};
+}
+
+std::string findProjectRoot(const std::vector<std::string>& tokens)
+{
+    constexpr const char* prefix = "--project=";
+    for (size_t i = 0; i < tokens.size(); ++i) {
+        if (tokens[i] == "--project") {
+            return i + 1 < tokens.size() ? tokens[i + 1] : std::string{};
+        }
+        if (tokens[i].compare(0, std::strlen(prefix), prefix) == 0) {
+            return tokens[i].substr(std::strlen(prefix));
+        }
+    }
+    return {};
+}
+
+std::string detectEditorProjectRoot()
+{
+    std::vector<std::filesystem::path> starts;
+    std::error_code ec;
+    starts.push_back(std::filesystem::current_path(ec));
+    char modulePath[MAX_PATH]{};
+    const DWORD length = ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
+    if (length > 0 && length < MAX_PATH) {
+        starts.push_back(std::filesystem::path(modulePath).parent_path());
+    }
+    for (std::filesystem::path cursor : starts) {
+        for (int depth = 0; depth < 10 && !cursor.empty(); ++depth) {
+            if (std::filesystem::exists(cursor / "AYRuntime" / "AYEditor", ec)
+                && std::filesystem::exists(cursor / "CMakeLists.txt", ec)) {
+                return cursor.lexically_normal().string();
+            }
+            const std::filesystem::path parent = cursor.parent_path();
+            if (parent == cursor) break;
+            cursor = parent;
+        }
+    }
+    return std::filesystem::current_path(ec).string();
 }
 
 bool hasNetClientFlag(const std::vector<std::string>& tokens)
@@ -323,6 +498,15 @@ void EditorApp::run()
         tokenizeCommandLine(::GetCommandLineA());
     const bool netClientMode = hasNetClientFlag(cmdTokens);
     const std::string netConnectHost = findNetConnectHost(cmdTokens);
+    std::string projectRoot = findProjectRoot(cmdTokens);
+    if (projectRoot.empty()) projectRoot = _projectRoot;
+    if (projectRoot.empty()) {
+        projectRoot = ayt::io::env::get("AY_EDITOR_PROJECT_ROOT").value_or("");
+    }
+    if (projectRoot.empty()) projectRoot = detectEditorProjectRoot();
+    ayt::project::Project::instance().setRoot(projectRoot);
+    projectRoot = ayt::project::Project::instance().root();
+    std::fprintf(stderr, "[EditorApp] project root: %s\n", projectRoot.c_str());
     if (netClientMode) {
         std::fprintf(stderr,
             "[EditorApp] net client mode (connect to %s)\n",
@@ -457,6 +641,10 @@ void EditorApp::run()
     deviceConfig.window.title = _desc.name != nullptr ? _desc.name : "AY Editor";
     deviceConfig.window.width = static_cast<int>(_desc.width);
     deviceConfig.window.height = static_cast<int>(_desc.height);
+    // Configure the native surface before its first visible frame. The editor
+    // installs self-painted chrome immediately after creation, avoiding a
+    // one-frame flash of the Win32 caption.
+    deviceConfig.window.hidden = true;
     deviceConfig.enableTouch = true;
     if (!_devices->initialize(deviceConfig)) {
         std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
@@ -484,10 +672,15 @@ void EditorApp::run()
         return;
     }
 
-    if (_editorPreferences.windowMaximized
-        && !window.isTopLevelMaximized(hwnd)) {
-        window.toggleTopLevelMaximized(hwnd);
+    if (!installEditorBorderlessChrome(
+            window, hwnd, static_cast<int>(_desc.width),
+            static_cast<int>(_desc.height))) {
+        std::fprintf(stderr,
+                     "[EditorApp] failed to install borderless editor chrome\n");
     }
+    ::ShowWindow(hwnd, _editorPreferences.windowMaximized
+        ? SW_MAXIMIZE : SW_SHOW);
+    ::UpdateWindow(hwnd);
 
     int clientWidth = window.getWidth();
     int clientHeight = window.getHeight();
@@ -504,6 +697,7 @@ void EditorApp::run()
     sessionDesc.uiBackend = uiBackend.get();
     sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.layoutPath = layoutPath;
+    sessionDesc.projectRoot = projectRoot;
     sessionDesc.iconRootPath = resolveEditorIconRoot();
     sessionDesc.hostWindow = hwnd;
     sessionDesc.deviceManager = _devices.get();

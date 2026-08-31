@@ -129,4 +129,31 @@ Importer::Result Importer::importAnimationFile(
     return r;
 }
 
+Importer::Result Importer::importAssetFile(
+    const std::string& sourcePath,
+    const std::string& destinationDir,
+    const ayt::resource::SourceCoordinatePolicy& sourceCoordinates)
+{
+    ayt::resource::ImportOptions opts;
+    opts.sourcePath = sourcePath;
+    opts.outputDir = destinationDir;
+    opts.force = forceImportRequested();
+    opts.requireCharacterAssets = false;
+    opts.requireAnimationAssets = false;
+    opts.loadOption = ayt::resource::IConverter::LoadOption::Full;
+    opts.cookTextures = cookTexturesRequested();
+    opts.sourceCoordinates = sourceCoordinates;
+
+    const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
+    Result r;
+    r.conversion = core.conversion;
+    r.success = core.ok;
+    r.usedCache = core.usedCache;
+    r.errorMessage = core.error;
+    if (core.cancelled && r.errorMessage.empty()) {
+        r.errorMessage = "import cancelled";
+    }
+    return r;
+}
+
 } // namespace ayt::editor

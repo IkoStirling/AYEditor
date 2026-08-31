@@ -33,6 +33,7 @@
 
 #include "AYIO/Env.h"
 #include "AYIO/File.h"
+#include "AYProject/Project.h"
 #include "AYMath/MathTransform.h"
 #include "AYMath/MathTypes.h"
 #include "AYMath/MathDefs.h"
@@ -48,6 +49,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <sys/stat.h>
 #include <vector>
@@ -311,6 +313,19 @@ void EditorPlayRuntime::configureShaderToolchainOnce()
 
 std::string EditorPlayRuntime::resolvePersistentCacheRoot()
 {
+    // AYProject is the path authority once a host has opened a project. Keep
+    // editor-generated runtime assets and Content Browser imports in the same
+    // project-local cache so Imported reflects what the runtime actually uses.
+    if (ayt::project::Project::instance().hasRoot()) {
+        std::string root = (std::filesystem::path(
+            ayt::project::Project::instance().root()) / ".ayeditor_cache")
+            .lexically_normal().string();
+        if (root.empty() || (root.back() != '\\' && root.back() != '/')) {
+            root.push_back(std::filesystem::path::preferred_separator);
+        }
+        return root;
+    }
+
     char modulePath[MAX_PATH] = {};
     const DWORD len = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
     if (len == 0 || len >= MAX_PATH) {

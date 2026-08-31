@@ -7,74 +7,70 @@
     {
       "type": "HBox",
       "id": "menubar_row",
-      "size": { "h": 26 },
+      "size": { "h": 24 },
       "spacing": 4,
       "padding": { "left": 6, "top": 2, "right": 4, "bottom": 2 },
       "children": [
         {
           "type": "Image",
           "id": "app_logo",
-          "size": { "w": 20, "h": 20 },
+          "size": { "w": 18, "h": 18 },
           "color": [0.25, 0.55, 0.95, 1.0],
           "slot": { "width": 22 }
         },
         {
           "type": "MenuBar",
           "id": "menubar",
-          "size": { "w": 340, "h": 22 },
-          "slot": { "width": 340 }
+          "size": { "w": 320, "h": 20 },
+          "slot": { "width": 320 }
         },
         {
           "type": "TextLabel",
           "id": "lbl_document_title",
           "text": "Untitled  —  Aliyat Editor",
-          "size": { "w": 0, "h": 22 }
+          "size": { "w": 0, "h": 20 }
         },
         {
           "type": "Button",
           "id": "btn_minimize",
           "text": "-",
-          "size": { "w": 28, "h": 22 },
-          "slot": { "width": 28 }
+          "size": { "w": 26, "h": 20 },
+          "slot": { "width": 26 }
         },
         {
           "type": "Button",
           "id": "btn_maximize",
           "text": "[]",
-          "size": { "w": 28, "h": 22 },
-          "slot": { "width": 28 }
+          "size": { "w": 26, "h": 20 },
+          "slot": { "width": 26 }
         },
         {
           "type": "Button",
           "id": "btn_close",
           "text": "X",
-          "size": { "w": 28, "h": 22 },
-          "slot": { "width": 28 }
+          "size": { "w": 26, "h": 20 },
+          "slot": { "width": 26 }
         }
       ]
     },
     {
       "type": "HBox",
       "id": "workspace_toolbar",
-      "size": { "h": 38 },
+      "size": { "h": 34 },
       "spacing": 4,
-      "padding": { "left": 8, "top": 5, "right": 8, "bottom": 5 },
+      "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
       "children": [
-        { "type": "TextLabel", "id": "lbl_workspace", "text": "SCENE", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } },
-        { "type": "Button", "id": "btn_tool_select", "text": "[Q]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_tool_move", "text": "[W]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_tool_rotate", "text": "[E]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_tool_scale", "text": "[R]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "TextLabel", "id": "toolbar_divider_left", "text": "|", "size": { "w": 12, "h": 28 }, "slot": { "width": 12 } },
-        { "type": "Button", "id": "btn_tool_space", "text": "World", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } },
-        { "type": "TextLabel", "id": "toolbar_spacer_left", "text": "", "size": { "w": 0, "h": 28 } },
-        { "type": "Button", "id": "btn_play", "text": ">", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_pause", "text": "||", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_step", "text": ">|", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "Button", "id": "btn_stop", "text": "[]", "size": { "w": 38, "h": 28 }, "slot": { "width": 38 } },
-        { "type": "TextLabel", "id": "toolbar_spacer_right", "text": "", "size": { "w": 0, "h": 28 } },
-        { "type": "TextLabel", "id": "lbl_active_tool", "text": "Select", "size": { "w": 74, "h": 28 }, "slot": { "width": 74 } },
-        { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 58, "h": 28 }, "slot": { "width": 58 } }
+        { "type": "TextLabel", "id": "lbl_workspace", "text": "SCENE", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } },
+        { "type": "TextLabel", "id": "toolbar_divider_left", "text": "|", "size": { "w": 10, "h": 26 }, "slot": { "width": 10 } },
+        { "type": "Button", "id": "btn_tool_space", "text": "World", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } },
+        { "type": "TextLabel", "id": "toolbar_spacer_left", "text": "", "size": { "w": 0, "h": 26 } },
+        { "type": "Button", "id": "btn_play", "text": ">", "size": { "w": 34, "h": 26 }, "slot": { "width": 34 } },
+        { "type": "Button", "id": "btn_pause", "text": "||", "size": { "w": 34, "h": 26 }, "slot": { "width": 34 } },
+        { "type": "Button", "id": "btn_step", "text": ">|", "size": { "w": 34, "h": 26 }, "slot": { "width": 34 } },
+        { "type": "Button", "id": "btn_stop", "text": "[]", "size": { "w": 34, "h": 26 }, "slot": { "width": 34 } },
+        { "type": "TextLabel", "id": "toolbar_spacer_right", "text": "", "size": { "w": 0, "h": 26 } },
+        { "type": "TextLabel", "id": "lbl_active_tool", "text": "Universal", "size": { "w": 76, "h": 26 }, "slot": { "width": 76 } },
+        { "type": "TextLabel", "id": "lbl_mode", "text": "EDIT", "size": { "w": 54, "h": 26 }, "slot": { "width": 54 } }
       ]
     },
     {
@@ -92,7 +88,7 @@
         "Right": 0.25,
         "Center": 0.55,
         "Top": 1e-6,
-        "Bottom": 0.22
+        "Bottom": 0.34
       },
       "slotMinSizes": {
         "Left": 190,
@@ -201,15 +197,15 @@
               {
                 "type": "HBox",
                 "id": "viewport_toolbar",
-                "size": { "h": 28 },
+                "size": { "h": 26 },
                 "spacing": 4,
                 "padding": { "left": 6, "top": 2, "right": 6, "bottom": 2 },
                 "children": [
-                  { "type": "TextLabel", "id": "lbl_viewport_scene", "text": "SCENE VIEW", "size": { "w": 92, "h": 24 }, "slot": { "width": 92 } },
-                  { "type": "TextLabel", "id": "viewport_toolbar_spacer", "text": "", "size": { "w": 0, "h": 24 } },
-                  { "type": "Button", "id": "btn_view_camera", "text": "Perspective", "size": { "w": 86, "h": 24 }, "slot": { "width": 86 } },
-                  { "type": "Button", "id": "btn_view_shading", "text": "Shaded", "size": { "w": 64, "h": 24 }, "slot": { "width": 64 } },
-                  { "type": "Button", "id": "btn_view_options", "text": "...", "size": { "w": 30, "h": 24 }, "slot": { "width": 30 } }
+                  { "type": "TextLabel", "id": "lbl_viewport_scene", "text": "SCENE VIEW", "size": { "w": 86, "h": 22 }, "slot": { "width": 86 } },
+                  { "type": "TextLabel", "id": "viewport_toolbar_spacer", "text": "", "size": { "w": 0, "h": 22 } },
+                  { "type": "Button", "id": "btn_view_camera", "text": "Perspective", "size": { "w": 80, "h": 22 }, "slot": { "width": 80 } },
+                  { "type": "Button", "id": "btn_view_shading", "text": "Shaded", "size": { "w": 58, "h": 22 }, "slot": { "width": 58 } },
+                  { "type": "Button", "id": "btn_view_options", "text": "...", "size": { "w": 28, "h": 22 }, "slot": { "width": 28 } }
                 ]
               },
               {
@@ -233,27 +229,51 @@
             "padding": { "left": 8, "top": 4, "right": 8, "bottom": 4 },
             "children": [
               { "type": "TextLabel", "id": "inspector_hint", "text": "Click buttons to configure.", "size": { "w": 240, "h": 24 } },
-              { "type": "TextLabel", "id": "inspector_transform_header", "text": "Transform", "size": { "w": 240, "h": 20 } },
-              { "type": "TextLabel", "id": "inspector_position_label", "text": "Position X / Y / Z", "size": { "w": 240, "h": 18 } },
-              { "type": "TextInput", "id": "transform_px", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_py", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_pz", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextLabel", "id": "inspector_rotation_label", "text": "Rotation degrees X / Y / Z", "size": { "w": 240, "h": 18 } },
-              { "type": "TextInput", "id": "transform_rx", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_ry", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_rz", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextLabel", "id": "inspector_scale_label", "text": "Scale X / Y / Z", "size": { "w": 240, "h": 18 } },
-              { "type": "TextInput", "id": "transform_sx", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_sy", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "TextInput", "id": "transform_sz", "text": "-", "size": { "w": 240, "h": 24 } },
-              { "type": "Button", "id": "btn_transform_apply", "text": "Apply Transform", "size": { "w": 140, "h": 24 } },
-              { "type": "TextLabel", "id": "inspector_mesh", "text": "mesh: -", "size": { "w": 240, "h": 20 } },
-              { "type": "TextLabel", "id": "inspector_skel", "text": "skel: -", "size": { "w": 240, "h": 20 } },
-              { "type": "TextLabel", "id": "inspector_anim", "text": "anim: -", "size": { "w": 240, "h": 20 } },
-              { "type": "Button", "id": "btn_inspector_skel", "text": "Pick Skel", "size": { "w": 120, "h": 24 }, "onClick": "pick_skel" },
-              { "type": "Button", "id": "btn_inspector_anim", "text": "Pick Anim", "size": { "w": 120, "h": 24 }, "onClick": "pick_anim" },
-              { "type": "Button", "id": "btn_inspector_apply", "text": "Apply", "size": { "w": 80, "h": 24 }, "onClick": "apply_overrides" },
-              { "type": "Button", "id": "btn_inspector_reset", "text": "Reset", "size": { "w": 80, "h": 24 }, "onClick": "reset_overrides" }
+              {
+                "type": "VBox",
+                "id": "inspector_entity_body",
+                "spacing": 4,
+                "size": { "h": 0 },
+                "children": [
+                  { "type": "TextLabel", "id": "inspector_transform_header", "text": "Transform", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_position_label", "text": "Position X / Y / Z", "size": { "w": 240, "h": 18 } },
+                  { "type": "TextInput", "id": "transform_px", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_py", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_pz", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextLabel", "id": "inspector_rotation_label", "text": "Rotation degrees X / Y / Z", "size": { "w": 240, "h": 18 } },
+                  { "type": "TextInput", "id": "transform_rx", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_ry", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_rz", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextLabel", "id": "inspector_scale_label", "text": "Scale X / Y / Z", "size": { "w": 240, "h": 18 } },
+                  { "type": "TextInput", "id": "transform_sx", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_sy", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "TextInput", "id": "transform_sz", "text": "-", "size": { "w": 240, "h": 24 } },
+                  { "type": "Button", "id": "btn_transform_apply", "text": "Apply Transform", "size": { "w": 140, "h": 24 } },
+                  { "type": "TextLabel", "id": "inspector_mesh", "text": "mesh: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_skel", "text": "skel: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_anim", "text": "anim: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "Button", "id": "btn_inspector_skel", "text": "Pick Skel", "size": { "w": 120, "h": 24 }, "onClick": "pick_skel" },
+                  { "type": "Button", "id": "btn_inspector_anim", "text": "Pick Anim", "size": { "w": 120, "h": 24 }, "onClick": "pick_anim" },
+                  { "type": "Button", "id": "btn_inspector_apply", "text": "Apply", "size": { "w": 80, "h": 24 }, "onClick": "apply_overrides" },
+                  { "type": "Button", "id": "btn_inspector_reset", "text": "Reset", "size": { "w": 80, "h": 24 }, "onClick": "reset_overrides" }
+                ]
+              },
+              {
+                "type": "VBox",
+                "id": "inspector_asset_body",
+                "visible": false,
+                "spacing": 5,
+                "size": { "h": 0 },
+                "children": [
+                  { "type": "TextLabel", "id": "inspector_asset_header", "text": "Asset", "size": { "w": 240, "h": 22 } },
+                  { "type": "TextLabel", "id": "inspector_asset_type", "text": "Type: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_asset_origin", "text": "Origin: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_asset_size", "text": "Size: -", "size": { "w": 240, "h": 20 } },
+                  { "type": "TextLabel", "id": "inspector_asset_path", "text": "Path: -", "size": { "w": 240, "h": 64 } },
+                  { "type": "TextLabel", "id": "inspector_asset_state", "text": "State: indexed", "size": { "w": 240, "h": 20 } },
+                  { "type": "Button", "id": "btn_asset_reload", "text": "Reload Asset", "size": { "w": 110, "h": 24 } }
+                ]
+              }
             ]
           }
         },
@@ -304,14 +324,26 @@
                 "size": { "h": 26 },
                 "spacing": 4,
                 "children": [
-                  { "type": "Button", "id": "btn_assets_add", "text": "+", "size": { "w": 32, "h": 24 }, "slot": { "width": 32 } },
-                  { "type": "TextLabel", "id": "lbl_asset_path", "text": "Assets /", "size": { "w": 220, "h": 24 }, "slot": { "width": 220 } },
+                  { "type": "Button", "id": "btn_assets_add", "text": "+", "size": { "w": 28, "h": 24 }, "slot": { "width": 28 } },
+                  { "type": "Button", "id": "btn_assets_up", "text": "^", "size": { "w": 28, "h": 24 }, "slot": { "width": 28 } },
+                  { "type": "Button", "id": "btn_assets_refresh", "text": "R", "size": { "w": 28, "h": 24 }, "slot": { "width": 28 } },
+                  { "type": "TextLabel", "id": "lbl_asset_path", "text": "Assets", "size": { "w": 190, "h": 24 }, "slot": { "width": 190 } },
                   { "type": "TextLabel", "id": "assets_toolbar_spacer", "text": "", "size": { "w": 0, "h": 24 } },
-                  { "type": "TextInput", "id": "assets_search", "text": "Search assets...", "size": { "w": 180, "h": 24 }, "slot": { "width": 180 } },
-                  { "type": "Button", "id": "btn_assets_view", "text": "Grid", "size": { "w": 46, "h": 24 }, "slot": { "width": 46 } }
+                  { "type": "ComboBox", "id": "cmb_assets_type", "size": { "w": 108, "h": 24 }, "slot": { "width": 108 }, "items": ["All types", "Mesh", "Material", "Texture", "Scene", "Animation", "Skeleton", "Script", "Shader", "Audio", "UI Layout", "Source Model"], "selectedIndex": 0, "maxPopupItems": 8 },
+                  { "type": "TextInput", "id": "assets_search", "text": "", "size": { "w": 170, "h": 24 }, "slot": { "width": 170 } }
                 ]
               },
-              { "type": "TextLabel", "id": "assets_empty_state", "text": "[ ]  Drop files here or use + to import assets", "size": { "w": 520, "h": 56 } }
+              {
+                "type": "HBox",
+                "id": "assets_browser",
+                "spacing": 4,
+                "size": { "h": 0 },
+                "children": [
+                  { "type": "TreeView", "id": "tree_assets", "size": { "w": 170, "h": 0 }, "slot": { "width": 170 } },
+                  { "type": "EditorAssetListView", "id": "list_assets", "size": { "w": 0, "h": 0 } }
+                ]
+              },
+              { "type": "TextLabel", "id": "assets_status", "text": "Indexing project assets...", "size": { "w": 520, "h": 18 } }
             ]
           }
         },
@@ -340,16 +372,16 @@
     {
       "type": "HBox",
       "id": "editor_status_bar",
-      "size": { "h": 22 },
+      "size": { "h": 20 },
       "spacing": 10,
       "padding": { "left": 8, "top": 2, "right": 8, "bottom": 2 },
       "children": [
-        { "type": "TextLabel", "id": "lbl_status_scene", "text": "Scene: Untitled", "size": { "w": 180, "h": 18 }, "slot": { "width": 180 } },
-        { "type": "TextLabel", "id": "lbl_unsaved", "text": "", "size": { "w": 18, "h": 18 }, "slot": { "width": 18 } },
-        { "type": "TextLabel", "id": "status_spacer", "text": "", "size": { "w": 0, "h": 18 } },
-        { "type": "TextLabel", "id": "lbl_status_network", "text": "Network: Offline", "size": { "w": 116, "h": 18 }, "slot": { "width": 116 } },
-        { "type": "TextLabel", "id": "lbl_status_renderer", "text": "Renderer: Ready", "size": { "w": 110, "h": 18 }, "slot": { "width": 110 } },
-        { "type": "TextLabel", "id": "lbl_status_fps", "text": "FPS --", "size": { "w": 48, "h": 18 }, "slot": { "width": 48 } }
+        { "type": "TextLabel", "id": "lbl_status_scene", "text": "Scene: Untitled", "size": { "w": 170, "h": 16 }, "slot": { "width": 170 } },
+        { "type": "TextLabel", "id": "lbl_unsaved", "text": "", "size": { "w": 16, "h": 16 }, "slot": { "width": 16 } },
+        { "type": "TextLabel", "id": "status_spacer", "text": "", "size": { "w": 0, "h": 16 } },
+        { "type": "TextLabel", "id": "lbl_status_network", "text": "Network: Offline", "size": { "w": 110, "h": 16 }, "slot": { "width": 110 } },
+        { "type": "TextLabel", "id": "lbl_status_renderer", "text": "Renderer: Ready", "size": { "w": 104, "h": 16 }, "slot": { "width": 104 } },
+        { "type": "TextLabel", "id": "lbl_status_fps", "text": "FPS --", "size": { "w": 44, "h": 16 }, "slot": { "width": 44 } }
       ]
     }
   ]

@@ -37,6 +37,7 @@ constexpr const char* kEditorConfigRelativePath = "assets/config/editor.json";
 constexpr const char* kDefaultImportPathKey = "Editor.DefaultImportPath";
 constexpr const char* kDefaultAnimationImportPathKey =
     "Editor.DefaultAnimationImportPath";
+constexpr const char* kProjectRootKey = "Editor.ProjectRoot";
 constexpr const char* kAutoPlayImportedAnimationKey =
     "Editor.AutoPlayImportedAnimation";
 constexpr const char* kViewportOrientationAxisVisibleKey =
@@ -271,6 +272,14 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Window.Height", out.windowHeight)), 600, 4320);
     out.windowMaximized = saved.getBool(
         "Editor.Window.Maximized", out.windowMaximized);
+    out.themeName = saved.getString(
+        "Editor.Appearance.Theme", out.themeName);
+    out.density = static_cast<ayt::editor::EditorDensity>(std::clamp(
+        static_cast<int>(saved.getInt(
+            "Editor.Appearance.Density", static_cast<int>(out.density))),
+        0, 1));
+    out.uiScale = std::clamp(preferenceFloat(
+        saved, "Editor.Appearance.UiScale", out.uiScale), 0.75f, 1.25f);
 
     out.dockTree = saved.getString("Editor.Workspace.DockTree", out.dockTree);
     out.panelRenderVisible = saved.getBool(
@@ -365,6 +374,9 @@ bool saveEditorPreferences(const std::string& path,
     config.setInt("Editor.Window.Width", value.windowWidth);
     config.setInt("Editor.Window.Height", value.windowHeight);
     config.setBool("Editor.Window.Maximized", value.windowMaximized);
+    config.setString("Editor.Appearance.Theme", value.themeName);
+    config.setInt("Editor.Appearance.Density", static_cast<int>(value.density));
+    config.setFloat("Editor.Appearance.UiScale", value.uiScale);
     config.setString("Editor.Workspace.DockTree", value.dockTree);
     config.setBool("Editor.Workspace.Panel.Render", value.panelRenderVisible);
     config.setBool("Editor.Workspace.Panel.Inspector", value.panelInspectorVisible);
@@ -595,6 +607,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
     auto app = ayt::editor::EditorApp::create(desc);
     app->setDefaultImportPath(defaultImportPath);
     app->setDefaultAnimationImportPath(defaultAnimationImportPath);
+    app->setProjectRoot(editorConfig.getString(kProjectRootKey));
     const bool autoPlayImportedAnimation =
         editorConfig.getBool(kAutoPlayImportedAnimationKey, false);
     app->setAutoPlayImportedAnimation(autoPlayImportedAnimation);

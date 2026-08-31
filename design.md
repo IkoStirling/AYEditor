@@ -2,7 +2,7 @@
 
 **Version:** v0.3.2
 **Date:** 2026-08-31
-**Status:** E2-composite + native SVG shell icons + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
+**Status:** E2-composite + native SVG shell icons + Transform Gizmo baseline + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -30,7 +30,7 @@ AYEditor is the **minimal editor product layer** on top of the runtime:
 
 ### 1.2 Non-goals (v0)
 
-- Full SceneView gizmos, asset browser, undo/redo stack.
+- Multi-selection/pivot editing, transform snapping and parent-space gizmos.
 - Inspector driven by reflection (planned E4+).
 - Level/scene save-load via serializer (planned E4+).
 - Docking drag-resize, multi-window, plugin SDK.
@@ -538,7 +538,7 @@ state. Color Grading exposes Neutral/Warm/Cool/Cinematic presets plus strength
 and defaults off. Controls remain live in Edit/Play and are reapplied after
 presentation or pipeline recreation.
 
-### 5.5 FreeCam wheel navigation
+### 5.5 FreeCam viewport navigation
 
 Mouse wheel input over the unobstructed 3D viewport dollies FreeCam along the
 world ray under the pointer. This makes the pointer the visible zoom anchor and
@@ -547,11 +547,19 @@ notches before navigation so high-resolution touchpads preserve fractional
 motion without multiplying sensitivity. UI overlays, menus and scrollable
 panels retain wheel priority, so camera navigation cannot consume their input.
 
+Continuous flight is an explicit RMB-held mode. While RMB is held, mouse
+movement changes view direction, W/S move along the full camera forward vector
+(including pitch), A/D strafe, Q/E descend/ascend and Shift boosts speed.
+Releasing RMB ends both mouse-look and keyboard movement. Ctrl is never a
+camera key, so Edit-mode Ctrl+Z/Ctrl+Y/Ctrl+S remain unambiguous. LMB is reserved
+for selection and Universal Gizmo handles; dragging an object or empty surface
+does not silently enter FreeCam.
+
 ### 5.6 Native SVG shell icons
 
 AYEditor owns command-to-icon semantics while AYUI owns SVG parsing, retained
 path recording and rendering. `EditorSession::bindShellIcons` maps the window
-controls, Select/Move/Rotate/Scale tools, Play/Pause/Step/Stop transport and
+controls, Play/Pause/Step/Stop transport and
 viewport-options button to shared immutable `AYUI::SvgDocument` instances. A
 button's JSON text is cleared only after its SVG parses successfully; failures
 retain the existing text placeholder. Icon-only buttons set explicit
@@ -669,6 +677,91 @@ Long term, [AYExtension/Editor](../AYExtension/design.md) may thin-wrap or re-ex
 - **E2-composite:** Manual — single-window composite; no child HWND.
 - No compile in AI agent loop (project rule).
 
+### 10.1 Editor visual system
+
+AYEditor owns the product-facing visual policy while AYUI owns reusable
+rendering primitives:
+
+- `EditorVisualStyle` registers the `aliyat-editor-dark` palette through
+  AYUI `ThemeManager` and applies an editor density profile after layout load.
+- Theme, density, and UI scale are independent persisted preferences. A color
+  change must not resize widgets; a density change must not fork the palette.
+- `Compact` is the default profile: 13px body text, 12px secondary chrome,
+  shorter buttons/tabs, while the default global UI scale remains 1.0 so
+  viewport input and renderer coordinates keep their existing pixel contract.
+- The primary editor uses a borderless Win32 surface with AYUI-owned chrome.
+  Platform hit testing stays in `EditorApp`: blank title space drags/double-
+  clicks, outer edges resize, and custom minimize/maximize/close buttons remain
+  ordinary AYUI controls.
+- If SVG/theme/font/density behavior becomes useful to more than one host, move
+  the generic mechanism into AYUI. AYEditor keeps only palette choice, metrics,
+  semantic icon mapping, and persistence policy.
+
+### 10.2 Transform Gizmo baseline
+
+- Edit 模式选中带 `Transform` 的实体后直接显示一个 Universal Gizmo；不再要求
+  切换 Select/Move/Rotate/Scale 工具。Play/Paused 或无选择时不显示。
+- Universal 同时提供 X/Y/Z 平移箭头、XY/YZ/ZX 平面方片、三个轴向旋转圆环、
+  三个局部轴缩放方块和中心统一缩放方块。空间层级固定为：中心统一缩放、平面
+  移动边框、内段缩放细杆与方块、留白、外段平移箭头、最外圈旋转环。平移箭头
+  不再从原点出发，缩放和平移之间的留白也不接受任一语义的命中；几何由
+  AYRenderer 程序化生成，不依赖贴图或模型资产。
+- 缩放可见段约为 `[0.09, 0.38]`，平移可见段约为 `[0.50, 0.95]`，使外侧
+  平移明显长于内侧缩放。CPU 轴向命中带分别覆盖 `[0.13, 0.40]`（中心附近由
+  统一缩放优先）和 `[0.47, 0.97]`，径向热区使用 `0.105`，大于实际几何；缩放
+  细杆本身、方块和完整箭头都可点击。平面边框视觉范围 `[0.18, 0.32]`、命中
+  范围 `[0.16, 0.34]`，旋转环同样使用大于线宽的 `0.085` 热区。
+- 视觉上平移杆半径由 `0.016` 收细至 `0.008`，旋转环半宽收细至 `0.010`，
+  平面移动从不透明方片改为细边框；视觉变细不以牺牲鼠标可点击性为代价。
+- 操作类型由命中的 handle 决定。命中优先级为中心统一缩放、轴缩放方块、平面、
+  平移箭头、旋转环，避免投影重叠时随机切换语义。
+- Universal Gizmo 按当前相机计算每个 handle 的屏幕投影可操作性。平移/轴缩放在
+  轴向投影长度低于 `0.25`（约 14°）时禁用；平面与旋转环在投影面积低于同一阈值
+  时禁用。已禁用 handle 必须恢复到 `0.32`（约 19°）才重新启用，形成滞回并避免
+  相机位于临界角时闪烁。中心统一缩放始终可用。
+- 禁用 handle 不参与 CPU 命中和拖动起始，但 Renderer 保留 36% 亮度的暗色轮廓，
+  让用户仍能判断轴向。`EditorSession` 每帧把同一个禁用位掩码传给 Renderer，保证
+  视觉状态与拾取状态一致；正在拖动的 handle 不会因局部旋转改变基向而半途变暗。
+- 对象表面点击只负责选择，LMB 空白/对象拖动不旋转相机也不直接修改 Transform；
+  RMB 按住才进入 FreeCam look，Transform 只从明确命中的 Gizmo handle 开始。
+- Gizmo hover/drag 始终使用普通箭头系统光标；可操作性由具体 handle 的黄色高亮
+  表达。通用四向 Move 光标无法区分平移、旋转和缩放，因此不用于 Transform。
+- `EditorTransformGizmo` 是无 UI/GPU 依赖的 CPU 状态机，负责射线拾取、轴/平面
+  约束、圆环角度和缩放计算；`EditorSession` 负责选择、鼠标捕获和 Renderer 状态同步。
+- 拖动期间直接预览实体 Transform；释放时先恢复起始值，再通过
+  `EditorCommandStack::executeTransform` 提交最终值，因此一次连续拖动只产生一条
+  Undo/Redo 命令并统一更新 document dirty。失焦、离开视口、切空间或切模式
+  会回滚未提交拖动。
+- World/Local 对 Move 与 Rotate 生效。Scale 固定使用局部轴，因为当前 TRS 组件无法
+  无损表达任意世界轴非均匀缩放产生的 shear。
+- 当前基线不包含 snapping、数值 HUD、多选 pivot、父子层级空间补偿和可编辑 pivot；
+  这些在视觉与输入闭环稳定后迭代。
+
+### 10.3 Project Content Browser P0
+
+- `EditorApp` 将显式 `--project`、`Editor.ProjectRoot`、
+  `AY_EDITOR_PROJECT_ROOT` 或自动探测到的仓库根传给 `EditorSession`，并同步
+  `AYProject::Project`。编辑器不再以 exe 当前目录作为资源身份的一部分。
+- `EditorAssetDatabase` 是 AYEditor 拥有的轻量项目索引，不是第二个
+  `ResourceManager`。它异步扫描 `<project>/Assets` 与
+  `<project>/.ayeditor_cache/assets`，在 UI 中分别映射为 `Assets` 和
+  `Imported`，提供稳定 ID、目录浏览、递归搜索和类型过滤；解码、加载与热重载
+  仍由 AYResource 负责。
+- Content Browser 使用左侧目录树、右侧资源列表与路径/搜索/类型工具条。目录
+  跳转延迟到下一次 editor update 消费，禁止在 ListView 选中回调仍在派发时重建
+  同一控件。
+- 选中资源会清除实体选择并切换 Inspector 到资源详情；选中实体则恢复组件
+  Inspector。当前详情包含类型、来源、大小、逻辑路径和 AYResource 加载状态。
+- `+` 通过 AYResource 导入管线把受支持的源文件写入 Imported 根并立即重扫。
+  P0 不直接复制任意文件，也不引入私有格式转换器。
+- `EditorAssetListView` 只在 AYEditor 中把列表行映射为 `EditorAsset` drag
+  payload。将 Mesh 拖到 Scene View 后，Session 用视口射线与 y=0 工作平面确定
+  放置点，创建带 `Transform`/`MeshComponent` 的实体，选中它并把场景标记为 dirty。
+- P0 仍不包含缩略图缓存、右键菜单、重命名/移动/删除、文件系统 watcher、
+  `.meta` GUID、依赖图、材质/场景双击编辑器以及资源引用修复。稳定后可把通用的
+  虚拟化缩略图网格和拖放展示下沉到 AYUI，但项目身份、导入策略和资源语义留在
+  AYEditor/AYProject/AYResource。
+
 ---
 
 ## 11. Decisions log
@@ -686,6 +779,12 @@ Long term, [AYExtension/Editor](../AYExtension/design.md) may thin-wrap or re-ex
 | 2026-08-30 | Render Settings 保留每个可见效果的验证开关；FreeCam 视口滚轮使用沿视线 dolly |
 | 2026-08-30 | Render Settings 新增 LUT Color Grading 开关、四种预设与强度实时验证控件 |
 | 2026-08-31 | Shell 图标改用 AYUI 原生 SVG path；AYEditor 只保留语义映射、资产查找和文字降级 |
+| 2026-08-31 | 主窗口改为无原生标题栏的 AYUI 自绘 Chrome；保留拖动、双击最大化和边缘缩放 |
+| 2026-08-31 | 引入 `aliyat-editor-dark` + `Compact`，主题、密度和 UI Scale 分离持久化 |
+| 2026-08-31 | Transform 编辑使用选中即出现的 Universal Gizmo：平移轴/平面、旋转圆环、轴/统一缩放同时可用；RMB 独占 FreeCam，Ctrl 只作为编辑快捷键修饰符 |
+| 2026-08-31 | Universal Gizmo 对朝向相机的轴和侧视退化的平面/圆环使用 0.25/0.32 投影滞回门限；暗色禁用并从 CPU 拾取中排除 |
+| 2026-08-31 | Universal Gizmo 调整为短缩放/长平移比例；热区覆盖全部可见几何并保留外扩容差；hover/drag 保持普通箭头，仅由 handle 高亮反馈 |
+| 2026-08-31 | Content Browser P0 采用 AYEditor 轻量项目索引：Assets/Imported 双根、搜索过滤、资源 Inspector、导入与 Mesh 拖入视口；加载继续复用 AYResource |
 
 ---
 

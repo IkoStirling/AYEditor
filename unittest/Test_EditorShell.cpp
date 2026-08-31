@@ -1,5 +1,6 @@
 #include "AYTest.h"
 #include "AYEditor/EditorSession.h"
+#include "AYEditor/EditorVisualStyle.h"
 #include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
@@ -13,13 +14,16 @@
 #include "AYUI/Image.h"
 #include "AYUI/MenuBar.h"
 #include "AYUI/TextInput.h"
+#include "AYUI/Theme.h"
 #include "AYEntity.h"
 #include <AYEntity/components/MeshComponent.h>
 #include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
+#include "AYDevice/KeyboardDevice.h"
 
+#include <cmath>
 #include <sys/stat.h>
 #include <string>
 
@@ -57,6 +61,17 @@ bool clickButton(Button* button)
         0);
     return button->onMouseButtonDown(event) &&
            button->onMouseButtonUp(event);
+}
+
+bool clickSessionButton(EditorSession& session, Button* button)
+{
+    if (button == nullptr) return false;
+    const auto bounds = button->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    session.onMouseMove(x, y);
+    return session.onMouseButtonDown(x, y, 0)
+        && session.onMouseButtonUp(x, y, 0);
 }
 
 } // namespace
@@ -189,6 +204,28 @@ TEST_CASE(editor_freecam_wheel_zoom_can_anchor_to_cursor_ray) {
     CHECK_FLOAT_EQ(delta.z, direction.z * 0.375f, 1.0e-5f);
 }
 
+TEST_CASE(editor_freecam_w_moves_along_view_and_control_is_not_camera_motion) {
+    EditorFreecam camera;
+    ayt::device::KeyboardDevice keyboard;
+    const ayt::math::FVector3 initialEye = camera.eye();
+    const ayt::math::FVector3 viewDirection = camera.forward().normalize();
+
+    keyboard.onKeyDown(ayt::device::KeyCode::W);
+    camera.updateMovement(0.5f, keyboard);
+    const ayt::math::FVector3 delta = camera.eye() - initialEye;
+    CHECK_FLOAT_EQ(delta.dot(viewDirection), 3.0f, 1.0e-5f);
+    CHECK_FLOAT_EQ(delta.lengthSq(), 9.0f, 1.0e-4f);
+    CHECK(std::fabs(delta.y) > 0.1f);
+
+    keyboard.onKeyUp(ayt::device::KeyCode::W);
+    const ayt::math::FVector3 beforeControl = camera.eye();
+    keyboard.onKeyDown(ayt::device::KeyCode::LeftControl);
+    camera.updateMovement(1.0f, keyboard);
+    CHECK_FLOAT_EQ(camera.eye().x, beforeControl.x, 1.0e-5f);
+    CHECK_FLOAT_EQ(camera.eye().y, beforeControl.y, 1.0e-5f);
+    CHECK_FLOAT_EQ(camera.eye().z, beforeControl.z, 1.0e-5f);
+}
+
 TEST_CASE(editor_shell_v2_has_stable_workspace_regions) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
@@ -227,7 +264,7 @@ TEST_CASE(editor_shell_v2_has_stable_workspace_regions) {
         CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Left), 0.20f, 1e-5f);
         CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Right), 0.25f, 1e-5f);
         CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Center), 0.55f, 1e-5f);
-        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Bottom), 0.22f, 1e-5f);
+        CHECK_FLOAT_EQ(dock->getSlotWeight(DockArea::Slot::Bottom), 0.34f, 1e-5f);
 
         auto* render = dock->findCard("card_render");
         auto* inspector = dock->findCard("card_inspector");
@@ -269,12 +306,12 @@ TEST_CASE(editor_menu_bar_stays_inside_top_chrome_row) {
     if (row != nullptr && bar != nullptr) {
         const auto rowBounds = row->getWorldBounds();
         const auto barBounds = bar->getWorldBounds();
-        CHECK(bar->getSize().y == 22.0f);
+        CHECK(bar->getSize().y == 20.0f);
         CHECK(barBounds.minY >= rowBounds.minY);
         CHECK(barBounds.maxY <= rowBounds.maxY);
         for (Widget* child : bar->getChildren()) {
             if (auto* anchor = dynamic_cast<Button*>(child)) {
-                CHECK(anchor->getSize().y == 22.0f);
+                CHECK(anchor->getSize().y == 20.0f);
                 CHECK(anchor->getWorldBounds().maxY <= rowBounds.maxY);
             }
         }
@@ -534,8 +571,11 @@ TEST_CASE(editor_viewport_first_click_recovers_stale_ui_capture_after_arrow_key)
     }
 
     const auto inputBounds = input->getWorldBounds();
-    const float inputX = (inputBounds.minX + inputBounds.maxX) * 0.5f;
-    const float inputY = (inputBounds.minY + inputBounds.maxY) * 0.5f;
+    const auto inputCenter = session.ui().logicalToPhysical({
+        (inputBounds.minX + inputBounds.maxX) * 0.5f,
+        (inputBounds.minY + inputBounds.maxY) * 0.5f});
+    const float inputX = inputCenter.x;
+    const float inputY = inputCenter.y;
     CHECK(session.onMouseButtonDown(inputX, inputY, 0));
     CHECK(session.ui().isCapturing());
 
@@ -543,10 +583,11 @@ TEST_CASE(editor_viewport_first_click_recovers_stale_ui_capture_after_arrow_key)
     session.onKeyUp(UIKey_Right);
 
     const auto viewportBounds = viewport->getWorldBounds();
-    const float viewportX =
-        (viewportBounds.minX + viewportBounds.maxX) * 0.5f;
-    const float viewportY =
-        (viewportBounds.minY + viewportBounds.maxY) * 0.5f;
+    const auto viewportCenter = session.ui().logicalToPhysical({
+        (viewportBounds.minX + viewportBounds.maxX) * 0.5f,
+        (viewportBounds.minY + viewportBounds.maxY) * 0.5f});
+    const float viewportX = viewportCenter.x;
+    const float viewportY = viewportCenter.y;
     CHECK(session.onMouseButtonDown(viewportX, viewportY, 0));
     CHECK_FALSE(session.ui().isCapturing());
     CHECK(session.onMouseButtonUp(viewportX, viewportY, 0));
@@ -585,6 +626,43 @@ TEST_CASE(editor_viewport_wheel_converts_ui_pixels_and_anchors_at_pointer)
     // Off-centre cursor anchoring must include a lateral component; a legacy
     // forward-only dolly has zero projection onto screen-right.
     CHECK(delta.dot(session.freecam().right()) > 0.1f);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_viewport_rmb_owns_freecam_look_and_lmb_does_not)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK_NOT_NULL(viewport);
+    if (viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+
+    CHECK(session.onMouseButtonDown(x, y, 1));
+    CHECK(session.freecam().isLooking());
+    CHECK(session.onMouseMove(x + 24.0f, y + 12.0f));
+    CHECK(session.onMouseButtonUp(x + 24.0f, y + 12.0f, 1));
+    CHECK_FALSE(session.freecam().isLooking());
+
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseMove(x + 24.0f, y + 12.0f));
+    CHECK_FALSE(session.freecam().isLooking());
+    CHECK(session.onMouseButtonUp(x + 24.0f, y + 12.0f, 0));
 
     session.shutdown();
 }
@@ -909,6 +987,9 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     requested.cameraMoveSpeed = 9.0f;
     requested.activeTool = EditorTool::Move;
     requested.localTransformSpace = true;
+    requested.themeName = kAliyatEditorDarkTheme;
+    requested.density = EditorDensity::Compact;
+    requested.uiScale = 0.90f;
     requested.gamma = 2.0f;
     requested.bloomEnabled = false;
 
@@ -936,6 +1017,8 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     CHECK_FLOAT_EQ(session.freecam().yawRadians(), 0.35f, 1.0e-5f);
     CHECK_FLOAT_EQ(session.freecam().pitchRadians(), -0.2f, 1.0e-5f);
     CHECK_FLOAT_EQ(session.freecam().moveSpeed(), 9.0f, 1.0e-5f);
+    CHECK_FLOAT_EQ(session.ui().getUiScale(), 0.90f, 1.0e-5f);
+    CHECK(ThemeManager::get().getActiveThemeName() == kAliyatEditorDarkTheme);
 
     auto* network = dynamic_cast<DockCard*>(
         session.ui().findById("card_network"));
@@ -948,7 +1031,7 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     CHECK(gamma != nullptr);
     CHECK(bloom != nullptr);
     if (network != nullptr) CHECK(network->isVisible());
-    if (toolLabel != nullptr) CHECK(toolLabel->getText() == L"Move");
+    if (toolLabel != nullptr) CHECK(toolLabel->getText() == L"Universal");
     if (gamma != nullptr) CHECK_FLOAT_EQ(gamma->getValue(), 2.0f, 1.0e-5f);
     if (bloom != nullptr) CHECK_FALSE(bloom->isChecked());
 
@@ -958,15 +1041,125 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     CHECK(persisted.localTransformSpace);
     CHECK(persisted.panelNetworkVisible);
     CHECK_FALSE(persisted.bloomEnabled);
+    CHECK(persisted.themeName == kAliyatEditorDarkTheme);
+    CHECK(persisted.density == EditorDensity::Compact);
+    CHECK_FLOAT_EQ(persisted.uiScale, 0.90f, 1.0e-5f);
     CHECK(!persisted.dockTree.empty());
 
-    auto* select = dynamic_cast<Button*>(
-        session.ui().findById("btn_tool_select"));
-    CHECK(select != nullptr);
-    if (select != nullptr) CHECK(clickButton(select));
-    session.savePreferencesNow();
-    CHECK(persistenceCalls == 2);
-    CHECK(persisted.activeTool == EditorTool::Select);
+    CHECK(session.ui().findById("btn_tool_select") == nullptr);
+    CHECK(session.ui().findById("btn_tool_move") == nullptr);
+    CHECK(session.ui().findById("btn_tool_rotate") == nullptr);
+    CHECK(session.ui().findById("btn_tool_scale") == nullptr);
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_compact_visual_profile_is_applied)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* toolbar = session.ui().findById("workspace_toolbar");
+    auto* universal = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_active_tool"));
+    auto* documentTitle = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_document_title"));
+    auto* renderHeader = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_render_hdr"));
+    auto* inspector = dynamic_cast<DockCard*>(
+        session.ui().findById("card_inspector"));
+
+    CHECK_FLOAT_EQ(session.ui().getUiScale(), 1.0f, 1.0e-5f);
+    CHECK(ThemeManager::get().getActiveThemeName() == kAliyatEditorDarkTheme);
+    CHECK_NOT_NULL(toolbar);
+    CHECK_NOT_NULL(universal);
+    CHECK_NOT_NULL(documentTitle);
+    CHECK_NOT_NULL(renderHeader);
+    CHECK_NOT_NULL(inspector);
+    if (toolbar != nullptr) CHECK_FLOAT_EQ(toolbar->getHeight(), 34.0f, 1.0e-5f);
+    if (universal != nullptr) {
+        CHECK(universal->getText() == L"Universal");
+        CHECK_FLOAT_EQ(universal->getWidth(), 76.0f, 1.0e-5f);
+    }
+    if (documentTitle != nullptr) CHECK(documentTitle->getFontSize() == 12);
+    if (renderHeader != nullptr) CHECK(renderHeader->getFontSize() == 13);
+    if (inspector != nullptr) {
+        CHECK_FLOAT_EQ(inspector->getHeaderHeight(), 20.0f, 1.0e-5f);
+    }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_scene_uses_one_universal_gizmo_without_mode_buttons)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    CHECK(session.ui().findById("btn_tool_select") == nullptr);
+    CHECK(session.ui().findById("btn_tool_move") == nullptr);
+    CHECK(session.ui().findById("btn_tool_rotate") == nullptr);
+    CHECK(session.ui().findById("btn_tool_scale") == nullptr);
+    auto* universal = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_active_tool"));
+    CHECK_NOT_NULL(universal);
+    if (universal != nullptr) CHECK(universal->getText() == L"Universal");
+    for (int cycle = 0; cycle < 32; ++cycle) {
+        session.update(1.0f / 240.0f);
+        session.render();
+    }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_space_button_click_recovers_lost_viewport_mouse_up)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.preferences.activeTool = EditorTool::Scale;
+
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* viewport = dynamic_cast<Image*>(session.ui().findById("panel_viewport"));
+    auto* space = dynamic_cast<Button*>(session.ui().findById("btn_tool_space"));
+    CHECK_NOT_NULL(viewport);
+    CHECK_NOT_NULL(space);
+    if (viewport == nullptr || space == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const auto viewportBounds = viewport->getWorldBounds();
+    const float viewportX = (viewportBounds.minX + viewportBounds.maxX) * 0.5f;
+    const float viewportY = (viewportBounds.minY + viewportBounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(viewportX, viewportY, 0));
+
+    // Deliberately omit the viewport mouse-up. The next toolbar press must
+    // recover both the viewport gesture and AYUI capture, then deliver its
+    // own matching mouse-up to the World/Local button.
+    CHECK(clickSessionButton(session, space));
+    CHECK(space->getText() == L"Local");
+    CHECK_FALSE(session.freecam().isLooking());
+    CHECK_FALSE(session.ui().isCapturing());
 
     session.shutdown();
 }
@@ -1035,7 +1228,7 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
     session.shutdown();
 }
 
-TEST_CASE(editor_move_tool_drags_on_camera_plane_as_one_undoable_command)
+TEST_CASE(editor_universal_gizmo_requires_handle_instead_of_object_surface_drag)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
@@ -1051,12 +1244,9 @@ TEST_CASE(editor_move_tool_drags_on_camera_plane_as_one_undoable_command)
         session.worldContext().world(EditorWorldSlot::Edit, true);
     auto* viewport = dynamic_cast<Image*>(
         session.ui().findById("panel_viewport"));
-    auto* move = dynamic_cast<Button*>(
-        session.ui().findById("btn_tool_move"));
     CHECK(world != nullptr);
     CHECK(viewport != nullptr);
-    CHECK(move != nullptr);
-    if (world == nullptr || viewport == nullptr || move == nullptr) {
+    if (world == nullptr || viewport == nullptr) {
         session.shutdown();
         return;
     }
@@ -1076,20 +1266,29 @@ TEST_CASE(editor_move_tool_drags_on_camera_plane_as_one_undoable_command)
         return;
     }
     const ayt::math::FVector3 before = transform->position;
-    CHECK(clickButton(move));
-    CHECK(session.activeTool() == EditorTool::Move);
-
     const auto bounds = viewport->getWorldBounds();
     const float x = (bounds.minX + bounds.maxX) * 0.5f;
     const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    // A click selects the object first. A subsequent drag beginning on the
+    // object surface is inert rather than camera navigation; transforms are
+    // changed only after an explicit Universal Gizmo handle is hit.
     CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseButtonUp(x, y, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+    session.onMouseMove(x, y);
+    CHECK(session.getUiCursorHint() == UiCursorHint::Default);
+
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.getUiCursorHint() == UiCursorHint::Default);
     CHECK(session.onMouseMove(x + 96.0f, y));
     CHECK(session.onMouseButtonUp(x + 96.0f, y, 0));
+    CHECK_FALSE(session.freecam().isLooking());
     CHECK(session.selectedEntityId() == entity->getId());
-    CHECK((transform->position - before).lengthSq() > 0.01f);
+    CHECK_FLOAT_EQ(transform->position.x, before.x, 1.0e-5f);
+    CHECK_FLOAT_EQ(transform->position.y, before.y, 1.0e-5f);
+    CHECK_FLOAT_EQ(transform->position.z, before.z, 1.0e-5f);
 
     session.onKeyDown(UIKey_Control);
-    CHECK(session.onKeyDown(UIKey_Z));
     CHECK_FALSE(session.onKeyDown(UIKey_Z));
     session.onKeyUp(UIKey_Control);
     CHECK_FLOAT_EQ(transform->position.x, before.x, 1.0e-5f);

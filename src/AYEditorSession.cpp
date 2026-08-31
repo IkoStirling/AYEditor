@@ -1,6 +1,8 @@
 #include "AYEditor/EditorSession.h"
 
 #include "AYEditor/EditorHeapDebug.h"
+#include "AYEditor/EditorVisualStyle.h"
+#include "AYEditor/EditorAssetListView.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Button.h"
@@ -15,7 +17,10 @@
 #include "AYUI/SvgIcon.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TextInput.h"
+#include "AYUI/Theme.h"
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
+#include "AYUI/ListView.h"
+#include "AYUI/UnicodeText.h"
 #include "AYUI/Widget.h"
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
@@ -40,6 +45,7 @@
 #include <AYEntity/components/TransformComponent.h>
 #include <AYMath/MathTransform.h>
 #include <AYResource/ResourceManager.h>
+#include <AYResource/AssetPath.h>
 #include <AYResource/assetsDefs/IMesh.h>
 
 #include <algorithm>
@@ -48,6 +54,8 @@
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
+#include <optional>
+#include <unordered_map>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -70,6 +78,9 @@ namespace {
 // eight-notch safety clamp and produced the touchpad sensitivity spike.
 constexpr float kWheelLogicalPixelsPerNotch = 40.0f;
 constexpr float kViewportLookDragSlopPixels = 8.0f;
+static_assert(EditorTransformGizmo::kWorldScalePerCameraDistance
+              == ayt::render::kEditorTransformGizmoScalePerDistance,
+              "editor hit geometry and renderer gizmo scale must match");
 
 bool intersectRaySphere(const ayt::math::FVector3& origin,
                         const ayt::math::FVector3& direction,
@@ -272,6 +283,36 @@ bool parseFloat(const std::wstring& text, float& value) {
     return true;
 }
 
+std::string wideToUtf8(const std::wstring& text)
+{
+    if (text.empty()) return {};
+    const int required = ::WideCharToMultiByte(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        nullptr, 0, nullptr, nullptr);
+    if (required <= 0) return {};
+    std::string result(static_cast<std::size_t>(required), '\0');
+    (void)::WideCharToMultiByte(
+        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
+        result.data(), required, nullptr, nullptr);
+    return result;
+}
+
+std::wstring assetSizeText(std::uintmax_t bytes)
+{
+    wchar_t buffer[64]{};
+    if (bytes >= 1024u * 1024u) {
+        std::swprintf(buffer, 64, L"%.2f MiB",
+            static_cast<double>(bytes) / (1024.0 * 1024.0));
+    } else if (bytes >= 1024u) {
+        std::swprintf(buffer, 64, L"%.1f KiB",
+            static_cast<double>(bytes) / 1024.0);
+    } else {
+        std::swprintf(buffer, 64, L"%llu bytes",
+            static_cast<unsigned long long>(bytes));
+    }
+    return buffer;
+}
+
 } // namespace
 
 EditorSession::EditorSession()
@@ -314,6 +355,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // AY_EDITOR_HEAP_CHECK("session_after_set_host");
 
     _ui.initialize(desc.uiBackend);
+    // AYEditor-specific list control must exist in WidgetFactory before the
+    // JSON loader encounters EditorAssetListView.
+    registerEditorAssetWidgets();
+    installEditorTheme(_preferences.themeName);
+    _ui.setUiScale(std::clamp(_preferences.uiScale, 0.75f, 1.25f));
     AY_EDITOR_TRACE("initialize: ui backend set");
     _gameView.setModeChangedCallback([this](EditorMode mode) { onModeChanged(mode); });
 
@@ -351,6 +397,18 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // 一次性 bind（selection callback + itemHeight via setItemHeight;
     // JSON 的 itemHeight 在 DockCard.content 路径被静默丢，见 Landmine A）。
     bindOutlinerPanel();
+    bindAssetBrowser();
+
+    std::string assetDatabaseError;
+    if (!_assetDatabase.open(desc.projectRoot, &assetDatabaseError)) {
+        setAssetBrowserStatus(
+            L"Asset database unavailable: "
+            + ayt::ui::decodeUtf8Text(assetDatabaseError), true);
+    } else {
+        refreshAssetBrowser();
+        setAssetBrowserStatus(L"Indexing project assets...");
+        (void)_assetDatabase.requestScan();
+    }
 
     _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
     if (_mainDock != nullptr) {
@@ -468,7 +526,7 @@ void EditorSession::shutdown() {
     }
     _shutdown = true;
 
-    finishEntityMoveDrag(false);
+    finishTransformGizmoDrag(false);
     savePreferencesNow();
 
     _gameView.setModeChangedCallback({});
@@ -494,12 +552,21 @@ void EditorSession::shutdown() {
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
     // 链上 deref）。
     _outliner = nullptr;
+    _assetList = nullptr;
+    _assetTree = nullptr;
+    _assetSearch = nullptr;
+    _assetTypeFilter = nullptr;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
     _viewportOrientationAxisMenuItem = nullptr;
     _onViewportOrientationAxisVisibilityChanged = {};
     _onPreferencesChanged = {};
     _outlinerEntityIds.clear();
+    _assetEntries.clear();
+    _assetFolderSourcePaths.clear();
+    _assetFolderFlatPaths.clear();
+    _assetFolderSourceExpanded.clear();
+    _assetDatabase.close();
     clearSelectedEntity(false);
     _outlinerRefreshPending = false;
     _commands.clear();
@@ -567,13 +634,31 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         _outlinerRefreshPending = false;
         refreshOutliner();
     }
+    if (_assetDatabase.pollScan()) {
+        _assetBrowserRefreshPending = true;
+    }
+    if (_assetBrowserRefreshPending) {
+        _assetBrowserRefreshPending = false;
+        refreshAssetBrowser();
+        if (_assetDatabase.lastError().empty()) {
+            setAssetBrowserStatus(
+                L"Indexed " + std::to_wstring(_assetDatabase.records().size())
+                + L" assets");
+        } else {
+            setAssetBrowserStatus(
+                L"Asset scan warning: "
+                + ayt::ui::decodeUtf8Text(_assetDatabase.lastError()), true);
+        }
+    }
     // Per-frame reconcile: if the last known cursor is not on a splitter
     // band, force every SplitterHandle un-revealed. Leave events alone
     // are not sufficient (capture path / coalesced pointer movement).
     syncSplitterRevealToMouse();
 
     if (freecamActive()) {
-        if (viewportAcceptsGameInput()) {
+        // Keyboard flight is intentionally gated by the RMB look gesture.
+        // Outside that gesture editor shortcuts and text input own the keys.
+        if (_freecam.isLooking() && viewportAcceptsGameInput()) {
             if (_devices != nullptr) {
                 if (const ayt::device::KeyboardDevice* keyboard =
                         _devices->keyboard()) {
@@ -598,6 +683,11 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     } else if (_gameView.mode() == EditorMode::Paused) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
     }
+
+    // Inspector edits, Undo/Redo and scene systems may all change the selected
+    // transform without a pointer event. Publish the latest pose every frame;
+    // the renderer compares geometry mode/highlight before rebuilding buffers.
+    syncTransformGizmoToRenderer();
 
     // Splitter drag updates HBox slot widths; keep the 3D viewport rect
     // in sync every frame so render composite tracks panel resize.
@@ -642,6 +732,14 @@ void EditorSession::populateFrame(bool skipViewportPanel) {
     // the backend's pendingRects + textBatch. No flush yet — the
     // flush moves to UIPass::execute so the RenderPass dispatch owns
     // the UI submission boundary. flushFrame() closes the lifecycle.
+    //
+    // Consume pending layout while the viewport still participates in its
+    // VBox. Laying out after the composite-hole visibility toggle collapses
+    // panel_viewport out of the tree and can expand the native scene behind
+    // editor chrome until the next resize.
+    _ui.layout();
+    syncViewportIfChanged();
+
     _panelViewportForFrame = nullptr;
     _cardViewportForFrame = nullptr;
     if (skipViewportPanel) {
@@ -660,7 +758,6 @@ void EditorSession::populateFrame(bool skipViewportPanel) {
         }
     }
 
-    _ui.layout();
     _ui.populateFrame();
 }
 
@@ -743,7 +840,9 @@ bool EditorSession::isSplitHandlePoint(float x, float y) const {
         return false;
     }
 
-    ayt::ui::Widget* hit = mainRow->hitTest(ayt::math::FVector2(x, y));
+    const ayt::math::FVector2 logical =
+        _ui.physicalToLogical(ayt::math::FVector2(x, y));
+    ayt::ui::Widget* hit = mainRow->hitTest(logical);
     return dynamic_cast<const ayt::ui::SplitterHandle*>(hit) != nullptr;
 }
 
@@ -797,7 +896,9 @@ void EditorSession::syncSplitterRevealToMouse()
     }
     // Use bounds walk (not hitTest): hitTest can prefer other widgets
     // or miss when layout is mid-update; bounds are the reveal source of truth.
-    if (!pointOnSplitterRecursive(_ui.root(), _lastMouseX, _lastMouseY)) {
+    const ayt::math::FVector2 logical =
+        _ui.physicalToLogical(ayt::math::FVector2(_lastMouseX, _lastMouseY));
+    if (!pointOnSplitterRecursive(_ui.root(), logical.x, logical.y)) {
         clearSplitterHovers();
     }
 }
@@ -807,11 +908,13 @@ bool EditorSession::isViewportSurfacePoint(float x, float y) const {
         return false;
     }
 
+    const ayt::math::FVector2 pos =
+        _ui.physicalToLogical(ayt::math::FVector2(x, y));
+
     // Open menus / combo popups live on the overlay and often extend into
     // panel_viewport. In Play/Paused those points must still reach UIManager
     // or dropdown items over the cube receive no hits.
     if (ayt::ui::Widget* overlay = _ui.getOverlayRoot()) {
-        const ayt::math::FVector2 pos(x, y);
         for (ayt::ui::Widget* child : overlay->getChildren()) {
             if (child == nullptr || !child->isVisible()) {
                 continue;
@@ -827,8 +930,8 @@ bool EditorSession::isViewportSurfacePoint(float x, float y) const {
         return false;
     }
 
-    return x >= viewport.minX && x < viewport.maxX
-        && y >= viewport.minY && y < viewport.maxY;
+    return pos.x >= viewport.minX && pos.x < viewport.maxX
+        && pos.y >= viewport.minY && pos.y < viewport.maxY;
 }
 
 bool EditorSession::isChromePoint(float x, float y) const {
@@ -845,8 +948,12 @@ bool EditorSession::viewportRayDirection(
         return false;
     }
 
-    const float ndcX = 2.0f * ((x - viewport.minX) / viewport.width()) - 1.0f;
-    const float ndcY = 1.0f - 2.0f * ((y - viewport.minY) / viewport.height());
+    const ayt::math::FVector2 logical =
+        _ui.physicalToLogical(ayt::math::FVector2(x, y));
+    const float ndcX =
+        2.0f * ((logical.x - viewport.minX) / viewport.width()) - 1.0f;
+    const float ndcY =
+        1.0f - 2.0f * ((logical.y - viewport.minY) / viewport.height());
     constexpr float degreesToRadians = 0.017453292519943295f;
     const float tanHalfFov = std::tan(
         _freecam.fovYDegrees() * degreesToRadians * 0.5f);
@@ -869,7 +976,7 @@ bool EditorSession::viewportAcceptsGameInput() const {
     if (focused != nullptr && focused->isTextEditingWidget()) {
         return false;
     }
-    // LMB look already started inside the viewport — keep movement.
+    // RMB fly navigation already started inside the viewport — keep movement.
     if (_freecam.isLooking()) {
         return true;
     }
@@ -884,26 +991,26 @@ bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseY = y;
     _hasLastMouse = true;
 
-    if (_entityMoveDragActive) {
-        return updateEntityMoveDrag(x, y);
+    // Cross-panel drags are owned by AYUI even while the cursor is over the
+    // 3D surface. Without this gate EditorSession's freecam routing starves
+    // UIManager::updateDrag, so the viewport never becomes a drop target.
+    if (_ui.isDragging()) {
+        return _ui.onMouseMove(x, y);
     }
 
-    // Armed viewport LMB: past slop → move the selected Edit entity when
-    // Move is active; otherwise begin freecam look.
+    if (_transformGizmo.active()) {
+        return updateTransformGizmoDrag(x, y);
+    }
+
+    // Armed viewport LMB: object surfaces only select. A drag past slop is
+    // consumed (reserved for future marquee selection) but never rotates the
+    // camera; transforms begin exclusively from a gizmo handle.
     if (_viewportLmbPending && !_viewportLmbDragged && !_freecam.isLooking()) {
         const float dx = x - _viewportLmbX;
         const float dy = y - _viewportLmbY;
         if ((dx * dx + dy * dy)
             >= (kViewportLookDragSlopPixels * kViewportLookDragSlopPixels)) {
             _viewportLmbDragged = true;
-            if (_entityMoveCandidate
-                && beginEntityMoveDrag(_viewportLmbX, _viewportLmbY)) {
-                updateEntityMoveDrag(x, y);
-                return true;
-            }
-            _freecam.beginLook(_viewportLmbX, _viewportLmbY);
-            _freecam.updateLook(x, y);
-            pushFreecamToRenderer();
             return true;
         }
     }
@@ -921,6 +1028,14 @@ bool EditorSession::onMouseMove(float x, float y) {
         return _ui.onMouseMove(x, y);
     }
 
+    if (isViewportSurfacePoint(x, y)) {
+        updateTransformGizmoHover(x, y);
+    } else if (_gizmoHoverHandle != EditorGizmoHandle::None) {
+        _gizmoHoverHandle = EditorGizmoHandle::None;
+        syncTransformGizmoToRenderer();
+        if (_repaintCallback) _repaintCallback();
+    }
+
     if (!isChromePoint(x, y)) {
         // Moving from an Inspector field into the viewport commits the field
         // and releases text focus before WASD/free-look starts.
@@ -933,18 +1048,24 @@ bool EditorSession::onMouseMove(float x, float y) {
     }
 
     const bool handled = _ui.onMouseMove(x, y);
-    if (!pointOnSplitterRecursive(_ui.root(), x, y)) {
+    const ayt::math::FVector2 logical =
+        _ui.physicalToLogical(ayt::math::FVector2(x, y));
+    if (!pointOnSplitterRecursive(_ui.root(), logical.x, logical.y)) {
         clearSplitterHovers();
     }
     return handled;
 }
 
 bool EditorSession::onMouseButtonDown(float x, float y, int button) {
+    if (_ui.isDragging()) {
+        return _ui.onMouseButtonDown(x, y, button);
+    }
     // Dismiss MenuBar popups on any click that is not inside an open
     // menu. Play-mode freecam / isCapturing used to skip UIManager, so
     // click-outside never ran and the dropdown stayed painted forever.
     {
-        const ayt::math::FVector2 pos(x, y);
+        const ayt::math::FVector2 pos =
+            _ui.physicalToLogical(ayt::math::FVector2(x, y));
         bool insideOpenMenu = false;
         if (ayt::ui::Widget* overlay = _ui.getOverlayRoot()) {
             for (ayt::ui::Widget* child : overlay->getChildren()) {
@@ -967,17 +1088,35 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
     }
 
     const bool onViewportSurface = isViewportSurfacePoint(x, y);
+    // A fresh primary-button down is a recovery boundary for an older UI
+    // capture whose matching mouse-up was lost (focus change, touchpad
+    // gesture cancellation, etc.). Keeping the stale capture alive lets the
+    // next toolbar button enter Pressed while its mouse-up is consumed by a
+    // different viewport gesture, leaving two input state machines out of
+    // sync. Cancel first, then route this down as a brand-new gesture.
+    if (button == 0 && _ui.isCapturing()) {
+        _ui.cancelCapture();
+    }
+
+    if (button == 0 && !onViewportSurface) {
+        // Chrome input must not complete a stale viewport gesture. In
+        // particular, onMouseButtonUp() gives an armed viewport LMB priority
+        // over AYUI capture; without clearing it here the first toolbar click
+        // is swallowed and its Button remains pressed/captured.
+        if (_transformGizmo.active()) {
+            finishTransformGizmoDrag(false);
+        }
+        _viewportLmbPending = false;
+        _viewportLmbDragged = false;
+        if (_freecam.isLooking()) {
+            _freecam.endLook();
+        }
+    }
+
     if (_ui.isCapturing()) {
-        if (button != 0 || !onViewportSurface) {
+        if (button != 0) {
             return _ui.onMouseButtonDown(x, y, button);
         }
-        // A second LMB-down cannot belong to the old LMB gesture: a matching
-        // up would have cleared UIManager capture first. Precision touchpads
-        // can lose that up while keyboard focus changes, leaving the next
-        // viewport click routed to the old Inspector/Hierarchy widget. Treat
-        // a fresh viewport LMB-down as the recovery boundary so its very first
-        // click can select instead of merely clearing stale capture.
-        _ui.cancelCapture();
     }
 
     if (onViewportSurface) {
@@ -989,21 +1128,31 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
         }
         _ui.clearHover();
 
+        if (button == 1 && freecamActive()) {
+            if (_transformGizmo.active()) {
+                finishTransformGizmoDrag(false);
+            }
+            _viewportLmbPending = false;
+            _viewportLmbDragged = false;
+            _freecam.beginLook(x, y);
+            return true;
+        }
+
         if (button == 0 && freecamActive()) {
-            // Defer freecam until drag past slop — short click selects.
+            if (_gameView.mode() == EditorMode::Edit) {
+                const EditorGizmoHandle handle = hitTestTransformGizmo(x, y);
+                if (handle != EditorGizmoHandle::None
+                    && beginTransformGizmoDrag(handle, x, y)) {
+                    _viewportLmbPending = false;
+                    _viewportLmbDragged = false;
+                    return true;
+                }
+            }
+            // A short click selects. LMB drag never enters FreeCam.
             _viewportLmbPending = true;
             _viewportLmbDragged = false;
             _viewportLmbX = x;
             _viewportLmbY = y;
-            _entityMoveCandidate = false;
-            if (_gameView.mode() == EditorMode::Edit
-                && _activeTool == EditorTool::Move) {
-                ayt::entity::World* world = hierarchyWorldMutable();
-                if (ayt::entity::Entity* hit = pickEntityFromViewport(x, y)) {
-                    applyViewportSelection(world, hit);
-                    _entityMoveCandidate = true;
-                }
-            }
             return true; // AYDevice already owns capture for the pressed button.
         }
         return false;
@@ -1013,31 +1162,29 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
-    if (button == 0 && _entityMoveDragActive) {
-        updateEntityMoveDrag(x, y);
-        finishEntityMoveDrag(true);
+    if (_ui.isDragging()) {
+        return _ui.onMouseButtonUp(x, y, button);
+    }
+    if (button == 0 && _transformGizmo.active()) {
+        updateTransformGizmoDrag(x, y);
+        finishTransformGizmoDrag(true);
         _viewportLmbPending = false;
         _viewportLmbDragged = false;
-        _entityMoveCandidate = false;
+        return true;
+    }
+
+    if (_freecam.isLooking() && button == 1) {
+        _freecam.endLook();
         return true;
     }
 
     if (button == 0 && _viewportLmbPending) {
-        const bool wasClick = !_viewportLmbDragged && !_freecam.isLooking();
+        const bool wasClick = !_viewportLmbDragged;
         _viewportLmbPending = false;
         _viewportLmbDragged = false;
-        if (_freecam.isLooking()) {
-            _freecam.endLook();
-        }
-        if (wasClick && !_entityMoveCandidate) {
+        if (wasClick) {
             selectPlayEntityFromViewport();
         }
-        _entityMoveCandidate = false;
-        return true;
-    }
-
-    if (_freecam.isLooking() && button == 0) {
-        _freecam.endLook();
         return true;
     }
 
@@ -1078,10 +1225,14 @@ bool EditorSession::onMouseWheel(float x, float y, float deltaY) {
 
 void EditorSession::onMouseLeave() {
     _hasLastMouse = false;
-    if (_entityMoveDragActive) {
-        finishEntityMoveDrag(false);
+    if (_freecam.isLooking()) {
+        _freecam.endLook();
     }
-    _entityMoveCandidate = false;
+    if (_transformGizmo.active()) {
+        finishTransformGizmoDrag(false);
+    }
+    _gizmoHoverHandle = EditorGizmoHandle::None;
+    syncTransformGizmoToRenderer();
     _ui.onMouseLeave();
     clearSplitterHovers();
 }
@@ -1130,8 +1281,7 @@ void EditorSession::onWindowFocusChanged(bool focused)
     _ui.onKeyUp(ayt::ui::UIKey_Shift);
     _ui.onKeyUp(ayt::ui::UIKey_Alt);
     _ui.cancelCapture();
-    finishEntityMoveDrag(false);
-    _entityMoveCandidate = false;
+    finishTransformGizmoDrag(false);
     if (_ui.getFocusedWidget() != nullptr) {
         _ui.setFocus(nullptr);
     }
@@ -1149,11 +1299,13 @@ bool EditorSession::isUiHoverInteractive() const {
 
 ayt::ui::UiCursorHint EditorSession::getUiCursorHint() const {
     if (_gameView.mode() == EditorMode::Edit
-        && _activeTool == EditorTool::Move
-        && (_entityMoveDragActive
-            || (_hasLastMouse
-                && isViewportSurfacePoint(_lastMouseX, _lastMouseY)))) {
-        return ayt::ui::UiCursorHint::Move;
+        && (_transformGizmo.active()
+            || _gizmoHoverHandle != EditorGizmoHandle::None)) {
+        // DCC-style transform feedback comes from the highlighted/active
+        // handle. A generic four-way Move cursor is misleading for rotation
+        // and scale, so the viewport arrow remains stable throughout hover
+        // and drag.
+        return ayt::ui::UiCursorHint::Default;
     }
     return _ui.getCursorHint();
 }
@@ -1181,13 +1333,9 @@ void EditorSession::bindToolbar() {
     bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
     bindButton("btn_inspector_reset", [this]() { resetInspectorOverrides(); });
 
-    // Shell V2 workspace tools. The short labels are deliberate icon
-    // placeholders and live in editor_shell.ui.json, so replacing them with
-    // real assets later does not touch editor behavior.
-    bindButton("btn_tool_select", [this]() { setActiveTool(EditorTool::Select); });
-    bindButton("btn_tool_move", [this]() { setActiveTool(EditorTool::Move); });
-    bindButton("btn_tool_rotate", [this]() { setActiveTool(EditorTool::Rotate); });
-    bindButton("btn_tool_scale", [this]() { setActiveTool(EditorTool::Scale); });
+    // Selection now exposes one Universal transform gizmo. The legacy
+    // Select/Move/Rotate/Scale buttons are deliberately not bound even when
+    // loading an older custom layout.
     bindButton("btn_tool_space", [this]() {
         setLocalTransformSpace(!_localTransformSpace);
     });
@@ -1226,10 +1374,11 @@ void EditorSession::bindToolbar() {
         if (_repaintCallback) _repaintCallback();
     });
 
-    const ayt::math::FVector4 accent(0.16f, 0.40f, 0.70f, 1.0f);
-    const ayt::math::FVector4 muted(0.68f, 0.71f, 0.76f, 1.0f);
+    const ayt::math::FVector4 accent = editorThemeColor(
+        "color.accent", ayt::math::FVector4(0.16f, 0.40f, 0.70f, 1.0f));
+    const ayt::math::FVector4 muted = editorThemeColor(
+        "color.text.muted", ayt::math::FVector4(0.68f, 0.71f, 0.76f, 1.0f));
     const char* accentButtons[] = {
-        "btn_tool_select", "btn_tool_move", "btn_tool_rotate", "btn_tool_scale",
         "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
         "btn_view_camera", "btn_view_shading", "btn_view_options"
     };
@@ -1294,10 +1443,6 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_minimize",    "outline/minus.svg",             L"Minimize",            13.0f, 5.0f, 3.0f},
         {"btn_maximize",    "outline/maximize.svg",          L"Maximize or restore",  13.0f, 5.0f, 3.0f},
         {"btn_close",       "outline/x.svg",                 L"Close editor",         13.0f, 5.0f, 3.0f},
-        {"btn_tool_select", "outline/pointer.svg",           L"Select tool (Q)",       17.0f, 8.0f, 4.0f},
-        {"btn_tool_move",   "outline/arrows-move.svg",       L"Move tool (W)",         17.0f, 8.0f, 4.0f},
-        {"btn_tool_rotate", "outline/rotate.svg",            L"Rotate tool (E)",       17.0f, 8.0f, 4.0f},
-        {"btn_tool_scale",  "outline/arrows-diagonal-2.svg", L"Scale tool (R)",        17.0f, 8.0f, 4.0f},
         {"btn_play",        "filled/player-play.svg",        L"Play",                  16.0f, 8.0f, 4.0f},
         {"btn_pause",       "filled/player-pause.svg",       L"Pause",                 16.0f, 8.0f, 4.0f},
         {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
@@ -1457,7 +1602,8 @@ ayt::entity::World* EditorSession::hierarchyWorldMutable() noexcept
     return const_cast<ayt::entity::World*>(hierarchyWorld());
 }
 
-void EditorSession::clearSelectedEntity(bool clearOutline)
+void EditorSession::clearSelectedEntity(bool clearOutline,
+                                        bool clearAssetSelection)
 {
     if (clearOutline && _selectionWorld != nullptr && !_selection.empty()) {
         // Only dereference worlds still advertised by EditorWorldContext.
@@ -1477,6 +1623,9 @@ void EditorSession::clearSelectedEntity(bool clearOutline)
     }
     _selection.clear();
     _selectionWorld = nullptr;
+    if (clearAssetSelection) clearSelectedAsset();
+    _gizmoHoverHandle = EditorGizmoHandle::None;
+    syncTransformGizmoToRenderer();
 }
 
 void EditorSession::setSelectedEntity(ayt::entity::World* world,
@@ -1492,6 +1641,8 @@ void EditorSession::setSelectedEntity(ayt::entity::World* world,
     if (auto* mesh = entity->getComponent<ayt::entity::MeshComponent>()) {
         mesh->outlineHull = true;
     }
+    _gizmoHoverHandle = EditorGizmoHandle::None;
+    syncTransformGizmoToRenderer();
 }
 
 void EditorSession::bindOutlinerPanel()
@@ -1632,6 +1783,557 @@ void EditorSession::onOutlinerSelectionChanged(int flatIndex)
     if (_repaintCallback) {
         _repaintCallback();
     }
+}
+
+// =============================================================================
+// Project Content Browser
+// =============================================================================
+void EditorSession::bindAssetBrowser()
+{
+    _assetTree = dynamic_cast<ayt::ui::TreeView*>(
+        _ui.findById("tree_assets"));
+    _assetList = dynamic_cast<EditorAssetListView*>(
+        _ui.findById("list_assets"));
+    _assetSearch = dynamic_cast<ayt::ui::TextInput*>(
+        _ui.findById("assets_search"));
+    _assetTypeFilter = dynamic_cast<ayt::ui::ComboBox*>(
+        _ui.findById("cmb_assets_type"));
+
+    if (_assetTree != nullptr) {
+        _assetTree->setItemHeight(18.0f);
+        _assetTree->setOnSelectionChanged([this](int flatIndex) {
+            if (_updatingAssetSelection || flatIndex < 0
+                || flatIndex >= static_cast<int>(_assetFolderFlatPaths.size())) {
+                return;
+            }
+            _assetCurrentFolder = _assetFolderFlatPaths[flatIndex];
+            refreshAssetList();
+        });
+        _assetTree->setOnExpandToggled([this](int flatIndex, bool expanded) {
+            if (flatIndex < 0
+                || flatIndex >= static_cast<int>(_assetFolderFlatPaths.size())) {
+                return;
+            }
+            const std::string path = _assetFolderFlatPaths[flatIndex];
+            for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
+                if (_assetFolderSourcePaths[i] == path) {
+                    _assetFolderSourceExpanded[i] = expanded;
+                    break;
+                }
+            }
+            // TreeView already rebuilt its nodes. Recompute only our parallel
+            // flat-index mapping so the next selection resolves correctly.
+            rebuildAssetFolderMapping();
+        });
+    }
+
+    if (_assetList != nullptr) {
+        _assetList->setItemHeight(20.0f);
+        _assetList->setOnSelectionChanged([this](int index) {
+            if (_updatingAssetSelection || index < 0
+                || index >= static_cast<int>(_assetEntries.size())) return;
+            const EditorAssetEntry entry = _assetEntries[index];
+            if (entry.folder) {
+                _assetCurrentFolder = entry.folderPath;
+                // ListView dispatches this callback while it still owns the
+                // selected row. Rebuilding the list (and synchronising the
+                // tree selection) here re-enters that dispatch and can recurse
+                // until the process exhausts its stack. Consume navigation on
+                // the next editor update, just like deferred Outliner rebuilds.
+                _assetBrowserRefreshPending = true;
+                if (_repaintCallback) _repaintCallback();
+                return;
+            }
+            selectAsset(entry.assetId);
+        });
+        _assetList->setPayloadProvider(
+            [this](int index) -> ayt::ui::DragPayload {
+                if (index < 0 || index >= static_cast<int>(_assetEntries.size())) {
+                    return {};
+                }
+                const EditorAssetEntry& entry = _assetEntries[index];
+                const EditorAssetRecord* record = entry.folder
+                    ? nullptr : _assetDatabase.find(entry.assetId);
+                if (record == nullptr || record->type != EditorAssetType::Mesh) {
+                    return {};
+                }
+                _assetDragData.id = record->id;
+                _assetDragData.type = record->type;
+                _assetDragData.runtimePath = record->runtimePath;
+                ayt::ui::DragPayload payload;
+                payload.kind = "EditorAsset";
+                payload.text = ayt::ui::decodeUtf8Text(record->name);
+                payload.data = &_assetDragData;
+                return payload;
+            });
+    }
+
+    if (_assetSearch != nullptr) {
+        _assetSearch->setOnTextChanged(
+            [this](const std::wstring&) { refreshAssetList(); });
+    }
+    if (_assetTypeFilter != nullptr) {
+        _assetTypeFilter->setOnSelectionChanged(
+            [this](int) { refreshAssetList(); });
+    }
+
+    auto bindButton = [this](const char* id, std::function<void()> callback) {
+        if (auto* button = dynamic_cast<ayt::ui::Button*>(_ui.findById(id))) {
+            button->setOnClicked(std::move(callback));
+        }
+    };
+    bindButton("btn_assets_add", [this]() { importAssetFromDialog(); });
+    bindButton("btn_assets_refresh", [this]() {
+        if (_assetDatabase.requestScan()) {
+            setAssetBrowserStatus(L"Refreshing asset index...");
+        }
+    });
+    bindButton("btn_assets_up", [this]() {
+        const std::size_t slash = _assetCurrentFolder.find_last_of('/');
+        if (slash == std::string::npos) return;
+        _assetCurrentFolder = _assetCurrentFolder.substr(0, slash);
+        refreshAssetBrowser();
+    });
+    bindButton("btn_asset_reload", [this]() { reloadSelectedAsset(); });
+
+    auto bindViewportAssetDrop = [this](const char* id) {
+        ayt::ui::Widget* target = _ui.findById(id);
+        if (target == nullptr) return;
+        target->setAcceptDrops(true);
+        target->setAcceptDropKinds({"EditorAsset"});
+        target->setOnDrop([this](const ayt::ui::DragPayload& payload) {
+            if (payload.kind != "EditorAsset" || payload.data == nullptr) return;
+            const auto* drag = static_cast<const AssetDragData*>(payload.data);
+            if (drag != &_assetDragData || drag->type != EditorAssetType::Mesh) {
+                return;
+            }
+            const ayt::math::FVector2 physical = _ui.logicalToPhysical(
+                _ui.getDragLastMousePos());
+            // The workspace/card fallbacks also cover the viewport toolbar.
+            // Keep creation constrained to the actual scene surface.
+            if (!isViewportSurfacePoint(physical.x, physical.y)) return;
+            (void)placeAssetInViewport(drag->id, physical.x, physical.y);
+        });
+    };
+    // panel_viewport is temporarily hidden while the host punches the native
+    // composite hole. Input can arrive during that interval, in which case
+    // hit testing resolves to one of its still-visible containers. Bind the
+    // same typed drop contract at each stable layer; the nearest target wins.
+    bindViewportAssetDrop("panel_viewport");
+    bindViewportAssetDrop("viewport_workspace");
+    bindViewportAssetDrop("card_viewport");
+}
+
+void EditorSession::rebuildAssetFolderMapping()
+{
+    _assetFolderFlatPaths.clear();
+    if (_assetFolderSourcePaths.empty()) return;
+    std::unordered_map<std::string, int> byPath;
+    for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
+        byPath.emplace(_assetFolderSourcePaths[i], static_cast<int>(i));
+    }
+    std::vector<std::vector<int>> children(_assetFolderSourcePaths.size());
+    std::vector<int> roots;
+    for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
+        const std::string& path = _assetFolderSourcePaths[i];
+        const std::size_t slash = path.find_last_of('/');
+        if (slash == std::string::npos) {
+            roots.push_back(static_cast<int>(i));
+        } else {
+            const auto it = byPath.find(path.substr(0, slash));
+            if (it != byPath.end()) children[it->second].push_back(
+                static_cast<int>(i));
+            else roots.push_back(static_cast<int>(i));
+        }
+    }
+    std::function<void(int)> visit = [&](int index) {
+        _assetFolderFlatPaths.push_back(_assetFolderSourcePaths[index]);
+        if (index < static_cast<int>(_assetFolderSourceExpanded.size())
+            && _assetFolderSourceExpanded[index]) {
+            for (int child : children[index]) visit(child);
+        }
+    };
+    for (int root : roots) visit(root);
+}
+
+void EditorSession::refreshAssetBrowser()
+{
+    if (_assetTree == nullptr || _assetList == nullptr) return;
+
+    std::unordered_map<std::string, bool> priorExpanded;
+    for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
+        priorExpanded[_assetFolderSourcePaths[i]] =
+            i < _assetFolderSourceExpanded.size()
+                ? _assetFolderSourceExpanded[i] : false;
+    }
+
+    EditorAssetId pendingId = 0;
+    if (!_pendingAssetSelectionPath.empty()) {
+        auto normalized = [](std::string path) {
+            std::replace(path.begin(), path.end(), '\\', '/');
+            std::transform(path.begin(), path.end(), path.begin(),
+                [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            return path;
+        };
+        const std::string wanted = normalized(_pendingAssetSelectionPath);
+        for (const EditorAssetRecord& record : _assetDatabase.records()) {
+            if (normalized(record.runtimePath) == wanted
+                || normalized(record.name) == wanted) {
+                pendingId = record.id;
+                const std::size_t slash = record.logicalPath.find_last_of('/');
+                _assetCurrentFolder = slash == std::string::npos
+                    ? std::string("Imported")
+                    : record.logicalPath.substr(0, slash);
+                break;
+            }
+        }
+    }
+
+    const auto& folders = _assetDatabase.folders();
+    _assetFolderSourcePaths.clear();
+    _assetFolderSourceExpanded.clear();
+    _assetFolderSourcePaths.reserve(folders.size());
+    _assetFolderSourceExpanded.reserve(folders.size());
+    std::unordered_map<std::string, int> sourceIndex;
+    for (std::size_t i = 0; i < folders.size(); ++i) {
+        sourceIndex.emplace(folders[i].logicalPath, static_cast<int>(i));
+        _assetFolderSourcePaths.push_back(folders[i].logicalPath);
+        const auto old = priorExpanded.find(folders[i].logicalPath);
+        _assetFolderSourceExpanded.push_back(old != priorExpanded.end()
+            ? old->second : folders[i].parentPath.empty());
+    }
+
+    std::vector<bool> hasChildren(folders.size(), false);
+    std::vector<int> parentIndices(folders.size(), -1);
+    for (std::size_t i = 0; i < folders.size(); ++i) {
+        const auto parent = sourceIndex.find(folders[i].parentPath);
+        if (parent != sourceIndex.end()) {
+            parentIndices[i] = parent->second;
+            hasChildren[parent->second] = true;
+        }
+    }
+    std::vector<ayt::ui::TreeNodeData> nodes;
+    nodes.reserve(folders.size());
+    for (std::size_t i = 0; i < folders.size(); ++i) {
+        ayt::ui::TreeNodeData node;
+        node.label = ayt::ui::decodeUtf8Text(folders[i].displayName);
+        // TreeNode renders this field as literal text. Keep it empty until the
+        // asset browser is wired to AYUI's SVG icon provider.
+        node.icon.clear();
+        node.hasChildren = hasChildren[i];
+        node.expanded = _assetFolderSourceExpanded[i];
+        node.parentIndex = parentIndices[i];
+        nodes.push_back(std::move(node));
+    }
+    _assetTree->setTree(nodes);
+    rebuildAssetFolderMapping();
+
+    if (sourceIndex.find(_assetCurrentFolder) == sourceIndex.end()) {
+        _assetCurrentFolder = "Assets";
+    }
+    const auto current = std::find(_assetFolderFlatPaths.begin(),
+                                   _assetFolderFlatPaths.end(),
+                                   _assetCurrentFolder);
+    _updatingAssetSelection = true;
+    _assetTree->setSelectedIndex(current == _assetFolderFlatPaths.end()
+        ? -1 : static_cast<int>(std::distance(
+            _assetFolderFlatPaths.begin(), current)));
+    _updatingAssetSelection = false;
+    refreshAssetList();
+
+    if (pendingId != 0) {
+        _pendingAssetSelectionPath.clear();
+        for (std::size_t i = 0; i < _assetEntries.size(); ++i) {
+            if (!_assetEntries[i].folder && _assetEntries[i].assetId == pendingId) {
+                _updatingAssetSelection = true;
+                _assetList->setSelectedIndex(static_cast<int>(i));
+                _updatingAssetSelection = false;
+                selectAsset(pendingId);
+                break;
+            }
+        }
+    }
+}
+
+void EditorSession::refreshAssetList()
+{
+    if (_assetList == nullptr) return;
+    const std::string query = _assetSearch != nullptr
+        ? wideToUtf8(_assetSearch->getText()) : std::string{};
+    std::optional<EditorAssetType> filter;
+    if (_assetTypeFilter != nullptr
+        && _assetTypeFilter->getSelectedIndex() > 0) {
+        filter = static_cast<EditorAssetType>(
+            _assetTypeFilter->getSelectedIndex());
+    }
+    _assetEntries = _assetDatabase.entries(
+        _assetCurrentFolder, query, filter);
+    std::vector<std::wstring> labels;
+    labels.reserve(_assetEntries.size());
+    for (const EditorAssetEntry& entry : _assetEntries) {
+        if (entry.folder) {
+            labels.push_back(L"[Folder]  "
+                + ayt::ui::decodeUtf8Text(entry.displayName));
+        } else {
+            labels.push_back(L"["
+                + ayt::ui::decodeUtf8Text(editorAssetTypeName(entry.type))
+                + L"]  " + ayt::ui::decodeUtf8Text(entry.displayName));
+        }
+    }
+    _updatingAssetSelection = true;
+    _assetList->setItems(labels);
+    // A directory can contain far fewer rows than its parent. ListView keeps
+    // its previous scroll offset across setItems(), so reset before restoring
+    // selection or a one-row child directory can render completely offscreen.
+    _assetList->setScrollOffset(ayt::math::FVector2(0.0f, 0.0f));
+    int selected = -1;
+    for (std::size_t i = 0; i < _assetEntries.size(); ++i) {
+        if (!_assetEntries[i].folder
+            && _assetEntries[i].assetId == _selectedAssetId) {
+            selected = static_cast<int>(i);
+            break;
+        }
+    }
+    _assetList->setSelectedIndex(selected);
+    _updatingAssetSelection = false;
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_asset_path"))) {
+        label->setText(ayt::ui::decodeUtf8Text(_assetCurrentFolder));
+    }
+    if (_assetEntries.empty() && !_assetDatabase.scanPending()) {
+        setAssetBrowserStatus(query.empty()
+            ? L"This folder is empty. Use + to import an asset."
+            : L"No assets match the current search/filter.");
+    }
+}
+
+void EditorSession::selectAsset(EditorAssetId assetId)
+{
+    const EditorAssetRecord* record = _assetDatabase.find(assetId);
+    if (record == nullptr) return;
+    // Resource and entity selection are mutually exclusive. Clear the
+    // TreeView's visual selection as well as EditorSelection; otherwise a
+    // resource picked while (for example) Character is highlighted leaves
+    // that same row selected. Clicking Character again then produces no
+    // TreeView selection-change callback and the resource Inspector remains
+    // visible, including its Reload button.
+    if (_outliner != nullptr && _outliner->getSelectedIndex() >= 0) {
+        _outliner->setSelectedIndex(-1);
+    }
+    clearSelectedEntity(true, false);
+    _selectedAssetId = assetId;
+    setInspectorAssetMode(true);
+    refreshAssetInspector();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::clearSelectedAsset()
+{
+    if (_selectedAssetId == 0) {
+        setInspectorAssetMode(false);
+        return;
+    }
+    _selectedAssetId = 0;
+    setInspectorAssetMode(false);
+    if (_assetList != nullptr && !_updatingAssetSelection) {
+        _updatingAssetSelection = true;
+        _assetList->clearSelection();
+        _updatingAssetSelection = false;
+    }
+}
+
+void EditorSession::setInspectorAssetMode(bool assetMode)
+{
+    bool changed = false;
+    if (ayt::ui::Widget* entity = _ui.findById("inspector_entity_body")) {
+        const bool visible = !assetMode;
+        changed = changed || entity->isVisible() != visible;
+        entity->setVisible(visible);
+    }
+    if (ayt::ui::Widget* asset = _ui.findById("inspector_asset_body")) {
+        changed = changed || asset->isVisible() != assetMode;
+        asset->setVisible(assetMode);
+    }
+    if (changed) {
+        // UIManager caches layout by client size. Visibility changes alter
+        // VBox participation without resizing the window. Invalidate here
+        // and let populateFrame consume it before opening the native viewport
+        // hole; synchronous re-entry from an input callback can corrupt the
+        // composite layout.
+        _ui.invalidateLayout();
+    }
+}
+
+void EditorSession::refreshAssetInspector()
+{
+    const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
+    if (record == nullptr) return;
+    auto set = [this](const char* id, const std::wstring& text) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(_ui.findById(id))) {
+            label->setText(text);
+        }
+    };
+    set("inspector_hint", L"Project asset selected");
+    set("inspector_asset_header", ayt::ui::decodeUtf8Text(record->name));
+    set("inspector_asset_type", L"Type: "
+        + ayt::ui::decodeUtf8Text(editorAssetTypeName(record->type)));
+    set("inspector_asset_origin", record->origin == EditorAssetOrigin::Source
+        ? L"Origin: Assets (source)" : L"Origin: Imported (generated)");
+    set("inspector_asset_size", L"Size: " + assetSizeText(record->size));
+    set("inspector_asset_path", L"Path: "
+        + ayt::ui::decodeUtf8Text(record->logicalPath));
+    const auto state = ayt::resource::ResourceManager::instance()
+        .getLoadState(record->runtimePath);
+    const wchar_t* stateName = L"not loaded";
+    switch (state) {
+    case ayt::resource::ResourceLoadState::Loading: stateName = L"loading"; break;
+    case ayt::resource::ResourceLoadState::Ready: stateName = L"ready"; break;
+    case ayt::resource::ResourceLoadState::Failed: stateName = L"failed"; break;
+    case ayt::resource::ResourceLoadState::NotLoaded: break;
+    }
+    set("inspector_asset_state", std::wstring(L"State: ") + stateName);
+    _ui.invalidateLayout();
+}
+
+void EditorSession::setAssetBrowserStatus(const std::wstring& text,
+                                          bool mirrorToConsole)
+{
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("assets_status"))) label->setText(text);
+    if (mirrorToConsole) {
+        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+                _ui.findById("console_output"))) label->setText(text);
+    }
+    if (_repaintCallback) _repaintCallback();
+}
+
+bool EditorSession::rescanAssetsNow()
+{
+    std::string error;
+    const bool ok = _assetDatabase.scanNow(&error);
+    refreshAssetBrowser();
+    if (ok) {
+        setAssetBrowserStatus(
+            L"Indexed " + std::to_wstring(_assetDatabase.records().size())
+            + L" assets");
+    } else {
+        setAssetBrowserStatus(
+            L"Asset scan failed: " + ayt::ui::decodeUtf8Text(error), true);
+    }
+    return ok;
+}
+
+void EditorSession::importAssetFromDialog()
+{
+    const std::string source = ImportDialog::showOpenAssetFileDialog(_hostWindow);
+    if (source.empty()) return;
+    if (!Importer::isSupportedExtension(source)) {
+        setAssetBrowserStatus(L"Unsupported import type: "
+            + ayt::ui::decodeUtf8Text(source), true);
+        return;
+    }
+    setAssetBrowserStatus(L"Importing "
+        + ayt::ui::decodeUtf8Text(std::filesystem::path(source).filename().string())
+        + L"...", true);
+    const Importer::Result result = Importer::importAssetFile(
+        source, _assetDatabase.derivedRoot());
+    if (!result.success) {
+        setAssetBrowserStatus(L"Import failed: "
+            + ayt::ui::decodeUtf8Text(result.errorMessage), true);
+        return;
+    }
+    for (const auto& resource : result.conversion.resources) {
+        if (resource.path.empty()) continue;
+        std::filesystem::path output(resource.path);
+        if (output.is_relative()) output =
+            std::filesystem::path(_assetDatabase.derivedRoot()) / output;
+        _pendingAssetSelectionPath = output.lexically_normal().string();
+        break;
+    }
+    _assetCurrentFolder = "Imported";
+    (void)rescanAssetsNow();
+    setAssetBrowserStatus(result.usedCache
+        ? L"Import cache reused; asset index refreshed."
+        : L"Import complete; asset index refreshed.", true);
+}
+
+void EditorSession::reloadSelectedAsset()
+{
+    const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
+    if (record == nullptr) return;
+    ayt::resource::ResourceManager::instance().reloadResource(
+        record->runtimePath);
+    refreshAssetInspector();
+    setAssetBrowserStatus(L"Reload requested: "
+        + ayt::ui::decodeUtf8Text(record->name));
+}
+
+bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
+                                         float physicalX, float physicalY)
+{
+    const EditorAssetRecord* record = _assetDatabase.find(assetId);
+    if (record == nullptr || record->type != EditorAssetType::Mesh
+        || _document == nullptr || _gameView.mode() != EditorMode::Edit) {
+        return false;
+    }
+    ayt::entity::World* world = hierarchyWorldMutable();
+    if (world == nullptr) return false;
+    ayt::math::FVector3 direction;
+    if (!viewportRayDirection(physicalX, physicalY, direction)) return false;
+
+    ayt::math::FVector3 position = _freecam.eye() + direction * 5.0f;
+    if (std::fabs(direction.y) > 1.0e-5f) {
+        const float distance = -_freecam.eye().y / direction.y;
+        if (distance > 0.0f) position = _freecam.eye() + direction * distance;
+    }
+
+    std::shared_ptr<ayt::resource::IMesh> meshResource;
+    try {
+        meshResource = ayt::resource::ResourceManager::instance()
+            .load<ayt::resource::IMesh>(record->runtimePath);
+    } catch (...) {
+        // The entity still preserves the asset reference. Inspector/load state
+        // exposes a decoder failure and Reload can retry after hot replacement.
+    }
+    std::string materialPath;
+    if (meshResource != nullptr) {
+        if (meshResource->hasBounds()) {
+            position.y -= meshResource->getBounds().getMin().y;
+        }
+        if (meshResource->getMaterialSlotCount() > 0) {
+            const char* slot = meshResource->getMaterialSlot(0);
+            if (slot != nullptr && slot[0] != '\0') {
+                materialPath = ayt::resource::resolveAssetPath(
+                    record->runtimePath, slot);
+            }
+        }
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    if (entity == nullptr) return false;
+    const std::string stem = std::filesystem::path(record->name).stem().string();
+    const std::string name = (stem.empty() ? std::string("Mesh") : stem)
+        + " " + std::to_string(static_cast<unsigned>(entity->getId()));
+    entity->setName(name.c_str());
+    auto* transform = entity->addComponent<ayt::entity::Transform>();
+    transform->setPosition(position.x, position.y, position.z);
+    auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
+    mesh->meshPath = record->runtimePath;
+    mesh->materialPath = materialPath;
+
+    setSelectedEntity(world, entity);
+    _commands.clear();
+    _document->markDirty();
+    _outlinerRefreshPending = true;
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    setAssetBrowserStatus(L"Created scene entity from "
+        + ayt::ui::decodeUtf8Text(record->name));
+    if (_repaintCallback) _repaintCallback();
+    return true;
 }
 
 void EditorSession::setDockCardVisible(const char* cardId, bool visible) {
@@ -2241,6 +2943,10 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _applyingPreferences = true;
     _preferences = preferences;
 
+    installEditorTheme(preferences.themeName);
+    _ui.setUiScale(std::clamp(preferences.uiScale, 0.75f, 1.25f));
+    applyEditorVisualStyle(_ui, preferences.density);
+
     _viewportOrientationAxisVisible =
         preferences.viewportOrientationAxisVisible;
     if (_viewportOrientationAxisMenuItem != nullptr) {
@@ -2357,6 +3063,8 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
 EditorPreferences EditorSession::capturePreferences() const
 {
     EditorPreferences out = _preferences;
+    out.themeName = ayt::ui::ThemeManager::get().getActiveThemeName();
+    out.uiScale = _ui.getUiScale();
     out.viewportOrientationAxisVisible = _viewportOrientationAxisVisible;
     out.panelRenderVisible = _panelRenderVisible;
     out.panelInspectorVisible = _panelInspectorVisible;
@@ -2469,34 +3177,43 @@ void EditorSession::resetWorkspacePreferences()
     defaults.windowWidth = _preferences.windowWidth;
     defaults.windowHeight = _preferences.windowHeight;
     defaults.windowMaximized = _preferences.windowMaximized;
+    defaults.themeName = _preferences.themeName;
+    defaults.density = _preferences.density;
+    defaults.uiScale = _preferences.uiScale;
     applyPreferences(defaults);
     savePreferencesNow();
 }
 
 void EditorSession::setActiveTool(EditorTool tool)
 {
-    _activeTool = tool;
-    const wchar_t* name = L"Select";
-    switch (tool) {
-    case EditorTool::Move: name = L"Move"; break;
-    case EditorTool::Rotate: name = L"Rotate"; break;
-    case EditorTool::Scale: name = L"Scale"; break;
-    default: break;
+    if (_transformGizmo.active()) {
+        finishTransformGizmoDrag(false);
     }
+    _activeTool = tool;
+    _gizmoHoverHandle = EditorGizmoHandle::None;
+    // Kept as a preferences/API compatibility shim. Transform interaction no
+    // longer branches on this legacy mode; every selection uses Universal.
+    const wchar_t* name = L"Universal";
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_active_tool"))) {
         label->setText(name);
     }
+    syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::setLocalTransformSpace(bool local)
 {
+    if (_transformGizmo.active()) {
+        finishTransformGizmoDrag(false);
+    }
     _localTransformSpace = local;
+    _gizmoHoverHandle = EditorGizmoHandle::None;
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_tool_space"))) {
         button->setText(local ? L"Local" : L"World");
     }
+    syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
 }
 
@@ -3114,6 +3831,12 @@ void EditorSession::importCharacterFromDialog()
         return;
     }
 
+    // Character import uses the same project-local generated root as the
+    // Content Browser. Publish the newly cooked products before changing the
+    // preview selection so the browser is current without needing a manual R.
+    _assetCurrentFolder = "Imported";
+    (void)rescanAssetsNow();
+
     _playRuntime.replaceImportedCharacter(mapped);
     if (_gameView.mode() == EditorMode::Edit) {
         if (_document != nullptr) _document->markDirty();
@@ -3152,6 +3875,13 @@ void EditorSession::importCharacterFromDialog()
 // baseline 同样 fail）。Edit 模式行为不变。
 void EditorSession::refreshInspectorLabels()
 {
+    if (_selectedAssetId != 0) {
+        setInspectorAssetMode(true);
+        refreshAssetInspector();
+        return;
+    }
+    setInspectorAssetMode(false);
+
     auto setUtf8 = [this](const char* id, const std::string& utf8) {
         if (auto* w = _ui.findById(id)) {
             if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
@@ -3449,118 +4179,188 @@ void EditorSession::applyViewportSelection(ayt::entity::World* world,
     if (_repaintCallback) _repaintCallback();
 }
 
-bool EditorSession::beginEntityMoveDrag(float x, float y)
+EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
 {
-    if (_gameView.mode() != EditorMode::Edit
-        || _activeTool != EditorTool::Move) {
-        return false;
+    if (_gameView.mode() != EditorMode::Edit) {
+        return EditorGizmoHandle::None;
     }
-
     ayt::entity::World* world = hierarchyWorldMutable();
     ayt::entity::Entity* entity = _selection.resolve(world);
     auto* transform = entity != nullptr
         ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-    if (world == nullptr || entity == nullptr || transform == nullptr) {
-        return false;
+    if (world == nullptr || world != _selectionWorld || transform == nullptr) {
+        return EditorGizmoHandle::None;
     }
-
     ayt::math::FVector3 direction{};
     if (!viewportRayDirection(x, y, direction)) {
-        return false;
+        return EditorGizmoHandle::None;
     }
-    const ayt::math::FVector3 normal = _freecam.forward().normalize();
-    const float denominator = direction.dot(normal);
-    if (std::fabs(denominator) <= 1.0e-5f) {
-        return false;
-    }
-    const ayt::math::FVector3 origin = _freecam.eye();
-    const float distance = (transform->position - origin).dot(normal)
-        / denominator;
-    if (!std::isfinite(distance) || distance < 0.0f) {
-        return false;
-    }
-
-    _entityMoveWorld = world;
-    _entityMoveId = entity->getId();
-    _entityMoveBefore = {
+    const EditorTransformState state{
         transform->position, transform->rotation, transform->scale};
-    _entityMovePlaneNormal = normal;
-    _entityMoveStartHit = origin + direction * distance;
-    _entityMoveDragActive = true;
-    return true;
+    _gizmoDisabledHandleMask = EditorTransformGizmo::disabledHandleMask(
+        state, _localTransformSpace, _freecam.eye(),
+        _gizmoDisabledHandleMask);
+    return _transformGizmo.hitTestUniversal(
+        state, _localTransformSpace, _freecam.eye(), direction,
+        _gizmoDisabledHandleMask);
 }
 
-bool EditorSession::updateEntityMoveDrag(float x, float y)
+bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
+                                            float x, float y)
 {
-    if (!_entityMoveDragActive || _entityMoveWorld == nullptr) {
+    if (_gameView.mode() != EditorMode::Edit
+        || handle == EditorGizmoHandle::None) {
         return false;
     }
-    ayt::entity::Entity* entity = _entityMoveWorld->findEntity(_entityMoveId);
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
     auto* transform = entity != nullptr
         ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-    if (transform == nullptr) {
-        finishEntityMoveDrag(false);
+    if (world == nullptr || world != _selectionWorld || transform == nullptr) {
         return false;
     }
-
     ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) {
-        return true;
-    }
-    const float denominator = direction.dot(_entityMovePlaneNormal);
-    if (std::fabs(denominator) <= 1.0e-5f) {
-        return true;
-    }
-    const ayt::math::FVector3 origin = _freecam.eye();
-    const float distance = (_entityMoveBefore.position - origin)
-        .dot(_entityMovePlaneNormal) / denominator;
-    if (!std::isfinite(distance) || distance < 0.0f) {
-        return true;
-    }
+    if (!viewportRayDirection(x, y, direction)) return false;
 
-    const ayt::math::FVector3 hit = origin + direction * distance;
-    const ayt::math::FVector3 position =
-        _entityMoveBefore.position + (hit - _entityMoveStartHit);
-    transform->setPosition(position.x, position.y, position.z);
-    refreshTransformInspector();
+    const EditorTransformState state{
+        transform->position, transform->rotation, transform->scale};
+    if (!_transformGizmo.beginUniversal(
+            handle, state, _localTransformSpace,
+            _freecam.eye(), direction, y,
+            _gizmoDisabledHandleMask)) {
+        return false;
+    }
+    _gizmoDragWorld = world;
+    _gizmoDragEntityId = entity->getId();
+    _gizmoHoverHandle = handle;
+    syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
     return true;
 }
 
-void EditorSession::finishEntityMoveDrag(bool commit)
+bool EditorSession::updateTransformGizmoDrag(float x, float y)
 {
-    if (!_entityMoveDragActive) {
-        return;
+    if (!_transformGizmo.active() || _gizmoDragWorld == nullptr) {
+        return false;
     }
+    ayt::entity::Entity* entity =
+        _gizmoDragWorld->findEntity(_gizmoDragEntityId);
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (transform == nullptr) {
+        finishTransformGizmoDrag(false);
+        return false;
+    }
+    ayt::math::FVector3 direction{};
+    if (!viewportRayDirection(x, y, direction)) return true;
 
-    ayt::entity::World* world = _entityMoveWorld;
-    const uint32_t entityId = _entityMoveId;
-    const EditorTransformState before = _entityMoveBefore;
-    _entityMoveDragActive = false;
-    _entityMoveWorld = nullptr;
-    _entityMoveId = 0;
+    EditorTransformState updated;
+    if (_transformGizmo.update(
+            _freecam.eye(), direction, x, y, updated)) {
+        transform->setPosition(updated.position.x,
+                               updated.position.y,
+                               updated.position.z);
+        transform->setRotation(updated.rotation.x,
+                               updated.rotation.y,
+                               updated.rotation.z,
+                               updated.rotation.w);
+        transform->setScale(updated.scale.x,
+                            updated.scale.y,
+                            updated.scale.z);
+        refreshTransformInspector();
+        syncTransformGizmoToRenderer();
+        if (_repaintCallback) _repaintCallback();
+    }
+    return true;
+}
 
+void EditorSession::finishTransformGizmoDrag(bool commit)
+{
+    if (!_transformGizmo.active()) return;
+
+    ayt::entity::World* world = _gizmoDragWorld;
+    const uint32_t entityId = _gizmoDragEntityId;
+    const EditorTransformState before = _transformGizmo.before();
     ayt::entity::Entity* entity = world != nullptr
         ? world->findEntity(entityId) : nullptr;
     auto* transform = entity != nullptr
         ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-    if (transform == nullptr) {
-        return;
+    EditorTransformState after = before;
+    if (transform != nullptr) {
+        after = {transform->position, transform->rotation, transform->scale};
+        transform->setPosition(before.position.x, before.position.y,
+                               before.position.z);
+        transform->setRotation(before.rotation.x, before.rotation.y,
+                               before.rotation.z, before.rotation.w);
+        transform->setScale(before.scale.x, before.scale.y, before.scale.z);
     }
 
-    const EditorTransformState after{
-        transform->position, transform->rotation, transform->scale};
-    transform->setPosition(before.position.x, before.position.y,
-                           before.position.z);
-    transform->setRotation(before.rotation.x, before.rotation.y,
-                           before.rotation.z, before.rotation.w);
-    transform->setScale(before.scale.x, before.scale.y, before.scale.z);
-    if (commit) {
+    _transformGizmo.reset();
+    _gizmoDragWorld = nullptr;
+    _gizmoDragEntityId = 0;
+    _gizmoHoverHandle = EditorGizmoHandle::None;
+    if (commit && transform != nullptr) {
         _commands.executeTransform(*world, entityId, after);
     } else {
         refreshTransformInspector();
-        if (_repaintCallback) _repaintCallback();
     }
+    syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::updateTransformGizmoHover(float x, float y)
+{
+    if (_transformGizmo.active()) return;
+    const uint16_t oldDisabledHandles = _gizmoDisabledHandleMask;
+    const EditorGizmoHandle handle = hitTestTransformGizmo(x, y);
+    if (handle == _gizmoHoverHandle
+        && oldDisabledHandles == _gizmoDisabledHandleMask) {
+        return;
+    }
+    _gizmoHoverHandle = handle;
+    syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::syncTransformGizmoToRenderer()
+{
+    auto* subsystem = ayt::render::RendererSubSystem::findRegistered();
+    if (subsystem == nullptr) return;
+
+    ayt::render::EditorTransformGizmoState state;
+    if (_gameView.mode() == EditorMode::Edit) {
+        ayt::entity::World* world = hierarchyWorldMutable();
+        ayt::entity::Entity* entity = _selection.resolve(world);
+        auto* transform = entity != nullptr
+            ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+        if (world != nullptr && world == _selectionWorld
+            && transform != nullptr) {
+            const EditorTransformState transformState{
+                transform->position, transform->rotation, transform->scale};
+            _gizmoDisabledHandleMask =
+                EditorTransformGizmo::disabledHandleMask(
+                    transformState, _localTransformSpace, _freecam.eye(),
+                    _gizmoDisabledHandleMask);
+            state.visible = true;
+            state.position = transform->position;
+            state.rotation = transform->rotation;
+            state.localSpace = _localTransformSpace;
+            state.activeHandle = static_cast<uint8_t>(
+                _transformGizmo.active()
+                    ? _transformGizmo.activeHandle()
+                    : _gizmoHoverHandle);
+            state.disabledHandleMask = _gizmoDisabledHandleMask;
+            // The active handle must not dim halfway through a rotation that
+            // changes its own local basis. Camera movement is unavailable
+            // during a left-button gizmo drag, so keeping it active is safe.
+            state.disabledHandleMask &= static_cast<uint16_t>(
+                ~EditorTransformGizmo::handleBit(
+                    _transformGizmo.activeHandle()));
+            state.mode = ayt::render::EditorTransformGizmoMode::Universal;
+        }
+    }
+    if (!state.visible) _gizmoDisabledHandleMask = 0u;
+    subsystem->renderer().setEditorTransformGizmoState(state);
 }
 
 // ED-03: [Select] handler. Snapshots paths into the inspector.
@@ -3816,8 +4616,8 @@ void EditorSession::setInspectorHint(const std::wstring& text) {
 
 void EditorSession::onModeChanged(EditorMode mode) {
     _ui.cancelCapture();
-    finishEntityMoveDrag(false);
-    _entityMoveCandidate = false;
+    finishTransformGizmoDrag(false);
+    _gizmoHoverHandle = EditorGizmoHandle::None;
     if (_freecam.isLooking()) {
         _freecam.endLook();
     }
@@ -3878,6 +4678,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
     _ui.invalidateLayout();
     _ui.layout();
     syncViewport();
+    syncTransformGizmoToRenderer();
 
     if (_repaintCallback) {
         _repaintCallback();

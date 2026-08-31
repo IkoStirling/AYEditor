@@ -7,7 +7,9 @@
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorCommandStack.h"
+#include "AYEditor/EditorTransformGizmo.h"
 #include "AYEditor/EditorPreferences.h"
+#include "AYEditor/EditorAssetDatabase.h"
 #include "AYEditor/ImportedCharacterMapper.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditor/Importer.h"
@@ -44,12 +46,20 @@ namespace ayt::scene { class Scene; }
 // v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
 // TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
 // 任何 include AYEditor/EditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
-namespace ayt::ui { class TreeView; class MenuItem; }
+namespace ayt::ui {
+class TreeView;
+class ListView;
+class TextInput;
+class ComboBox;
+class MenuItem;
+}
 namespace ayt::ui { class LayoutEditorSession; }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
+
+class EditorAssetListView;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -58,6 +68,9 @@ namespace ayt::editor {
 struct EditorSessionDesc {
     ayt::ui::IRenderBackend* uiBackend = nullptr;
     std::string layoutPath;
+    // Open project root. Assets/ is the editable source tree and
+    // .ayeditor_cache/assets/ is the generated/imported tree.
+    std::string projectRoot;
     // Optional SVG icon directory containing Tabler's outline/ and filled/
     // folders. Empty keeps the JSON text placeholders, which makes embedded
     // and headless hosts independent from editor-only visual assets.
@@ -159,6 +172,15 @@ public:
         return _viewportOrientationAxisVisible;
     }
     uint32_t selectedEntityId() const noexcept { return _selection.entityId(); }
+    EditorAssetId selectedAssetId() const noexcept { return _selectedAssetId; }
+    EditorAssetDatabase& assetDatabase() noexcept { return _assetDatabase; }
+    const EditorAssetDatabase& assetDatabase() const noexcept {
+        return _assetDatabase;
+    }
+    // Host/test command surfaces used by the Content Browser actions.
+    bool rescanAssetsNow();
+    bool placeAssetInViewport(EditorAssetId assetId,
+                              float physicalX, float physicalY);
     const EditorFreecam& freecam() const noexcept { return _freecam; }
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
@@ -233,12 +255,17 @@ private:
     ayt::entity::Entity* pickEntityFromViewport(float x, float y);
     void applyViewportSelection(ayt::entity::World* world,
                                 ayt::entity::Entity* entity);
-    bool beginEntityMoveDrag(float x, float y);
-    bool updateEntityMoveDrag(float x, float y);
-    void finishEntityMoveDrag(bool commit);
+    EditorGizmoHandle hitTestTransformGizmo(float x, float y);
+    bool beginTransformGizmoDrag(EditorGizmoHandle handle,
+                                 float x, float y);
+    bool updateTransformGizmoDrag(float x, float y);
+    void finishTransformGizmoDrag(bool commit);
+    void updateTransformGizmoHover(float x, float y);
+    void syncTransformGizmoToRenderer();
     void setSelectedEntity(ayt::entity::World* world,
                            ayt::entity::Entity* entity);
-    void clearSelectedEntity(bool clearOutline = true);
+    void clearSelectedEntity(bool clearOutline = true,
+                             bool clearAssetSelection = true);
 
     // ED-03: commit the picked paths to the live character
     // (and to the runtime's pending-overrides buffer so a
@@ -315,6 +342,22 @@ private:
     void clearSplitterHovers();
     void syncSplitterRevealToMouse();
 
+    // Project Content Browser. The database only indexes files; AYResource
+    // remains the runtime loader. Tree/List callbacks defer destructive model
+    // rebuilds to update() for the same event-lifetime reason as Outliner.
+    void bindAssetBrowser();
+    void refreshAssetBrowser();
+    void rebuildAssetFolderMapping();
+    void refreshAssetList();
+    void selectAsset(EditorAssetId assetId);
+    void clearSelectedAsset();
+    void refreshAssetInspector();
+    void setInspectorAssetMode(bool assetMode);
+    void importAssetFromDialog();
+    void reloadSelectedAsset();
+    void setAssetBrowserStatus(const std::wstring& text,
+                               bool mirrorToConsole = false);
+
     // Declared before the runtime because EditorPlayRuntime borrows it.
     EditorWorldContext _worldContext;
     EditorPlayRuntime _playRuntime;
@@ -388,13 +431,11 @@ private:
     bool _orthographicView = false;
     bool _wireframeView = false;
 
-    bool _entityMoveCandidate = false;
-    bool _entityMoveDragActive = false;
-    uint32_t _entityMoveId = 0;
-    ayt::entity::World* _entityMoveWorld = nullptr;
-    EditorTransformState _entityMoveBefore;
-    ayt::math::FVector3 _entityMovePlaneNormal{};
-    ayt::math::FVector3 _entityMoveStartHit{};
+    EditorTransformGizmo _transformGizmo;
+    EditorGizmoHandle _gizmoHoverHandle = EditorGizmoHandle::None;
+    uint16_t _gizmoDisabledHandleMask = 0u;
+    uint32_t _gizmoDragEntityId = 0;
+    ayt::entity::World* _gizmoDragWorld = nullptr;
 
     // ED-03: staged Inspector pick state. Populated by
     // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
@@ -432,6 +473,26 @@ private:
     EditorSelection       _selection;
     ayt::entity::World*    _selectionWorld = nullptr;
     bool                  _outlinerRefreshPending = false;
+
+    EditorAssetDatabase _assetDatabase;
+    EditorAssetListView* _assetList = nullptr;
+    ayt::ui::TreeView* _assetTree = nullptr;
+    ayt::ui::TextInput* _assetSearch = nullptr;
+    ayt::ui::ComboBox* _assetTypeFilter = nullptr;
+    std::vector<EditorAssetEntry> _assetEntries;
+    std::vector<std::string> _assetFolderSourcePaths;
+    std::vector<std::string> _assetFolderFlatPaths;
+    std::vector<bool> _assetFolderSourceExpanded;
+    std::string _assetCurrentFolder = "Assets";
+    std::string _pendingAssetSelectionPath;
+    EditorAssetId _selectedAssetId = 0;
+    struct AssetDragData {
+        EditorAssetId id = 0;
+        EditorAssetType type = EditorAssetType::Unknown;
+        std::string runtimePath;
+    } _assetDragData;
+    bool _assetBrowserRefreshPending = false;
+    bool _updatingAssetSelection = false;
 
     EditorCommandStack _commands;
     bool _updatingTransformInputs = false;

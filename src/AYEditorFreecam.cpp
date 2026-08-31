@@ -149,22 +149,20 @@ void EditorFreecam::updateMovement(
     const float speed = _moveSpeed * boost * dtSeconds;
 
     ayt::math::FVector3 f = forward();
-    // Flatten forward for ground-plane WASD (keep pitch for look only).
-    ayt::math::FVector3 flat(f.x, 0.0f, f.z);
-    if (flat.lengthSq() > 1.0e-8f) {
-        flat = flat.normalize();
+    if (f.lengthSq() > 1.0e-8f) {
+        f = f.normalize();
     } else {
-        flat = ayt::math::FVector3(0.0f, 0.0f, -1.0f);
+        f = ayt::math::FVector3(0.0f, 0.0f, -1.0f);
     }
     const ayt::math::FVector3 r = right();
     const ayt::math::FVector3 worldUp(0.0f, 1.0f, 0.0f);
 
     ayt::math::FVector3 delta(0.0f, 0.0f, 0.0f);
     if (keyDown(keyboard, KeyCode::W)) {
-        delta = delta + flat;
+        delta = delta + f;
     }
     if (keyDown(keyboard, KeyCode::S)) {
-        delta = delta - flat;
+        delta = delta - f;
     }
     if (keyDown(keyboard, KeyCode::D)) {
         delta = delta + r;
@@ -175,9 +173,7 @@ void EditorFreecam::updateMovement(
     if (keyDown(keyboard, KeyCode::E) || keyDown(keyboard, KeyCode::Space)) {
         delta = delta + worldUp;
     }
-    if (keyDown(keyboard, KeyCode::Q)
-        || keyDown(keyboard, KeyCode::LeftControl)
-        || keyDown(keyboard, KeyCode::RightControl)) {
+    if (keyDown(keyboard, KeyCode::Q)) {
         delta = delta - worldUp;
     }
 

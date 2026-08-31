@@ -14,16 +14,25 @@ enum class EditorTool : uint8_t {
     Scale,
 };
 
+enum class EditorDensity : uint8_t {
+    Compact = 0,
+    Comfortable,
+};
+
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 1;
+    static constexpr int kCurrentSchemaVersion = 2;
 
     int schemaVersion = kCurrentSchemaVersion;
 
     int windowWidth = 1280;
     int windowHeight = 720;
     bool windowMaximized = false;
+
+    std::string themeName = "aliyat-editor-dark";
+    EditorDensity density = EditorDensity::Compact;
+    float uiScale = 1.0f;
 
     std::string dockTree;
     bool panelRenderVisible = true;
@@ -73,6 +82,9 @@ inline bool operator==(const EditorPreferences& a,
         && a.windowWidth == b.windowWidth
         && a.windowHeight == b.windowHeight
         && a.windowMaximized == b.windowMaximized
+        && a.themeName == b.themeName
+        && a.density == b.density
+        && a.uiScale == b.uiScale
         && a.dockTree == b.dockTree
         && a.panelRenderVisible == b.panelRenderVisible
         && a.panelInspectorVisible == b.panelInspectorVisible

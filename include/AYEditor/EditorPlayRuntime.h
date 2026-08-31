@@ -165,7 +165,8 @@ public:
     // the same root the runtime uses for ensureAssets(). Single
     // source of truth - no risk of cache-root drift between
     // EditorApp and EditorPlayRuntime. Returns
-    // "<exeDir>/ayeditor_cache\\" on Windows (single trailing '\\'),
+    // "<project>/.ayeditor_cache/" when AYProject has a root; otherwise
+    // "<exeDir>/ayeditor_cache\\" on Windows (single trailing separator),
     // or the literal relative path on GetModuleFileNameA failure.
     static std::string resolvePersistentCacheRoot();
 

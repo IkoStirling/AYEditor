@@ -32,6 +32,10 @@ public:
     // call site compiles cross-platform even though the toolbar
     // button is wired unconditionally.
     static std::string showOpenFileDialog(void* ownerWindowHandle);
+
+    // Generic Content Browser picker. The converter remains the authority on
+    // supported extensions; this filter only keeps the common choices handy.
+    static std::string showOpenAssetFileDialog(void* ownerWindowHandle);
 };
 
 } // namespace ayt::editor

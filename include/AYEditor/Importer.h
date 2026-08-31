@@ -27,7 +27,7 @@ public:
         float normalMapYSign = 1.0f;
     };
     // Run one import. Writes the converted files under `destinationDir`
-    // (typically the editor's `ayeditor_cache/assets/` root; see
+    // (typically the opened project's `.ayeditor_cache/assets/` root; see
     // EditorPlayRuntime::resolvePersistentCacheRoot). `sourcePath` must
     // already exist on disk — the IConverter implementation will open
     // it. Returns the ConversionResult from `IConverter::convert()` on
@@ -55,6 +55,14 @@ public:
     // textures or helper geometry. The resulting clip is intended to target a
     // separately imported character skeleton with identical bone names.
     static Result importAnimationFile(
+        const std::string& sourcePath,
+        const std::string& destinationDir,
+        const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});
+
+    // Generic Content Browser import. Unlike importFile(), this does not
+    // require a character skeleton/mesh set and therefore accepts ordinary
+    // static models and every other extension supported by AYResource.
+    static Result importAssetFile(
         const std::string& sourcePath,
         const std::string& destinationDir,
         const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});

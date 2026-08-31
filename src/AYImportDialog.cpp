@@ -75,4 +75,29 @@ std::string ImportDialog::showOpenFileDialog(void* ownerWindowHandle)
 #endif
 }
 
+std::string ImportDialog::showOpenAssetFileDialog(void* ownerWindowHandle)
+{
+#if !defined(_WIN32)
+    (void)ownerWindowHandle;
+    return std::string{};
+#else
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = static_cast<HWND>(ownerWindowHandle);
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        "Importable assets (*.fbx;*.gltf;*.glb;*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.dds;*.wav;*.ogg;*.mp3)\0"
+        "*.fbx;*.gltf;*.glb;*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.dds;*.wav;*.ogg;*.mp3\0"
+        "3D models (*.fbx;*.gltf;*.glb)\0*.fbx;*.gltf;*.glb\0"
+        "Images (*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.dds)\0*.png;*.jpg;*.jpeg;*.tga;*.bmp;*.dds\0"
+        "Audio (*.wav;*.ogg;*.mp3)\0*.wav;*.ogg;*.mp3\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+#endif
+}
+
 } // namespace ayt::editor

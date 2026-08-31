@@ -19,13 +19,16 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorHierarchy.cpp
     Test_EditorSceneBridge.cpp
     Test_EditorP0Core.cpp
+    Test_EditorTransformGizmo.cpp
+    Test_EditorAssetBrowser.cpp
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
      PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 set_property(SOURCE main.cpp APPEND PROPERTY
     OBJECT_DEPENDS "${AY_EDITOR_EMBEDDED_TEST_SOURCES}")
 
-target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource AYIO AYEntity AYScene)
+target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource
+    AYIO AYProject AYEntity AYScene)
 
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include

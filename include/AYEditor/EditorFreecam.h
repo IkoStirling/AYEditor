@@ -6,8 +6,9 @@ namespace ayt::device { class KeyboardDevice; }
 
 namespace ayt::editor {
 
-// Editor-owned freecam (Play/Paused viewport). LMB drag looks,
-// WASD/QE move. Does not use PlayerController / Logia.
+// Editor-owned freecam for Edit/Play/Paused viewports. Holding RMB enters
+// fly navigation: mouse looks, W/S move along the view direction, A/D
+// strafe and Q/E move vertically. Does not use PlayerController / Logia.
 class EditorFreecam {
 public:
     EditorFreecam();

@@ -14,6 +14,8 @@
 #include "Test_EditorHierarchy.cpp"            // v0.3+ PR-5 case definitions
 #include "Test_EditorSceneBridge.cpp"          // v0.4 PR-1 Scene runtime bridge
 #include "Test_EditorP0Core.cpp"               // P0 document/selection/command core
+#include "Test_EditorTransformGizmo.cpp"        // transform gizmo ray/constraint math
+#include "Test_EditorAssetBrowser.cpp"          // project asset index/browser/drag-drop
 
 int main(int argc, char* argv[]) {
     const int result = argc > 1

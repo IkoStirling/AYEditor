@@ -1,6 +1,6 @@
 # AYEditor Cache Path Convention
 
-Status: **frozen** — ED-01 acceptance (2026-07-09).
+Status: **active** — ED-01 acceptance, project-root amendment (2026-08-31).
 Owner: Editor team.
 Supersedes: ad-hoc hard-coded paths previously scattered in
 `AYEditorPlayRuntime::resolvePersistentCacheRoot` and `AYImporter` callers.
@@ -11,28 +11,26 @@ This convention pins down the on-disk layout that the editor writes under
 when it imports assets, bakes previews, or caches compiled shaders.
 It does **not** cover the engine-side `ayt::resource::setAssetRoot` global
 (see `AYResource/docs/runtime-conventions.md` §3) — that one is for
-runtime asset resolution, not editor cache layout. The editor never
-calls `setAssetRoot`.
+runtime asset resolution, not editor cache layout. `EditorPlayRuntime` wires
+that runtime root to this cache's `assets/` directory after resolving it.
 
 ## Root
 
-The cache root is **`<exeDir>/ayeditor_cache/`** — i.e. the directory that
-contains the running `AYEditorShell_Demo.exe` (or, in future, the unified
-`AYEditorShell.exe`). On Windows, this is whatever `GetModuleFileNameA(nullptr)`
-returns with the filename stripped. On failure to resolve, the root falls
-back to the literal relative path `ayeditor_cache\` (working-directory-relative).
+The primary cache root is **`<project>/.ayeditor_cache/`** whenever
+`AYProject::Project` has an opened root. This keeps imports, preview assets and
+shader output with the project and makes `.ayeditor_cache/assets` the Content
+Browser's `Imported` root.
 
-> The cache lives next to the executable because the editor binary is what
-> ships to designers; designers do not have an engine-source checkout.
-> Migrating to a project-relative path requires the `AYProject` abstraction
-> (Foundation Plan §S-02) — once that lands, this convention is the
-> fallback for a project with no explicit cache root.
+For hosts/tests that have not opened a project, the compatibility fallback is
+**`<exeDir>/ayeditor_cache/`**. On Windows this is resolved with
+`GetModuleFileNameA(nullptr)`; if that also fails, the literal relative path
+`ayeditor_cache\` is used.
 
 ## Layout
 
 ```
-<exeDir>/
-└── ayeditor_cache/
+<project>/
+└── .ayeditor_cache/
     ├── assets/              ← Importer writes here; engine reads here
     │   ├── meshes/             (created on demand by FBXConverter)
     │   ├── materials/          (created on demand by FBXConverter)
@@ -104,21 +102,22 @@ the editor.
    the file header — duplicate-imports dedupe by GUID rewrite, not
    by directory structure.
 
-5. **Cross-platform: use `ayt::io::path::join` and `normalize`.**
-   Do not hard-code `\\` in new code paths. The existing
-   `resolvePersistentCacheRoot` does this because it must work
-   before `AYIO` has migrated its `path` namespace — leave as-is
-   for now; new code paths use `ayt::io::path::*`.
+5. **Cross-platform: use `std::filesystem` or `ayt::io::path`.**
+   New code must not construct project-relative paths by string concatenation.
+   A trailing preferred separator is retained only at the legacy string API
+   boundary used by existing converter/bootstrap callers.
 
 ## Migration path
 
-When `AYProject` ships (Foundation Plan §S-02), `resolvePersistentCacheRoot`
-gains a sibling `resolveProjectCacheRoot(projectPath)` that returns
-`<projectPath>/.ayeditor_cache/` instead of `<exeDir>/ayeditor_cache/`.
-Until then, the above convention is canonical.
+The AYProject migration is complete: `resolvePersistentCacheRoot()` consults
+the process-wide project path authority first and retains the executable-local
+root only as a compatibility fallback. A future cache service may split
+user-imported products from transient preview/shader products without changing
+the Content Browser's `Imported` virtual root.
 
 ## Versioning
 
 | Version | Date | Change |
 |---|---|---|
 | 1.0 | 2026-07-09 | ED-01 acceptance; freeze initial layout |
+| 1.1 | 2026-08-31 | Prefer `<project>/.ayeditor_cache`; expose `assets/` as Content Browser `Imported` |
