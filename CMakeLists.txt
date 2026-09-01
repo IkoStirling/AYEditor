@@ -25,6 +25,8 @@ set(SRC_FILES
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetListView.cpp
+    src/AYEditor2DViewportModel.cpp
+    src/AYEditorTilemapDocument.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
@@ -58,6 +60,8 @@ set(HEAD_FILES
     include/AYEditor/EditorVisualStyle.h
     include/AYEditor/EditorAssetDatabase.h
     include/AYEditor/EditorAssetListView.h
+    include/AYEditor/Editor2DViewportModel.h
+    include/AYEditor/EditorTilemapDocument.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
     include/AYEditor/ImportedCharacterMapper.h

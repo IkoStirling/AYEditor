@@ -785,6 +785,7 @@ rendering primitives:
 | 2026-08-31 | Universal Gizmo 对朝向相机的轴和侧视退化的平面/圆环使用 0.25/0.32 投影滞回门限；暗色禁用并从 CPU 拾取中排除 |
 | 2026-08-31 | Universal Gizmo 调整为短缩放/长平移比例；热区覆盖全部可见几何并保留外扩容差；hover/drag 保持普通箭头，仅由 handle 高亮反馈 |
 | 2026-08-31 | Content Browser P0 采用 AYEditor 轻量项目索引：Assets/Imported 双根、搜索过滤、资源 Inspector、导入与 Mesh 拖入视口；加载继续复用 AYResource |
+| 2026-09-01 | 2D authoring 先落 UI-independent 模型：`Editor2DViewportModel` 负责正交视口换算/网格吸附，`EditorTilemapDocument` 负责 paint/fill/collision/animation 与 `.aytilemap.json` 保存加载；AYUI 后续只绑定通用控件。 |
 
 ---
 

@@ -10,6 +10,8 @@
 #include <AYEditor/EditorPlayerController.h>
 #include <AYEditor/EditorSession.h>
 #include <AYEditor/EditorWorldContext.h>
+#include <AYEditor/Editor2DViewportModel.h>
+#include <AYEditor/EditorTilemapDocument.h>
 #include <AYEditor/ImportDialog.h>
 #include <AYEditor/ImportedCharacterMapper.h>
 #include <AYEditor/Importer.h>
