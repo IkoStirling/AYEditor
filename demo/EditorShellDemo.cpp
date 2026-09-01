@@ -351,6 +351,12 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Render.Tonemap", out.tonemapMode)), 0, 3);
     out.fxaaEnabled = saved.getBool(
         "Editor.Render.FXAA", out.fxaaEnabled);
+    out.smaaEnabled = saved.getBool(
+        "Editor.Render.SMAA", out.smaaEnabled);
+    // SMAA is the editor's preferred AA path. Older preferences only carry
+    // FXAA, so the new default also performs the one-time migration without
+    // ever chaining both filters.
+    if (out.smaaEnabled) out.fxaaEnabled = false;
     out.colorGradingEnabled = saved.getBool(
         "Editor.Render.ColorGrading.Enabled", out.colorGradingEnabled);
     out.colorGradingPreset = std::clamp(static_cast<int>(saved.getInt(
@@ -412,6 +418,7 @@ bool saveEditorPreferences(const std::string& path,
     config.setFloat("Editor.Render.ShadowBias", value.shadowBias);
     config.setInt("Editor.Render.Tonemap", value.tonemapMode);
     config.setBool("Editor.Render.FXAA", value.fxaaEnabled);
+    config.setBool("Editor.Render.SMAA", value.smaaEnabled);
     config.setBool("Editor.Render.ColorGrading.Enabled",
                    value.colorGradingEnabled);
     config.setInt("Editor.Render.ColorGrading.Preset",
@@ -605,6 +612,10 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
     desc.height = static_cast<uint32_t>(editorPreferences.windowHeight);
 
     auto app = ayt::editor::EditorApp::create(desc);
+    // AYEditorShell_Demo is the renderer/editor integration fixture. Keep its
+    // reference Character/Ground/Cube/Glass scene explicit so future product
+    // editor entry points do not inherit test content by accident.
+    app->setEditorTestSceneEnabled(true);
     app->setDefaultImportPath(defaultImportPath);
     app->setDefaultAnimationImportPath(defaultAnimationImportPath);
     app->setProjectRoot(editorConfig.getString(kProjectRootKey));

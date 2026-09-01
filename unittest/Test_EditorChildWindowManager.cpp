@@ -22,6 +22,7 @@
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
 #include "AYUI/DockOverlay.h"
+#include "AYUI/DockTabGroup.h"
 #include "AYUI/MockRenderer.h"
 
 #include <cstdio>
@@ -394,6 +395,83 @@ TEST_CASE(test_promote_live_card_migration) {
     CHECK(mgr.count() == 0);
     CHECK_FALSE(::IsWindow(childHwnd));
     CHECK(::IsWindow(primaryHwnd));
+
+    primary.shutdown();
+    wm.destroyWindow();
+}
+
+TEST_CASE(test_detached_persistent_card_close_parks_and_reopens_same_instance) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "D5.5 Persistent Panel Primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+    const HWND primaryHwnd = static_cast<HWND>(wm.getWindowHandle());
+
+    MockRenderer backend;
+    UIManager primary;
+    primary.initialize(&backend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    auto* dock = new DockArea();
+    dock->setId("shell");
+    dock->setSize({800.0f, 600.0f});
+    primary.root()->addChild(dock);
+
+    auto ownedCard = std::make_unique<DockCard>();
+    DockCard* panel = ownedCard.get();
+    panel->setId("render-settings");
+    panel->setTitle(L"Render Settings");
+    auto* content = new Widget();
+    content->setId("persistent-content");
+    panel->setContent(content);
+    dock->addCard(DockArea::Slot::Right, std::move(ownedCard));
+    primary.layout();
+
+    dock->setOnCardCloseRequested([dock](DockCard* requested) {
+        if (requested == nullptr || requested->getId() != "render-settings") {
+            return false;
+        }
+        return dock->setCardVisible("render-settings", false,
+                                    DockArea::Slot::Right);
+    });
+
+    CHECK(dock->floatCard("render-settings", {420.0f, 80.0f}));
+    CHECK(dock->getOverlay()->getFloatingCardCount() == 1);
+
+    EditorChildWindowManager mgr(wm, primary);
+    mgr.setRedockTarget(dock);
+    panel->setPromoteCallback(
+        [&mgr](DockCard* card, const std::wstring& title,
+               int x, int y, int w, int h) -> bool {
+            return mgr.promoteCard(card, title, x, y, w, h);
+        });
+
+    CHECK(panel->detachToOwnWindow());
+    CHECK(mgr.count() == 1);
+    CHECK(panel->getContent() == content);
+    const HWND childHwnd = static_cast<HWND>(mgr.entries()[0].handle);
+
+    ::SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+    CHECK(mgr.count() == 1);
+    CHECK(mgr.entries()[0].closeRequested);
+    mgr.tickAll(0.0f);
+
+    CHECK(mgr.count() == 0);
+    CHECK_FALSE(::IsWindow(childHwnd));
+    CHECK(::IsWindow(primaryHwnd));
+    CHECK(dock->findCard("render-settings") == panel);
+    CHECK(panel->getContent() == content);
+    CHECK_FALSE(panel->isVisible());
+
+    // Mirrors the Window-menu action: reveal the parked live instance.
+    CHECK(dock->setCardVisible("render-settings", true,
+                               DockArea::Slot::Right));
+    CHECK(panel->isVisible());
+    CHECK(panel->getContent() == content);
+    CHECK(dynamic_cast<DockTabGroup*>(panel->getParent()) != nullptr);
 
     primary.shutdown();
     wm.destroyWindow();

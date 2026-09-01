@@ -1,12 +1,12 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorAssetDatabase.h"
-#include "AYEditor/EditorAssetListView.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorSession.h"
 #include "AYApplication.h"
 #include "AYApplication/IEngineHost.h"
 #include "AYProject/Project.h"
+#include "AYUI/TileView.h"
 #include "AYScene/SceneManager.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/TextLabel.h"
@@ -45,6 +45,13 @@ std::string resolveAssetBrowserLayout()
     return std::filesystem::exists(path) ? path.string() : std::string{};
 }
 
+ayt::math::FVector2 rectCenter(const ayt::math::FRectangle& rectangle)
+{
+    return ayt::math::FVector2(
+        (rectangle.minX + rectangle.maxX) * 0.5f,
+        (rectangle.minY + rectangle.maxY) * 0.5f);
+}
+
 struct AssetBrowserTempCleanup {
     std::filesystem::path root;
     ~AssetBrowserTempCleanup() {
@@ -74,6 +81,8 @@ TEST_CASE(editor_asset_type_classification_covers_runtime_and_source_files)
     CHECK(classifyEditorAssetPath("editor.ui.json") == EditorAssetType::UiLayout);
     CHECK(classifyEditorAssetPath("Hero.FBX") == EditorAssetType::SourceModel);
     CHECK(classifyEditorAssetPath("albedo.PNG") == EditorAssetType::Texture);
+    CHECK(classifyEditorAssetPath("material.phoskia") == EditorAssetType::Shader);
+    CHECK(classifyEditorAssetPath("controller.logia") == EditorAssetType::Script);
 }
 
 TEST_CASE(editor_runtime_cache_follows_open_project_root)
@@ -151,7 +160,7 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
 
     auto* tree = dynamic_cast<ayt::ui::TreeView*>(
         session.ui().findById("tree_assets"));
-    auto* list = dynamic_cast<EditorAssetListView*>(
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
         session.ui().findById("list_assets"));
     CHECK(tree != nullptr);
     CHECK(list != nullptr);
@@ -161,27 +170,39 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
         return;
     }
 
-    // Assets root contains Models. Folder navigation is intentionally a
-    // mouse-up action: an update between down/up must not rebuild the list and
-    // reinterpret the release as a click on the new folder's first asset.
+    // Assets root contains Models. Tile selection is independent from folder
+    // activation; navigation requires a complete double click.
     CHECK(list->getItemCount() == 1u);
-    const auto rootListBounds = list->getWorldBounds();
-    const auto folderClick = session.ui().logicalToPhysical({
-        rootListBounds.minX + 24.0f,
-        rootListBounds.minY + list->getItemHeight() * 0.5f});
-    session.onMouseMove(folderClick.x, folderClick.y);
-    (void)session.onMouseButtonDown(folderClick.x, folderClick.y, 0);
-    session.update(0.0f);
-    CHECK(list->getItem(0).find(L"[Folder]") != std::wstring::npos);
-    (void)session.onMouseButtonUp(folderClick.x, folderClick.y, 0);
+    ayt::ui::TileCell* folderCell = list->cellForLogicalIndex(0);
+    CHECK(folderCell != nullptr);
+    CHECK(folderCell != nullptr
+          && folderCell->getInfoStripText() == L"DIR");
+    CHECK(folderCell != nullptr
+          && !folderCell->isCornerMarkerVisible());
+    const auto folderClick = session.ui().logicalToPhysical(
+        folderCell != nullptr
+            ? rectCenter(folderCell->getThumbnailRect())
+            : ayt::math::FVector2{});
+    for (int click = 0; click < 2; ++click) {
+        session.onMouseMove(folderClick.x, folderClick.y);
+        (void)session.onMouseButtonDown(folderClick.x, folderClick.y, 0);
+        (void)session.onMouseButtonUp(folderClick.x, folderClick.y, 0);
+        if (click == 0) session.update(0.1f);
+    }
     session.update(0.0f);
     CHECK(list->getItemCount() == 1u);
-    CHECK(list->getItem(0).find(L"[Mesh]") != std::wstring::npos);
+    CHECK(list->getItem(0).find(L"Crate.aymesh") != std::wstring::npos);
+    ayt::ui::TileCell* assetCell = list->cellForLogicalIndex(0);
+    CHECK(assetCell != nullptr);
+    CHECK(assetCell != nullptr
+          && assetCell->getInfoStripText() == L"MESH");
+    CHECK(assetCell != nullptr
+          && assetCell->isCornerMarkerVisible());
 
-    const auto assetListBounds = list->getWorldBounds();
-    const auto assetClick = session.ui().logicalToPhysical({
-        assetListBounds.minX + 24.0f,
-        assetListBounds.minY + list->getItemHeight() * 0.5f});
+    const auto assetClick = session.ui().logicalToPhysical(
+        assetCell != nullptr
+            ? rectCenter(assetCell->getThumbnailRect())
+            : ayt::math::FVector2{});
     session.onMouseMove(assetClick.x, assetClick.y);
     (void)session.onMouseButtonDown(assetClick.x, assetClick.y, 0);
     (void)session.onMouseButtonUp(assetClick.x, assetClick.y, 0);
@@ -244,7 +265,7 @@ TEST_CASE(editor_asset_browser_folder_navigation_resets_stale_list_scroll)
     session.setClientSize(1280.0f, 720.0f);
     CHECK(session.rescanAssetsNow());
 
-    auto* list = dynamic_cast<EditorAssetListView*>(
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
         session.ui().findById("list_assets"));
     CHECK(list != nullptr);
     if (list == nullptr) {
@@ -268,20 +289,23 @@ TEST_CASE(editor_asset_browser_folder_navigation_resets_stale_list_scroll)
     }
     CHECK(targetIndex >= 0);
     if (targetIndex >= 0) {
-        const auto bounds = list->getWorldBounds();
-        const float y = bounds.minY
-            + static_cast<float>(targetIndex) * list->getItemHeight()
-            - list->getScrollOffset().y + list->getItemHeight() * 0.5f;
-        const auto click = session.ui().logicalToPhysical({
-            bounds.minX + 24.0f, y});
-        session.onMouseMove(click.x, click.y);
-        (void)session.onMouseButtonDown(click.x, click.y, 0);
-        (void)session.onMouseButtonUp(click.x, click.y, 0);
+        list->scrollToIndex(targetIndex);
+        ayt::ui::TileCell* target = list->cellForLogicalIndex(targetIndex);
+        CHECK(target != nullptr);
+        const auto click = session.ui().logicalToPhysical(
+            target != nullptr ? rectCenter(target->getThumbnailRect())
+                              : ayt::math::FVector2{});
+        for (int count = 0; count < 2; ++count) {
+            session.onMouseMove(click.x, click.y);
+            (void)session.onMouseButtonDown(click.x, click.y, 0);
+            (void)session.onMouseButtonUp(click.x, click.y, 0);
+            if (count == 0) session.update(0.1f);
+        }
         session.update(0.0f);
     }
     CHECK(list->getItemCount() == 1u);
     CHECK_FLOAT_EQ(list->getScrollOffset().y, 0.0f, 1e-5f);
-    CHECK(list->getItem(0).find(L"[Mesh]") != std::wstring::npos);
+    CHECK(list->getItem(0).find(L"Crate.aymesh") != std::wstring::npos);
     session.shutdown();
 }
 
@@ -304,7 +328,7 @@ TEST_CASE(editor_asset_drag_reaches_viewport_and_creates_mesh_entity)
     session.setClientSize(1280.0f, 720.0f);
     CHECK(session.rescanAssetsNow());
 
-    auto* list = dynamic_cast<EditorAssetListView*>(
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
         session.ui().findById("list_assets"));
     ayt::ui::Widget* viewport = session.ui().findById("panel_viewport");
     auto* scenes = ayt::app::defaultEngineHost().scenes();
@@ -318,9 +342,11 @@ TEST_CASE(editor_asset_drag_reaches_viewport_and_creates_mesh_entity)
         return;
     }
     const std::size_t before = scenes->edit()->world().getAllEntities().size();
-    const auto listBounds = list->getWorldBounds();
-    const auto press = session.ui().logicalToPhysical({
-        listBounds.minX + 20.0f, listBounds.minY + 10.0f});
+    ayt::ui::TileCell* dragCell = list->cellForLogicalIndex(0);
+    CHECK(dragCell != nullptr);
+    const auto press = session.ui().logicalToPhysical(
+        dragCell != nullptr ? rectCenter(dragCell->getThumbnailRect())
+                            : ayt::math::FVector2{});
     session.onMouseMove(press.x, press.y);
     (void)session.onMouseButtonDown(press.x, press.y, 0);
     CHECK(session.ui().isCapturing());

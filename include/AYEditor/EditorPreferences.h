@@ -22,7 +22,7 @@ enum class EditorDensity : uint8_t {
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 2;
+    static constexpr int kCurrentSchemaVersion = 3;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -67,7 +67,8 @@ struct EditorPreferences {
     float ambientStrength = 0.85f;
     float shadowBias = 0.003f;
     int tonemapMode = 2;
-    bool fxaaEnabled = true;
+    bool fxaaEnabled = false;
+    bool smaaEnabled = true;
     bool colorGradingEnabled = false;
     int colorGradingPreset = 1;
     float colorGradingStrength = 0.75f;
@@ -119,6 +120,7 @@ inline bool operator==(const EditorPreferences& a,
         && a.shadowBias == b.shadowBias
         && a.tonemapMode == b.tonemapMode
         && a.fxaaEnabled == b.fxaaEnabled
+        && a.smaaEnabled == b.smaaEnabled
         && a.colorGradingEnabled == b.colorGradingEnabled
         && a.colorGradingPreset == b.colorGradingPreset
         && a.colorGradingStrength == b.colorGradingStrength

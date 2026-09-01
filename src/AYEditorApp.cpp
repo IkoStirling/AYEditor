@@ -3,6 +3,7 @@
 #include "AYEditor/EditorHeapDebug.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorSession.h"
+#include "AYEditor/EditorStartupSplash.h"
 #include "AYEditor/RegisterDefaultEditorModules.h"
 #include "AYGameLoop.h"
 #include "AYDevice/DeviceManager.h"
@@ -24,6 +25,7 @@
 #include <AYProject/Project.h>
 #include <AYPlatform/Console.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -51,6 +53,22 @@ constexpr int kEditorChromeDragLeft = 360;
 constexpr int kEditorChromeButtonsWidth = 92;
 constexpr int kEditorResizeBorder = 6;
 
+void renderEditorWarmupFrame(EditorSession& session,
+                             ayt::render::RendererSubSystem& rendererSub,
+                             ayt::render::UIRenderBackend& uiBackend)
+{
+    rendererSub.renderCompositeFrame(
+        session.shouldCompositeViewport(), &uiBackend,
+        [&session](bool skipViewportPanel,
+                   ayt::render::CompositeUiPhase phase) {
+            if (phase == ayt::render::CompositeUiPhase::Populate) {
+                session.populateFrame(skipViewportPanel);
+            } else {
+                session.flushFrame();
+            }
+        });
+}
+
 std::intptr_t handleEditorBorderlessMessage(HWND hwnd, unsigned msg,
                                              std::uintptr_t wParam,
                                              std::intptr_t lParam,
@@ -58,23 +76,11 @@ std::intptr_t handleEditorBorderlessMessage(HWND hwnd, unsigned msg,
 {
     switch (msg) {
     case WM_NCCALCSIZE:
-        // The whole HWND is editor client area. While maximized, constrain it
-        // to the monitor work area so the taskbar remains reachable.
-        if (::IsZoomed(hwnd) != FALSE) {
-            RECT* proposed = nullptr;
-            if (lParam != 0) {
-                proposed = wParam != 0
-                    ? &reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam)->rgrc[0]
-                    : reinterpret_cast<RECT*>(lParam);
-            }
-            MONITORINFO monitorInfo{};
-            monitorInfo.cbSize = sizeof(monitorInfo);
-            const HMONITOR monitor = ::MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-            if (proposed != nullptr
-                && ::GetMonitorInfoW(monitor, &monitorInfo) != FALSE) {
-                *proposed = monitorInfo.rcWork;
-            }
-        }
+        // The whole HWND is editor client area in every window state. Do not
+        // put rcWork here: a maximized HWND still spans rcMonitor, so shrinking
+        // only its client rectangle leaves the taskbar-height remainder as an
+        // unpainted non-client strip. WM_GETMINMAXINFO below constrains the
+        // HWND itself to the monitor work area instead.
         handled = true;
         return 0;
 
@@ -116,9 +122,38 @@ std::intptr_t handleEditorBorderlessMessage(HWND hwnd, unsigned msg,
         if (limits != nullptr) {
             limits->ptMinTrackSize.x = 960;
             limits->ptMinTrackSize.y = 600;
+
+            MONITORINFO monitorInfo{};
+            monitorInfo.cbSize = sizeof(monitorInfo);
+            const HMONITOR monitor = ::MonitorFromWindow(
+                hwnd, MONITOR_DEFAULTTONEAREST);
+            if (::GetMonitorInfoW(monitor, &monitorInfo) != FALSE) {
+                const RECT& monitorRect = monitorInfo.rcMonitor;
+                const RECT& workRect = monitorInfo.rcWork;
+                limits->ptMaxPosition.x = workRect.left - monitorRect.left;
+                limits->ptMaxPosition.y = workRect.top - monitorRect.top;
+                limits->ptMaxSize.x = workRect.right - workRect.left;
+                limits->ptMaxSize.y = workRect.bottom - workRect.top;
+            }
         }
         handled = true;
         return 0;
+    }
+
+    case WM_ERASEBKGND: {
+        // The AYDevice main-window class has a COLOR_WINDOW brush for generic
+        // applications. Before the first GPU present that would expose a white
+        // client area. Paint the editor's bootstrap colour instead; after the
+        // renderer starts this remains a harmless resize/failure fallback.
+        HDC dc = reinterpret_cast<HDC>(wParam);
+        RECT client{};
+        if (dc != nullptr && ::GetClientRect(hwnd, &client) != FALSE) {
+            ::SetDCBrushColor(dc, RGB(0x14, 0x16, 0x1B));
+            ::FillRect(dc, &client,
+                       reinterpret_cast<HBRUSH>(::GetStockObject(DC_BRUSH)));
+        }
+        handled = true;
+        return TRUE;
     }
 
     default:
@@ -485,6 +520,10 @@ void EditorApp::run()
 {
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
 
+    EditorStartupSplash startupSplash;
+    (void)startupSplash.show();
+    startupSplash.update(0.02f, L"Starting AY Editor...");
+
     AY_EDITOR_HEAP_DEBUG_INIT();
     AY_EDITOR_HEAP_CHECK("startup");
     attachDebugConsole();
@@ -499,6 +538,7 @@ void EditorApp::run()
     const bool netClientMode = hasNetClientFlag(cmdTokens);
     const std::string netConnectHost = findNetConnectHost(cmdTokens);
     std::string projectRoot = findProjectRoot(cmdTokens);
+    startupSplash.update(0.06f, L"Resolving project workspace...");
     if (projectRoot.empty()) projectRoot = _projectRoot;
     if (projectRoot.empty()) {
         projectRoot = ayt::io::env::get("AY_EDITOR_PROJECT_ROOT").value_or("");
@@ -521,6 +561,7 @@ void EditorApp::run()
                          importPath.c_str());
         }
         if (!importPath.empty()) {
+            startupSplash.update(0.10f, L"Importing startup character...");
             const std::string cacheRoot =
                 EditorPlayRuntime::resolvePersistentCacheRoot();
             const std::string assetRoot = cacheRoot + "assets\\";
@@ -587,6 +628,7 @@ void EditorApp::run()
             }
         }
     }
+    startupSplash.update(0.24f, L"Preparing runtime modules...");
 
     // A model source owns render assets and the target skeleton. A separate
     // animation source contributes only .ayanm clips, preventing re-exported
@@ -597,6 +639,7 @@ void EditorApp::run()
             animationImportPath = _defaultAnimationImportPath;
         }
         if (!animationImportPath.empty()) {
+            startupSplash.update(0.25f, L"Importing startup animation...");
             const std::string cacheRoot =
                 EditorPlayRuntime::resolvePersistentCacheRoot();
             const std::string assetRoot = cacheRoot + "assets\\";
@@ -632,6 +675,7 @@ void EditorApp::run()
     }
     AY_EDITOR_HEAP_CHECK("after_import_before_runtime_init");
 
+    startupSplash.update(0.32f, L"Registering engine modules...");
     onInit();
     // INT-02 (2026-07-15): _devices is a member (was stack-local
     // before). Lifetime == *this so the Logia InputProvider that
@@ -646,6 +690,7 @@ void EditorApp::run()
     // one-frame flash of the Win32 caption.
     deviceConfig.window.hidden = true;
     deviceConfig.enableTouch = true;
+    startupSplash.update(0.40f, L"Creating editor window...");
     if (!_devices->initialize(deviceConfig)) {
         std::fprintf(stderr, "[EditorApp] DeviceManager initialize failed\n");
         _devices.reset();
@@ -678,10 +723,6 @@ void EditorApp::run()
         std::fprintf(stderr,
                      "[EditorApp] failed to install borderless editor chrome\n");
     }
-    ::ShowWindow(hwnd, _editorPreferences.windowMaximized
-        ? SW_MAXIMIZE : SW_SHOW);
-    ::UpdateWindow(hwnd);
-
     int clientWidth = window.getWidth();
     int clientHeight = window.getHeight();
 
@@ -696,6 +737,7 @@ void EditorApp::run()
     EditorSessionDesc sessionDesc{};
     sessionDesc.uiBackend = uiBackend.get();
     sessionDesc.importedCharacter = importedCharacter;
+    sessionDesc.editorTestSceneEnabled = _editorTestSceneEnabled;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.projectRoot = projectRoot;
     sessionDesc.iconRootPath = resolveEditorIconRoot();
@@ -732,6 +774,11 @@ void EditorApp::run()
             }
         };
     sessionDesc.onPreferencesChanged = persistEditorPreferences;
+    sessionDesc.onStartupProgress = [&startupSplash](float progress,
+                                                      const wchar_t* stage) {
+        startupSplash.update(0.42f + std::clamp(progress, 0.0f, 1.0f) * 0.20f,
+                             stage != nullptr ? stage : L"Loading editor...");
+    };
 
     if (!session.initialize(sessionDesc)) {
         std::fprintf(stderr, "[EditorApp] failed to load layout: %s\n", layoutPath.c_str());
@@ -742,12 +789,14 @@ void EditorApp::run()
     session.setClientSize(static_cast<float>(clientWidth),
                           static_cast<float>(clientHeight));
 
+    startupSplash.update(0.66f, L"Initializing renderer...");
     if (!session.ensurePresentationReady()) {
         std::fprintf(stderr, "[EditorApp] presentation bootstrap failed\n");
         session.shutdown();
         _devices->shutdown();
         return;
     }
+    startupSplash.update(0.86f, L"Preparing render pipeline...");
 
     if (netClientMode) {
         session.autoEnterNetClientPlay();
@@ -783,6 +832,7 @@ void EditorApp::run()
     //   flush lived entirely in the host lambda.
     rendererSub->renderer().setUiBackend(uiBackend.get());
     AY_EDITOR_HEAP_CHECK("after_full_init");
+    startupSplash.update(0.93f, L"Connecting editor input...");
 
     bool running = true;
     bool loggedFirstFrameHeap = false;
@@ -855,6 +905,20 @@ void EditorApp::run()
     inputBridge.connect(*_devices);
     inputBridge.bindTextInputFocus(session.ui());
     window.setCursorShape(ayt::ui::systemCursorFromUi(session.getUiCursorHint()));
+
+    // Submit a complete frame against the final editor HWND while it is still
+    // hidden. The splash remains responsive on its own message thread during
+    // shader warm-up. Only after this Present boundary do we reveal the main
+    // window, eliminating the previous COLOR_WINDOW/white interval.
+    startupSplash.update(0.97f, L"Rendering editor workspace...");
+    session.syncViewportIfChanged();
+    renderEditorWarmupFrame(session, *rendererSub, *uiBackend);
+    startupSplash.update(1.0f, L"Editor ready");
+    startupSplash.close();
+
+    ::ShowWindow(hwnd, _editorPreferences.windowMaximized
+        ? SW_MAXIMIZE : SW_SHOW);
+    ::SetForegroundWindow(hwnd);
 
     // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
     // Reports ms for pollEvents / update / syncViewport / render per

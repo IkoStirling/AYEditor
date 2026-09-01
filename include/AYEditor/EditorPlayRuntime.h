@@ -71,6 +71,9 @@ public:
     void setHostWindow(HWND hostWindow);
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
+    void setEditorTestSceneEnabled(bool enabled) noexcept {
+        _editorTestSceneEnabled = enabled;
+    }
     void setWorldContext(EditorWorldContext* context) noexcept {
         _worldContext = context;
     }
@@ -111,9 +114,9 @@ public:
     }
 
     bool ensurePresentationReady();
-    // Seed the initial demo content into the persistent Edit Scene. Play then
-    // clones these authored entities instead of creating an unrelated runtime-
-    // only scene, which keeps Inspector edits and viewport manipulation useful.
+    // Prepare the persistent Edit Scene. The generic editor leaves an empty
+    // document untouched; AYEditorShell_Demo can explicitly opt into the
+    // centralized reference/test scene through setEditorTestSceneEnabled().
     bool prepareEditScene();
     // Called after New/Open replaces document contents. Runtime-only demo
     // bindings are discarded; subsequent Play uses the document as-is.
@@ -193,6 +196,10 @@ private:
     void bindEditPreviewEntities() noexcept;
     void bindPlayPreviewEntities() noexcept;
     void clearPreviewPointersOnly() noexcept;
+    // TEST/VALIDATION CONTENT ONLY. This is the single initialization point
+    // for the Character, Reference Cube, Ground and Glass entities shown by
+    // AYEditorShell_Demo. Keep production document bootstrap outside it.
+    bool initializeEditorTestScene(ayt::entity::World& editWorld);
 
     // INT-01 (2026-07-15): Logia end-to-end smoke — spawn a fresh
     // Entity with the EditorPlayerController ScriptComponent, bind
@@ -257,6 +264,7 @@ private:
     ayt::entity::World* _entityWorldOverride = nullptr;
     bool _useEditSceneAsAuthoringSource = false;
     bool _editPreviewPrepared = false;
+    bool _editorTestSceneEnabled = false;
     uint32_t _editCubeId = 0;
     uint32_t _editGroundId = 0;
     uint32_t _editGlassId = 0;

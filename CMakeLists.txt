@@ -24,7 +24,10 @@ set(SRC_FILES
     src/AYEditorTransformGizmo.cpp
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
+    src/AYEditorAssetTilePresenter.cpp
     src/AYEditorAssetListView.cpp
+    src/AYEditorDslDocument.cpp
+    src/AYEditorStartupSplash.cpp
     src/AYEditor2DViewportModel.cpp
     src/AYEditorTilemapDocument.cpp
     src/AYImporter.cpp
@@ -59,7 +62,10 @@ set(HEAD_FILES
     include/AYEditor/EditorTransformGizmo.h
     include/AYEditor/EditorVisualStyle.h
     include/AYEditor/EditorAssetDatabase.h
+    include/AYEditor/EditorAssetTilePresenter.h
     include/AYEditor/EditorAssetListView.h
+    include/AYEditor/EditorDslDocument.h
+    include/AYEditor/EditorStartupSplash.h
     include/AYEditor/Editor2DViewportModel.h
     include/AYEditor/EditorTilemapDocument.h
     include/AYEditor/Importer.h
@@ -93,7 +99,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
-    PRIVATE AYEntity AYRenderer AYResource AYIO AYProject AYScript AYPlatform AYNetwork
+    PRIVATE AYEntity AYRenderer AYResource AYIO AYProject AYScript AYShader AYPlatform AYNetwork
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
     # 暴露 SceneManager 类型。
@@ -116,7 +122,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
 # non-Windows branch returns empty), so the link is gated. The demo
 # and shutdown-repro targets inherit the link transitively.
 if(WIN32)
-    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32)
+    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32 user32 gdi32)
 endif()
 
 target_include_directories(${MODULE_NAME} PRIVATE

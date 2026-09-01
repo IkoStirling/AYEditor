@@ -1,7 +1,11 @@
 #include "AYEditor/EditorChildWindowManager.h"
 
+#include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
+#include "AYUI/DockTabGroup.h"
+#include "AYUI/DockTrace.h"
 #include "AYUI/DeviceInputBridge.h"
+#include "AYUI/SvgIcon.h"
 
 #if defined(_WIN32)
 #  include "GdiRenderBackend.h"
@@ -14,7 +18,10 @@
 #  include <Windows.h>
 #endif
 
+#include <algorithm>
 #include <cstdio>
+#include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -130,9 +137,104 @@ EditorChildWindowManager::~EditorChildWindowManager() {
     // a potentially-null child, so destroying the manager here
     // (with primary still alive) avoids an UAF cleanup race.
     for (auto& e : _entries) {
-        teardownEntry(e);
+        teardownEntry(e, false);
     }
     _entries.clear();
+}
+
+EditorChildWindowManager::Entry*
+EditorChildWindowManager::findEntryByHandle(Handle h) {
+    for (auto& entry : _entries) {
+        if (entry.handle == h) return &entry;
+    }
+    return nullptr;
+}
+
+EditorChildWindowManager::Entry*
+EditorChildWindowManager::findEntryByUi(const ayt::ui::UIManager* ui) {
+    for (auto& entry : _entries) {
+        if (entry.ui.get() == ui) return &entry;
+    }
+    return nullptr;
+}
+
+EditorChildWindowManager::Entry*
+EditorChildWindowManager::findEntryByCard(const ayt::ui::DockCard* card) {
+    for (auto& entry : _entries) {
+        if (entry.card == card) return &entry;
+    }
+    return nullptr;
+}
+
+bool EditorChildWindowManager::hasActiveDrag() const {
+    for (const auto& entry : _entries) {
+        if (entry.ui != nullptr && entry.ui->isDragging()) return true;
+    }
+    return false;
+}
+
+void EditorChildWindowManager::resetPromotedCardChrome(
+    ayt::ui::DockCard* card) {
+    if (card == nullptr) return;
+    card->clearMinimizeHandler();
+    card->clearMaximizeHandler();
+    card->setShowMinimizeButton(false);
+    card->setShowMaximizeButton(false);
+    card->setShowResizeGrip(false);
+    card->setMaximizedVisual(false);
+    card->setOnCloseRequested({});
+}
+
+void EditorChildWindowManager::configurePromotedCard(
+    ayt::ui::DockCard* card, Handle h) {
+    if (card == nullptr) return;
+
+    ayt::ui::SvgDocument::Ptr minimize;
+    ayt::ui::SvgDocument::Ptr maximize;
+    ayt::ui::SvgDocument::Ptr restore;
+    ayt::ui::SvgDocument::Ptr close;
+    if (!_iconRootPath.empty()) {
+        const std::filesystem::path root(_iconRootPath);
+        auto load = [&root](const char* relative) {
+            std::string ignored;
+            return ayt::ui::SvgDocument::loadFromFile(root / relative,
+                                                       &ignored);
+        };
+        minimize = load("outline/minus.svg");
+        maximize = load("outline/maximize.svg");
+        restore = load("outline/restore.svg");
+        close = load("outline/x.svg");
+    }
+    card->setHostChromeIcons(std::move(minimize), std::move(maximize),
+                             std::move(restore), std::move(close));
+    card->setShowResizeGrip(true);
+    card->setShowMinimizeButton(true);
+    card->setShowMaximizeButton(true);
+    card->setMinimizeHandler(
+        [](void* user, ayt::ui::DockCard* requested) {
+            auto* self = static_cast<EditorChildWindowManager*>(user);
+            Entry* entry = self != nullptr
+                ? self->findEntryByCard(requested) : nullptr;
+            if (entry != nullptr && entry->handle != nullptr) {
+                self->_wm.minimizeTopLevelWindow(entry->handle);
+            }
+        },
+        this);
+    card->setMaximizeHandler(
+        [](void* user, ayt::ui::DockCard* requested) {
+            auto* self = static_cast<EditorChildWindowManager*>(user);
+            Entry* entry = self != nullptr
+                ? self->findEntryByCard(requested) : nullptr;
+            if (entry != nullptr && entry->handle != nullptr) {
+                self->_wm.toggleTopLevelMaximized(entry->handle);
+                requested->setMaximizedVisual(
+                    self->_wm.isTopLevelMaximized(entry->handle));
+            }
+        },
+        this);
+    card->setOnCloseRequested([this, h](ayt::ui::DockCard*) {
+        requestCloseChildWindow(h);
+    });
 }
 
 bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
@@ -192,31 +294,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         e.card->setPosition(ayt::math::FVector2(0.0f, 0.0f));
         e.card->setSize(ayt::math::FVector2(
             static_cast<float>(cfg.width), static_cast<float>(cfg.height)));
-        e.card->setShowResizeGrip(true);
-        e.card->setShowMaximizeButton(true);
-        e.card->setMaximizeHandler(
-            [](void* user, ayt::ui::DockCard* c) {
-                auto* self = static_cast<EditorChildWindowManager*>(user);
-                if (self == nullptr || c == nullptr) {
-                    return;
-                }
-                for (const auto& ent : self->entries()) {
-                    if (ent.card != c || ent.handle == nullptr) {
-                        continue;
-                    }
-                    self->_wm.toggleTopLevelMaximized(ent.handle);
-                    c->setMaximizedVisual(
-                        self->_wm.isTopLevelMaximized(ent.handle));
-                    break;
-                }
-            },
-            this);
-        // A promoted card no longer belongs to its source DockArea. Its
-        // chrome X must close this host window, and must not retain or
-        // invoke the source DockArea's close callback after reparenting.
-        e.card->setOnCloseRequested([this, h](ayt::ui::DockCard*) {
-            requestCloseChildWindow(h);
-        });
+        configurePromotedCard(e.card, h);
         e.ui->root()->addChild(e.card);
         e.ui->layout();
     } else if (!cfg.layoutPath.empty()) {
@@ -261,7 +339,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     const auto focusChanged = cfg.onFocusChanged;
     const auto resolveCursor = cfg.resolveCursorHint;
     auto mousePos = std::make_shared<ayt::math::FVector2>(0.0f, 0.0f);
-    cbs.onMouseMove = [ui, beforeMove, mousePos](float x, float y) {
+    cbs.onMouseMove = [this, ui, beforeMove, mousePos, h](float x, float y) {
         mousePos->x = x;
         mousePos->y = y;
         ayt::ui::UIManager::ActiveScope guard(ui.get());
@@ -269,18 +347,33 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
             return;
         }
         ui->onMouseMove(x, y);
+        this->updateDragMove(h, x, y);
     };
     cbs.onMouseLeave = [ui]() {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         ui->onMouseLeave();
     };
-    cbs.onMouseButton = [ui, beforeButton](float x, float y, int button, bool pressed) {
+    cbs.onMouseButton = [this, ui, beforeButton, h](
+        float x, float y, int button, bool pressed) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
         if (beforeButton && beforeButton(*ui, x, y, button, pressed)) {
             return true; // request capture while document-dragging
         }
-        return pressed ? ui->onMouseButtonDown(x, y, button)
-                       : ui->onMouseButtonUp(x, y, button);
+        if (pressed) {
+            const bool handled = ui->onMouseButtonDown(x, y, button);
+            if (button == 0 && ui->isDragging()) {
+                this->beginDragMove(h, x, y);
+            }
+            return handled;
+        }
+        // Commit a live redock before the child UI ends its local drag.
+        if (button == 0 && this->tryRedock(ui)) {
+            this->endDragMove(h);
+            return true;
+        }
+        const bool handled = ui->onMouseButtonUp(x, y, button);
+        this->endDragMove(h);
+        return handled;
     };
     cbs.onMouseWheel = [ui, beforeWheel](float x, float y, float deltaY) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
@@ -354,6 +447,234 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     return true;
 }
 
+bool EditorChildWindowManager::screenToPrimaryWorld(
+    int screenX, int screenY, ayt::math::FVector2& out) const {
+#if defined(_WIN32)
+    HWND primary = static_cast<HWND>(_wm.getWindowHandle());
+    if (primary == nullptr) return false;
+    POINT point{static_cast<LONG>(screenX), static_cast<LONG>(screenY)};
+    if (!::ScreenToClient(primary, &point)) return false;
+    // Win32 client coordinates are physical pixels, while DockArea geometry
+    // lives in UI logical coordinates. Feeding the physical point directly
+    // shifts the external drop by the monitor DPI scale and can make a visible
+    // 125%/150% drop target resolve as "none".
+    out = _primary.physicalToLogical(ayt::math::FVector2(
+        static_cast<float>(point.x), static_cast<float>(point.y)));
+    return true;
+#else
+    (void)screenX;
+    (void)screenY;
+    (void)out;
+    return false;
+#endif
+}
+
+bool EditorChildWindowManager::screenPointOverPrimaryWindow(
+    int screenX, int screenY) const {
+#if defined(_WIN32)
+    HWND primary = static_cast<HWND>(_wm.getWindowHandle());
+    if (primary == nullptr) return false;
+    POINT screenPoint{static_cast<LONG>(screenX), static_cast<LONG>(screenY)};
+    POINT clientPoint = screenPoint;
+    RECT clientRect{};
+    if (!::ScreenToClient(primary, &clientPoint)
+        || !::GetClientRect(primary, &clientRect)
+        || !::PtInRect(&clientRect, clientPoint)) {
+        return false;
+    }
+
+    HWND under = ::WindowFromPoint(screenPoint);
+    if (under == primary || (under != nullptr && ::IsChild(primary, under))) {
+        return true;
+    }
+    for (const Entry& entry : _entries) {
+        if (entry.handle == nullptr) continue;
+        HWND child = static_cast<HWND>(entry.handle);
+        if (under == child || (under != nullptr && ::IsChild(child, under))) {
+            return entry.ui != nullptr && entry.ui->isDragging();
+        }
+    }
+    return false;
+#else
+    (void)screenX;
+    (void)screenY;
+    return false;
+#endif
+}
+
+void EditorChildWindowManager::beginDragMove(Handle h, float clientX,
+                                             float clientY) {
+#if defined(_WIN32)
+    Entry* entry = findEntryByHandle(h);
+    if (entry == nullptr || entry->handle == nullptr) return;
+    HWND child = static_cast<HWND>(entry->handle);
+    POINT cursorPoint{static_cast<LONG>(std::lround(clientX)),
+                      static_cast<LONG>(std::lround(clientY))};
+    RECT windowRect{};
+    if (!::ClientToScreen(child, &cursorPoint)
+        || !::GetWindowRect(child, &windowRect)) {
+        return;
+    }
+    entry->dragGrabX = static_cast<int>(cursorPoint.x - windowRect.left);
+    entry->dragGrabY = static_cast<int>(cursorPoint.y - windowRect.top);
+    entry->dragStartScreenX = static_cast<int>(cursorPoint.x);
+    entry->dragStartScreenY = static_cast<int>(cursorPoint.y);
+    entry->dragLastScreenX = entry->dragStartScreenX;
+    entry->dragLastScreenY = entry->dragStartScreenY;
+    entry->dragTravel = 0;
+    entry->dragMoveActive = true;
+#else
+    (void)h;
+    (void)clientX;
+    (void)clientY;
+#endif
+}
+
+void EditorChildWindowManager::updateDragMove(Handle h, float clientX,
+                                              float clientY) {
+#if defined(_WIN32)
+    Entry* entry = findEntryByHandle(h);
+    if (entry == nullptr || !entry->dragMoveActive
+        || entry->handle == nullptr) {
+        return;
+    }
+    if (entry->ui == nullptr || !entry->ui->isDragging()) {
+        entry->dragMoveActive = false;
+        return;
+    }
+    HWND child = static_cast<HWND>(entry->handle);
+    POINT cursorPoint{static_cast<LONG>(std::lround(clientX)),
+                      static_cast<LONG>(std::lround(clientY))};
+    if (!::ClientToScreen(child, &cursorPoint)) return;
+    entry->dragLastScreenX = static_cast<int>(cursorPoint.x);
+    entry->dragLastScreenY = static_cast<int>(cursorPoint.y);
+    entry->dragTravel = std::max(
+        entry->dragTravel,
+        std::abs(entry->dragLastScreenX - entry->dragStartScreenX)
+            + std::abs(entry->dragLastScreenY - entry->dragStartScreenY));
+    ::SetWindowPos(child, nullptr,
+                   entry->dragLastScreenX - entry->dragGrabX,
+                   entry->dragLastScreenY - entry->dragGrabY,
+                   0, 0,
+                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+#else
+    (void)h;
+    (void)clientX;
+    (void)clientY;
+#endif
+}
+
+void EditorChildWindowManager::endDragMove(Handle h) {
+    if (Entry* entry = findEntryByHandle(h)) {
+        entry->dragMoveActive = false;
+    }
+}
+
+void EditorChildWindowManager::updateRedockHover() {
+    if (_dock == nullptr) return;
+    for (const Entry& entry : _entries) {
+        if (entry.ui == nullptr || !entry.ui->isDragging()) continue;
+        ayt::math::FVector2 world;
+        if (screenPointOverPrimaryWindow(entry.dragLastScreenX,
+                                         entry.dragLastScreenY)
+            && screenToPrimaryWorld(entry.dragLastScreenX,
+                                    entry.dragLastScreenY, world)) {
+            _dock->setExternalDropPos(world);
+        } else {
+            _dock->clearExternalDropPos();
+        }
+        return;
+    }
+    _dock->clearExternalDropPos();
+}
+
+bool EditorChildWindowManager::tryRedock(
+    const std::shared_ptr<ayt::ui::UIManager>& ui) {
+    if (_dock == nullptr || ui == nullptr || !ui->isDragging()) {
+        ayt::ui::dockTrace(
+            "[editor-child] redock skip dock=%d ui=%d dragging=%d\n",
+            _dock != nullptr ? 1 : 0, ui != nullptr ? 1 : 0,
+            (ui != nullptr && ui->isDragging()) ? 1 : 0);
+        return false;
+    }
+    Entry* entry = findEntryByUi(ui.get());
+    if (entry == nullptr || entry->card == nullptr) {
+        ayt::ui::dockTrace(
+            "[editor-child] redock skip entry=%d card=%d\n",
+            entry != nullptr ? 1 : 0,
+            (entry != nullptr && entry->card != nullptr) ? 1 : 0);
+        return false;
+    }
+
+#if defined(_WIN32)
+    if (entry->dragTravel < 12) {
+        ayt::ui::dockTrace(
+            "[editor-child] redock skip moved=%d screen=(%d,%d) "
+            "start=(%d,%d)\n",
+            entry->dragTravel, entry->dragLastScreenX,
+            entry->dragLastScreenY, entry->dragStartScreenX,
+            entry->dragStartScreenY);
+        return false;
+    }
+#endif
+    if (!screenPointOverPrimaryWindow(entry->dragLastScreenX,
+                                      entry->dragLastScreenY)) {
+        ayt::ui::dockTrace(
+            "[editor-child] redock skip cursor outside primary\n");
+        return false;
+    }
+    ayt::math::FVector2 world;
+    if (!screenToPrimaryWorld(entry->dragLastScreenX,
+                              entry->dragLastScreenY, world)) {
+        ayt::ui::dockTrace(
+            "[editor-child] redock skip client conversion failed\n");
+        return false;
+    }
+
+    const ayt::ui::DockArea::DropTarget target =
+        _dock->resolveDropTarget(world);
+    ayt::ui::dockTrace(
+        "[editor-child] redock cursor logical=(%.1f,%.1f) kind=%d "
+        "slot=%d zone=%d leaf=%s scale=%.3f\n",
+        world.x, world.y, static_cast<int>(target.kind),
+        static_cast<int>(target.slot), static_cast<int>(target.zone),
+        target.leaf != nullptr ? target.leaf->getLeafId().c_str() : "-",
+        _primary.getEffectiveScale());
+    if (target.kind == ayt::ui::DockArea::DropKind::None) return false;
+    if (target.kind == ayt::ui::DockArea::DropKind::Slot) {
+        const ayt::math::FRectangle slotRect = _dock->getSlotRect(target.slot);
+        if ((slotRect.maxX - slotRect.minX) < 8.0f
+            || (slotRect.maxY - slotRect.minY) < 8.0f) {
+            return false;
+        }
+    }
+
+    ayt::ui::DockCard* card = entry->card;
+    const std::string cardId = card->getId();
+    const Handle handle = entry->handle;
+    ui->cancelDrag();
+    ui->root()->removeChild(card);
+    resetPromotedCardChrome(card);
+    entry->card = nullptr;
+
+    {
+        ayt::ui::UIManager::ActiveScope primaryGuard(&_primary);
+        if (!_dock->redockAt(card, world)) {
+            configurePromotedCard(card, handle);
+            entry->card = card;
+            ui->root()->addChild(card);
+            ui->layout();
+            return false;
+        }
+        _dock->clearExternalDropPos();
+        _primary.layout();
+    }
+    ayt::ui::dockTrace("[editor-child] redock OK card=%s pos=(%.1f,%.1f)\n",
+                       cardId.c_str(), world.x, world.y);
+    closeChildWindowNow(handle, false);
+    return true;
+}
+
 bool EditorChildWindowManager::promoteCard(ayt::ui::DockCard* card,
                                            const std::wstring& title,
                                            int x, int y, int w, int h) {
@@ -376,7 +697,7 @@ bool EditorChildWindowManager::promoteCard(ayt::ui::DockCard* card,
 }
 
 void EditorChildWindowManager::closeChildWindow(Handle h) {
-    closeChildWindowNow(h);
+    closeChildWindowNow(h, true);
 }
 
 void EditorChildWindowManager::requestCloseChildWindow(Handle h) {
@@ -388,7 +709,8 @@ void EditorChildWindowManager::requestCloseChildWindow(Handle h) {
     }
 }
 
-void EditorChildWindowManager::teardownEntry(Entry& entry) {
+void EditorChildWindowManager::teardownEntry(
+    Entry& entry, bool returnPromotedCard) {
     const Handle handle = entry.handle;
     entry.handle = nullptr;
 
@@ -401,14 +723,24 @@ void EditorChildWindowManager::teardownEntry(Entry& entry) {
 
     auto beforeClose = std::move(entry.beforeClose);
     entry.beforeClose = {};
+    ayt::ui::DockCard* returningCard = nullptr;
     if (entry.ui != nullptr) {
         ayt::ui::UIManager::ActiveScope guard(entry.ui.get());
         if (beforeClose) {
             beforeClose(*entry.ui);
         }
         if (entry.card != nullptr) {
-            entry.card->clearMaximizeHandler();
-            entry.card->setOnCloseRequested({});
+            if (returnPromotedCard && _dock != nullptr) {
+                entry.ui->cancelDrag();
+                entry.ui->root()->removeChild(entry.card);
+                resetPromotedCardChrome(entry.card);
+                returningCard = entry.card;
+                entry.card = nullptr;
+            } else {
+                // Shutdown owns and destroys the card in this branch; make
+                // sure no callback can re-enter this manager from teardown.
+                resetPromotedCardChrome(entry.card);
+            }
         }
         entry.ui->shutdown();
     }
@@ -418,12 +750,29 @@ void EditorChildWindowManager::teardownEntry(Entry& entry) {
     entry.card = nullptr;
     entry.ui.reset();
     entry.backend.reset();
+
+    if (returningCard != nullptr) {
+        ayt::ui::UIManager::ActiveScope primaryGuard(&_primary);
+        // Re-enter DockArea before routing close so its editor policy can
+        // park persistent cards. This is what keeps Window-menu reopening
+        // functional after a detached host is closed.
+        if (_dock != nullptr
+            && _dock->adoptCard(ayt::ui::DockArea::Slot::Center,
+                                returningCard)) {
+            (void)_dock->requestCloseCard(returningCard);
+            _dock->clearExternalDropPos();
+            _primary.layout();
+        } else {
+            ayt::ui::destroyWidgetTree(returningCard);
+        }
+    }
 }
 
-void EditorChildWindowManager::closeChildWindowNow(Handle h) {
+void EditorChildWindowManager::closeChildWindowNow(
+    Handle h, bool returnPromotedCard) {
     for (auto it = _entries.begin(); it != _entries.end(); ++it) {
         if (it->handle == h) {
-            teardownEntry(*it);
+            teardownEntry(*it, returnPromotedCard);
             _entries.erase(it);
             ayt::ui::UIManager::makeActive(&_primary);
             return;
@@ -437,7 +786,7 @@ void EditorChildWindowManager::drainCloseRequests() {
             ++i;
             continue;
         }
-        teardownEntry(_entries[i]);
+        teardownEntry(_entries[i], true);
         _entries.erase(_entries.begin() + static_cast<std::ptrdiff_t>(i));
     }
     ayt::ui::UIManager::makeActive(&_primary);
@@ -447,6 +796,7 @@ void EditorChildWindowManager::tickAll(float dt) {
     // Close requests originate in WindowManager/UIManager callbacks. Drain
     // only after their dispatch stack has unwound, before iterating entries.
     drainCloseRequests();
+    updateRedockHover();
     for (auto& e : _entries) {
         if (!e.ui) continue;
         // D5 — pushActive swaps g_activeUIManager for the duration of

@@ -1631,7 +1631,29 @@ bool EditorPlayRuntime::prepareEditScene()
         return true;
     }
 
-    _entityWorldOverride = editWorld;
+    if (!_editorTestSceneEnabled) {
+        std::fprintf(stderr,
+            "[EditorPlayRuntime] empty Edit Scene preserved "
+            "(editor test scene disabled)\n");
+        return true;
+    }
+
+    return initializeEditorTestScene(*editWorld);
+}
+
+bool EditorPlayRuntime::initializeEditorTestScene(
+    ayt::entity::World& editWorld)
+{
+    // =====================================================================
+    // AYEDITOR TEST / VALIDATION SCENE
+    // =====================================================================
+    // This is intentionally the only startup path that authors the reference
+    // Character, opaque Cube, scaled Ground and transparent Glass entities.
+    // It is enabled explicitly by AYEditorShell_Demo; generic editor hosts
+    // keep a new document empty. Centralizing it here prevents renderer test
+    // fixtures from being mistaken for product document defaults.
+
+    _entityWorldOverride = &editWorld;
     const bool hasCharacter = trySpawnImportedCharacter();
     spawnCubeIfNeeded();
     if (hasCharacter && _cubeEntity != nullptr) {
@@ -1657,9 +1679,9 @@ bool EditorPlayRuntime::prepareEditScene()
     _editPreviewPrepared = true;
     _entityWorldOverride = nullptr;
     std::fprintf(stderr,
-        "[EditorPlayRuntime] authored startup preview in Edit Scene "
+        "[EditorPlayRuntime] initialized explicit editor test scene "
         "(character=%s, entities=%zu)\n",
-        hasCharacter ? "yes" : "no", editWorld->getAllEntities().size());
+        hasCharacter ? "yes" : "no", editWorld.getAllEntities().size());
     return true;
 }
 

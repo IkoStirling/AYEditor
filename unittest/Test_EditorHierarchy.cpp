@@ -8,11 +8,12 @@
 //      !edit->isDirty() && !sm->isEditDirty()）
 //   3. 点击行 → Inspector 目标切到该 entity（"Hierarchy: <name>"）
 //   4. mode 切换 → Outliner 重建（延迟，经 update(dt) 消费）
-//   5. 无 host/Edit World → tree 空 + hint "Scene: -"
+//   5. root 折叠/展开 → 逻辑 entity 选择保持并恢复行高亮
+//   6. 无 host/Edit World → tree 空 + hint "Scene: -"
 //
 // 不覆盖（deferred to e2e / manual）：
 //   - 真层级（Entity 无 parent 字段，AYEntity/EntityImpl.h:69-73）
-//   - 滚动 / 展开折叠（TreeView 自测覆盖，AYUI C-12）
+//   - 滚动（TreeView 自测覆盖，AYUI C-12）
 //   - Outliner 多选 / 搜索 / 过滤（Outliner v1 仅显示 + 单选）
 //
 // Landmines（PR-5 review 时检查）：
@@ -238,7 +239,80 @@ TEST_CASE(editor_hierarchy_refresh_on_mode_change)
     session.shutdown();
 }
 
-// case 5: 无 host → tree 空 + hint "Scene: -"
+// case 5: AYUI TreeView 的可见 flat index 会随折叠改变。AYEditor 必须用
+// entity id 保留逻辑选择，并在再次展开后恢复正确的视觉行高亮。
+TEST_CASE(editor_hierarchy_root_collapse_preserves_entity_selection)
+{
+    const std::string layoutPath = resolveHierarchyLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+
+    auto* sm = ayt::app::currentEngineHost()->scenes();
+    auto* tree = dynamic_cast<TreeView*>(
+        session.ui().findById("tree_outliner"));
+    auto* inspectorHint = dynamic_cast<TextLabel*>(
+        session.ui().findById("inspector_hint"));
+    CHECK_NOT_NULL(sm);
+    CHECK_NOT_NULL(tree);
+    CHECK_NOT_NULL(inspectorHint);
+    if (sm == nullptr || sm->edit() == nullptr || tree == nullptr
+        || inspectorHint == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = sm->edit()->world().createEntity();
+    CHECK_NOT_NULL(entity);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("TreeView Selection Sentinel");
+
+    // Direct World mutation intentionally does not dirty Scene; use the same
+    // deferred refresh boundary as a mode/world-source notification.
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
+    session.update(0.016f);
+
+    int entityFlatIndex = -1;
+    for (size_t i = 1; i < tree->getNodeCount(); ++i) {
+        if (tree->getNodeData(i).label == L"TreeView Selection Sentinel") {
+            entityFlatIndex = static_cast<int>(i);
+            break;
+        }
+    }
+    CHECK(entityFlatIndex > 0);
+    if (entityFlatIndex <= 0) {
+        session.shutdown();
+        return;
+    }
+
+    tree->setSelectedIndex(entityFlatIndex);
+    const std::wstring selectedHint = inspectorHint->getText();
+    CHECK(selectedHint.rfind(L"Hierarchy: ", 0) == 0);
+
+    tree->toggleExpand(0);
+    session.update(0.016f);
+    CHECK(tree->getNodeCount() == 1u);
+    CHECK(tree->getSelectedIndex() == -1);
+    CHECK(inspectorHint->getText() == selectedHint);
+
+    tree->toggleExpand(0);
+    session.update(0.016f);
+    CHECK(tree->getNodeCount() > 1u);
+    CHECK(tree->getSelectedIndex() == entityFlatIndex);
+    CHECK(inspectorHint->getText() == selectedHint);
+
+    session.shutdown();
+}
+
+// case 6: 无 host → tree 空 + hint "Scene: -"
 TEST_CASE(editor_hierarchy_empty_when_no_edit_world)
 {
     auto layoutPath = resolveHierarchyLayoutPath();

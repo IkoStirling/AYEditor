@@ -16,6 +16,8 @@
 #include "Test_EditorP0Core.cpp"               // P0 document/selection/command core
 #include "Test_EditorTransformGizmo.cpp"        // transform gizmo ray/constraint math
 #include "Test_EditorAssetBrowser.cpp"          // project asset index/browser/drag-drop
+#include "Test_EditorAssetTilePresenter.cpp"    // asset tile display-only mapping
+#include "Test_EditorDslDocument.cpp"           // Phoskia/Logia dock editor
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
 
 int main(int argc, char* argv[]) {

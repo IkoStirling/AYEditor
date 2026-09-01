@@ -26,6 +26,7 @@
 
 namespace ayt::ui {
 class DockCard;
+class DockArea;
 } // namespace ayt::ui
 
 namespace ayt::editor {
@@ -103,6 +104,14 @@ public:
     bool promoteCard(ayt::ui::DockCard* card, const std::wstring& title,
                      int x, int y, int w, int h);
 
+    // Primary DockArea bridge for promoted-card return. Dragging a child
+    // title over the primary client previews and commits a live redock;
+    // closing a promoted host returns the card through DockArea's normal
+    // close-request policy so persistent Window-menu panels remain reopenable.
+    void setRedockTarget(ayt::ui::DockArea* dock) { _dock = dock; }
+    void setChromeIconRoot(std::string root) { _iconRootPath = std::move(root); }
+    bool hasActiveDrag() const;
+
     // Tick every open child: pushActive scope → update → GDI render
     // into the per-window backend (Win32; GetDC per frame).
     void tickAll(float dt);
@@ -130,17 +139,41 @@ public:
         // Window/card close callbacks run inside Win32/UI dispatch. They
         // only mark the entry; tickAll tears it down after dispatch returns.
         bool                              closeRequested = false;
+        bool                              dragMoveActive = false;
+        int                               dragGrabX = 0;
+        int                               dragGrabY = 0;
+        int                               dragStartScreenX = 0;
+        int                               dragStartScreenY = 0;
+        int                               dragLastScreenX = 0;
+        int                               dragLastScreenY = 0;
+        int                               dragTravel = 0;
     };
     const std::vector<Entry>& entries() const { return _entries; }
 
 private:
     void requestCloseChildWindow(Handle h);
-    void closeChildWindowNow(Handle h);
-    void teardownEntry(Entry& entry);
+    void closeChildWindowNow(Handle h, bool returnPromotedCard);
+    void teardownEntry(Entry& entry, bool returnPromotedCard);
     void drainCloseRequests();
+
+    Entry* findEntryByHandle(Handle h);
+    Entry* findEntryByUi(const ayt::ui::UIManager* ui);
+    Entry* findEntryByCard(const ayt::ui::DockCard* card);
+    bool screenToPrimaryWorld(int screenX, int screenY,
+                              ayt::math::FVector2& out) const;
+    bool screenPointOverPrimaryWindow(int screenX, int screenY) const;
+    void beginDragMove(Handle h, float clientX, float clientY);
+    void updateDragMove(Handle h, float clientX, float clientY);
+    void endDragMove(Handle h);
+    void updateRedockHover();
+    bool tryRedock(const std::shared_ptr<ayt::ui::UIManager>& ui);
+    void configurePromotedCard(ayt::ui::DockCard* card, Handle h);
+    static void resetPromotedCardChrome(ayt::ui::DockCard* card);
 
     ayt::device::WindowManager& _wm;
     ayt::ui::UIManager&         _primary;
+    ayt::ui::DockArea*          _dock = nullptr;
+    std::string                 _iconRootPath;
     std::vector<Entry>          _entries;
 };
 

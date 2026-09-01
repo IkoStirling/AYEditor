@@ -10,6 +10,7 @@
 #include "AYEditor/EditorTransformGizmo.h"
 #include "AYEditor/EditorPreferences.h"
 #include "AYEditor/EditorAssetDatabase.h"
+#include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/ImportedCharacterMapper.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditor/Importer.h"
@@ -21,6 +22,7 @@
 
 #include "AYMath/MathTypes.h"
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
@@ -48,7 +50,7 @@ namespace ayt::scene { class Scene; }
 // 任何 include AYEditor/EditorSession.h 的 TU。**文件作用域** 同 PR-4 landmine。
 namespace ayt::ui {
 class TreeView;
-class ListView;
+class TileView;
 class TextInput;
 class ComboBox;
 class MenuItem;
@@ -58,8 +60,6 @@ namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
-
-class EditorAssetListView;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -77,6 +77,9 @@ struct EditorSessionDesc {
     std::string iconRootPath;
     HWND hostWindow = nullptr;
     ImportedCharacter importedCharacter;  // empty = fall back to cube
+    // Test/demo-only authoring content. False is the generic editor default;
+    // AYEditorShell_Demo opts in explicitly at its composition root.
+    bool editorTestSceneEnabled = false;
 
     // Dual-process net demo: `--net-client` auto-enters Play and connects.
     bool netClientMode = false;
@@ -98,6 +101,11 @@ struct EditorSessionDesc {
     std::function<void(bool)> onViewportOrientationAxisVisibilityChanged;
     EditorPreferences preferences;
     std::function<void(const EditorPreferences&)> onPreferencesChanged;
+
+    // Optional host-owned startup progress sink. EditorSession reports only
+    // its own layout/binding portion as a normalized 0..1 range; EditorApp
+    // maps that subrange into the process-wide splash progress.
+    std::function<void(float, const wchar_t*)> onStartupProgress;
 };
 
 class EditorSession {
@@ -181,6 +189,12 @@ public:
     bool rescanAssetsNow();
     bool placeAssetInViewport(EditorAssetId assetId,
                               float physicalX, float physicalY);
+    // Opens or focuses the source-backed Phoskia/Logia DockCard for an asset.
+    // Returns false for non-DSL records or when the source cannot be read.
+    bool openDslAsset(EditorAssetId assetId);
+    std::size_t openDslDocumentCount() const noexcept {
+        return _openDslDocuments.size();
+    }
     const EditorFreecam& freecam() const noexcept { return _freecam; }
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
@@ -358,6 +372,17 @@ private:
     void setAssetBrowserStatus(const std::wstring& text,
                                bool mirrorToConsole = false);
 
+    // Source-backed Phoskia/Logia document tabs. Their DockCards are owned by
+    // DockArea; this session-owned record keeps only model state and raw widget
+    // aliases. File activation is deferred out of TileCell event dispatch.
+    struct OpenDslDocument;
+    OpenDslDocument* findOpenDslDocument(EditorAssetId assetId) noexcept;
+    OpenDslDocument* focusedDslDocument() noexcept;
+    void refreshDslDocumentChrome(OpenDslDocument& document);
+    bool saveDslDocument(OpenDslDocument& document);
+    void compileDslDocument(OpenDslDocument& document);
+    bool requestCloseDslDocument(ayt::ui::DockCard* card);
+
     // Declared before the runtime because EditorPlayRuntime borrows it.
     EditorWorldContext _worldContext;
     EditorPlayRuntime _playRuntime;
@@ -473,9 +498,12 @@ private:
     EditorSelection       _selection;
     ayt::entity::World*    _selectionWorld = nullptr;
     bool                  _outlinerRefreshPending = false;
+    bool                  _outlinerRootExpanded = true;
+    bool                  _updatingOutlinerSelection = false;
 
     EditorAssetDatabase _assetDatabase;
-    EditorAssetListView* _assetList = nullptr;
+    EditorAssetTilePresenter _assetTilePresenter;
+    ayt::ui::TileView* _assetTileView = nullptr;
     ayt::ui::TreeView* _assetTree = nullptr;
     ayt::ui::TextInput* _assetSearch = nullptr;
     ayt::ui::ComboBox* _assetTypeFilter = nullptr;
@@ -486,6 +514,7 @@ private:
     std::string _assetCurrentFolder = "Assets";
     std::string _pendingAssetSelectionPath;
     EditorAssetId _selectedAssetId = 0;
+    EditorAssetId _pendingDslAssetOpenId = 0;
     struct AssetDragData {
         EditorAssetId id = 0;
         EditorAssetType type = EditorAssetType::Unknown;
@@ -493,6 +522,7 @@ private:
     } _assetDragData;
     bool _assetBrowserRefreshPending = false;
     bool _updatingAssetSelection = false;
+    std::vector<std::unique_ptr<OpenDslDocument>> _openDslDocuments;
 
     EditorCommandStack _commands;
     bool _updatingTransformInputs = false;

@@ -173,7 +173,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
     if (extension == ".ayskel") return EditorAssetType::Skeleton;
     if (extension == ".lua" || extension == ".logia"
         || extension == ".py") return EditorAssetType::Script;
-    if (extension == ".shader" || extension == ".sc"
+    if (extension == ".phoskia" || extension == ".shader" || extension == ".sc"
         || extension == ".vert" || extension == ".frag") {
         return EditorAssetType::Shader;
     }

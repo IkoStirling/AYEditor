@@ -161,7 +161,8 @@
                 "selectedIndex": 2,
                 "maxPopupItems": 3
               },
-              { "type": "CheckBox", "id": "chk_fxaa", "text": "FXAA", "checked": true, "size": { "w": 200, "h": 22 } },
+              { "type": "CheckBox", "id": "chk_fxaa", "text": "FXAA", "checked": false, "size": { "w": 200, "h": 22 } },
+              { "type": "CheckBox", "id": "chk_smaa", "text": "SMAA 1x", "checked": true, "size": { "w": 200, "h": 22 } },
               { "type": "CheckBox", "id": "chk_color_grading", "text": "Color Grading", "checked": false, "size": { "w": 200, "h": 22 } },
               {
                 "type": "ComboBox",
@@ -186,7 +187,7 @@
         {
           "slot": "Center",
           "id": "card_viewport",
-          "title": "",
+          "title": "Scene View",
           "floatable": false,
           "headerHeight": 0,
           "content": {
@@ -340,7 +341,7 @@
                 "size": { "h": 0 },
                 "children": [
                   { "type": "TreeView", "id": "tree_assets", "size": { "w": 170, "h": 0 }, "slot": { "width": 170 } },
-                  { "type": "EditorAssetListView", "id": "list_assets", "size": { "w": 0, "h": 0 } }
+                  { "type": "TileView", "id": "list_assets", "size": { "w": 0, "h": 0 }, "tileSize": { "w": 104, "h": 150 }, "tileSpacing": 8, "contentPadding": 4, "infoStripHeight": 16, "cornerMarkerSize": 12, "thumbnailAspectRatio": 1.0, "labelHeight": 28, "overscanRows": 1, "dragEnabled": true }
                 ]
               },
               { "type": "TextLabel", "id": "assets_status", "text": "Indexing project assets...", "size": { "w": 520, "h": 18 } }

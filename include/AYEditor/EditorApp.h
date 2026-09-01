@@ -46,6 +46,12 @@ public:
     void setAutoPlayImportedAnimation(bool enabled) {
         _autoPlayImportedAnimation = enabled;
     }
+    // Explicit opt-in for AYEditorShell_Demo's reference scene. Generic
+    // editor hosts start with an empty document and do not silently inherit
+    // Character/Ground/Cube/Glass validation content.
+    void setEditorTestSceneEnabled(bool enabled) {
+        _editorTestSceneEnabled = enabled;
+    }
     void setViewportOrientationAxisPreference(
         bool visible,
         std::function<void(bool)> onChanged = {}) {
@@ -120,6 +126,7 @@ private:
     ayt::resource::SourceCoordinatePolicy _sourceCoordinates;
     float _normalMapYSign = 1.0f;
     bool _autoPlayImportedAnimation = false;
+    bool _editorTestSceneEnabled = false;
     bool _viewportOrientationAxisVisible = true;
     std::function<void(bool)> _onViewportOrientationAxisVisibilityChanged;
     EditorPreferences _editorPreferences;

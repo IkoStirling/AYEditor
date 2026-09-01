@@ -22,10 +22,23 @@
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
 #include "AYDevice/KeyboardDevice.h"
+#include "AYDevice/WindowManager.h"
+#include "AYDevice/WindowTypes.h"
 
 #include <cmath>
 #include <sys/stat.h>
 #include <string>
+#include <vector>
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <Windows.h>
+#endif
 
 using namespace ayt::ui;
 using namespace ayt::editor;
@@ -142,10 +155,74 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_depth_haze")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_smaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_color_grading")) != nullptr);
     CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_grading_preset")) != nullptr);
     CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_color_grading_strength")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_shadows")) != nullptr);
+    session.shutdown();
+}
+
+TEST_CASE(editor_aa_controls_default_to_smaa_and_remain_mutually_exclusive) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    auto* fxaa = dynamic_cast<CheckBox*>(
+        session.ui().findById("chk_fxaa"));
+    auto* smaa = dynamic_cast<CheckBox*>(
+        session.ui().findById("chk_smaa"));
+    CHECK(fxaa != nullptr);
+    CHECK(smaa != nullptr);
+    if (fxaa != nullptr && smaa != nullptr) {
+        CHECK_FALSE(fxaa->isChecked());
+        CHECK_TRUE(smaa->isChecked());
+
+        fxaa->setChecked(true);
+        CHECK_TRUE(fxaa->isChecked());
+        CHECK_FALSE(smaa->isChecked());
+
+        smaa->setChecked(true);
+        CHECK_FALSE(fxaa->isChecked());
+        CHECK_TRUE(smaa->isChecked());
+
+        const EditorPreferences preferences = session.currentPreferences();
+        CHECK_FALSE(preferences.fxaaEnabled);
+        CHECK_TRUE(preferences.smaaEnabled);
+    }
+    session.shutdown();
+}
+
+TEST_CASE(editor_session_reports_monotonic_startup_progress) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    std::vector<float> progress;
+    std::vector<std::wstring> stages;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.onStartupProgress = [&progress, &stages](float value,
+                                                  const wchar_t* stage) {
+        progress.push_back(value);
+        stages.emplace_back(stage != nullptr ? stage : L"");
+    };
+
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    CHECK(!progress.empty());
+    CHECK(progress.size() == stages.size());
+    for (size_t i = 1; i < progress.size(); ++i) {
+        CHECK(progress[i] >= progress[i - 1]);
+    }
+    CHECK(progress.front() >= 0.0f);
+    CHECK(progress.back() == 1.0f);
+    CHECK(stages.back() == L"Editor workspace ready");
     session.shutdown();
 }
 
@@ -366,6 +443,7 @@ TEST_CASE(test_editor_session_dock_cards_floatable) {
     CHECK(viewportCard != nullptr);
     CHECK(renderCard->isFloatable());
     CHECK(!viewportCard->isFloatable());
+    CHECK(viewportCard->getTitle() == L"Scene View");
 
     session.shutdown();
 }
@@ -456,6 +534,94 @@ TEST_CASE(renderer_settings_close_and_window_menu_reopen_keeps_live_card) {
 
     session.shutdown();
 }
+
+#if defined(_WIN32)
+TEST_CASE(detached_renderer_settings_close_then_window_menu_reopens_live_card) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor detached-panel lifecycle test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.hostWindow = static_cast<HWND>(windowManager.getWindowHandle());
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* dock = dynamic_cast<DockArea*>(session.ui().findById("main_dock"));
+    auto* panel = dynamic_cast<DockCard*>(session.ui().findById("card_render"));
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    EditorChildWindowManager* children = session.childWindows();
+    CHECK_NOT_NULL(dock);
+    CHECK_NOT_NULL(panel);
+    CHECK_NOT_NULL(menuBar);
+    CHECK_NOT_NULL(children);
+    if (dock == nullptr || panel == nullptr || menuBar == nullptr
+        || children == nullptr) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+    Widget* const content = panel->getContent();
+
+    CHECK(dock->floatCard("card_render", {760.0f, 90.0f}));
+    CHECK(panel->detachToOwnWindow());
+    CHECK(children->count() == 1);
+    if (children->count() != 1) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+    const HWND childHwnd =
+        static_cast<HWND>(children->entries()[0].handle);
+    CHECK(::IsWindow(childHwnd));
+
+    ::SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+    CHECK(children->entries()[0].closeRequested);
+    children->tickAll(0.0f);
+
+    CHECK(children->count() == 0);
+    CHECK_FALSE(::IsWindow(childHwnd));
+    CHECK(session.ui().findById("card_render") == panel);
+    CHECK(dock->findCard("card_render") == panel);
+    CHECK(panel->getContent() == content);
+    CHECK_FALSE(panel->isVisible());
+
+    Menu* windowMenu = nullptr;
+    for (size_t i = 0; i < menuBar->getMenuCount(); ++i) {
+        if (menuBar->getMenuTitle(i) == L"Window") {
+            windowMenu = menuBar->getMenu(i);
+            break;
+        }
+    }
+    CHECK_NOT_NULL(windowMenu);
+    MenuItem* reopen = windowMenu != nullptr ? windowMenu->getItem(0) : nullptr;
+    CHECK_NOT_NULL(reopen);
+    if (reopen != nullptr) {
+        CHECK(reopen->getText() == L"Render Settings");
+        CHECK(reopen->handleClick());
+    }
+
+    CHECK(panel->isVisible());
+    CHECK(panel->getContent() == content);
+    CHECK(dynamic_cast<DockTabGroup*>(panel->getParent()) != nullptr);
+
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+#endif
 
 TEST_CASE(test_editor_session_play_mode_viewport_is_game_surface) {
     const std::string layoutPath = resolveEditorShellLayoutPath();

@@ -587,6 +587,36 @@ The supported SVG grammar and explicit rejection boundary are authoritative in
 [AYUI design](../AYUI/design.md); AYEditor must not grow a second parser or a
 private NanoSVG-style rasterizer.
 
+### 5.7 Dock tabs and promoted-window lifecycle
+
+Every non-empty dock leaf renders the same tab strip, including a leaf that
+contains only one card. Tabs keep the editor preferred width (140 logical px)
+while room remains, then compress and middle-elide their titles; unused strip
+space is not assigned to the final tab. Only the active tab paints a close
+button, and that button is an AYUI vector path rather than a font glyph. The
+viewport card keeps the stable `Scene View` title even though its own embedded
+header height is zero.
+
+A promoted DockCard is the same live widget tree hosted by a borderless child
+HWND. AYUI paints SVG/fallback-vector minimize, maximize/restore, and close
+buttons; `EditorChildWindowManager` maps those semantic requests to AYDevice.
+Dragging the promoted title moves the child HWND and publishes a drop guide on
+the primary DockArea. A valid drop reparents the same card back into the dock
+and removes child-only chrome state, so detaching and docking never serialize
+or recreate panel contents. The child host derives the authoritative screen
+point from each Win32 mouse message's client coordinates, so follow-window
+movement and synthetic input cannot leave `GetCursorPos` stale. Those Win32
+coordinates are physical pixels and must pass through the primary UIManager's
+`physicalToLogical` boundary before DockArea hit-testing; this keeps guides and
+drops aligned at 125%/150% display scaling.
+
+Closing a promoted window is deferred until platform/UI dispatch has unwound.
+Before destroying the child host, the manager returns the card to the primary
+DockArea and invokes its normal close policy. Persistent tool panels are parked
+and remain reopenable from Window; DSL documents run their dirty Save/Discard/
+Cancel path. Editor shutdown is the exception: it tears child hosts down
+directly and must not re-enter the primary dock.
+
 ---
 
 ## 6. Application & subsystems
@@ -601,6 +631,32 @@ From [AYApplication/design.md](../AYApplication/design.md):
 E3 wires `EditorApp : IApplication` to construct `EditorSession` after GameLoop init.
 
 **Do not** put `EditorGameView` inside AYUI widgets.
+
+### 6.1 Startup presentation and validation-scene boundary
+
+The production main HWND is created hidden. `EditorStartupSplash` owns a small
+borderless Win32/GDI window and its own message thread, so progress remains
+responsive while synchronous renderer and importer work runs on the editor
+thread. Startup ordering is fixed:
+
+1. show the startup progress window;
+2. create the final editor HWND hidden;
+3. initialize `EditorSession`, renderer, UI backend, and input against that
+   final HWND;
+4. submit one complete composite warm-up frame while the HWND is hidden;
+5. close the progress window, then reveal the editor HWND.
+
+The splash is presentation only: it must not own AYUI, a renderer subsystem, or
+a temporary swap chain. `WM_ERASEBKGND` on the final editor surface uses the
+editor bootstrap colour as a failure/resize fallback, so a slow or failed first
+present cannot expose the generic white window-class brush.
+
+Reference Character, Ground, Cube, and Glass entities are not product document
+defaults. They are authored only by the clearly marked
+`EditorPlayRuntime::initializeEditorTestScene()` function. Generic editor hosts
+leave `EditorSessionDesc::editorTestSceneEnabled` false; the
+`AYEditorShell_Demo` integration fixture opts in explicitly at its composition
+root. Keep future renderer-validation objects inside that one function.
 
 ---
 
@@ -747,20 +803,48 @@ rendering primitives:
   `<project>/.ayeditor_cache/assets`，在 UI 中分别映射为 `Assets` 和
   `Imported`，提供稳定 ID、目录浏览、递归搜索和类型过滤；解码、加载与热重载
   仍由 AYResource 负责。
-- Content Browser 使用左侧目录树、右侧资源列表与路径/搜索/类型工具条。目录
-  跳转延迟到下一次 editor update 消费，禁止在 ListView 选中回调仍在派发时重建
-  同一控件。
+- Content Browser 使用左侧目录树、右侧虚拟化 `AYUI::TileView` 与路径/搜索/类型工具条。
+  单击选择资源，双击文件夹后把目录跳转延迟到下一次 editor update 消费，禁止在
+  `TileCell` 回调仍在派发时重绑同一虚拟池。
 - 选中资源会清除实体选择并切换 Inspector 到资源详情；选中实体则恢复组件
   Inspector。当前详情包含类型、来源、大小、逻辑路径和 AYResource 加载状态。
 - `+` 通过 AYResource 导入管线把受支持的源文件写入 Imported 根并立即重扫。
   P0 不直接复制任意文件，也不引入私有格式转换器。
-- `EditorAssetListView` 只在 AYEditor 中把列表行映射为 `EditorAsset` drag
-  payload。将 Mesh 拖到 Scene View 后，Session 用视口射线与 y=0 工作平面确定
+- Session 使用 `TileView::setDragPayloadBuilder()` 把选中的 Mesh tile 映射为
+  `EditorAsset` drag payload。将 Mesh 拖到 Scene View 后，Session 用视口射线与 y=0 工作平面确定
   放置点，创建带 `Transform`/`MeshComponent` 的实体，选中它并把场景标记为 dirty。
+- `EditorAssetTilePresenter` 是无状态、无 UI 输入的展示映射：保留包含扩展名的
+  完整文件名，输出类型简称、资源类别与类别色，并按引擎原生扩展名输出右上角
+  标记。Session binder 把这些值写入 AYUI 的通用 `InfoStrip`/`CornerMarker`；AYUI
+  不包含 EngineAsset、Mesh 等编辑器语义。Presenter 不读取 SVG/PNG、不创建控件，
+  也不执行重命名或其他文件系统操作；预览图来源与缓存延后到缩略图阶段实现。
 - P0 仍不包含缩略图缓存、右键菜单、重命名/移动/删除、文件系统 watcher、
   `.meta` GUID、依赖图、材质/场景双击编辑器以及资源引用修复。稳定后可把通用的
-  虚拟化缩略图网格和拖放展示下沉到 AYUI，但项目身份、导入策略和资源语义留在
-  AYEditor/AYProject/AYResource。
+  项目身份、导入策略和资源语义继续留在 AYEditor/AYProject/AYResource。
+
+### 10.4 Phoskia / Logia DSL document tabs
+
+- Content Browser 将 `.phoskia` 归类为 Shader、`.logia` 归类为 Script；双击两类
+  文件时把打开请求延迟到下一次 editor update，避免在 `TileCell` 事件派发期间修改
+  Dock 树。同一资源只保留一个 Center `DockCard`，再次打开只聚焦已有页签。
+- `EditorDslDocument` 是独立于控件的源码模型。它读取 UTF-8，编辑缓冲统一为 LF，
+  保存时保留原文件的 UTF-8 BOM 与 CRLF 风格，并以原子替换写回；8 MiB 上限与
+  Content Browser 的资源身份保持在 AYEditor，而不是下沉到 AYUI。
+- 页签提供源码区、只读 Diagnostics、Save/Compile 工具条。修改后标题显示 `*`；
+  `Ctrl+S` 保存，`F7` 编译当前内存缓冲，关闭脏页签时提供 Save/Discard/Cancel。
+- 源码区启用行号 gutter 与竖向分隔线；行号、文本、选择、光标和鼠标命中共享
+  TextArea 的同一测量坐标。Tab 插入到下一个四空格制表位，选区 Tab/Shift+Tab
+  对涉及行统一缩进/反缩进，不再触发普通控件焦点遍历。
+- AYEditor 按 Logia/Phoskia 语义配置逐行高亮：语言关键字、内建类型、数字/布尔
+  字面量、字符串与行注释使用不同颜色。AYUI 只执行宿主提供的 span 绘制，不
+  认识两种 DSL 的 token 或编译器。
+- Phoskia 使用 AYShader 的 production frontend 与 BGFX source backend 生成并验证
+  后端源码。该页面尚不拥有目标平台、shader profile、include 路径和 shaderc 配置，
+  因而不在此处产出最终平台二进制。Logia 通过 AYScript production compiler 编译为
+  Lua，并把结构化错误、行列与 hint 显示在 Diagnostics。
+- Dock、TextArea 和按钮仍是 AYUI 通用能力；DSL 类型、编译器选择、文件保存语义与
+  诊断格式只存在于 AYEditor/AYShader/AYScript。TextArea 的绘制、命中、选择框与光标
+  必须共享同一有效字号和内容内边距，避免紧凑编辑器行高下产生累计偏移。
 
 ---
 
@@ -785,7 +869,10 @@ rendering primitives:
 | 2026-08-31 | Universal Gizmo 对朝向相机的轴和侧视退化的平面/圆环使用 0.25/0.32 投影滞回门限；暗色禁用并从 CPU 拾取中排除 |
 | 2026-08-31 | Universal Gizmo 调整为短缩放/长平移比例；热区覆盖全部可见几何并保留外扩容差；hover/drag 保持普通箭头，仅由 handle 高亮反馈 |
 | 2026-08-31 | Content Browser P0 采用 AYEditor 轻量项目索引：Assets/Imported 双根、搜索过滤、资源 Inspector、导入与 Mesh 拖入视口；加载继续复用 AYResource |
+| 2026-08-31 | Content Browser 右侧切换到 AYUI 通用 TileView；AYEditor Presenter 独占类型简称、类别色和引擎原生角标语义，AYUI 只提供 InfoStrip/CornerMarker 展示契约 |
+| 2026-08-31 | `.phoskia` / `.logia` 双击打开唯一 Center DSL DockCard；AYEditor 保留源码、保存和编译语义，AYUI 仅提供 Dock/TextArea 通用控件 |
 | 2026-09-01 | 2D authoring 先落 UI-independent 模型：`Editor2DViewportModel` 负责正交视口换算/网格吸附，`EditorTilemapDocument` 负责 paint/fill/collision/animation 与 `.aytilemap.json` 保存加载；AYUI 后续只绑定通用控件。 |
+| 2026-09-01 | Dock 单页签保持固定宽度且仅活动页显示矢量关闭图标；浮动 DockCard 使用 AYUI 矢量窗口控件，关闭先回主 DockArea 执行持久面板/DSL 文档策略，拖回时迁移同一 live card。 |
 
 ---
 
