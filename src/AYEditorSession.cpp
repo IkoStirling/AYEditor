@@ -20,12 +20,14 @@
 #include "AYUI/MenuBar.h"
 #include "AYUI/Menu.h"
 #include "AYUI/MenuItem.h"
+#include "AYUI/ModalDialog.h"
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYUI/Slider.h"
 #include "AYUI/SvgIcon.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/TextArea.h"
+#include "AYUI/Image.h"
 #include "AYUI/Theme.h"
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYUI/ListView.h"
@@ -36,6 +38,7 @@
 #include "AYUI/DockCard.h"
 #include <AYReflect.h>
 #include "AudioEditorSession.h"
+#include "EditorAssetPreviewCache.h"
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
 #include "AYDevice/DeviceManager.h"
@@ -60,7 +63,9 @@
 #include <AYResource/assetsDefs/IMesh.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
@@ -393,6 +398,31 @@ EditorSession::EditorSession()
     EditorUiLayoutExtensionConfig layoutConfig;
     layoutConfig.chromePath = [this]() {
         return resolveLayoutEditorChromePath(_engineAssetsRoot);
+std::wstring assetModifiedText(std::int64_t ticks)
+{
+    if (ticks == 0) return L"unknown";
+    using FileTime = std::filesystem::file_time_type;
+    const FileTime fileTime{FileTime::duration(ticks)};
+    const auto systemTime = std::chrono::time_point_cast<
+        std::chrono::system_clock::duration>(
+            fileTime - FileTime::clock::now()
+            + std::chrono::system_clock::now());
+    const std::time_t value = std::chrono::system_clock::to_time_t(systemTime);
+    std::tm local{};
+#if defined(_WIN32)
+    if (localtime_s(&local, &value) != 0) return L"unknown";
+#else
+    if (localtime_r(&value, &local) == nullptr) return L"unknown";
+#endif
+    wchar_t buffer[32]{};
+    if (std::wcsftime(buffer, sizeof(buffer) / sizeof(buffer[0]),
+                      L"%Y-%m-%d %H:%M", &local)
+        == 0) {
+        return L"unknown";
+    }
+    return buffer;
+}
+
     };
     layoutConfig.openPathPicker = [this]() {
         return showUiJsonOpenDialog(_hostWindow);
@@ -477,6 +507,12 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _netClientAutoPlay = desc.netClientMode;
     auto* host = ayt::app::currentEngineHost();
     _worldContext.setSceneManager(host != nullptr ? host->scenes() : nullptr);
+    if (desc.createAssetPreviewTexture
+        && desc.releaseAssetPreviewTexture) {
+        _assetPreviewCache = std::make_unique<EditorAssetPreviewCache>(
+            desc.createAssetPreviewTexture,
+            desc.releaseAssetPreviewTexture);
+    }
     // Pre-existing _CrtCheckMemory() failure on session_after_set_host
     // in Debug builds. Commented to keep the build runnable; the four
     // checks later in initialize() remain enabled as debug invariants.
@@ -734,6 +770,12 @@ void EditorSession::shutdown() {
     _redoMenuItem = nullptr;
     _viewportOrientationAxisMenuItem = nullptr;
     _onViewportOrientationAxisVisibilityChanged = {};
+    _assetDeleteDialog.reset();
+    if (_assetInspectorPreview != nullptr) {
+        _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
+    }
+    _assetPreviewCache.reset();
+
     _onPreferencesChanged = {};
     _outlinerEntityIds.clear();
     _assetEntries.clear();
@@ -742,6 +784,8 @@ void EditorSession::shutdown() {
     _assetFolderSourceExpanded.clear();
     _assetDatabase.close();
     clearSelectedEntity(false);
+    _assetInspectorPreview = nullptr;
+    _assetDeleteButton = nullptr;
     _outlinerRefreshPending = false;
     _outlinerRootExpanded = true;
     _updatingOutlinerSelection = false;
@@ -756,6 +800,7 @@ void EditorSession::shutdown() {
         }
     }
 
+    _selectedAssetIds.clear();
     _ui.shutdown();
     if (_dockViewHost != nullptr) {
         _dockViewHost->releaseAfterUiShutdown();
@@ -850,6 +895,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         (void)openDslAsset(assetId);
     }
     // Per-frame reconcile: if the last known cursor is not on a splitter
+    if (_assetPreviewCache != nullptr && _assetPreviewCache->poll()) {
+        refreshVisibleAssetPreviews();
+        refreshAssetInspector();
+    }
     // band, force every SplitterHandle un-revealed. Leave events alone
     // are not sufficient (capture path / coalesced pointer movement).
     syncSplitterRevealToMouse();
@@ -1521,6 +1570,12 @@ bool EditorSession::onKeyUp(int keyCode)
 }
 
 void EditorSession::onWindowFocusChanged(bool focused)
+        if (!_selectedAssetIds.empty() && _assetTileView != nullptr
+            && (focused == _assetTileView
+                || isDescendantOf(focused, _assetTileView))) {
+            requestDeleteSelectedAssets();
+            return true;
+        }
 {
     _hostFocused = focused;
     if (focused) return;
@@ -2094,6 +2149,10 @@ void EditorSession::bindAssetBrowser()
             const std::string path = _assetFolderFlatPaths[flatIndex];
             for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
                 if (_assetFolderSourcePaths[i] == path) {
+    _assetInspectorPreview = dynamic_cast<ayt::ui::Image*>(
+        _ui.findById("inspector_asset_preview"));
+    _assetDeleteButton = dynamic_cast<ayt::ui::Button*>(
+        _ui.findById("btn_assets_delete"));
                     _assetFolderSourceExpanded[i] = expanded;
                     break;
                 }
@@ -2113,7 +2172,7 @@ void EditorSession::bindAssetBrowser()
                     return;
                 }
                 const EditorAssetTilePresentation presentation =
-                    _assetTilePresenter.present(_assetEntries.at(index));
+                    _assetTilePresenter.present(entry);
                 cell.setText(presentation.fullFileName);
                 cell.setInfoStrip(
                     presentation.typeAbbreviation,
@@ -2123,14 +2182,8 @@ void EditorSession::bindAssetBrowser()
                     presentation.showEngineResourceMarker);
                 cell.clearThumbnail();
             });
-        _assetTileView->setOnSelectionChanged([this](int index) {
-            if (_updatingAssetSelection || index < 0
-                || index >= static_cast<int>(_assetEntries.size())) return;
-            const EditorAssetEntry& entry = _assetEntries[index];
-            if (entry.folder) return;
-            selectAsset(entry.assetId);
-        });
         _assetTileView->setOnItemDoubleClicked(
+                const EditorAssetEntry& entry = _assetEntries.at(index);
             [this](int index, ayt::ui::TileCell::HitRegion) {
                 if (index < 0
                     || index >= static_cast<int>(_assetEntries.size())) {
@@ -2141,6 +2194,20 @@ void EditorSession::bindAssetBrowser()
                     const EditorAssetRecord* record =
                         _assetDatabase.find(entry.assetId);
                     if (record != nullptr
+                if (!entry.folder && _assetPreviewCache != nullptr) {
+                    if (const EditorAssetRecord* record =
+                            _assetDatabase.find(entry.assetId)) {
+                        const ayt::ui::ImageTextureHandle preview =
+                            _assetPreviewCache->request(*record);
+                        if (preview.isValid()) cell.setThumbnail(preview);
+                    }
+                }
+            });
+        _assetTileView->setSelectionMode(
+            ayt::ui::TileView::SelectionMode::Extended);
+        _assetTileView->setOnSelectionIndicesChanged(
+            [this](const std::vector<int>& indices) {
+                if (!_updatingAssetSelection) selectAssetsFromIndices(indices);
                         && editorDslLanguageFromPath(record->name)
                                != EditorDslLanguage::Unknown) {
                         // Do not mutate the DockArea while TileCell is still
@@ -2214,6 +2281,8 @@ void EditorSession::bindAssetBrowser()
         target->setAcceptDrops(true);
         target->setAcceptDropKinds({"EditorAsset"});
         target->setOnDrop([this](const ayt::ui::DragPayload& payload) {
+    bindButton("btn_assets_delete",
+               [this]() { requestDeleteSelectedAssets(); });
             if (payload.kind != "EditorAsset" || payload.data == nullptr) return;
             const auto* drag = static_cast<const AssetDragData*>(payload.data);
             if (drag != &_assetDragData || drag->type != EditorAssetType::Mesh) {
@@ -2226,6 +2295,7 @@ void EditorSession::bindAssetBrowser()
             if (!isViewportSurfacePoint(physical.x, physical.y)) return;
             (void)placeAssetInViewport(drag->id, physical.x, physical.y);
         });
+    refreshAssetDeleteButton();
     };
     // panel_viewport is temporarily hidden while the host punches the native
     // composite hole. Input can arrive during that interval, in which case
@@ -2392,15 +2462,20 @@ void EditorSession::refreshAssetList()
     // A directory can contain far fewer tiles than its parent. Reset before
     // restoring selection so a one-item child never remains below viewport.
     _assetTileView->setScrollOffset(ayt::math::FVector2(0.0f, 0.0f));
-    int selected = -1;
+    std::vector<int> selectedIndices;
+    std::vector<EditorAssetId> visibleSelection;
     for (std::size_t i = 0; i < _assetEntries.size(); ++i) {
-        if (!_assetEntries[i].folder
-            && _assetEntries[i].assetId == _selectedAssetId) {
-            selected = static_cast<int>(i);
-            break;
+        if (_assetEntries[i].folder) continue;
+        if (std::find(_selectedAssetIds.begin(), _selectedAssetIds.end(),
+                      _assetEntries[i].assetId) != _selectedAssetIds.end()) {
+            selectedIndices.push_back(static_cast<int>(i));
+            visibleSelection.push_back(_assetEntries[i].assetId);
         }
     }
-    _assetTileView->setSelectedIndex(selected);
+    _selectedAssetIds = std::move(visibleSelection);
+    _selectedAssetId = _selectedAssetIds.empty()
+        ? 0 : _selectedAssetIds.back();
+    _assetTileView->setSelectedIndices(selectedIndices);
     _updatingAssetSelection = false;
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_asset_path"))) {
@@ -2421,6 +2496,8 @@ void EditorSession::selectAsset(EditorAssetId assetId)
     // TreeView's visual selection as well as EditorSelection; otherwise a
     // resource picked while (for example) Character is highlighted leaves
     // that same row selected. Clicking Character again then produces no
+    if (_selectedAssetIds.empty()) setInspectorAssetMode(false);
+    refreshAssetDeleteButton();
     // TreeView selection-change callback and the resource Inspector remains
     // visible, including its Reload button.
     if (_outliner != nullptr && _outliner->getSelectedIndex() >= 0) {
@@ -2433,11 +2510,49 @@ void EditorSession::selectAsset(EditorAssetId assetId)
     if (_repaintCallback) _repaintCallback();
 }
 
-void EditorSession::clearSelectedAsset()
+void EditorSession::selectAssetsFromIndices(const std::vector<int>& indices)
 {
-    if (_selectedAssetId == 0) {
+    std::vector<EditorAssetId> selected;
+    selected.reserve(indices.size());
+    for (int index : indices) {
+        if (index < 0 || index >= static_cast<int>(_assetEntries.size())) {
+            continue;
+        }
+        const EditorAssetEntry& entry = _assetEntries[index];
+        if (!entry.folder && _assetDatabase.find(entry.assetId) != nullptr) {
+            selected.push_back(entry.assetId);
+        }
+    }
+    if (selected.empty()) {
+        _selectedAssetId = 0;
+        _selectedAssetIds.clear();
         setInspectorAssetMode(false);
-        return;
+    } else {
+        // TreeView emits its deselection callback synchronously. Clear the
+        // entity side before publishing the new resource selection so that
+        // callback cannot erase the resource IDs we are about to select.
+        if (_outliner != nullptr && _outliner->getSelectedIndex() >= 0) {
+            _outliner->setSelectedIndex(-1);
+        }
+        clearSelectedEntity(true, false);
+        _selectedAssetIds = std::move(selected);
+        EditorAssetId primary = 0;
+        if (_assetTileView != nullptr) {
+            const int focused = _assetTileView->getFocusedIndex();
+            if (focused >= 0
+                && focused < static_cast<int>(_assetEntries.size())
+                && !_assetEntries[focused].folder
+                && std::find(_selectedAssetIds.begin(),
+                             _selectedAssetIds.end(),
+                             _assetEntries[focused].assetId)
+                    != _selectedAssetIds.end()) {
+                primary = _assetEntries[focused].assetId;
+            }
+        }
+        if (primary == 0) primary = _selectedAssetIds.back();
+        _selectedAssetId = primary;
+        setInspectorAssetMode(true);
+        refreshAssetInspector();
     }
     _selectedAssetId = 0;
     setInspectorAssetMode(false);
@@ -2447,8 +2562,10 @@ void EditorSession::clearSelectedAsset()
         _updatingAssetSelection = false;
     }
 }
+    _selectedAssetIds = {assetId};
 
 void EditorSession::setInspectorAssetMode(bool assetMode)
+    refreshAssetDeleteButton();
 {
     bool changed = false;
     if (ayt::ui::Widget* entity = _ui.findById("inspector_entity_body")) {
@@ -2458,13 +2575,21 @@ void EditorSession::setInspectorAssetMode(bool assetMode)
     }
     if (ayt::ui::Widget* asset = _ui.findById("inspector_asset_body")) {
         changed = changed || asset->isVisible() != assetMode;
+    refreshAssetDeleteButton();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::clearSelectedAsset()
+{
         asset->setVisible(assetMode);
+    _selectedAssetIds.clear();
     }
     if (changed) {
         // UIManager caches layout by client size. Visibility changes alter
         // VBox participation without resizing the window. Invalidate here
         // and let populateFrame consume it before opening the native viewport
         // hole; synchronous re-entry from an input callback can corrupt the
+    refreshAssetDeleteButton();
         // composite layout.
         _ui.invalidateLayout();
     }
@@ -2472,8 +2597,6 @@ void EditorSession::setInspectorAssetMode(bool assetMode)
 
 void EditorSession::refreshAssetInspector()
 {
-    const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
-    if (record == nullptr) return;
     auto set = [this](const char* id, const std::wstring& text) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(_ui.findById(id))) {
             label->setText(text);
@@ -2498,13 +2621,103 @@ void EditorSession::refreshAssetInspector()
     case ayt::resource::ResourceLoadState::NotLoaded: break;
     }
     set("inspector_asset_state", std::wstring(L"State: ") + stateName);
-    _ui.invalidateLayout();
+    if (_selectedAssetIds.empty()) return;
+
+    if (_selectedAssetIds.size() > 1u) {
+        std::uintmax_t totalSize = 0;
+        EditorAssetType commonType = EditorAssetType::Unknown;
+        EditorAssetOrigin commonOrigin = EditorAssetOrigin::Source;
+        bool first = true;
+        bool mixedType = false;
+        bool mixedOrigin = false;
+        for (EditorAssetId id : _selectedAssetIds) {
+            const EditorAssetRecord* selected = _assetDatabase.find(id);
+            if (selected == nullptr) continue;
+            totalSize += selected->size;
+            if (first) {
+                commonType = selected->type;
+                commonOrigin = selected->origin;
+                first = false;
+            } else {
+                mixedType = mixedType || commonType != selected->type;
+                mixedOrigin = mixedOrigin || commonOrigin != selected->origin;
+            }
+        }
+        set("inspector_hint", L"Multiple project assets selected");
+        set("inspector_asset_header",
+            std::to_wstring(_selectedAssetIds.size()) + L" assets selected");
+        set("inspector_asset_type", mixedType
+            ? L"Type: Mixed" : L"Type: "
+                + ayt::ui::decodeUtf8Text(editorAssetTypeName(commonType)));
+        set("inspector_asset_origin", mixedOrigin
+            ? L"Origin: Mixed" : (commonOrigin == EditorAssetOrigin::Source
+                ? L"Origin: Assets (source)"
+                : L"Origin: Imported (generated)"));
+        set("inspector_asset_size", L"Combined size: "
+            + assetSizeText(totalSize));
+        set("inspector_asset_modified", L"Modified: Multiple values");
+        set("inspector_asset_path", L"Path: Multiple files");
+        set("inspector_asset_state", L"State: indexed metadata cached");
+        if (_assetInspectorPreview != nullptr) {
+            const bool changed = _assetInspectorPreview->isVisible();
+            _assetInspectorPreview->setVisible(false);
+            if (changed) _ui.invalidateLayout();
+        }
+        if (auto* reload = dynamic_cast<ayt::ui::Button*>(
+                _ui.findById("btn_asset_reload"))) {
+            reload->setEnabled(false);
+        }
+        return;
+    }
+
+    const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
+    if (record == nullptr) return;
+    if (auto* reload = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_asset_reload"))) {
+        reload->setEnabled(true);
+    }
+
+    const bool showPreview = record->type == EditorAssetType::Texture
+        && _assetPreviewCache != nullptr;
+    if (_assetInspectorPreview != nullptr) {
+        const bool visibilityChanged =
+            _assetInspectorPreview->isVisible() != showPreview;
+        _assetInspectorPreview->setVisible(showPreview);
+        if (showPreview) {
+            const ayt::ui::ImageTextureHandle preview =
+                _assetPreviewCache->request(*record);
+            _assetInspectorPreview->setTexture(preview);
+        } else {
+            _assetInspectorPreview->setTexture(
+                ayt::ui::ImageTextureHandle{});
+        }
+        if (visibilityChanged) _ui.invalidateLayout();
+    }
+}
+
+void EditorSession::refreshVisibleAssetPreviews()
+{
+    if (_assetTileView == nullptr || _assetPreviewCache == nullptr) return;
+    for (std::size_t index = 0; index < _assetEntries.size(); ++index) {
+        if (_assetEntries[index].folder) continue;
+        ayt::ui::TileCell* cell = _assetTileView->cellForLogicalIndex(
+            static_cast<int>(index));
+        const EditorAssetRecord* record =
+            _assetDatabase.find(_assetEntries[index].assetId);
+        if (cell == nullptr || record == nullptr) continue;
+        const ayt::ui::ImageTextureHandle preview =
+            _assetPreviewCache->request(*record);
+        if (preview.isValid()) cell->setThumbnail(preview);
+    }
+    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::setAssetBrowserStatus(const std::wstring& text,
                                           bool mirrorToConsole)
 {
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+    set("inspector_asset_modified", L"Modified: "
+        + assetModifiedText(record->lastModified));
             _ui.findById("assets_status"))) label->setText(text);
     if (mirrorToConsole) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
@@ -2584,6 +2797,7 @@ bool EditorSession::openDslAsset(EditorAssetId assetId)
         return false;
     }
 
+    if (_selectedAssetIds.size() != 1u) return;
     EditorOpenRequest request;
     request.resourcePath = record->absolutePath;
     request.resourceKey = record->absolutePath;
@@ -2593,6 +2807,110 @@ bool EditorSession::openDslAsset(EditorAssetId assetId)
     EditorDockViewOptions options;
     options.cardId = "card_dsl_" + std::to_string(assetId);
     const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+void EditorSession::refreshAssetDeleteButton()
+{
+    if (_assetDeleteButton != nullptr) {
+        _assetDeleteButton->setEnabled(!_selectedAssetIds.empty());
+    }
+}
+
+void EditorSession::requestDeleteSelectedAssets()
+{
+    if (_selectedAssetIds.empty()) return;
+
+    _assetDeleteDialog = std::make_unique<ayt::ui::ModalDialog>();
+    _assetDeleteDialog->setId("asset_delete_confirmation");
+    _assetDeleteDialog->setSize({460.0f, 240.0f});
+    _assetDeleteDialog->setAcceptText(L"Delete");
+    _assetDeleteDialog->setRejectText(L"Cancel");
+
+    auto* body = new ayt::ui::VBox();
+    body->setSpacing(8.0f);
+    body->setSize({428.0f, 168.0f});
+    auto* title = new ayt::ui::TextLabel();
+    title->setText(_selectedAssetIds.size() == 1u
+        ? L"Delete this project asset?"
+        : L"Delete " + std::to_wstring(_selectedAssetIds.size())
+            + L" project assets?");
+    title->setFontSize(15);
+    body->addWidget(title, 26.0f);
+
+    std::wstring names;
+    constexpr std::size_t maxListed = 5u;
+    for (std::size_t index = 0;
+         index < std::min(maxListed, _selectedAssetIds.size()); ++index) {
+        if (const EditorAssetRecord* record =
+                _assetDatabase.find(_selectedAssetIds[index])) {
+            if (!names.empty()) names += L"\n";
+            names += L"• " + ayt::ui::decodeUtf8Text(record->logicalPath);
+        }
+    }
+    if (_selectedAssetIds.size() > maxListed) {
+        names += L"\n• and "
+            + std::to_wstring(_selectedAssetIds.size() - maxListed)
+            + L" more";
+    }
+    auto* list = new ayt::ui::TextLabel();
+    list->setText(names);
+    list->setSize({428.0f, 104.0f});
+    body->addWidget(list, 104.0f);
+
+    auto* warning = new ayt::ui::TextLabel();
+    warning->setText(L"This removes the files from disk and cannot be undone.");
+    warning->setSize({428.0f, 22.0f});
+    body->addWidget(warning, 22.0f);
+    _assetDeleteDialog->setBodyContentOwned(body);
+    _assetDeleteDialog->setOnResult([this](int result) {
+        if (result == ayt::ui::ModalDialog::Ok) {
+            deleteSelectedAssetsConfirmed();
+        }
+    });
+    _assetDeleteDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::deleteSelectedAssetsConfirmed()
+{
+    std::vector<EditorAssetRecord> records;
+    records.reserve(_selectedAssetIds.size());
+    for (EditorAssetId id : _selectedAssetIds) {
+        if (const EditorAssetRecord* record = _assetDatabase.find(id)) {
+            records.push_back(*record);
+        }
+    }
+
+    std::size_t deleted = 0;
+    std::wstring failure;
+    for (const EditorAssetRecord& record : records) {
+        ayt::resource::ResourceManager::instance().unloadResource(
+            record.runtimePath);
+        std::error_code error;
+        const bool removed = std::filesystem::remove(record.absolutePath, error);
+        if (removed) {
+            ++deleted;
+            if (_assetPreviewCache != nullptr) {
+                _assetPreviewCache->erase(record.absolutePath);
+            }
+        } else if (failure.empty()) {
+            failure = ayt::ui::decodeUtf8Text(record.logicalPath)
+                + L": " + ayt::ui::decodeUtf8Text(
+                    error ? error.message() : "file was not removed");
+        }
+    }
+
+    clearSelectedAsset();
+    (void)rescanAssetsNow();
+    if (failure.empty()) {
+        setAssetBrowserStatus(
+            L"Deleted " + std::to_wstring(deleted)
+            + (deleted == 1u ? L" asset." : L" assets."), true);
+    } else {
+        setAssetBrowserStatus(
+            L"Deleted " + std::to_wstring(deleted)
+            + L" asset(s); failed: " + failure, true);
+    }
+}
+
     if (!opened) {
         setAssetBrowserStatus(
             L"DSL open failed: " + ayt::ui::decodeUtf8Text(opened.error), true);

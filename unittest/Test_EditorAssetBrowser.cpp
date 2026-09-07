@@ -6,15 +6,21 @@
 #include "AYApplication.h"
 #include "AYApplication/IEngineHost.h"
 #include "AYProject/Project.h"
+#include "AYUI/Button.h"
+#include "AYUI/Image.h"
+#include "AYUI/ModalDialog.h"
 #include "AYUI/TileView.h"
 #include "AYScene/SceneManager.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TreeView.h"
+#include "AYUI/UIKeyCode.h"
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <thread>
 
 using namespace ayt::editor;
 
@@ -425,6 +431,150 @@ TEST_CASE(editor_asset_drag_reaches_viewport_and_creates_mesh_entity)
     }
     CHECK(session.document() != nullptr && session.document()->isDirty());
     session.shutdown();
+}
+
+TEST_CASE(editor_asset_browser_supports_extended_batch_selection_and_confirmed_delete)
+{
+    const std::string layout = resolveAssetBrowserLayout();
+    CHECK(!layout.empty());
+    if (layout.empty()) return;
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("batch_delete")};
+    const auto first = cleanup.root / "Assets/A.aymesh";
+    const auto second = cleanup.root / "Assets/B.aymesh";
+    const auto third = cleanup.root / "Assets/C.aymesh";
+    writeAssetBrowserFile(first, "mesh-a");
+    writeAssetBrowserFile(second, "mesh-b");
+    writeAssetBrowserFile(third, "mesh-c");
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::ui::MockRenderer renderer;
+    EditorSessionDesc desc;
+    desc.uiBackend = &renderer;
+    desc.layoutPath = layout;
+    desc.projectRoot = cleanup.root.string();
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK(session.rescanAssetsNow());
+
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
+        session.ui().findById("list_assets"));
+    auto* deleteButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_assets_delete"));
+    CHECK(list != nullptr);
+    CHECK(deleteButton != nullptr);
+    if (list == nullptr || deleteButton == nullptr) {
+        session.shutdown();
+        return;
+    }
+    CHECK(list->getSelectionMode()
+          == ayt::ui::TileView::SelectionMode::Extended);
+    CHECK(list->getItemCount() == 3u);
+    list->setSelectedIndices({0, 2});
+    CHECK(session.selectedAssetIds().size() == 2u);
+    CHECK(deleteButton->isEnabled());
+
+    session.ui().setFocus(list);
+    CHECK(session.onKeyDown(ayt::ui::UIKey_Delete));
+    CHECK(std::filesystem::is_regular_file(first));
+    CHECK(std::filesystem::is_regular_file(third));
+
+    ayt::ui::ModalDialog* confirmation = nullptr;
+    if (ayt::ui::Widget* overlay = session.ui().getOverlayRoot()) {
+        for (ayt::ui::Widget* child : overlay->getChildren()) {
+            if (child != nullptr
+                && child->getId() == "asset_delete_confirmation") {
+                confirmation = dynamic_cast<ayt::ui::ModalDialog*>(child);
+                break;
+            }
+        }
+    }
+    CHECK(confirmation != nullptr);
+    CHECK(confirmation != nullptr && confirmation->isOpen());
+    if (confirmation != nullptr) confirmation->acceptDialog();
+
+    CHECK_FALSE(std::filesystem::exists(first));
+    CHECK(std::filesystem::is_regular_file(second));
+    CHECK_FALSE(std::filesystem::exists(third));
+    CHECK(session.selectedAssetIds().empty());
+    CHECK(list->getItemCount() == 1u);
+    CHECK_FALSE(deleteButton->isEnabled());
+    session.shutdown();
+}
+
+TEST_CASE(editor_asset_browser_decodes_png_preview_once_off_the_ui_thread)
+{
+    const std::string layout = resolveAssetBrowserLayout();
+    CHECK(!layout.empty());
+    if (layout.empty()) return;
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("png_preview")};
+    const std::filesystem::path source =
+        std::filesystem::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "../../AYRuntime/AYUI/demo/assets/visual_regression/checkerboard.png";
+    const std::filesystem::path target =
+        cleanup.root / "Assets/checkerboard.png";
+    std::error_code copyError;
+    std::filesystem::create_directories(target.parent_path(), copyError);
+    copyError.clear();
+    std::filesystem::copy_file(source, target,
+        std::filesystem::copy_options::overwrite_existing, copyError);
+    CHECK(copyError.value() == 0);
+    CHECK(std::filesystem::is_regular_file(target));
+    if (copyError || !std::filesystem::is_regular_file(target)) return;
+
+    int uploadCount = 0;
+    int releaseCount = 0;
+    std::uint16_t uploadedWidth = 0;
+    std::uint16_t uploadedHeight = 0;
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::ui::MockRenderer renderer;
+    EditorSessionDesc desc;
+    desc.uiBackend = &renderer;
+    desc.layoutPath = layout;
+    desc.projectRoot = cleanup.root.string();
+    desc.createAssetPreviewTexture =
+        [&](std::uint16_t width, std::uint16_t height, const void* pixels) {
+            ++uploadCount;
+            uploadedWidth = width;
+            uploadedHeight = height;
+            CHECK(pixels != nullptr);
+            return reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x1234));
+        };
+    desc.releaseAssetPreviewTexture = [&](void* handle) {
+        CHECK(handle == reinterpret_cast<void*>(
+            static_cast<std::uintptr_t>(0x1234)));
+        ++releaseCount;
+    };
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK(session.rescanAssetsNow());
+
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
+        session.ui().findById("list_assets"));
+    CHECK(list != nullptr);
+    for (int attempt = 0; attempt < 200 && uploadCount == 0; ++attempt) {
+        session.update(0.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    CHECK(uploadCount == 1);
+    CHECK(uploadedWidth > 0u);
+    CHECK(uploadedHeight > 0u);
+    ayt::ui::TileCell* cell = list != nullptr
+        ? list->cellForLogicalIndex(0) : nullptr;
+    CHECK(cell != nullptr);
+    CHECK(cell != nullptr && cell->getThumbnail().isValid());
+
+    if (list != nullptr) list->setSelectedIndex(0);
+    auto* preview = dynamic_cast<ayt::ui::Image*>(
+        session.ui().findById("inspector_asset_preview"));
+    CHECK(preview != nullptr);
+    CHECK(preview != nullptr && preview->isVisible());
+    CHECK(preview != nullptr && preview->hasTexture());
+    for (int attempt = 0; attempt < 5; ++attempt) session.update(0.0f);
+    CHECK(uploadCount == 1);
+    session.shutdown();
+    CHECK(releaseCount == 1);
 }
 
 TEST_SUITE_END

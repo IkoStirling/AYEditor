@@ -738,6 +738,18 @@ void EditorApp::run()
 
     EditorSessionDesc sessionDesc{};
     sessionDesc.uiBackend = uiBackend.get();
+    sessionDesc.createAssetPreviewTexture =
+        [backend = uiBackend.get()](std::uint16_t width,
+                                    std::uint16_t height,
+                                    const void* bgraPixels) -> void* {
+            return backend != nullptr
+                ? backend->createUiTexture(width, height, bgraPixels)
+                : nullptr;
+        };
+    sessionDesc.releaseAssetPreviewTexture =
+        [backend = uiBackend.get()](void* handle) {
+            if (backend != nullptr) backend->releaseUiTexture(handle);
+        };
     sessionDesc.importedCharacter = importedCharacter;
     sessionDesc.editorTestSceneEnabled = _editorTestSceneEnabled;
     sessionDesc.layoutPath = layoutPath;

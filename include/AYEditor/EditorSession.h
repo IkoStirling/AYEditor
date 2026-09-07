@@ -55,6 +55,9 @@ class TextInput;
 class ComboBox;
 class VBox;
 class MenuItem;
+class Button;
+class Image;
+class ModalDialog;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
@@ -66,6 +69,7 @@ class EditorDockViewHost;
 class IEditorHostServices;
 class EditorUiLayoutController;
 class EditorUiLayoutDocument;
+class EditorAssetPreviewCache;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -115,6 +119,14 @@ struct EditorSessionDesc {
     // its own layout/binding portion as a normalized 0..1 range; EditorApp
     // maps that subrange into the process-wide splash progress.
     std::function<void(float, const wchar_t*)> onStartupProgress;
+
+    // Optional host upload bridge for Content Browser raster previews.
+    // Decode stays inside AYEditor and runs asynchronously; the actual GPU
+    // handle is created/released by the host's concrete UI backend. Empty
+    // callbacks keep Foundation/headless hosts free of renderer coupling.
+    std::function<void*(std::uint16_t, std::uint16_t, const void*)>
+        createAssetPreviewTexture;
+    std::function<void(void*)> releaseAssetPreviewTexture;
 };
 
 class EditorSession {
@@ -190,6 +202,9 @@ public:
     }
     uint32_t selectedEntityId() const noexcept { return _selection.entityId(); }
     EditorAssetId selectedAssetId() const noexcept { return _selectedAssetId; }
+    const std::vector<EditorAssetId>& selectedAssetIds() const noexcept {
+        return _selectedAssetIds;
+    }
     EditorAssetDatabase& assetDatabase() noexcept { return _assetDatabase; }
     const EditorAssetDatabase& assetDatabase() const noexcept {
         return _assetDatabase;
@@ -360,11 +375,16 @@ private:
     void rebuildAssetFolderMapping();
     void refreshAssetList();
     void selectAsset(EditorAssetId assetId);
+    void selectAssetsFromIndices(const std::vector<int>& indices);
     void clearSelectedAsset();
     void refreshAssetInspector();
+    void refreshVisibleAssetPreviews();
     void setInspectorAssetMode(bool assetMode);
     void importAssetFromDialog();
     void reloadSelectedAsset();
+    void requestDeleteSelectedAssets();
+    void deleteSelectedAssetsConfirmed();
+    void refreshAssetDeleteButton();
     void setAssetBrowserStatus(const std::wstring& text,
                                bool mirrorToConsole = false);
 
@@ -491,7 +511,12 @@ private:
     std::string _assetCurrentFolder = "Assets";
     std::string _pendingAssetSelectionPath;
     EditorAssetId _selectedAssetId = 0;
+    std::vector<EditorAssetId> _selectedAssetIds;
     EditorAssetId _pendingDslAssetOpenId = 0;
+    std::unique_ptr<EditorAssetPreviewCache> _assetPreviewCache;
+    ayt::ui::Image* _assetInspectorPreview = nullptr;
+    ayt::ui::Button* _assetDeleteButton = nullptr;
+    std::unique_ptr<ayt::ui::ModalDialog> _assetDeleteDialog;
     struct AssetDragData {
         EditorAssetId id = 0;
         EditorAssetType type = EditorAssetType::Unknown;

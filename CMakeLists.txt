@@ -52,6 +52,7 @@ set(SRC_FILES
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetTilePresenter.cpp
+    src/EditorAssetPreviewCache.cpp
     src/AYEditorAssetListView.cpp
     src/AYEditorDslDocument.cpp
     src/AYEditorDslExtension.cpp
