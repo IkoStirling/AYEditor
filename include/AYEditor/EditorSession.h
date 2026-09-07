@@ -53,6 +53,7 @@ class TreeView;
 class TileView;
 class TextInput;
 class ComboBox;
+class VBox;
 class MenuItem;
 }
 namespace ayt::audio { class AudioEditorSession; }
@@ -229,12 +230,19 @@ private:
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
-    void bindTransformInspector();
     void bindComponentBrowser();
     void refreshComponentBrowser();
     void addSelectedComponent();
+    void removeSelectedComponent();
+    void rebuildComponentPropertyEditor();
+    void commitInspectorTextField(const std::string& componentType,
+                                  const std::string& fieldName,
+                                  int elementIndex,
+                                  const std::wstring& text);
+    void commitInspectorBoolField(const std::string& componentType,
+                                  const std::string& fieldName,
+                                  bool value);
     void refreshTransformInspector();
-    void applyTransformInspector();
     void newSceneDocument();
     void openSceneDocument();
     void saveSceneDocument();
@@ -295,33 +303,6 @@ private:
                            ayt::entity::Entity* entity);
     void clearSelectedEntity(bool clearOutline = true,
                              bool clearAssetSelection = true);
-
-    // ED-03: commit the picked paths to the live character
-    // (and to the runtime's pending-overrides buffer so a
-    // future spawn re-applies them). Bound to [Apply].
-    void applyInspectorOverrides();
-
-    // ED-03: clear pending overrides (= reset path picks back
-    // to the ImportedCharacter-derived defaults). Bound to
-    // [Reset]. Refreshes inspector labels after.
-    void resetInspectorOverrides();
-
-    // ED-03: pending paths picked via Pick Skel / Pick Anim
-    // buttons. Both empty = nothing to Apply. Apply wraps
-    // these into an EntityInspectorOverrides and forwards
-    // through selectCharacter / _playRuntime.
-    void pickInspectorSkeleton();
-    void pickInspectorAnimation();
-
-    // ED-03: thin setter for the inspector's staged override
-    // fields, called from pickInspector{Skel,Anim} after the
-    // Win32 dialog returns a path.
-    void setInspectorSkeletonPath(const std::string& path);
-    void setInspectorAnimationPath(const std::string& path);
-
-    // ED-03: shared work for [Apply] - build the override
-    // struct from staged fields and forward.
-    void commitInspectorOverrides(const EntityInspectorOverrides& ov);
 
     // D5.5 (2026-07-26): inject DockCard::setPromoteCallback into every
     // DockCard reachable through _ui.root(). The callback closes over
@@ -470,18 +451,6 @@ private:
     uint32_t _gizmoDragEntityId = 0;
     ayt::entity::World* _gizmoDragWorld = nullptr;
 
-    // ED-03: staged Inspector pick state. Populated by
-    // pickInspector{Skel,Anim} via Win32 dialogs; consumed by
-    // applyInspectorOverrides to build the EntityInspector
-    // Overrides struct. Both empty = nothing staged = [Apply]
-    // is a no-op. Reset clears them.
-    std::string _inspectorSkelPick;
-    std::string _inspectorAnimPick;
-
-    // Viewport click cycles Character ↔ opaque cube so the Inspector
-    // visibly changes (full ray-pick deferred).
-    bool _inspectorPreferCube = false;
-    uint32_t _viewportClickCount = 0;
     bool _netClientAutoPlay = false;
 
     ayt::ui::DockArea* _mainDock = nullptr;
@@ -539,7 +508,12 @@ private:
     EditorCommandStack _commands;
     ayt::ui::ComboBox* _componentPicker = nullptr;
     std::vector<std::string> _componentPickerTypeNames;
-    bool _updatingTransformInputs = false;
+    ayt::ui::ComboBox* _attachedComponentPicker = nullptr;
+    ayt::ui::VBox* _componentPropertyBody = nullptr;
+    std::vector<std::string> _attachedComponentTypeNames;
+    std::string _inspectedComponentTypeName;
+    bool _updatingComponentPicker = false;
+    bool _updatingComponentPropertyCommit = false;
     bool _controlDown = false;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;
     ayt::ui::MenuItem* _redoMenuItem = nullptr;
@@ -557,17 +531,6 @@ private:
     bool _preferencesDirty = false;
     bool _applyingPreferences = false;
 
-    // PR-5 (v0.1.2 LM-2): Play/Paused 时锁 Inspector 写路径。
-    // onModeChanged 切 mode 时同步切换。Inspector 4 button click handler
-    // (pickInspector{Skel,Anim} / applyInspectorOverrides /
-    // resetInspectorOverrides) 入口守卫 `if (!allowInspectorEdit()) return;`。
-    // 视觉提示走 `inspector_hint` TextLabel 文案切换 ("No selection" /
-    // "Locked during Play") — AYUI Button 没有 setEnabled 接口
-    // (D:/Projects/AYRuntime/AYUI/Controls/AYButton.h), 故仅做 click 早返。
-    bool _allowInspectorEdit = true;
-
-    // PR-5 LM-2 helper — Inspector 4 click handler + apply/commit 入口守卫。
-    bool allowInspectorEdit() const noexcept { return _allowInspectorEdit; }
 };
 
 } // namespace ayt::editor

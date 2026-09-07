@@ -34,6 +34,7 @@
 #include "AYUI/Widget.h"
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
+#include <AYReflect.h>
 #include "AudioEditorSession.h"
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
@@ -65,6 +66,7 @@
 #include <cwchar>
 #include <filesystem>
 #include <optional>
+#include <limits>
 #include <unordered_map>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -287,6 +289,53 @@ bool parseFloat(const std::wstring& text, float& value) {
     return true;
 }
 
+bool parseDouble(const std::wstring& text, double& value)
+{
+    const wchar_t* begin = text.c_str();
+    wchar_t* end = nullptr;
+    const double parsed = std::wcstod(begin, &end);
+    while (end != nullptr && *end == L' ') ++end;
+    if (begin == end || end == nullptr || *end != L'\0'
+        || !std::isfinite(parsed)) {
+        return false;
+    }
+    value = parsed;
+    return true;
+}
+
+template<typename T>
+bool isReflectedType(const ayt::reflect::ITypeInfo* type)
+{
+    return type != nullptr && type->getId() == typeid(T).hash_code();
+}
+
+template<typename T>
+bool assignIntegralValue(void* address, double parsed)
+{
+    auto* target = static_cast<T*>(address);
+    T next{};
+    if (parsed <= static_cast<double>(std::numeric_limits<T>::lowest())) {
+        next = std::numeric_limits<T>::lowest();
+    } else if (parsed >= static_cast<double>(std::numeric_limits<T>::max())) {
+        next = std::numeric_limits<T>::max();
+    } else {
+        next = static_cast<T>(parsed);
+    }
+    if (*target == next) return false;
+    *target = next;
+    return true;
+}
+
+bool isDescendantOf(const ayt::ui::Widget* widget,
+                    const ayt::ui::Widget* ancestor)
+{
+    for (auto* current = widget; current != nullptr;
+         current = current->getParent()) {
+        if (current == ancestor) return true;
+    }
+    return false;
+}
+
 std::string wideToUtf8(const std::wstring& text)
 {
     if (text.empty()) return {};
@@ -459,7 +508,6 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     bindTransportBar();
     bindNetworkPanelStub();
     bindRenderSettingsPanel();
-    bindTransformInspector();
     bindComponentBrowser();
 
     // v0.3+ PR-5 — bindOutlinerPanel (design §4.3.y)
@@ -665,7 +713,11 @@ void EditorSession::shutdown() {
     _assetSearch = nullptr;
     _assetTypeFilter = nullptr;
     _componentPicker = nullptr;
+    _attachedComponentPicker = nullptr;
+    _componentPropertyBody = nullptr;
     _componentPickerTypeNames.clear();
+    _attachedComponentTypeNames.clear();
+    _inspectedComponentTypeName.clear();
     _pendingDslAssetOpenId = 0;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
@@ -1527,11 +1579,6 @@ void EditorSession::bindToolbar() {
     bindButton("btn_minimize", [this]() { requestHostMinimize(); });
     bindButton("btn_maximize", [this]() { requestHostMaximizeToggle(); });
     bindButton("btn_close", [this]() { requestHostClose(); });
-
-    bindButton("btn_inspector_skel",  [this]() { pickInspectorSkeleton(); });
-    bindButton("btn_inspector_anim",  [this]() { pickInspectorAnimation(); });
-    bindButton("btn_inspector_apply", [this]() { applyInspectorOverrides(); });
-    bindButton("btn_inspector_reset", [this]() { resetInspectorOverrides(); });
 
     // Selection now exposes one Universal transform gizmo. The legacy
     // Select/Move/Rotate/Scale buttons are deliberately not bound even when
@@ -4297,15 +4344,6 @@ void EditorSession::importCharacterFromDialog()
     }
 }
 
-// ED-03: walk the inspector's TextLabels and update them with
-// the currently-spawned Play entity (character preferred, else cube).
-//
-// v0.4 PR-2 (design §6 decision 7a + LM-2 fix): Play/Paused 模式下
-// inspector 已 lock（PR-5 LM-2 语义），上层 onModeChanged 已
-// `setInspectorHint("Locked during Play.")`。本函数必须不再触碰
-// 任何 inspector label — 否则 line 1590 "No selection" 会覆盖上层
-// 的 mode-aware hint（pre-existing bug，PR-1 验证：git stash 后
-// baseline 同样 fail）。Edit 模式行为不变。
 void EditorSession::refreshInspectorLabels()
 {
     refreshComponentBrowser();
@@ -4316,107 +4354,54 @@ void EditorSession::refreshInspectorLabels()
     }
     setInspectorAssetMode(false);
 
-    auto setUtf8 = [this](const char* id, const std::string& utf8) {
-        if (auto* w = _ui.findById(id)) {
-            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-                label->setText(std::wstring(utf8.begin(), utf8.end()));
-            }
-        }
-    };
-
-    // v0.3+ PR-5 — Hierarchy 选择优先于 PR-4 的 character/cube 二选一。
-    // 存 id 不存指针 → 每次重解析，实体没了自动降级（Landmine F）。
     if (!_selection.empty()) {
         if (auto* w = hierarchyWorldMutable()) {
             if (ayt::entity::Entity* sel = _selection.resolve(w)) {
                 const char* nm = sel->getName();
-                setUtf8("inspector_hint",
-                        std::string(_gameView.mode() == EditorMode::Edit
-                                        ? "Hierarchy: " : "Play selection: ")
-                        + ((nm && nm[0]) ? nm : "entity"));
-                if (auto* meshC = sel->getComponent<ayt::entity::MeshComponent>()) {
-                    setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
-                } else {
-                    setUtf8("inspector_mesh", "mesh: -");
-                }
-                if (auto* skelC = sel->getComponent<ayt::entity::SkeletonComponent>()) {
-                    setUtf8("inspector_skel", "skel: " + skelC->skeletonPath);
-                } else {
-                    setUtf8("inspector_skel", "skel: -");
-                }
-                if (auto* animC = sel->getComponent<ayt::entity::AnimationComponent>()) {
-                    setUtf8("inspector_anim",
-                            animC->clipPath.empty() ? "anim: (bind-pose)"
-                                                    : ("anim: " + animC->clipPath));
-                } else {
-                    setUtf8("inspector_anim", "anim: -");
-                }
+                setInspectorHint(ayt::ui::decodeUtf8Text(
+                    std::string(_gameView.mode() == EditorMode::Edit
+                                    ? "Entity: " : "Play entity: ")
+                    + ((nm && nm[0]) ? nm : "Unnamed")));
                 return;
             }
         }
-        clearSelectedEntity(false);  // 已销毁 → 降级到 PR-4 路径
+        clearSelectedEntity(false);
     }
 
     if (_gameView.mode() != EditorMode::Edit) {
-        setUtf8("inspector_hint", "Locked during Play.");
-        setUtf8("inspector_mesh", "mesh: -");
-        setUtf8("inspector_skel", "skel: -");
-        setUtf8("inspector_anim", "anim: -");
+        setInspectorHint(L"Locked during Play.");
         return;
     }
-
-    ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
-    ayt::entity::Entity* cube = _playRuntime.cubeEntity();
-    ayt::entity::Entity* e = nullptr;
-    if (_inspectorPreferCube && cube != nullptr) {
-        e = cube;
-    } else if (character != nullptr) {
-        e = character;
-    } else {
-        e = cube;
-    }
-
-    if (e == nullptr) {
-        setUtf8("inspector_hint", "No selection");
-        setUtf8("inspector_mesh", "mesh: -");
-        setUtf8("inspector_skel", "skel: -");
-        setUtf8("inspector_anim", "anim: -");
-        return;
-    }
-
-    const bool isCharacter = (e == character);
-    char hint[96];
-    std::snprintf(hint, sizeof(hint), "%s  (click#%u)",
-                  isCharacter ? "Character" : "Cube (opaque ref)",
-                  static_cast<unsigned>(_viewportClickCount));
-    setUtf8("inspector_hint", hint);
-
-    if (auto* meshC = e->getComponent<ayt::entity::MeshComponent>()) {
-        setUtf8("inspector_mesh", "mesh: " + meshC->meshPath);
-    } else {
-        setUtf8("inspector_mesh", "mesh: -");
-    }
-    if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
-        setUtf8("inspector_skel", "skel: " + skelC->skeletonPath);
-    } else {
-        setUtf8("inspector_skel", "skel: -");
-    }
-    if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
-        setUtf8("inspector_anim",
-                animC->clipPath.empty() ? "anim: (bind-pose)"
-                                        : ("anim: " + animC->clipPath));
-    } else {
-        setUtf8("inspector_anim", "anim: -");
-    }
+    setInspectorHint(L"No entity selected");
 }
 
 void EditorSession::bindComponentBrowser()
 {
     _componentPicker = dynamic_cast<ayt::ui::ComboBox*>(
         _ui.findById("cmb_add_component"));
+    _attachedComponentPicker = dynamic_cast<ayt::ui::ComboBox*>(
+        _ui.findById("cmb_attached_component"));
+    _componentPropertyBody = dynamic_cast<ayt::ui::VBox*>(
+        _ui.findById("inspector_component_properties"));
+    if (_attachedComponentPicker != nullptr) {
+        _attachedComponentPicker->setOnSelectionChanged([this](int index) {
+            if (_updatingComponentPicker || index < 0
+                || static_cast<std::size_t>(index)
+                    >= _attachedComponentTypeNames.size()) {
+                return;
+            }
+            _inspectedComponentTypeName = _attachedComponentTypeNames[
+                static_cast<std::size_t>(index)];
+            rebuildComponentPropertyEditor();
+        });
+    }
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_add_component"))) {
         button->setOnClicked([this]() { addSelectedComponent(); });
+    }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_remove_component"))) {
+        button->setOnClicked([this]() { removeSelectedComponent(); });
     }
     refreshComponentBrowser();
 }
@@ -4456,18 +4441,61 @@ void EditorSession::refreshComponentBrowser()
 
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("inspector_components"))) {
-        std::string text = "Components: ";
-        if (entity == nullptr) {
-            text += "-";
-        } else if (attached.empty()) {
-            text += "none";
-        } else {
-            for (std::size_t i = 0; i < attached.size(); ++i) {
-                if (i != 0) text += ", ";
-                text += attached[i]->displayName;
+        const std::string text = entity == nullptr
+            ? "Components"
+            : "Components (" + std::to_string(attached.size()) + ")";
+        label->setText(ayt::ui::decodeUtf8Text(text));
+    }
+
+    _attachedComponentTypeNames.clear();
+    std::vector<std::wstring> attachedItems;
+    attachedItems.reserve(attached.size());
+    _attachedComponentTypeNames.reserve(attached.size());
+    int inspectedIndex = -1;
+    for (std::size_t i = 0; i < attached.size(); ++i) {
+        const auto* descriptor = attached[i];
+        attachedItems.push_back(ayt::ui::decodeUtf8Text(
+            descriptor->category + " / " + descriptor->displayName));
+        _attachedComponentTypeNames.push_back(descriptor->name);
+        if (descriptor->name == _inspectedComponentTypeName) {
+            inspectedIndex = static_cast<int>(i);
+        }
+    }
+    if (attachedItems.empty()) {
+        attachedItems.push_back(entity == nullptr
+            ? L"Select an entity" : L"No components attached");
+        _inspectedComponentTypeName.clear();
+    } else if (inspectedIndex < 0) {
+        inspectedIndex = 0;
+        for (std::size_t i = 0; i < attached.size(); ++i) {
+            if (attached[i]->name == "Transform") {
+                inspectedIndex = static_cast<int>(i);
+                break;
             }
         }
-        label->setText(ayt::ui::decodeUtf8Text(text));
+        _inspectedComponentTypeName = _attachedComponentTypeNames[
+            static_cast<std::size_t>(inspectedIndex)];
+    }
+    _updatingComponentPicker = true;
+    if (_attachedComponentPicker != nullptr) {
+        _attachedComponentPicker->setItems(attachedItems);
+        _attachedComponentPicker->setSelectedIndex(
+            attached.empty() ? 0 : inspectedIndex);
+        _attachedComponentPicker->setEnabled(!attached.empty());
+    }
+    _updatingComponentPicker = false;
+
+    const auto* inspectedDescriptor = _inspectedComponentTypeName.empty()
+        ? nullptr
+        : ayt::entity::ComponentRegistry::instance().find(
+            _inspectedComponentTypeName);
+    const bool canRemove = canAdd && inspectedDescriptor != nullptr
+        && inspectedDescriptor->remove != nullptr
+        && inspectedDescriptor->has != nullptr
+        && inspectedDescriptor->has(*entity);
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_remove_component"))) {
+        button->setEnabled(canRemove);
     }
 
     _componentPickerTypeNames.clear();
@@ -4492,6 +4520,7 @@ void EditorSession::refreshComponentBrowser()
             _ui.findById("btn_add_component"))) {
         button->setEnabled(canAdd && !available.empty());
     }
+    rebuildComponentPropertyEditor();
 }
 
 void EditorSession::addSelectedComponent()
@@ -4521,117 +4550,441 @@ void EditorSession::addSelectedComponent()
     }
     if (descriptor->add(*entity) == nullptr) return;
 
+    _inspectedComponentTypeName = typeName;
     _commands.clear();
     _document->markDirty();
     refreshInspectorLabels();
-    refreshTransformInspector();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
 }
 
-void EditorSession::bindTransformInspector()
+void EditorSession::removeSelectedComponent()
 {
-    const char* ids[] = {
-        "transform_px", "transform_py", "transform_pz",
-        "transform_rx", "transform_ry", "transform_rz",
-        "transform_sx", "transform_sy", "transform_sz",
+    if (_gameView.mode() != EditorMode::Edit || _document == nullptr
+        || _inspectedComponentTypeName.empty()) {
+        return;
+    }
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
+        _inspectedComponentTypeName);
+    if (world == nullptr || entity == nullptr || descriptor == nullptr
+        || descriptor->has == nullptr || descriptor->remove == nullptr
+        || !descriptor->has(*entity)) {
+        refreshComponentBrowser();
+        return;
+    }
+    if (_inspectedComponentTypeName == "Transform") {
+        finishTransformGizmoDrag(false);
+    }
+    descriptor->remove(*entity);
+    _inspectedComponentTypeName.clear();
+    _commands.clear();
+    _document->markDirty();
+    refreshInspectorLabels();
+    refreshUnsavedIndicator();
+    syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::rebuildComponentPropertyEditor()
+{
+    if (_componentPropertyBody == nullptr) return;
+
+    if (ayt::ui::Widget* focused = _ui.getFocusedWidget();
+        focused != nullptr && isDescendantOf(focused, _componentPropertyBody)) {
+        _ui.clearFocusNoDispatch(focused);
+    }
+    const std::vector<ayt::ui::Widget*> oldChildren =
+        _componentPropertyBody->getChildren();
+    for (ayt::ui::Widget* child : oldChildren) {
+        _componentPropertyBody->removeWidget(child);
+        ayt::ui::destroyWidgetTree(child);
+    }
+
+    auto addLabel = [this](const std::wstring& text, float height,
+                           const std::string& id = {}) {
+        auto* label = new ayt::ui::TextLabel();
+        if (!id.empty()) label->setId(id);
+        label->setText(text);
+        label->setSize({240.0f, height});
+        _componentPropertyBody->addWidget(label, height);
+        return label;
     };
-    for (const char* id : ids) {
-        auto* input = dynamic_cast<ayt::ui::TextInput*>(_ui.findById(id));
-        if (input == nullptr) continue;
-        input->setOnSubmit([this](const std::wstring&) {
-            if (!_updatingTransformInputs) applyTransformInspector();
-        });
-        input->setOnFocusLostNotify([this]() {
-            if (!_updatingTransformInputs) applyTransformInspector();
-        });
+
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    const auto* descriptor = _inspectedComponentTypeName.empty()
+        ? nullptr
+        : ayt::entity::ComponentRegistry::instance().find(
+            _inspectedComponentTypeName);
+    ayt::entity::IComponent* component = entity != nullptr
+        && descriptor != nullptr && descriptor->get != nullptr
+        ? descriptor->get(*entity) : nullptr;
+    if (component == nullptr) {
+        addLabel(entity == nullptr ? L"Select an entity"
+                                   : L"Entity has no components. It remains in Hierarchy.",
+                 20.0f, "inspector_property_placeholder");
+        _ui.invalidateLayout();
+        return;
     }
-    _ui.bindEvent("btn_transform_apply", "onClick",
-                  [this]() { applyTransformInspector(); });
-    if (auto* button = dynamic_cast<ayt::ui::Button*>(
-            _ui.findById("btn_transform_apply"))) {
-        button->setOnClicked([this]() { applyTransformInspector(); });
+
+    addLabel(ayt::ui::decodeUtf8Text(descriptor->displayName), 22.0f,
+             "inspector_property_header");
+    auto* type = ayt::reflect::TypeRegistryImpl::instance().findType(
+        descriptor->type.hash_code());
+    if (type == nullptr || type->getFieldCount() == 0) {
+        addLabel(L"No reflected properties", 20.0f,
+                 "inspector_property_placeholder");
+        _ui.invalidateLayout();
+        return;
     }
+
+    const bool sessionReadOnly = _gameView.mode() != EditorMode::Edit;
+    std::size_t visibleFieldCount = 0;
+    const std::string componentTypeName = descriptor->name;
+    for (std::uint32_t fieldIndex = 0;
+         fieldIndex < type->getFieldCount(); ++fieldIndex) {
+        ayt::reflect::IFieldInfo* field = type->getField(fieldIndex);
+        if (field == nullptr
+            || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)) {
+            continue;
+        }
+        void* fieldValue = field->get(component);
+        ayt::reflect::ITypeInfo* fieldType = field->getType();
+        if (fieldValue == nullptr || fieldType == nullptr) continue;
+        ++visibleFieldCount;
+
+        const std::string fieldName = field->getName();
+        const char* reflectedDisplayName = field->getDisplayName();
+        std::wstring displayName = ayt::ui::decodeUtf8Text(
+            reflectedDisplayName != nullptr && reflectedDisplayName[0] != '\0'
+                ? reflectedDisplayName : field->getName());
+        const bool readOnly = sessionReadOnly
+            || field->hasAttribute(
+                ayt::reflect::FieldAttribute::BlueprintReadOnly);
+
+        int elementCount = 0;
+        std::wstring elementSuffix;
+        if (isReflectedType<ayt::math::FVector2>(fieldType)) {
+            elementCount = 2;
+            elementSuffix = L"  X / Y";
+        } else if (isReflectedType<ayt::math::FVector3>(fieldType)) {
+            elementCount = 3;
+            elementSuffix = L"  X / Y / Z";
+        } else if (isReflectedType<ayt::math::FVector4>(fieldType)) {
+            elementCount = 4;
+            elementSuffix = L"  X / Y / Z / W";
+        } else if (isReflectedType<ayt::math::FQuaternion>(fieldType)) {
+            elementCount = 3;
+            elementSuffix = L"  Euler X / Y / Z (degrees)";
+        }
+        addLabel(displayName + elementSuffix, 18.0f,
+                 "inspector_field_label_" + fieldName);
+
+        auto makeInput = [this, componentTypeName, fieldName, readOnly](
+                             const std::wstring& valueText,
+                             int elementIndex) {
+            auto* input = new ayt::ui::TextInput();
+            input->setText(valueText);
+            input->setReadOnly(readOnly);
+            input->setNumericScrubEnabled(true);
+            input->setSize({70.0f, 24.0f});
+            input->setOnSubmit(
+                [this, componentTypeName, fieldName, elementIndex](
+                    const std::wstring& value) {
+                    commitInspectorTextField(
+                        componentTypeName, fieldName, elementIndex, value);
+                });
+            input->setOnFocusLostNotify(
+                [this, componentTypeName, fieldName, elementIndex, input]() {
+                    commitInspectorTextField(componentTypeName, fieldName,
+                                             elementIndex, input->getText());
+                });
+            return input;
+        };
+
+        if (elementCount > 0) {
+            auto* row = new ayt::ui::HBox();
+            row->setId("inspector_field_" + fieldName);
+            row->setSpacing(4.0f);
+            row->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+            row->setSize({240.0f, 24.0f});
+            float values[4]{};
+            if (isReflectedType<ayt::math::FVector2>(fieldType)) {
+                const auto& vector =
+                    *static_cast<ayt::math::FVector2*>(fieldValue);
+                values[0] = vector.x;
+                values[1] = vector.y;
+            } else if (isReflectedType<ayt::math::FVector3>(fieldType)) {
+                const auto& vector =
+                    *static_cast<ayt::math::FVector3*>(fieldValue);
+                values[0] = vector.x;
+                values[1] = vector.y;
+                values[2] = vector.z;
+            } else if (isReflectedType<ayt::math::FVector4>(fieldType)) {
+                const auto& vector =
+                    *static_cast<ayt::math::FVector4*>(fieldValue);
+                values[0] = vector.x;
+                values[1] = vector.y;
+                values[2] = vector.z;
+                values[3] = vector.w;
+            } else {
+                constexpr float radiansToDegrees = 57.29577951308232f;
+                const auto euler = static_cast<ayt::math::FQuaternion*>(
+                    fieldValue)->toEulerAngles();
+                values[0] = euler.x * radiansToDegrees;
+                values[1] = euler.y * radiansToDegrees;
+                values[2] = euler.z * radiansToDegrees;
+            }
+            for (int element = 0; element < elementCount; ++element) {
+                row->addWidget(makeInput(formatFloat(values[element]), element));
+            }
+            _componentPropertyBody->addWidget(row, 24.0f);
+            continue;
+        }
+
+        if (isReflectedType<bool>(fieldType)) {
+            auto* check = new ayt::ui::CheckBox();
+            check->setId("inspector_field_" + fieldName);
+            check->setText(L"Value");
+            check->setChecked(*static_cast<bool*>(fieldValue));
+            check->setEnabled(!readOnly);
+            check->setOnToggled(
+                [this, componentTypeName, fieldName](bool checked) {
+                    commitInspectorBoolField(
+                        componentTypeName, fieldName, checked);
+                });
+            check->setSize({240.0f, 24.0f});
+            _componentPropertyBody->addWidget(check, 24.0f);
+            continue;
+        }
+
+        std::wstring valueText;
+        bool editableText = true;
+        if (isReflectedType<std::string>(fieldType)) {
+            valueText = ayt::ui::decodeUtf8Text(
+                *static_cast<std::string*>(fieldValue));
+        } else if (isReflectedType<float>(fieldType)) {
+            valueText = formatFloat(*static_cast<float*>(fieldValue));
+        } else if (isReflectedType<double>(fieldType)) {
+            valueText = std::to_wstring(*static_cast<double*>(fieldValue));
+        } else if (isReflectedType<std::int8_t>(fieldType)) {
+            valueText = std::to_wstring(
+                static_cast<int>(*static_cast<std::int8_t*>(fieldValue)));
+        } else if (isReflectedType<std::uint8_t>(fieldType)) {
+            valueText = std::to_wstring(
+                static_cast<unsigned>(*static_cast<std::uint8_t*>(fieldValue)));
+        } else if (isReflectedType<std::int16_t>(fieldType)) {
+            valueText = std::to_wstring(
+                static_cast<int>(*static_cast<std::int16_t*>(fieldValue)));
+        } else if (isReflectedType<std::uint16_t>(fieldType)) {
+            valueText = std::to_wstring(
+                static_cast<unsigned>(*static_cast<std::uint16_t*>(fieldValue)));
+        } else if (isReflectedType<std::int32_t>(fieldType)) {
+            valueText = std::to_wstring(
+                *static_cast<std::int32_t*>(fieldValue));
+        } else if (isReflectedType<std::uint32_t>(fieldType)) {
+            valueText = std::to_wstring(
+                *static_cast<std::uint32_t*>(fieldValue));
+        } else if (isReflectedType<std::int64_t>(fieldType)) {
+            valueText = std::to_wstring(
+                *static_cast<std::int64_t*>(fieldValue));
+        } else if (isReflectedType<std::uint64_t>(fieldType)) {
+            valueText = std::to_wstring(
+                *static_cast<std::uint64_t*>(fieldValue));
+        } else if (auto* container = dynamic_cast<
+                       ayt::reflect::IContainerTypeInfo*>(fieldType)) {
+            valueText = std::to_wstring(
+                container->getContainerSize(fieldValue))
+                + L" items (read only)";
+            editableText = false;
+        } else {
+            valueText = ayt::ui::decodeUtf8Text(fieldType->getName())
+                + L" (read only)";
+            editableText = false;
+        }
+        auto* input = makeInput(valueText, -1);
+        input->setId("inspector_field_" + fieldName);
+        input->setReadOnly(readOnly || !editableText);
+        input->setNumericScrubEnabled(
+            editableText && !isReflectedType<std::string>(fieldType));
+        input->setSize({240.0f, 24.0f});
+        _componentPropertyBody->addWidget(input, 24.0f);
+    }
+    if (visibleFieldCount == 0) {
+        addLabel(L"No visible reflected properties", 20.0f,
+                 "inspector_property_placeholder");
+    }
+    _ui.invalidateLayout();
+}
+
+void EditorSession::commitInspectorTextField(
+    const std::string& componentType,
+    const std::string& fieldName,
+    int elementIndex,
+    const std::wstring& text)
+{
+    if (_gameView.mode() != EditorMode::Edit || _document == nullptr) return;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
+        componentType);
+    ayt::entity::IComponent* component = entity != nullptr
+        && descriptor != nullptr && descriptor->get != nullptr
+        ? descriptor->get(*entity) : nullptr;
+    auto* type = descriptor != nullptr
+        ? ayt::reflect::TypeRegistryImpl::instance().findType(
+            descriptor->type.hash_code()) : nullptr;
+    auto* field = type != nullptr ? type->findField(fieldName.c_str()) : nullptr;
+    if (world == nullptr || entity == nullptr || component == nullptr
+        || field == nullptr || field->getType() == nullptr
+        || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)
+        || field->hasAttribute(
+            ayt::reflect::FieldAttribute::BlueprintReadOnly)) {
+        return;
+    }
+    void* value = field->get(component);
+    auto* fieldType = field->getType();
+    if (value == nullptr) return;
+
+    const bool stringField = isReflectedType<std::string>(fieldType);
+    double parsed = 0.0;
+    if (!stringField && !parseDouble(text, parsed)) return;
+
+    if (componentType == "Transform") {
+        auto* transform = entity->getComponent<ayt::entity::Transform>();
+        if (transform != nullptr) {
+            EditorTransformState state{
+                transform->position, transform->rotation, transform->scale};
+            bool handled = false;
+            if (fieldName == "position" && elementIndex >= 0
+                && elementIndex < 3) {
+                state.position[elementIndex] = static_cast<float>(parsed);
+                handled = true;
+            } else if (fieldName == "scale" && elementIndex >= 0
+                       && elementIndex < 3) {
+                state.scale[elementIndex] = static_cast<float>(parsed);
+                handled = true;
+            } else if (fieldName == "rotation" && elementIndex >= 0
+                       && elementIndex < 3) {
+                constexpr float degreesToRadians = 0.017453292519943295f;
+                auto euler = transform->rotation.toEulerAngles();
+                euler[elementIndex] = static_cast<float>(parsed)
+                    * degreesToRadians;
+                state.rotation = ayt::math::FQuaternion::fromEulerAngles(euler);
+                handled = true;
+            }
+            if (handled) {
+                _updatingComponentPropertyCommit = true;
+                (void)_commands.executeTransform(
+                    *world, entity->getId(), state);
+                _updatingComponentPropertyCommit = false;
+                return;
+            }
+        }
+    }
+
+    bool changed = false;
+    if (stringField) {
+        auto& target = *static_cast<std::string*>(value);
+        const std::string next = wideToUtf8(text);
+        changed = target != next;
+        if (changed) target = next;
+    } else if (isReflectedType<float>(fieldType)) {
+        auto& target = *static_cast<float*>(value);
+        const float next = static_cast<float>(parsed);
+        changed = target != next;
+        if (changed) target = next;
+    } else if (isReflectedType<double>(fieldType)) {
+        auto& target = *static_cast<double*>(value);
+        changed = target != parsed;
+        if (changed) target = parsed;
+    } else if (isReflectedType<ayt::math::FVector2>(fieldType)
+               && elementIndex >= 0 && elementIndex < 2) {
+        auto& target = *static_cast<ayt::math::FVector2*>(value);
+        const float next = static_cast<float>(parsed);
+        changed = target[elementIndex] != next;
+        if (changed) target[elementIndex] = next;
+    } else if (isReflectedType<ayt::math::FVector3>(fieldType)
+               && elementIndex >= 0 && elementIndex < 3) {
+        auto& target = *static_cast<ayt::math::FVector3*>(value);
+        const float next = static_cast<float>(parsed);
+        changed = target[elementIndex] != next;
+        if (changed) target[elementIndex] = next;
+    } else if (isReflectedType<ayt::math::FVector4>(fieldType)
+               && elementIndex >= 0 && elementIndex < 4) {
+        auto& target = *static_cast<ayt::math::FVector4*>(value);
+        const float next = static_cast<float>(parsed);
+        changed = target[elementIndex] != next;
+        if (changed) target[elementIndex] = next;
+    } else if (isReflectedType<ayt::math::FQuaternion>(fieldType)
+               && elementIndex >= 0 && elementIndex < 3) {
+        constexpr float degreesToRadians = 0.017453292519943295f;
+        auto& target = *static_cast<ayt::math::FQuaternion*>(value);
+        auto euler = target.toEulerAngles();
+        euler[elementIndex] = static_cast<float>(parsed) * degreesToRadians;
+        target = ayt::math::FQuaternion::fromEulerAngles(euler);
+        changed = true;
+    } else if (isReflectedType<std::int8_t>(fieldType)) {
+        changed = assignIntegralValue<std::int8_t>(value, parsed);
+    } else if (isReflectedType<std::uint8_t>(fieldType)) {
+        changed = assignIntegralValue<std::uint8_t>(value, parsed);
+    } else if (isReflectedType<std::int16_t>(fieldType)) {
+        changed = assignIntegralValue<std::int16_t>(value, parsed);
+    } else if (isReflectedType<std::uint16_t>(fieldType)) {
+        changed = assignIntegralValue<std::uint16_t>(value, parsed);
+    } else if (isReflectedType<std::int32_t>(fieldType)) {
+        changed = assignIntegralValue<std::int32_t>(value, parsed);
+    } else if (isReflectedType<std::uint32_t>(fieldType)) {
+        changed = assignIntegralValue<std::uint32_t>(value, parsed);
+    } else if (isReflectedType<std::int64_t>(fieldType)) {
+        changed = assignIntegralValue<std::int64_t>(value, parsed);
+    } else if (isReflectedType<std::uint64_t>(fieldType)) {
+        changed = assignIntegralValue<std::uint64_t>(value, parsed);
+    }
+    if (!changed) return;
+    _commands.clear();
+    _document->markDirty();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::commitInspectorBoolField(
+    const std::string& componentType,
+    const std::string& fieldName,
+    bool checked)
+{
+    if (_gameView.mode() != EditorMode::Edit || _document == nullptr) return;
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
+        componentType);
+    ayt::entity::IComponent* component = entity != nullptr
+        && descriptor != nullptr && descriptor->get != nullptr
+        ? descriptor->get(*entity) : nullptr;
+    auto* type = descriptor != nullptr
+        ? ayt::reflect::TypeRegistryImpl::instance().findType(
+            descriptor->type.hash_code()) : nullptr;
+    auto* field = type != nullptr ? type->findField(fieldName.c_str()) : nullptr;
+    if (component == nullptr || field == nullptr
+        || !isReflectedType<bool>(field->getType())
+        || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)
+        || field->hasAttribute(
+            ayt::reflect::FieldAttribute::BlueprintReadOnly)) {
+        return;
+    }
+    auto* target = static_cast<bool*>(field->get(component));
+    if (target == nullptr || *target == checked) return;
+    *target = checked;
+    _commands.clear();
+    _document->markDirty();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::refreshTransformInspector()
 {
-    const char* ids[] = {
-        "transform_px", "transform_py", "transform_pz",
-        "transform_rx", "transform_ry", "transform_rz",
-        "transform_sx", "transform_sy", "transform_sz",
-    };
-    auto setAll = [this, &ids](const std::wstring (&values)[9], bool readOnly) {
-        _updatingTransformInputs = true;
-        for (size_t i = 0; i < 9; ++i) {
-            if (auto* input = dynamic_cast<ayt::ui::TextInput*>(
-                    _ui.findById(ids[i]))) {
-                input->setText(values[i]);
-                input->setReadOnly(readOnly);
-            }
-        }
-        _updatingTransformInputs = false;
-    };
-
-    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
-    auto* transform = entity != nullptr
-        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
-    if (transform == nullptr) {
-        const std::wstring empty[9] = {
-            L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-", L"-"
-        };
-        setAll(empty, true);
-        return;
-    }
-
-    constexpr float radiansToDegrees = 57.29577951308232f;
-    const ayt::math::FVector3 euler = transform->rotation.toEulerAngles();
-    const std::wstring values[9] = {
-        formatFloat(transform->position.x), formatFloat(transform->position.y),
-        formatFloat(transform->position.z), formatFloat(euler.x * radiansToDegrees),
-        formatFloat(euler.y * radiansToDegrees), formatFloat(euler.z * radiansToDegrees),
-        formatFloat(transform->scale.x), formatFloat(transform->scale.y),
-        formatFloat(transform->scale.z),
-    };
-    // Runtime clones remain inspectable during Play/Paused, but edits stay
-    // locked so Inspector cannot mutate simulation state behind the host.
-    setAll(values, _gameView.mode() != EditorMode::Edit);
-}
-
-void EditorSession::applyTransformInspector()
-{
-    if (_updatingTransformInputs || _gameView.mode() != EditorMode::Edit) return;
-    ayt::entity::World* world = hierarchyWorldMutable();
-    ayt::entity::Entity* entity = _selection.resolve(world);
-    if (world == nullptr || entity == nullptr
-        || entity->getComponent<ayt::entity::Transform>() == nullptr) {
-        return;
-    }
-
-    const char* ids[] = {
-        "transform_px", "transform_py", "transform_pz",
-        "transform_rx", "transform_ry", "transform_rz",
-        "transform_sx", "transform_sy", "transform_sz",
-    };
-    float values[9] = {};
-    for (size_t i = 0; i < 9; ++i) {
-        auto* input = dynamic_cast<ayt::ui::TextInput*>(_ui.findById(ids[i]));
-        if (input == nullptr || !parseFloat(input->getText(), values[i])) {
-            refreshTransformInspector();
-            return;
-        }
-    }
-
-    constexpr float degreesToRadians = 0.017453292519943295f;
-    EditorTransformState state;
-    state.position = {values[0], values[1], values[2]};
-    state.rotation = ayt::math::FQuaternion::fromEulerAngles({
-        values[3] * degreesToRadians,
-        values[4] * degreesToRadians,
-        values[5] * degreesToRadians,
-    });
-    state.scale = {values[6], values[7], values[8]};
-    _commands.executeTransform(*world, entity->getId(), state);
+    if (_updatingComponentPropertyCommit) return;
+    rebuildComponentPropertyEditor();
 }
 
 void EditorSession::selectPlayEntityFromViewport()
@@ -4725,7 +5078,6 @@ void EditorSession::applyViewportSelection(ayt::entity::World* world,
                                            ayt::entity::Entity* entity)
 {
     setSelectedEntity(world, entity);
-    ++_viewportClickCount;
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -4916,20 +5268,13 @@ void EditorSession::syncTransformGizmoToRenderer()
     subsystem->renderer().setEditorTransformGizmoState(state);
 }
 
-// ED-03: [Select] handler. Snapshots paths into the inspector.
-// Falls back to the procedural cube when character spawn failed.
+// Select the live character for inspection and fall back to the procedural
+// cube when character spawn failed.
 void EditorSession::selectCharacter()
 {
     ayt::entity::Entity* character = _playRuntime.selectedCharacterEntity();
     ayt::entity::Entity* cube = _playRuntime.cubeEntity();
-    ayt::entity::Entity* e = nullptr;
-    if (_inspectorPreferCube && cube != nullptr) {
-        e = cube;
-    } else if (character != nullptr) {
-        e = character;
-    } else {
-        e = cube;
-    }
+    ayt::entity::Entity* e = character != nullptr ? character : cube;
 
     if (e == nullptr) {
         std::fprintf(stderr,
@@ -4940,123 +5285,6 @@ void EditorSession::selectCharacter()
     }
 
     setSelectedEntity(hierarchyWorldMutable(), e);
-
-    if (e == character) {
-        if (auto* skelC = e->getComponent<ayt::entity::SkeletonComponent>()) {
-            _inspectorSkelPick = skelC->skeletonPath;
-        }
-        if (auto* animC = e->getComponent<ayt::entity::AnimationComponent>()) {
-            _inspectorAnimPick = animC->clipPath;
-        }
-    } else {
-        _inspectorSkelPick.clear();
-        _inspectorAnimPick.clear();
-    }
-
-    refreshInspectorLabels();
-    if (_repaintCallback) {
-        _repaintCallback();
-    }
-}
-
-// ED-03: [Pick Skel] handler. Opens the Win32 dialog filtered
-// to .ayskel, stashes the chosen path into _inspectorSkelPick.
-// The path is NOT yet applied to the live entity - [Apply]
-// commits it. Cancel returns empty = no-op.
-void EditorSession::pickInspectorSkeleton()
-{
-    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
-    if (!allowInspectorEdit()) return;
-    // We currently pass the empty filter straight through; the
-    // ImportDialog::showOpenFileDialog defaults to its built-in
-    // 3D-Model (.fbx/.gltf/.glb) filter, which is wider than
-    // .ayskel. To stay within Phase 1 scope we accept the wider
-    // filter (the user just types the path or picks any
-    // cache-resident file). A typed filter arg is a Phase 2
-    // refinement when picker infrastructure exists.
-    const std::string picked =
-        ayt::editor::ImportDialog::showOpenFileDialog(_hostWindow);
-    if (picked.empty()) {
-        return; // user cancelled
-    }
-    setInspectorSkeletonPath(picked);
-}
-
-// ED-03: [Pick Anim] handler, sibling of pickInspectorSkeleton.
-void EditorSession::pickInspectorAnimation()
-{
-    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
-    if (!allowInspectorEdit()) return;
-    const std::string picked =
-        ayt::editor::ImportDialog::showOpenFileDialog(_hostWindow);
-    if (picked.empty()) {
-        return;
-    }
-    setInspectorAnimationPath(picked);
-}
-
-// ED-03: thin setters that stash the path and refresh the
-// corresponding inspector label so the user sees feedback
-// between [Pick ...] and [Apply].
-void EditorSession::setInspectorSkeletonPath(const std::string& path)
-{
-    _inspectorSkelPick = path;
-    if (auto* w = _ui.findById("inspector_skel")) {
-        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-            label->setText(std::wstring(path.begin(), path.end()));
-        }
-    }
-}
-
-void EditorSession::setInspectorAnimationPath(const std::string& path)
-{
-    _inspectorAnimPick = path;
-    if (auto* w = _ui.findById("inspector_anim")) {
-        if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-            label->setText(std::wstring(path.begin(), path.end()));
-        }
-    }
-}
-
-// ED-03: [Apply] handler. Builds an EntityInspectorOverrides
-// from the staged picks and forwards to the runtime. Empty
-// pick on a field => leave that component path unchanged
-// (the runtime's applyComponentOverrides treats empty as
-// "keep").
-void EditorSession::applyInspectorOverrides()
-{
-    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
-    if (!allowInspectorEdit()) return;
-    EntityInspectorOverrides ov;
-    ov.skeletonPathOverride  = _inspectorSkelPick;
-    ov.animationPathOverride = _inspectorAnimPick;
-    commitInspectorOverrides(ov);
-}
-
-// ED-03: [Reset] handler. Clear pending overrides back to
-// default (which the runtime interprets as "stop applying
-// user picks on the next spawn"). Does NOT clear the live
-// entity's component paths - the user keeps whatever is
-// animating now.
-void EditorSession::resetInspectorOverrides()
-{
-    // PR-5 (LM-2): Play/Paused 时锁 Inspector 写路径。
-    if (!allowInspectorEdit()) return;
-    _inspectorSkelPick.clear();
-    _inspectorAnimPick.clear();
-    EntityInspectorOverrides emptyOv;
-    commitInspectorOverrides(emptyOv);
-    std::fprintf(stderr, "[EditorSession] inspector overrides cleared\n");
-}
-
-// ED-03: shared work for both Apply and Reset. Forward the
-// override to the runtime, refresh labels, trigger redraw.
-void EditorSession::commitInspectorOverrides(const EntityInspectorOverrides& ov)
-{
-    // PR-5 (LM-2): 双层守卫 — applyInspectorOverrides/resetInspectorOverrides
-    // 入口已守；此处再守一次防外部 caller 直接调 commitInspectorOverrides 路径。
-    if (!allowInspectorEdit()) return;
-    _playRuntime.applyComponentOverrides(ov);
     refreshInspectorLabels();
     if (_repaintCallback) {
         _repaintCallback();
@@ -5131,11 +5359,7 @@ void EditorSession::setModeLabel(const std::wstring& text) {
     }
 }
 
-// PR-5 (LM-2): Inspector hint 文案切换 helper.
-// inspector_hint TextLabel 在 editor_shell.ui.json:141 已存在（id=
-// "inspector_hint", initial text "No selection"）。Play/Paused 时切
-// "Locked during Play"；Edit 模式回 "Click buttons to configure."
-// （让用户在 Reset 完 pick 后看见可操作提示）。
+// Update the Inspector selection/mode hint.
 void EditorSession::setInspectorHint(const std::wstring& text) {
     if (auto* widget = _ui.findById("inspector_hint")) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(widget)) {
@@ -5165,15 +5389,11 @@ void EditorSession::onModeChanged(EditorMode mode) {
     switch (mode) {
     case EditorMode::Edit:
         setModeLabel(L"EDIT");
-        // PR-5 (LM-2): Inspector 写权限恢复 + hint 文案恢复。
-        _allowInspectorEdit = true;
-        setInspectorHint(L"Click buttons to configure.");
+        setInspectorHint(L"No entity selected");
         pushFreecamToRenderer();
         break;
     case EditorMode::Play:
         setModeLabel(_netClientAutoPlay ? L"PLAY (NET CLIENT)" : L"PLAY");
-        // PR-5 (LM-2): Inspector 写权限锁 + hint 提示。
-        _allowInspectorEdit = false;
         setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
@@ -5183,8 +5403,6 @@ void EditorSession::onModeChanged(EditorMode mode) {
         break;
     case EditorMode::Paused:
         setModeLabel(L"PAUSED");
-        // PR-5 (LM-2): Paused 也锁 Inspector（与 Play 同语义）。
-        _allowInspectorEdit = false;
         setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
         pushFreecamToRenderer();
@@ -5203,7 +5421,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
 
     // v0.3 PR-4 — mode 变化时同步 refresh lbl_unsaved（design §4.3.x 决策 5a）
     refreshUnsavedIndicator();
-    refreshTransformInspector();
+    refreshInspectorLabels();
 
     _ui.invalidateLayout();
     _ui.layout();

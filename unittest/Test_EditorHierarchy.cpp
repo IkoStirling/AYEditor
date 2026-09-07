@@ -6,7 +6,7 @@
 //   1. card_outliner + tree_outliner 在 layout 加载后存在
 //   2. node 数 == 合成 root(1) + 当前 World entity 数（INV-4 gate：
 //      !edit->isDirty() && !sm->isEditDirty()）
-//   3. 点击行 → Inspector 目标切到该 entity（"Hierarchy: <name>"）
+//   3. 点击行 → Inspector 目标切到该 entity（"Entity: <name>"）
 //   4. mode 切换 → Outliner 重建（延迟，经 update(dt) 消费）
 //   5. root 折叠/展开 → 逻辑 entity 选择保持并恢复行高亮
 //   6. 无 host/Edit World → tree 空 + hint "Scene: -"
@@ -136,7 +136,7 @@ TEST_CASE(editor_hierarchy_node_count_matches_edit_world_entity_count)
     session.shutdown();
 }
 
-// case 3: 点击行 → Inspector 切到该 entity（"Hierarchy: <name>"）
+// case 3: 点击行 → Inspector 切到该 entity（"Entity: <name>"）
 TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
 {
     auto layoutPath = resolveHierarchyLayoutPath();
@@ -172,14 +172,14 @@ TEST_CASE(editor_hierarchy_click_selects_entity_for_inspector)
     auto* hint = dynamic_cast<TextLabel*>(
         session.ui().findById("inspector_hint"));
     CHECK_NOT_NULL(hint);
-    CHECK(hint->getText().rfind(L"Hierarchy: ", 0) == 0);
+    CHECK(hint->getText().rfind(L"Play entity: ", 0) == 0);
 
     // flat 0 = 合成 root → 清选择，Inspector 退回 PR-4 路径
     tree->setSelectedIndex(0);
     auto* hint2 = dynamic_cast<TextLabel*>(
         session.ui().findById("inspector_hint"));
     CHECK_NOT_NULL(hint2);
-    CHECK(hint2->getText().rfind(L"Hierarchy: ", 0) != 0);
+    CHECK(hint2->getText().rfind(L"Play entity: ", 0) != 0);
 
     session.shutdown();
 }
@@ -288,7 +288,7 @@ TEST_CASE(editor_hierarchy_root_collapse_preserves_entity_selection)
 
     tree->setSelectedIndex(entityFlatIndex);
     const std::wstring selectedHint = inspectorHint->getText();
-    CHECK(selectedHint.rfind(L"Hierarchy: ", 0) == 0);
+    CHECK(selectedHint.rfind(L"Entity: ", 0) == 0);
 
     tree->toggleExpand(0);
     session.update(0.016f);

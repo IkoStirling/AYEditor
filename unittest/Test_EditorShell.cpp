@@ -18,10 +18,12 @@
 #include "AYUI/Menu.h"
 #include "AYUI/MenuBar.h"
 #include "AYUI/Panel.h"
+#include "AYUI/ScrollView.h"
 #include "AYUI/Style.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
 #include "AYEntity.h"
+#include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/HealthComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include "AYApplication/IEngineHost.h"
@@ -181,6 +183,14 @@ TEST_CASE(test_editor_session_loads_shell_json) {
         session.ui().findById("cmb_add_component")) != nullptr);
     CHECK(dynamic_cast<Button*>(
         session.ui().findById("btn_add_component")) != nullptr);
+    CHECK(dynamic_cast<ScrollView*>(
+        session.ui().findById("panel_inspector_scroll")) != nullptr);
+    CHECK(dynamic_cast<ComboBox*>(
+        session.ui().findById("cmb_attached_component")) != nullptr);
+    CHECK(dynamic_cast<Button*>(
+        session.ui().findById("btn_remove_component")) != nullptr);
+    CHECK(dynamic_cast<VBox*>(
+        session.ui().findById("inspector_component_properties")) != nullptr);
     session.shutdown();
 }
 
@@ -609,7 +619,7 @@ TEST_CASE(editor_menu_bar_stays_inside_top_chrome_row) {
     session.shutdown();
 }
 
-TEST_CASE(inspector_panel_renders_pick_apply_reset_widgets) {
+TEST_CASE(inspector_panel_uses_scrollable_component_properties) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
     if (layoutPath.empty()) return;
@@ -619,20 +629,25 @@ TEST_CASE(inspector_panel_renders_pick_apply_reset_widgets) {
     CHECK(session.initialize(&backend, layoutPath));
 
     CHECK_NOT_NULL(session.ui().findById("inspector_hint"));
-    CHECK_NOT_NULL(session.ui().findById("inspector_mesh"));
-    CHECK_NOT_NULL(session.ui().findById("inspector_skel"));
-    CHECK_NOT_NULL(session.ui().findById("inspector_anim"));
+    auto* scroll = dynamic_cast<ScrollView*>(
+        session.ui().findById("panel_inspector_scroll"));
+    CHECK_NOT_NULL(scroll);
+    if (scroll != nullptr) {
+        CHECK(scroll->isVerticalScrollBarEnabled());
+        CHECK_FALSE(scroll->isHorizontalScrollBarEnabled());
+    }
+    CHECK_NOT_NULL(session.ui().findById("cmb_attached_component"));
+    CHECK_NOT_NULL(session.ui().findById("btn_remove_component"));
+    CHECK_NOT_NULL(session.ui().findById("inspector_component_properties"));
 
-    auto requireBtn = [&](const char* id) {
-        auto* w = session.ui().findById(id);
-        CHECK_NOT_NULL(w);
-        auto* b = dynamic_cast<Button*>(w);
-        CHECK_NOT_NULL(b);
-    };
-    requireBtn("btn_inspector_skel");
-    requireBtn("btn_inspector_anim");
-    requireBtn("btn_inspector_apply");
-    requireBtn("btn_inspector_reset");
+    CHECK(session.ui().findById("inspector_mesh") == nullptr);
+    CHECK(session.ui().findById("inspector_skel") == nullptr);
+    CHECK(session.ui().findById("inspector_anim") == nullptr);
+    CHECK(session.ui().findById("btn_inspector_skel") == nullptr);
+    CHECK(session.ui().findById("btn_inspector_anim") == nullptr);
+    CHECK(session.ui().findById("btn_inspector_apply") == nullptr);
+    CHECK(session.ui().findById("btn_inspector_reset") == nullptr);
+    CHECK(session.ui().findById("transform_px") == nullptr);
 
     session.shutdown();
 }
@@ -904,7 +919,7 @@ TEST_CASE(editor_viewport_click_commits_text_focus)
     session.setClientSize(1280.0f, 720.0f);
 
     auto* input = dynamic_cast<TextInput*>(
-        session.ui().findById("transform_px"));
+        session.ui().findById("assets_search"));
     auto* viewport = dynamic_cast<Image*>(
         session.ui().findById("panel_viewport"));
     CHECK(input != nullptr);
@@ -938,7 +953,7 @@ TEST_CASE(editor_viewport_first_click_recovers_stale_ui_capture_after_arrow_key)
     session.setClientSize(1280.0f, 720.0f);
 
     auto* input = dynamic_cast<TextInput*>(
-        session.ui().findById("transform_px"));
+        session.ui().findById("assets_search"));
     auto* viewport = dynamic_cast<Image*>(
         session.ui().findById("panel_viewport"));
     CHECK(input != nullptr);
@@ -1155,10 +1170,16 @@ TEST_CASE(editor_viewport_click_selects_entity_in_play_world)
             session.ui().findById("inspector_hint"));
         CHECK(hint != nullptr);
         if (hint != nullptr) {
-            CHECK(hint->getText().rfind(L"Play selection: ", 0) == 0);
+            CHECK(hint->getText().rfind(L"Play entity: ", 0) == 0);
         }
-        auto* positionX = dynamic_cast<TextInput*>(
-            session.ui().findById("transform_px"));
+        Widget* properties = session.ui().findById(
+            "inspector_component_properties");
+        Widget* positionRow = findWidgetInTree(
+            properties, "inspector_field_position");
+        auto* positionX = positionRow != nullptr
+            && !positionRow->getChildren().empty()
+            ? dynamic_cast<TextInput*>(positionRow->getChildren().front())
+            : nullptr;
         CHECK(positionX != nullptr);
         if (positionX != nullptr) {
             CHECK(positionX->getText() != L"-");
@@ -1272,21 +1293,8 @@ TEST_CASE(editor_view_menu_toggles_viewport_orientation_axis)
     session.shutdown();
 }
 
-// === PR-5 (v0.1.2 LM-2) =====================================================
-//
-// 设计依据（design v0.1.1 §7 LM-2）：
-//   * Play/Paused 时锁 Inspector 写路径
-//   * 4 button click handler (pickInspectorSkel/Anim + applyInspectorOverrides +
-//     resetInspectorOverrides) + commitInspectorOverrides helper 入口守卫
-//   * inspector_hint 文案切换：Edit "Click buttons to configure." /
-//     Play/Paused "Locked during Play."
-//
-// 验证策略：
-//   * EditorSession 实例化 + 拉起到能调 onModeChanged 的状态（layout 加载后）
-//   * Edit 模式：4 click handler 不 no-op（_allowInspectorEdit == true）
-//   * 切 Play：handler 早返；inspector_hint 文案 = "Locked during Play"
-//   * 切回 Edit：恢复
-//   * 本 case 不依赖真实 bgfx — 用现有 mock fixture + 加载 editor_shell.ui.json
+// Inspector properties are editable only in Edit mode. Play and Paused use
+// read-only generated fields and an explicit mode hint.
 
 #include <string>
 
@@ -1304,13 +1312,10 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
     EditorSession session;
     CHECK(session.initialize(desc));
 
-    // 默认模式 = Edit — verify 4 button click handler 不被锁。
-    // 间接验证：通过访问 gameView().mode() 确认 EditorMode 切换语义；
-    // 守卫字段是 private，没有 public accessor；走 inspector_hint 文案
-    // 间接观察（hint 文案仅当 _allowInspectorEdit 切时同步切）。
+    // Default mode is Edit.
     CHECK(session.gameView().mode() == EditorMode::Edit);
 
-    // Edit 初始 hint = "Click buttons to configure."（ui.json 默认）
+    // Edit 初始 hint 指明当前没有选择对象。
     if (auto* w = session.ui().findById("inspector_hint")) {
         if (auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(w)) {
             // 既有文本验证（hint 已加载）
@@ -1332,7 +1337,7 @@ TEST_CASE(editor_inspector_locked_during_play_LM2)
         session.gameView(), EditorMode::Edit);
     if (auto* w = session.ui().findById("inspector_hint")) {
         if (auto* lbl = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-            CHECK(lbl->getText() == std::wstring(L"Click buttons to configure."));
+            CHECK(lbl->getText() == std::wstring(L"No entity selected"));
         }
     }
 
@@ -1583,20 +1588,27 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
     CHECK(session.onMouseButtonUp(x, y, 0));
     CHECK(session.selectedEntityId() == entity->getId());
 
-    auto* positionX = dynamic_cast<TextInput*>(
-        session.ui().findById("transform_px"));
-    auto* apply = dynamic_cast<Button*>(
-        session.ui().findById("btn_transform_apply"));
+    Widget* propertyBody = session.ui().findById(
+        "inspector_component_properties");
+    Widget* positionRow = findWidgetInTree(
+        propertyBody, "inspector_field_position");
+    auto* positionX = positionRow != nullptr
+        && !positionRow->getChildren().empty()
+        ? dynamic_cast<TextInput*>(positionRow->getChildren().front())
+        : nullptr;
     CHECK(positionX != nullptr);
-    CHECK(apply != nullptr);
-    if (positionX != nullptr && apply != nullptr && transform != nullptr) {
+    CHECK(findWidgetInTree(propertyBody, "inspector_field_rotation") != nullptr);
+    CHECK(findWidgetInTree(propertyBody, "inspector_field_scale") != nullptr);
+    if (positionX != nullptr && transform != nullptr) {
         CHECK_FALSE(positionX->isReadOnly());
+        session.ui().setFocus(positionX);
         positionX->setText(L"2.500");
-        CHECK(clickButton(apply));
+        CHECK(session.onKeyDown(UIKey_Enter));
         CHECK_FLOAT_EQ(transform->position.x, 2.5f, 1.0e-5f);
         CHECK(session.document() != nullptr);
         if (session.document() != nullptr) CHECK(session.document()->isDirty());
 
+        session.ui().setFocus(nullptr);
         session.onKeyDown(UIKey_Control);
         CHECK(session.onKeyDown(UIKey_Z));
         session.onKeyUp(UIKey_Control);
@@ -1606,7 +1618,7 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
     session.shutdown();
 }
 
-TEST_CASE(editor_component_browser_lists_and_adds_registered_components)
+TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
@@ -1650,9 +1662,19 @@ TEST_CASE(editor_component_browser_lists_and_adds_registered_components)
         session.ui().findById("cmb_add_component"));
     auto* add = dynamic_cast<Button*>(
         session.ui().findById("btn_add_component"));
+    auto* attached = dynamic_cast<ComboBox*>(
+        session.ui().findById("cmb_attached_component"));
+    auto* remove = dynamic_cast<Button*>(
+        session.ui().findById("btn_remove_component"));
+    Widget* propertyBody = session.ui().findById(
+        "inspector_component_properties");
     CHECK(picker != nullptr);
     CHECK(add != nullptr);
-    if (picker != nullptr && add != nullptr) {
+    CHECK(attached != nullptr);
+    CHECK(remove != nullptr);
+    CHECK(propertyBody != nullptr);
+    if (picker != nullptr && add != nullptr && attached != nullptr
+        && remove != nullptr && propertyBody != nullptr) {
         int healthIndex = -1;
         for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
             if (picker->getItem(i).find(L"Health") != std::wstring::npos) {
@@ -1665,6 +1687,10 @@ TEST_CASE(editor_component_browser_lists_and_adds_registered_components)
             picker->setSelectedIndex(healthIndex);
             CHECK(clickButton(add));
             CHECK(entity->getComponent<ayt::entity::HealthComponent>() != nullptr);
+            CHECK(findWidgetInTree(propertyBody,
+                                   "inspector_field_currentHp") != nullptr);
+            CHECK(findWidgetInTree(propertyBody,
+                                   "inspector_field_maxHp") != nullptr);
             CHECK(session.document() != nullptr);
             if (session.document() != nullptr) {
                 CHECK(session.document()->isDirty());
@@ -1673,6 +1699,57 @@ TEST_CASE(editor_component_browser_lists_and_adds_registered_components)
                 CHECK(picker->getItem(i).find(L"Health")
                       == std::wstring::npos);
             }
+
+            CHECK(remove->isEnabled());
+            CHECK(clickButton(remove));
+            CHECK(entity->getComponent<ayt::entity::HealthComponent>() == nullptr);
+
+            int animationIndex = -1;
+            for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
+                if (picker->getItem(i).find(L"Animation")
+                    != std::wstring::npos) {
+                    animationIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            CHECK(animationIndex >= 0);
+            if (animationIndex >= 0) {
+                picker->setSelectedIndex(animationIndex);
+                CHECK(clickButton(add));
+                CHECK(entity->getComponent<
+                    ayt::entity::AnimationComponent>() != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_clipPath") != nullptr);
+
+                session.render();
+                auto* inspectorScroll = dynamic_cast<ScrollView*>(
+                    session.ui().findById("panel_inspector_scroll"));
+                CHECK(inspectorScroll != nullptr);
+                if (inspectorScroll != nullptr) {
+                    CHECK(inspectorScroll->getContentSize().y
+                          > inspectorScroll->getClientRect().height());
+                    CHECK(inspectorScroll->scrollBy({0.0f, 40.0f}));
+                    CHECK(inspectorScroll->getScrollOffset().y > 0.0f);
+                }
+                CHECK(clickButton(remove));
+                CHECK(entity->getComponent<
+                    ayt::entity::AnimationComponent>() == nullptr);
+            }
+
+            // With no dependency metadata in ComponentRegistry, every attached
+            // component is removable. Removing the final component preserves
+            // the entity itself as an empty Hierarchy node.
+            CHECK(clickButton(remove));
+            CHECK(entity->getComponent<ayt::entity::Transform>() == nullptr);
+            CHECK(clickButton(remove));
+            CHECK(entity->getComponent<ayt::entity::MeshComponent>() == nullptr);
+            CHECK(world->findEntity(entity->getId()) == entity);
+            CHECK(attached->getItemCount() == 1u);
+            CHECK(attached->getItem(0) == L"No components attached");
+            CHECK_FALSE(attached->isEnabled());
+            CHECK_FALSE(remove->isEnabled());
+            CHECK_NOT_NULL(findWidgetInTree(
+                propertyBody, "inspector_property_placeholder"));
         }
     }
 
