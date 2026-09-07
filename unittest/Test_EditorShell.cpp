@@ -1613,6 +1613,8 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
         CHECK(session.onKeyDown(UIKey_Z));
         session.onKeyUp(UIKey_Control);
         CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1.0e-5f);
+        CHECK(positionX->getText() == L"0.000");
+        CHECK(positionX == positionRow->getChildren().front());
     }
 
     session.shutdown();

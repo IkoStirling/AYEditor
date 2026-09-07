@@ -336,6 +336,17 @@ bool isDescendantOf(const ayt::ui::Widget* widget,
     return false;
 }
 
+ayt::ui::Widget* findDescendantById(ayt::ui::Widget* root,
+                                    const std::string& id)
+{
+    if (root == nullptr) return nullptr;
+    if (root->getId() == id) return root;
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (auto* found = findDescendantById(child, id)) return found;
+    }
+    return nullptr;
+}
+
 std::string wideToUtf8(const std::wstring& text)
 {
     if (text.empty()) return {};
@@ -4984,7 +4995,46 @@ void EditorSession::commitInspectorBoolField(
 void EditorSession::refreshTransformInspector()
 {
     if (_updatingComponentPropertyCommit) return;
-    rebuildComponentPropertyEditor();
+    if (_componentPropertyBody == nullptr
+        || _inspectedComponentTypeName != "Transform") {
+        return;
+    }
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    auto* transform = entity != nullptr
+        ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+    if (transform == nullptr) return;
+
+    auto updateRow = [this](const char* id,
+                            const float* values,
+                            std::size_t valueCount) {
+        ayt::ui::Widget* row = findDescendantById(_componentPropertyBody, id);
+        if (row == nullptr || row->getChildren().size() < valueCount) {
+            return false;
+        }
+        const bool readOnly = _gameView.mode() != EditorMode::Edit;
+        for (std::size_t index = 0; index < valueCount; ++index) {
+            auto* input = dynamic_cast<ayt::ui::TextInput*>(
+                row->getChildren()[index]);
+            if (input == nullptr) return false;
+            input->setText(formatFloat(values[index]));
+            input->setReadOnly(readOnly);
+        }
+        return true;
+    };
+
+    constexpr float radiansToDegrees = 57.29577951308232f;
+    const ayt::math::FVector3 euler = transform->rotation.toEulerAngles();
+    const float position[3] = {
+        transform->position.x, transform->position.y, transform->position.z};
+    const float rotation[3] = {
+        euler.x * radiansToDegrees,
+        euler.y * radiansToDegrees,
+        euler.z * radiansToDegrees};
+    const float scale[3] = {
+        transform->scale.x, transform->scale.y, transform->scale.z};
+    (void)updateRow("inspector_field_position", position, 3);
+    (void)updateRow("inspector_field_rotation", rotation, 3);
+    (void)updateRow("inspector_field_scale", scale, 3);
 }
 
 void EditorSession::selectPlayEntityFromViewport()
