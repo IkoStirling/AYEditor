@@ -49,6 +49,7 @@
 #include "AYApplication.h"  // currentEngineHost() / defaultEngineHost()
 
 #include <AYEntity/components/AnimationComponent.h>
+#include <AYEntity/ComponentRegistry.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
 #include <AYEntity/components/TransformComponent.h>
@@ -459,6 +460,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     bindNetworkPanelStub();
     bindRenderSettingsPanel();
     bindTransformInspector();
+    bindComponentBrowser();
 
     // v0.3+ PR-5 — bindOutlinerPanel (design §4.3.y)
     // 一次性 bind（selection callback + itemHeight via setItemHeight;
@@ -662,6 +664,8 @@ void EditorSession::shutdown() {
     _assetTree = nullptr;
     _assetSearch = nullptr;
     _assetTypeFilter = nullptr;
+    _componentPicker = nullptr;
+    _componentPickerTypeNames.clear();
     _pendingDslAssetOpenId = 0;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
@@ -2598,8 +2602,8 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     auto* transform = entity->addComponent<ayt::entity::Transform>();
     transform->setPosition(position.x, position.y, position.z);
     auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
-    mesh->meshPath = record->runtimePath;
-    mesh->materialPath = materialPath;
+    mesh->meshPath = _assetDatabase.portableAssetPath(*record);
+    mesh->materialPath = _assetDatabase.portableAssetPath(materialPath);
 
     setSelectedEntity(world, entity);
     _commands.clear();
@@ -4304,6 +4308,7 @@ void EditorSession::importCharacterFromDialog()
 // baseline 同样 fail）。Edit 模式行为不变。
 void EditorSession::refreshInspectorLabels()
 {
+    refreshComponentBrowser();
     if (_selectedAssetId != 0) {
         setInspectorAssetMode(true);
         refreshAssetInspector();
@@ -4403,6 +4408,125 @@ void EditorSession::refreshInspectorLabels()
     } else {
         setUtf8("inspector_anim", "anim: -");
     }
+}
+
+void EditorSession::bindComponentBrowser()
+{
+    _componentPicker = dynamic_cast<ayt::ui::ComboBox*>(
+        _ui.findById("cmb_add_component"));
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_add_component"))) {
+        button->setOnClicked([this]() { addSelectedComponent(); });
+    }
+    refreshComponentBrowser();
+}
+
+void EditorSession::refreshComponentBrowser()
+{
+    ayt::entity::Entity* entity = nullptr;
+    if (_selectedAssetId == 0) {
+        entity = _selection.resolve(hierarchyWorldMutable());
+    }
+    const bool canAdd = entity != nullptr
+        && _gameView.mode() == EditorMode::Edit;
+
+    std::vector<const ayt::entity::ComponentDescriptor*> attached;
+    std::vector<const ayt::entity::ComponentDescriptor*> available;
+    for (const auto& descriptor :
+         ayt::entity::ComponentRegistry::instance().descriptors()) {
+        const bool present = entity != nullptr && descriptor.has != nullptr
+            && descriptor.has(*entity);
+        if (present) attached.push_back(&descriptor);
+        if (canAdd && descriptor.editorAddable && descriptor.add != nullptr
+            && !present) {
+            available.push_back(&descriptor);
+        }
+    }
+    auto descriptorLess = [](const auto* left, const auto* right) {
+        if (left->category != right->category) {
+            return left->category < right->category;
+        }
+        if (left->displayName != right->displayName) {
+            return left->displayName < right->displayName;
+        }
+        return left->name < right->name;
+    };
+    std::sort(attached.begin(), attached.end(), descriptorLess);
+    std::sort(available.begin(), available.end(), descriptorLess);
+
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("inspector_components"))) {
+        std::string text = "Components: ";
+        if (entity == nullptr) {
+            text += "-";
+        } else if (attached.empty()) {
+            text += "none";
+        } else {
+            for (std::size_t i = 0; i < attached.size(); ++i) {
+                if (i != 0) text += ", ";
+                text += attached[i]->displayName;
+            }
+        }
+        label->setText(ayt::ui::decodeUtf8Text(text));
+    }
+
+    _componentPickerTypeNames.clear();
+    std::vector<std::wstring> items;
+    items.reserve(available.size());
+    _componentPickerTypeNames.reserve(available.size());
+    for (const auto* descriptor : available) {
+        items.push_back(ayt::ui::decodeUtf8Text(
+            descriptor->category + " / " + descriptor->displayName));
+        _componentPickerTypeNames.push_back(descriptor->name);
+    }
+    if (items.empty()) {
+        items.push_back(entity == nullptr
+            ? L"Select an entity" : L"All components added");
+    }
+    if (_componentPicker != nullptr) {
+        _componentPicker->setItems(items);
+        _componentPicker->setSelectedIndex(0);
+        _componentPicker->setEnabled(canAdd && !available.empty());
+    }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_add_component"))) {
+        button->setEnabled(canAdd && !available.empty());
+    }
+}
+
+void EditorSession::addSelectedComponent()
+{
+    if (_componentPicker == nullptr || _gameView.mode() != EditorMode::Edit
+        || _document == nullptr) {
+        return;
+    }
+    ayt::entity::World* world = hierarchyWorldMutable();
+    ayt::entity::Entity* entity = _selection.resolve(world);
+    const int selected = _componentPicker->getSelectedIndex();
+    if (world == nullptr || entity == nullptr || selected < 0
+        || static_cast<std::size_t>(selected)
+            >= _componentPickerTypeNames.size()) {
+        return;
+    }
+
+    const std::string typeName = _componentPickerTypeNames[
+        static_cast<std::size_t>(selected)];
+    const auto* descriptor =
+        ayt::entity::ComponentRegistry::instance().find(typeName);
+    if (descriptor == nullptr || !descriptor->editorAddable
+        || descriptor->add == nullptr
+        || (descriptor->has != nullptr && descriptor->has(*entity))) {
+        refreshComponentBrowser();
+        return;
+    }
+    if (descriptor->add(*entity) == nullptr) return;
+
+    _commands.clear();
+    _document->markDirty();
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::bindTransformInspector()

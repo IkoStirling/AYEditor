@@ -22,6 +22,7 @@
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
 #include "AYEntity.h"
+#include <AYEntity/components/HealthComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
@@ -176,6 +177,10 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_grading_preset")) != nullptr);
     CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_color_grading_strength")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_shadows")) != nullptr);
+    CHECK(dynamic_cast<ComboBox*>(
+        session.ui().findById("cmb_add_component")) != nullptr);
+    CHECK(dynamic_cast<Button*>(
+        session.ui().findById("btn_add_component")) != nullptr);
     session.shutdown();
 }
 
@@ -1596,6 +1601,79 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
         CHECK(session.onKeyDown(UIKey_Z));
         session.onKeyUp(UIKey_Control);
         CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1.0e-5f);
+    }
+
+    session.shutdown();
+}
+
+TEST_CASE(editor_component_browser_lists_and_adds_registered_components)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(world != nullptr);
+    CHECK(viewport != nullptr);
+    if (world == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("Component Target");
+    entity->addComponent<ayt::entity::Transform>();
+    entity->addComponent<ayt::entity::MeshComponent>();
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseButtonUp(x, y, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+
+    auto* picker = dynamic_cast<ComboBox*>(
+        session.ui().findById("cmb_add_component"));
+    auto* add = dynamic_cast<Button*>(
+        session.ui().findById("btn_add_component"));
+    CHECK(picker != nullptr);
+    CHECK(add != nullptr);
+    if (picker != nullptr && add != nullptr) {
+        int healthIndex = -1;
+        for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
+            if (picker->getItem(i).find(L"Health") != std::wstring::npos) {
+                healthIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        CHECK(healthIndex >= 0);
+        if (healthIndex >= 0) {
+            picker->setSelectedIndex(healthIndex);
+            CHECK(clickButton(add));
+            CHECK(entity->getComponent<ayt::entity::HealthComponent>() != nullptr);
+            CHECK(session.document() != nullptr);
+            if (session.document() != nullptr) {
+                CHECK(session.document()->isDirty());
+            }
+            for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
+                CHECK(picker->getItem(i).find(L"Health")
+                      == std::wstring::npos);
+            }
+        }
     }
 
     session.shutdown();

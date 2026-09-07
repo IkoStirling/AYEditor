@@ -31,6 +31,35 @@ bool startsWithFolder(const std::string& path, const std::string& folder)
         && path[folder.size()] == '/';
 }
 
+std::string stripRootPrefix(const std::string& path,
+                            const std::string& root)
+{
+    if (path.empty() || root.empty()) return {};
+    const std::string foldedPath = lowerAscii(path);
+    const std::string foldedRoot = lowerAscii(root);
+    if (foldedPath == foldedRoot) return {};
+    if (foldedPath.size() <= foldedRoot.size()
+        || foldedPath.compare(0, foldedRoot.size(), foldedRoot) != 0
+        || path[foldedRoot.size()] != '/') {
+        return {};
+    }
+    return path.substr(foldedRoot.size() + 1);
+}
+
+std::string stripBrowserRoot(std::string path)
+{
+    const std::string folded = lowerAscii(path);
+    constexpr std::size_t assetsPrefixLength = 7;
+    constexpr std::size_t importedPrefixLength = 9;
+    if (folded.rfind("assets/", 0) == 0) {
+        return path.substr(assetsPrefixLength);
+    }
+    if (folded.rfind("imported/", 0) == 0) {
+        return path.substr(importedPrefixLength);
+    }
+    return path;
+}
+
 std::string logicalParent(const std::string& path)
 {
     const std::size_t slash = path.find_last_of('/');
@@ -343,6 +372,28 @@ const EditorAssetRecord* EditorAssetDatabase::findByLogicalPath(
     const auto it = _recordByLogicalPath.find(
         lowerAscii(slashNormalized(logicalPath)));
     return it == _recordByLogicalPath.end() ? nullptr : &_records[it->second];
+}
+
+std::string EditorAssetDatabase::portableAssetPath(
+    const EditorAssetRecord& record) const
+{
+    return stripBrowserRoot(slashNormalized(record.logicalPath));
+}
+
+std::string EditorAssetDatabase::portableAssetPath(
+    const std::string& path) const
+{
+    const std::string normalized = slashNormalized(path);
+    if (normalized.empty()) return {};
+    if (const std::string relative = stripRootPrefix(normalized, _sourceRoot);
+        !relative.empty()) {
+        return relative;
+    }
+    if (const std::string relative = stripRootPrefix(normalized, _derivedRoot);
+        !relative.empty()) {
+        return relative;
+    }
+    return stripBrowserRoot(normalized);
 }
 
 std::vector<EditorAssetEntry> EditorAssetDatabase::entries(

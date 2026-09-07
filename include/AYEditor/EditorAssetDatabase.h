@@ -104,6 +104,13 @@ public:
     const EditorAssetRecord* findByLogicalPath(
         const std::string& logicalPath) const noexcept;
 
+    // Return the slash-normalized, asset-root-relative reference written to
+    // scene component fields. Editor preview/loading may continue to use the
+    // record's absolute runtimePath, but authored scenes must remain portable
+    // when a project is moved to another directory or machine.
+    std::string portableAssetPath(const EditorAssetRecord& record) const;
+    std::string portableAssetPath(const std::string& path) const;
+
     // Empty query lists direct children. A non-empty query searches
     // recursively beneath folderPath while keeping folders before files.
     std::vector<EditorAssetEntry> entries(

@@ -230,6 +230,9 @@ private:
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
     void bindTransformInspector();
+    void bindComponentBrowser();
+    void refreshComponentBrowser();
+    void addSelectedComponent();
     void refreshTransformInspector();
     void applyTransformInspector();
     void newSceneDocument();
@@ -534,6 +537,8 @@ private:
     std::unique_ptr<EditorDockViewHost> _dockViewHost;
 
     EditorCommandStack _commands;
+    ayt::ui::ComboBox* _componentPicker = nullptr;
+    std::vector<std::string> _componentPickerTypeNames;
     bool _updatingTransformInputs = false;
     bool _controlDown = false;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;

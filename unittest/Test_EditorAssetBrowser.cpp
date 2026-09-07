@@ -122,6 +122,16 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     CHECK(mesh != nullptr);
     if (mesh == nullptr) return;
     CHECK(mesh->type == EditorAssetType::Mesh);
+    CHECK(database.portableAssetPath(*mesh) == "meshes/Hero.aymesh");
+    CHECK(database.portableAssetPath(mesh->absolutePath)
+          == "meshes/Hero.aymesh");
+    const EditorAssetRecord* source =
+        database.findByLogicalPath("Assets/Characters/Hero.fbx");
+    CHECK(source != nullptr);
+    if (source != nullptr) {
+        CHECK(database.portableAssetPath(*source)
+              == "Characters/Hero.fbx");
+    }
     const EditorAssetId stableId = mesh->id;
 
     const auto direct = database.entries("Imported/meshes");
@@ -373,6 +383,17 @@ TEST_CASE(editor_asset_drag_reaches_viewport_and_creates_mesh_entity)
     CHECK(scenes->edit()->world().getAllEntities().size() == before + 1u);
     CHECK(session.selectedEntityId() != 0);
     CHECK(session.selectedAssetId() == 0);
+    if (auto* created = scenes->edit()->world().findEntity(
+            session.selectedEntityId())) {
+        auto* mesh = created->getComponent<ayt::entity::MeshComponent>();
+        CHECK(mesh != nullptr);
+        if (mesh != nullptr) {
+            CHECK(mesh->meshPath == "Crate.aymesh");
+            CHECK_FALSE(std::filesystem::path(mesh->meshPath).is_absolute());
+        }
+    } else {
+        CHECK(false);
+    }
     if (assetBody != nullptr && entityBody != nullptr) {
         CHECK_FALSE(assetBody->isVisible());
         CHECK(entityBody->isVisible());
