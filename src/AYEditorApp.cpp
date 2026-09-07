@@ -20,6 +20,7 @@
 
 #include <AYApplication/EngineModuleRuntime.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYApplication/EngineRuntimeScope.h>
 #include <AYEntity/ComponentRegistry.h>
 
 #include <AYEventSystem/EventBus.h>
@@ -386,6 +387,17 @@ std::string findNetConnectHost(const std::vector<std::string>& tokens)
 
 } // namespace
 
+class EditorAppRuntime final {
+public:
+    std::unique_ptr<ayt::app::EngineRuntimeScope> services;
+    std::unique_ptr<ayt::app::EngineModuleRuntime> modules;
+};
+
+static_assert(sizeof(std::unique_ptr<EditorAppRuntime>) ==
+              sizeof(std::unique_ptr<ayt::app::EngineModuleRuntime>));
+static_assert(alignof(std::unique_ptr<EditorAppRuntime>) ==
+              alignof(std::unique_ptr<ayt::app::EngineModuleRuntime>));
+
 EditorApp::EditorApp(const ayt::app::GameDesc& desc) : _desc(desc) {}
 
 EditorApp::EditorApp(const ayt::app::GameDesc& desc, const ayt::app::AppCommandLine& cmdLine)
@@ -404,10 +416,11 @@ EditorApp::EditorApp(const ayt::app::GameDesc& desc, const ayt::app::AppCommandL
 
 EditorApp::~EditorApp()
 {
-    if (_moduleRuntime) {
-        _moduleRuntime->shutdown();
-        _moduleRuntime.reset();
+    if (_runtime && _runtime->modules) {
+        _runtime->modules->shutdown();
+        _runtime->modules.reset();
     }
+    _runtime.reset();
     // INT-02 (2026-07-15): reset provider BEFORE devices. ScriptSubSystem is
     // normally withdrawn by the module runtime above; the explicit ordering
     // also protects compatibility paths where GameLoop still owns it. If
@@ -443,12 +456,15 @@ ayt::event::EventBus& EditorApp::eventBus()
 
 void EditorApp::registerSubSystems()
 {
-    if (!_moduleRuntime) {
+    if (!_runtime || !_runtime->modules) {
         // Engine-host: shared Editor assembly + service table
         // (AYApplication/docs/engine-host.md).
         EditorModuleOptions opts{};
         opts.enableAudio = !_cmdLine.noAudio;
 
+        auto state = std::make_unique<EditorAppRuntime>();
+        state->services = std::make_unique<ayt::app::EngineRuntimeScope>(
+            engineHost());
         auto runtime = std::make_unique<ayt::app::EngineModuleRuntime>(
             engineHost());
         auto require = [](const ayt::module::ModuleResult& result,
@@ -466,9 +482,9 @@ void EditorApp::registerSubSystems()
         require(runtime->prepare(), "type registration");
         runtime->context().componentRegistry().seal();
         require(runtime->install(), "installation");
-        _moduleRuntime = std::move(runtime);
-
-        ayt::app::bindBuiltinHostServices(engineHost());
+        state->modules = std::move(runtime);
+        state->services->refresh();
+        _runtime = std::move(state);
     }
 
     // INT-02: Script ← Editor-owned DeviceManager (not DeviceSubSystem).
@@ -1238,10 +1254,11 @@ void EditorApp::run()
     ayt::game::GameLoop::instance().shutdown();
     AY_EDITOR_HEAP_CHECK("after_gameloop_shutdown");
 
-    if (_moduleRuntime) {
-        _moduleRuntime->shutdown();
-        _moduleRuntime.reset();
+    if (_runtime && _runtime->modules) {
+        _runtime->modules->shutdown();
+        _runtime->modules.reset();
     }
+    _runtime.reset();
 
     _devices->shutdown();
     onShutdown();

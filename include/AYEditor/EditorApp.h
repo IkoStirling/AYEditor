@@ -21,11 +21,9 @@ namespace ayt::event {
 class EventBus;
 } // namespace ayt::event
 
-namespace ayt::app {
-class EngineModuleRuntime;
-} // namespace ayt::app
-
 namespace ayt::editor {
+
+class EditorAppRuntime;
 
 class EditorApp : public ayt::app::IApplication {
 public:
@@ -150,7 +148,9 @@ private:
     // bridge always sees a safe state during teardown.
     std::unique_ptr<ayt::device::DeviceManager>       _devices;
     std::unique_ptr<ayt::device::DeviceInputProvider> _inputProvider;
-    std::unique_ptr<ayt::app::EngineModuleRuntime>    _moduleRuntime;
+    // One opaque pointer preserves EditorApp's existing object layout while
+    // the source-owned state coordinates module and host-service teardown.
+    std::unique_ptr<EditorAppRuntime>                  _runtime;
 };
 
 } // namespace ayt::editor
