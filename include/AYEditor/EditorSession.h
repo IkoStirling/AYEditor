@@ -55,11 +55,16 @@ class TextInput;
 class ComboBox;
 class MenuItem;
 }
-namespace ayt::ui { class LayoutEditorSession; }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
+
+class EditorWorkspace;
+class EditorDockViewHost;
+class IEditorHostServices;
+class EditorUiLayoutController;
+class EditorUiLayoutDocument;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -71,6 +76,9 @@ struct EditorSessionDesc {
     // Open project root. Assets/ is the editable source tree and
     // .ayeditor_cache/assets/ is the generated/imported tree.
     std::string projectRoot;
+    // Root of immutable installed/source engine assets. Child tools and the
+    // play-runtime resolve their fixed inputs from this explicit mount.
+    std::string engineAssetsRoot;
     // Optional SVG icon directory containing Tabler's outline/ and filled/
     // folders. Empty keeps the JSON text placeholders, which makes embedded
     // and headless hosts independent from editor-only visual assets.
@@ -192,9 +200,11 @@ public:
     // Opens or focuses the source-backed Phoskia/Logia DockCard for an asset.
     // Returns false for non-DSL records or when the source cannot be read.
     bool openDslAsset(EditorAssetId assetId);
-    std::size_t openDslDocumentCount() const noexcept {
-        return _openDslDocuments.size();
-    }
+    std::size_t openDslDocumentCount() const noexcept;
+    bool openUiLayoutEditor();
+    std::size_t openUiLayoutDocumentCount() const noexcept;
+    EditorWorkspace& workspace() noexcept;
+    const EditorWorkspace& workspace() const noexcept;
     const EditorFreecam& freecam() const noexcept { return _freecam; }
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
@@ -210,10 +220,12 @@ private:
     void bindToolbar();
     void bindShellIcons(const std::string& iconRootPath);
     void bindMenuBar();
-    void openLayoutEditorWindow();
-    void syncLayoutEditorLifetime();
     void openAudioEditorWindow();
     void syncAudioEditorLifetime();
+    void syncUiDesignerLifetime();
+    bool confirmUiDesignerClose();
+    void releaseUiDesigner(bool closeDocument);
+    void refreshUiDesignerTitle();
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
@@ -372,17 +384,6 @@ private:
     void setAssetBrowserStatus(const std::wstring& text,
                                bool mirrorToConsole = false);
 
-    // Source-backed Phoskia/Logia document tabs. Their DockCards are owned by
-    // DockArea; this session-owned record keeps only model state and raw widget
-    // aliases. File activation is deferred out of TileCell event dispatch.
-    struct OpenDslDocument;
-    OpenDslDocument* findOpenDslDocument(EditorAssetId assetId) noexcept;
-    OpenDslDocument* focusedDslDocument() noexcept;
-    void refreshDslDocumentChrome(OpenDslDocument& document);
-    bool saveDslDocument(OpenDslDocument& document);
-    void compileDslDocument(OpenDslDocument& document);
-    bool requestCloseDslDocument(ayt::ui::DockCard* card);
-
     // Declared before the runtime because EditorPlayRuntime borrows it.
     EditorWorldContext _worldContext;
     EditorPlayRuntime _playRuntime;
@@ -403,10 +404,13 @@ private:
     // pointer in primary, never nullptr).
     std::unique_ptr<EditorChildWindowManager> _childWindows;
 
-    // v0.5 — UI Layout Editor child window + session (shared with
-    // AYUI_LayoutEditor). Reset when the child HWND is closed.
-    std::unique_ptr<ayt::ui::LayoutEditorSession> _layoutEditor;
-    EditorChildWindowManager::Handle _layoutEditorHandle = nullptr;
+    // UI Designer is a dedicated AYDevice-owned modeless tool window. Its
+    // document remains in EditorWorkspace; only presentation is outside the
+    // Scene DockArea.
+    std::unique_ptr<EditorUiLayoutController> _uiDesigner;
+    std::shared_ptr<EditorUiLayoutDocument> _uiDesignerDocument;
+    std::string _uiDesignerDocumentId;
+    EditorChildWindowManager::Handle _uiDesignerHandle = nullptr;
 
     // Audio Editor child (shared with AYAudio_AudioEditor).
     std::unique_ptr<ayt::audio::AudioEditorSession> _audioEditor;
@@ -416,6 +420,7 @@ private:
     ayt::device::DeviceManager* _devices = nullptr;
     bool _hostFocused = false;
     std::string _layoutPath;
+    std::string _engineAssetsRoot;
     RepaintCallback _repaintCallback;
 
     // AI-1: holds the viewport panel pointer across populateFrame +
@@ -522,7 +527,11 @@ private:
     } _assetDragData;
     bool _assetBrowserRefreshPending = false;
     bool _updatingAssetSelection = false;
-    std::vector<std::unique_ptr<OpenDslDocument>> _openDslDocuments;
+    // New document/command/selection service root. Existing Scene and panel
+    // paths remain outside it until their individual migration phases.
+    std::unique_ptr<EditorWorkspace> _workspace;
+    std::unique_ptr<IEditorHostServices> _editorHostServices;
+    std::unique_ptr<EditorDockViewHost> _dockViewHost;
 
     EditorCommandStack _commands;
     bool _updatingTransformInputs = false;

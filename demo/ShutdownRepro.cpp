@@ -7,6 +7,7 @@
 //   level 4: + renderCompositeFrame for --frames N (default 1)
 
 #include "AYEditor/EditorHeapDebug.h"
+#include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEntity/EntityModule.h"
 #include "AYGameLoop.h"
@@ -17,8 +18,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
-#include <sys/stat.h>
-#include <vector>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -29,12 +28,6 @@
 #include <Windows.h>
 
 namespace {
-
-bool fileExists(const std::string& path)
-{
-    struct stat st;
-    return !path.empty() && ::stat(path.c_str(), &st) == 0;
-}
 
 void attachDebugConsole()
 {
@@ -49,19 +42,8 @@ void attachDebugConsole()
 
 std::string resolveLayoutPath()
 {
-    const std::vector<std::string> candidates = {
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-        "../AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-        "../../AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            return path;
-        }
-    }
-    return candidates.front();
+    return ayt::editor::EditorProductPaths::detect()
+        .editorAsset("ui/editor_shell.ui.json").string();
 }
 
 int parseLevel(PWSTR cmdLine)
@@ -169,6 +151,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int)
 
     ayt::render::UIRenderBackend uiBackend;
     ayt::render::RendererSubSystem* rendererSub = nullptr;
+    const ayt::editor::EditorProductPaths productPaths =
+        ayt::editor::EditorProductPaths::detect();
     const std::string layoutPath = resolveLayoutPath();
 
     if (level >= 2) {
@@ -176,6 +160,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR cmdLine, int)
         ayt::editor::EditorSessionDesc sessionDesc{};
         sessionDesc.uiBackend = nullptr;
         sessionDesc.layoutPath = layoutPath;
+        sessionDesc.engineAssetsRoot = productPaths.engineAssetsRoot.string();
         sessionDesc.hostWindow = hwnd;
 
         const bool useMinimal =

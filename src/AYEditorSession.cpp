@@ -1,9 +1,15 @@
 #include "AYEditor/EditorSession.h"
 
 #include "AYEditor/EditorHeapDebug.h"
+#include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/EditorDslDocument.h"
+#include "AYEditor/EditorDslExtension.h"
+#include "AYEditor/EditorDockViewHost.h"
+#include "AYEditor/EditorUiLayoutExtension.h"
+#include "AYEditor/EditorUiLayoutDocument.h"
+#include "AYEditor/EditorWorkspace.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Button.h"
@@ -28,7 +34,6 @@
 #include "AYUI/Widget.h"
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
-#include "LayoutEditorSession.h"
 #include "AudioEditorSession.h"
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
@@ -57,12 +62,9 @@
 #include <cstdio>
 #include <cstring>
 #include <cwchar>
-#include <cwctype>
 #include <filesystem>
 #include <optional>
-#include <sstream>
 #include <unordered_map>
-#include <unordered_set>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -72,23 +74,45 @@
 #endif
 #include <Windows.h>
 #include <commdlg.h>
-#include <sys/stat.h>
 #include <vector>
 
 namespace ayt::editor {
 
-struct EditorSession::OpenDslDocument {
-    EditorAssetId assetId = 0;
-    std::string cardId;
-    std::string fileName;
-    EditorDslDocument model;
-    ayt::ui::DockCard* card = nullptr;
-    ayt::ui::TextArea* source = nullptr;
-    ayt::ui::TextArea* diagnostics = nullptr;
-    ayt::ui::TextLabel* status = nullptr;
-};
-
 namespace {
+
+class EditorSessionHostServices final : public IEditorHostServices {
+public:
+    EditorSessionHostServices(
+        EditorWorkspace& workspace,
+        ayt::ui::UIManager& ui,
+        std::string projectRoot,
+        std::function<void()> repaint,
+        std::function<void(const std::wstring&)> setStatus)
+        : _workspace(workspace), _ui(ui),
+          _projectRoot(std::move(projectRoot)),
+          _repaint(std::move(repaint)), _setStatus(std::move(setStatus)) {}
+
+    EditorWorkspace& workspace() noexcept override { return _workspace; }
+    const std::string& projectRoot() const noexcept override {
+        return _projectRoot;
+    }
+    ayt::ui::UIManager* uiManager() noexcept override {
+        return &_ui;
+    }
+    void requestRepaint() override {
+        if (_repaint) _repaint();
+    }
+    void setStatusText(const std::wstring& text) override {
+        if (_setStatus) _setStatus(text);
+    }
+
+private:
+    EditorWorkspace& _workspace;
+    ayt::ui::UIManager& _ui;
+    std::string _projectRoot;
+    std::function<void()> _repaint;
+    std::function<void(const std::wstring&)> _setStatus;
+};
 
 // DeviceInputBridge converts wheel notches to AYUI logical pixels before it
 // reaches EditorSession. Keep the inverse conversion explicit here: treating
@@ -144,57 +168,18 @@ bool intersectRayAabb(const ayt::math::FVector3& origin,
     return farDistance >= 0.0f;
 }
 
-bool layoutEditorFileExists(const std::string& path) {
-    struct stat st {};
-    return !path.empty() && ::stat(path.c_str(), &st) == 0;
+std::string resolveLayoutEditorChromePath(
+    const std::string& engineAssetsRoot) {
+    const std::string path = (std::filesystem::path(engineAssetsRoot)
+        / "AYUI" / "ui" / "layout_editor.ui.json").string();
+    return path;
 }
 
-std::filesystem::path editorExecutableDirectory() {
-    char modulePath[MAX_PATH]{};
-    const DWORD length = ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    return length > 0 && length < MAX_PATH
-        ? std::filesystem::path(modulePath).parent_path()
-        : std::filesystem::path{};
-}
-
-std::string resolveLayoutEditorChromePath() {
-    const std::filesystem::path executableDirectory =
-        editorExecutableDirectory();
-    const std::vector<std::string> candidates = {
-        (executableDirectory / "assets/ui/layout_editor.ui.json").string(),
-        "assets/ui/layout_editor.ui.json",
-        "AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
-        "../AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
-        "../../AYRuntime/AYEditor/assets/ui/layout_editor.ui.json",
-        "AYRuntime/AYUI/demo/layout_editor/assets/layout_editor.ui.json",
-        "../AYRuntime/AYUI/demo/layout_editor/assets/layout_editor.ui.json",
-    };
-    for (const std::string& path : candidates) {
-        if (layoutEditorFileExists(path)) {
-            return path;
-        }
-    }
-    return candidates.front();
-}
-
-std::string resolveAudioEditorChromePath() {
-    const std::filesystem::path executableDirectory =
-        editorExecutableDirectory();
-    const std::vector<std::string> candidates = {
-        (executableDirectory / "assets/ui/audio_editor.ui.json").string(),
-        "assets/ui/audio_editor.ui.json",
-        "AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
-        "../AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
-        "../../AYRuntime/AYEditor/assets/ui/audio_editor.ui.json",
-        "AYRuntime/AYAudio/demo/audio_editor/assets/audio_editor.ui.json",
-        "../AYRuntime/AYAudio/demo/audio_editor/assets/audio_editor.ui.json",
-    };
-    for (const std::string& path : candidates) {
-        if (layoutEditorFileExists(path)) {
-            return path;
-        }
-    }
-    return candidates.front();
+std::string resolveAudioEditorChromePath(
+    const std::string& engineAssetsRoot) {
+    const std::string path = (std::filesystem::path(engineAssetsRoot)
+        / "AYAudio" / "ui" / "audio_editor.ui.json").string();
+    return path;
 }
 
 std::string showOpenAudioFileDialog(HWND owner) {
@@ -315,153 +300,6 @@ std::string wideToUtf8(const std::wstring& text)
     return result;
 }
 
-bool isDslIdentifierStart(wchar_t ch) noexcept
-{
-    return ch == L'_' || std::iswalpha(static_cast<wint_t>(ch)) != 0;
-}
-
-bool isDslIdentifierContinue(wchar_t ch) noexcept
-{
-    return ch == L'_' || std::iswalnum(static_cast<wint_t>(ch)) != 0;
-}
-
-std::vector<ayt::ui::TextArea::SyntaxSpan> highlightDslLine(
-    EditorDslLanguage language, const std::wstring& line)
-{
-    using Span = ayt::ui::TextArea::SyntaxSpan;
-    static const std::unordered_set<std::wstring> logiaKeywords = {
-        L"script", L"var", L"on_start", L"on_update", L"on_destroy",
-        L"run", L"function", L"signal", L"if", L"else", L"while",
-        L"for", L"break", L"continue", L"do", L"end", L"return",
-        L"true", L"false"};
-    static const std::unordered_set<std::wstring> phoskiaKeywords = {
-        L"material", L"property", L"uniform", L"storage", L"shared",
-        L"uniformblock", L"binding", L"texture2d", L"texturecube",
-        L"sampler", L"vertex", L"fragment", L"compute", L"let",
-        L"if", L"else", L"for", L"in", L"out", L"return", L"true",
-        L"false", L"variant", L"position", L"normal", L"color",
-        L"texcoord", L"boneindices", L"boneweights", L"tangent"};
-    static const std::unordered_set<std::wstring> builtinTypes = {
-        L"bool", L"int", L"uint", L"float", L"double", L"string",
-        L"vec2", L"vec3", L"vec4", L"ivec2", L"ivec3", L"ivec4",
-        L"uvec2", L"uvec3", L"uvec4", L"mat2", L"mat3", L"mat4",
-        L"Entity", L"Vector2", L"Vector3", L"Vector4", L"String",
-        L"Float", L"Int", L"Bool", L"rwstructuredbuffer",
-        L"structuredbuffer"};
-    static const std::unordered_set<std::wstring> literalWords = {
-        L"true", L"false", L"null"};
-
-    const auto& keywords = language == EditorDslLanguage::Phoskia
-        ? phoskiaKeywords : logiaKeywords;
-    const ayt::math::FVector4 keywordColor(0.78f, 0.52f, 0.96f, 1.0f);
-    const ayt::math::FVector4 typeColor(0.38f, 0.76f, 0.94f, 1.0f);
-    const ayt::math::FVector4 literalColor(0.94f, 0.66f, 0.38f, 1.0f);
-    const ayt::math::FVector4 stringColor(0.64f, 0.82f, 0.50f, 1.0f);
-    const ayt::math::FVector4 commentColor(0.43f, 0.49f, 0.57f, 1.0f);
-
-    std::vector<Span> spans;
-    std::size_t index = 0;
-    while (index < line.size()) {
-        if (line[index] == L'/' && index + 1 < line.size()
-            && line[index + 1] == L'/') {
-            spans.push_back(Span{
-                index, line.size() - index, commentColor});
-            break;
-        }
-
-        if (line[index] == L'\"' || line[index] == L'\'') {
-            const std::size_t start = index;
-            const wchar_t quote = line[index++];
-            while (index < line.size()) {
-                if (line[index] == L'\\' && index + 1 < line.size()) {
-                    index += 2;
-                    continue;
-                }
-                const wchar_t current = line[index++];
-                if (current == quote) break;
-            }
-            spans.push_back(Span{start, index - start, stringColor});
-            continue;
-        }
-
-        if (std::iswdigit(static_cast<wint_t>(line[index])) != 0) {
-            const std::size_t start = index++;
-            while (index < line.size()) {
-                const wchar_t current = line[index];
-                const bool exponentSign = (current == L'+' || current == L'-')
-                    && index > start
-                    && (line[index - 1] == L'e' || line[index - 1] == L'E');
-                if (std::iswalnum(static_cast<wint_t>(current)) == 0
-                    && current != L'.' && current != L'_'
-                    && !exponentSign) {
-                    break;
-                }
-                ++index;
-            }
-            spans.push_back(Span{start, index - start, literalColor});
-            continue;
-        }
-
-        if (isDslIdentifierStart(line[index])) {
-            const std::size_t start = index++;
-            while (index < line.size()
-                   && isDslIdentifierContinue(line[index])) {
-                ++index;
-            }
-            const std::wstring token = line.substr(start, index - start);
-            if (literalWords.find(token) != literalWords.end()) {
-                spans.push_back(Span{start, index - start, literalColor});
-            } else if (keywords.find(token) != keywords.end()) {
-                spans.push_back(Span{start, index - start, keywordColor});
-            } else if (builtinTypes.find(token) != builtinTypes.end()) {
-                spans.push_back(Span{start, index - start, typeColor});
-            }
-            continue;
-        }
-        ++index;
-    }
-    return spans;
-}
-
-const char* dslDiagnosticSeverityName(
-    EditorDslDiagnosticSeverity severity) noexcept
-{
-    switch (severity) {
-    case EditorDslDiagnosticSeverity::Info: return "info";
-    case EditorDslDiagnosticSeverity::Warning: return "warning";
-    case EditorDslDiagnosticSeverity::Error: break;
-    }
-    return "error";
-}
-
-std::wstring formatDslCompileReport(const EditorDslCompileReport& report,
-                                    const std::string& displayPath)
-{
-    std::ostringstream output;
-    output << (report.success ? "[Success] " : "[Failed] ")
-           << displayPath << '\n'
-           << report.summary;
-    if (report.generatedBytes != 0) {
-        output << " Generated output: " << report.generatedBytes << " bytes.";
-    }
-    if (report.diagnostics.empty()) {
-        output << "\nNo diagnostics.";
-    } else {
-        for (const EditorDslDiagnostic& diagnostic : report.diagnostics) {
-            output << "\n\n" << dslDiagnosticSeverityName(diagnostic.severity);
-            if (diagnostic.line > 0) {
-                output << " L" << diagnostic.line;
-                if (diagnostic.column > 0) output << ':' << diagnostic.column;
-            }
-            output << ": " << diagnostic.message;
-            if (!diagnostic.hint.empty()) {
-                output << "\n  hint: " << diagnostic.hint;
-            }
-        }
-    }
-    return ayt::ui::decodeUtf8Text(output.str());
-}
-
 std::wstring assetSizeText(std::uintmax_t bytes)
 {
     wchar_t buffer[64]{};
@@ -484,10 +322,61 @@ EditorSession::EditorSession()
     : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
     _worldContext.setFallbackWorld(&ayt::entity::World::instance());
     _playRuntime.setWorldContext(&_worldContext);
+    _workspace = std::make_unique<EditorWorkspace>();
+    std::string error;
+    if (!registerEditorDslExtension(_workspace->registry(), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] DSL workspace registration failed: %s\n",
+            error.c_str());
+    }
+    EditorUiLayoutExtensionConfig layoutConfig;
+    layoutConfig.chromePath = [this]() {
+        return resolveLayoutEditorChromePath(_engineAssetsRoot);
+    };
+    layoutConfig.openPathPicker = [this]() {
+        return showUiJsonOpenDialog(_hostWindow);
+    };
+    layoutConfig.savePathPicker = [this]() {
+        return showUiJsonSaveDialog(_hostWindow);
+    };
+    error.clear();
+    if (!registerEditorUiLayoutExtension(
+            _workspace->registry(), std::move(layoutConfig), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] UI Layout workspace registration failed: %s\n",
+            error.c_str());
+    }
 }
 
 EditorSession::~EditorSession() {
     shutdown();
+}
+
+EditorWorkspace& EditorSession::workspace() noexcept
+{
+    return *_workspace;
+}
+
+const EditorWorkspace& EditorSession::workspace() const noexcept
+{
+    return *_workspace;
+}
+
+std::size_t EditorSession::openDslDocumentCount() const noexcept
+{
+    return _dockViewHost != nullptr
+        ? _dockViewHost->count(kEditorDslExtensionId) : 0u;
+}
+
+std::size_t EditorSession::openUiLayoutDocumentCount() const noexcept
+{
+    std::size_t count = 0;
+    if (_workspace == nullptr) return count;
+    for (const EditorDocumentRecord& record :
+         _workspace->documents().records()) {
+        if (record.editorId == kEditorUiLayoutExtensionId) ++count;
+    }
+    return count;
 }
 
 bool EditorSession::initialize(const EditorSessionDesc& desc) {
@@ -502,6 +391,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _devices = desc.deviceManager;
     _hostFocused = _devices != nullptr && _devices->window().isFocused();
     _layoutPath = desc.layoutPath;
+    _engineAssetsRoot = desc.engineAssetsRoot;
+    if (_engineAssetsRoot.empty()) {
+        _engineAssetsRoot =
+            EditorProductPaths::detect().engineAssetsRoot.string();
+    }
     _preferences = desc.preferences;
     _preferences.viewportOrientationAxisVisible =
         desc.viewportOrientationAxisVisible;
@@ -511,6 +405,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
         desc.onViewportOrientationAxisVisibilityChanged;
     _onPreferencesChanged = desc.onPreferencesChanged;
     _playRuntime.setHostWindow(_hostWindow);
+    _playRuntime.setEngineAssetsRoot(_engineAssetsRoot);
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
     _playRuntime.setImportedCharacter(desc.importedCharacter);
@@ -586,12 +481,41 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
 
     _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
     if (_mainDock != nullptr) {
+        _editorHostServices = std::make_unique<EditorSessionHostServices>(
+            *_workspace, _ui, desc.projectRoot,
+            [this]() {
+                if (_repaintCallback) _repaintCallback();
+            },
+            [this](const std::wstring& text) {
+                setAssetBrowserStatus(text);
+            });
+        _dockViewHost = std::make_unique<EditorDockViewHost>(
+            *_workspace, *_mainDock, *_editorHostServices, &_ui);
+        _dockViewHost->setCloseActionProvider(
+            [this](const EditorHostedView& hosted) {
+                if (_hostWindow == nullptr) {
+                    return EditorDocumentCloseAction::Discard;
+                }
+                const std::wstring prompt =
+                    ayt::ui::decodeUtf8Text(hosted.document->title())
+                    + L" has unsaved changes.\n\nSave before closing?";
+                const int choice = ::MessageBoxW(
+                    _hostWindow, prompt.c_str(), L"AY Editor Document",
+                    MB_YESNOCANCEL | MB_ICONWARNING);
+                if (choice == IDYES) {
+                    return EditorDocumentCloseAction::Save;
+                }
+                return choice == IDNO
+                    ? EditorDocumentCloseAction::Discard
+                    : EditorDocumentCloseAction::Cancel;
+            });
         _mainDock->setOnCardCloseRequested(
             [this](ayt::ui::DockCard* card) {
                 if (card == nullptr || _mainDock == nullptr) {
                     return false;
                 }
-                if (requestCloseDslDocument(card)) {
+                if (_dockViewHost != nullptr
+                    && _dockViewHost->requestClose(card)) {
                     return true;
                 }
                 const std::string& id = card->getId();
@@ -718,10 +642,11 @@ void EditorSession::shutdown() {
     // g_activeUIManager if it was active during the last tick. Doing
     // this here (with _ui still alive and owning the active slot)
     // avoids an UAF cleanup race against the primary.
-    _layoutEditor.reset();
-    _layoutEditorHandle = nullptr;
     _audioEditor.reset();
     _audioEditorHandle = nullptr;
+    if (_dockViewHost != nullptr) {
+        _dockViewHost->prepareForUiShutdown();
+    }
     _childWindows.reset();
     _mainDock = nullptr;
     // Tear down Play/renderer borrow before UI widgets — avoids
@@ -754,10 +679,24 @@ void EditorSession::shutdown() {
     _outlinerRootExpanded = true;
     _updatingOutlinerSelection = false;
     _commands.clear();
+    if (_workspace != nullptr && _dockViewHost == nullptr) {
+        _workspace->commands().setActiveTarget(nullptr);
+        while (!_workspace->documents().records().empty()) {
+            const std::string documentId =
+                _workspace->documents().records().back().documentId;
+            (void)_workspace->documents().close(
+                documentId, EditorDocumentCloseAction::Discard);
+        }
+    }
 
     _ui.shutdown();
-    _openDslDocuments.clear();
+    if (_dockViewHost != nullptr) {
+        _dockViewHost->releaseAfterUiShutdown();
+        _dockViewHost.reset();
+    }
+    _editorHostServices.reset();
     _layoutPath.clear();
+    _engineAssetsRoot.clear();
     _hostWindow = nullptr;
     _devices = nullptr;
     _hostFocused = false;
@@ -791,9 +730,9 @@ void EditorSession::update(float dt) {
 
 void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     const float dt = hostFrame.realWallDeltaTime;
-    syncLayoutEditorLifetime();
-    if (_layoutEditor != nullptr) {
-        _layoutEditor->pumpDeferred();
+    syncUiDesignerLifetime();
+    if (_uiDesigner != nullptr) {
+        _uiDesigner->pumpDeferred();
     }
     syncAudioEditorLifetime();
     if (_audioEditor != nullptr) {
@@ -808,6 +747,9 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         _childWindows->tickAll(dt);
     }
     _ui.update(dt);
+    if (_dockViewHost != nullptr) {
+        _dockViewHost->tick(dt);
+    }
     // Scene systems and diagnostic hosts can dirty or replace the Edit Scene
     // without going through an EditorSession command. Reconcile the document
     // indicator once per host frame so it cannot remain visually stale.
@@ -1200,6 +1142,10 @@ bool EditorSession::onMouseMove(float x, float y) {
     if (_ui.isDragging()) {
         return _ui.onMouseMove(x, y);
     }
+    if (_dockViewHost != nullptr
+        && _dockViewHost->routePointerMove(x, y)) {
+        return true;
+    }
 
     if (_transformGizmo.active()) {
         return updateTransformGizmoDrag(x, y);
@@ -1316,6 +1262,11 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
         }
     }
 
+    if (_dockViewHost != nullptr
+        && _dockViewHost->routePointerDown(x, y, button)) {
+        return true;
+    }
+
     if (_ui.isCapturing()) {
         if (button != 0) {
             return _ui.onMouseButtonDown(x, y, button);
@@ -1368,6 +1319,10 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
     if (_ui.isDragging()) {
         return _ui.onMouseButtonUp(x, y, button);
     }
+    if (_dockViewHost != nullptr
+        && _dockViewHost->routePointerUp(x, y, button)) {
+        return true;
+    }
     if (button == 0 && _transformGizmo.active()) {
         updateTransformGizmoDrag(x, y);
         finishTransformGizmoDrag(true);
@@ -1404,6 +1359,10 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseWheel(float x, float y, float deltaY) {
+    if (_dockViewHost != nullptr
+        && _dockViewHost->routeWheel(x, y, deltaY)) {
+        return true;
+    }
     if (_ui.isCapturing() || isChromePoint(x, y)) {
         return _ui.onMouseWheel(x, y, deltaY);
     }
@@ -1445,16 +1404,25 @@ bool EditorSession::onKeyDown(int keyCode)
     if (keyCode == ayt::ui::UIKey_Control) {
         _controlDown = true;
     }
+    if (_dockViewHost != nullptr
+        && _dockViewHost->routeKeyDown(keyCode)) {
+        return true;
+    }
     const ayt::ui::Widget* focused = _ui.getFocusedWidget();
     const bool textEditing = focused != nullptr && focused->isTextEditingWidget();
+    if (_dockViewHost != nullptr) {
+        _dockViewHost->syncCommandTargetFromFocus();
+    }
+    IEditorCommandTarget* commandTarget = _workspace != nullptr
+        ? _workspace->commands().activeTarget() : nullptr;
     if (textEditing) {
-        if (OpenDslDocument* dsl = focusedDslDocument()) {
+        if (commandTarget != nullptr) {
             if (_controlDown && keyCode == ayt::ui::UIKey_S) {
-                return saveDslDocument(*dsl);
+                return _workspace->commands().execute("file.save");
             }
             if (keyCode == ayt::ui::UIKey_F7) {
-                compileDslDocument(*dsl);
-                return true;
+                return _workspace->commands().execute(
+                    kEditorDslCompileCommand);
             }
         }
     }
@@ -1475,6 +1443,9 @@ bool EditorSession::onKeyDown(int keyCode)
 
 bool EditorSession::onKeyUp(int keyCode)
 {
+    if (_dockViewHost != nullptr) {
+        (void)_dockViewHost->routeKeyUp(keyCode);
+    }
     const bool handled = _ui.onKeyUp(keyCode);
     if (keyCode == ayt::ui::UIKey_Control) {
         _controlDown = false;
@@ -1494,6 +1465,10 @@ void EditorSession::onWindowFocusChanged(bool focused)
     _ui.onKeyUp(ayt::ui::UIKey_Control);
     _ui.onKeyUp(ayt::ui::UIKey_Shift);
     _ui.onKeyUp(ayt::ui::UIKey_Alt);
+    if (_dockViewHost != nullptr) {
+        (void)_dockViewHost->routeKeyUp(ayt::ui::UIKey_Space);
+        _dockViewHost->releaseInputFocus();
+    }
     _ui.cancelCapture();
     finishTransformGizmoDrag(false);
     if (_ui.getFocusedWidget() != nullptr) {
@@ -1512,6 +1487,13 @@ bool EditorSession::isUiHoverInteractive() const {
 }
 
 ayt::ui::UiCursorHint EditorSession::getUiCursorHint() const {
+    ayt::ui::UiCursorHint hostedHint = ayt::ui::UiCursorHint::Default;
+    if (_dockViewHost != nullptr && _hasLastMouse
+        && _dockViewHost->resolveCursorHint(
+            _lastMouseX, _lastMouseY, hostedHint)
+        && hostedHint != ayt::ui::UiCursorHint::Default) {
+        return hostedHint;
+    }
     if (_gameView.mode() == EditorMode::Edit
         && (_transformGizmo.active()
             || _gizmoHoverHandle != EditorGizmoHandle::None)) {
@@ -2530,114 +2512,9 @@ void EditorSession::reloadSelectedAsset()
         + ayt::ui::decodeUtf8Text(record->name));
 }
 
-EditorSession::OpenDslDocument* EditorSession::findOpenDslDocument(
-    EditorAssetId assetId) noexcept
-{
-    for (const auto& document : _openDslDocuments) {
-        if (document != nullptr && document->assetId == assetId) {
-            return document.get();
-        }
-    }
-    return nullptr;
-}
-
-EditorSession::OpenDslDocument* EditorSession::focusedDslDocument() noexcept
-{
-    ayt::ui::Widget* focused = _ui.getFocusedWidget();
-    if (focused == nullptr) return nullptr;
-    for (const auto& document : _openDslDocuments) {
-        if (document == nullptr || document->card == nullptr) continue;
-        if (focused == document->card
-            || ayt::ui::UIManager::isDescendantOf(
-                focused, document->card)) {
-            return document.get();
-        }
-    }
-    return nullptr;
-}
-
-void EditorSession::refreshDslDocumentChrome(OpenDslDocument& document)
-{
-    const bool dirty = document.model.isDirty();
-    if (document.card != nullptr) {
-        std::wstring title = ayt::ui::decodeUtf8Text(document.fileName);
-        if (dirty) title += L" *";
-        document.card->setTitle(title);
-    }
-    if (document.status != nullptr) {
-        document.status->setText(dirty
-            ? L"Modified  |  Ctrl+S save  |  F7 compile"
-            : L"Ready  |  F7 compile");
-        document.status->setTextColor(dirty
-            ? ayt::math::FVector4(0.95f, 0.72f, 0.30f, 1.0f)
-            : ayt::math::FVector4(0.64f, 0.68f, 0.75f, 1.0f));
-    }
-    if (_repaintCallback) _repaintCallback();
-}
-
-bool EditorSession::saveDslDocument(OpenDslDocument& document)
-{
-    std::string error;
-    if (!document.model.save(&error)) {
-        if (document.status != nullptr) {
-            document.status->setText(
-                L"Save failed: " + ayt::ui::decodeUtf8Text(error));
-            document.status->setTextColor(
-                ayt::math::FVector4(0.95f, 0.35f, 0.35f, 1.0f));
-        }
-        if (document.diagnostics != nullptr) {
-            document.diagnostics->setText(
-                L"[Save failed] " + ayt::ui::decodeUtf8Text(error));
-        }
-        if (_repaintCallback) _repaintCallback();
-        return false;
-    }
-    refreshDslDocumentChrome(document);
-    if (document.status != nullptr) {
-        document.status->setText(
-            L"Saved " + ayt::ui::decodeUtf8Text(document.model.displayPath()));
-        document.status->setTextColor(
-            ayt::math::FVector4(0.42f, 0.78f, 0.52f, 1.0f));
-    }
-    setAssetBrowserStatus(
-        L"Saved DSL: " + ayt::ui::decodeUtf8Text(document.model.displayPath()));
-    if (_repaintCallback) _repaintCallback();
-    return true;
-}
-
-void EditorSession::compileDslDocument(OpenDslDocument& document)
-{
-    if (document.status != nullptr) {
-        document.status->setText(L"Compiling current editor buffer...");
-        document.status->setTextColor(
-            ayt::math::FVector4(0.48f, 0.70f, 0.96f, 1.0f));
-    }
-    const EditorDslCompileReport report = document.model.compile();
-    if (document.diagnostics != nullptr) {
-        document.diagnostics->setText(formatDslCompileReport(
-            report, document.model.displayPath()));
-        document.diagnostics->setCaret(0, 0);
-    }
-    if (document.status != nullptr) {
-        document.status->setText(report.success
-            ? (document.model.isDirty()
-                ? L"Compile succeeded (unsaved buffer)"
-                : L"Compile succeeded")
-            : L"Compile failed - see Diagnostics");
-        document.status->setTextColor(report.success
-            ? ayt::math::FVector4(0.42f, 0.78f, 0.52f, 1.0f)
-            : ayt::math::FVector4(0.95f, 0.35f, 0.35f, 1.0f));
-    }
-    setAssetBrowserStatus(
-        ayt::ui::decodeUtf8Text(editorDslLanguageName(report.language))
-        + (report.success ? L" compile succeeded: " : L" compile failed: ")
-        + ayt::ui::decodeUtf8Text(document.fileName), true);
-    if (_repaintCallback) _repaintCallback();
-}
-
 bool EditorSession::openDslAsset(EditorAssetId assetId)
 {
-    if (_mainDock == nullptr) return false;
+    if (_dockViewHost == nullptr) return false;
     const EditorAssetRecord* record = _assetDatabase.find(assetId);
     if (record == nullptr
         || editorDslLanguageFromPath(record->name)
@@ -2645,159 +2522,29 @@ bool EditorSession::openDslAsset(EditorAssetId assetId)
         return false;
     }
 
-    if (OpenDslDocument* existing = findOpenDslDocument(assetId)) {
-        (void)_mainDock->setCardVisible(
-            existing->cardId, true, ayt::ui::DockArea::Slot::Center);
-        wirePromoteCallback();
-        _ui.invalidateLayout();
-        if (_repaintCallback) _repaintCallback();
-        return true;
-    }
+    EditorOpenRequest request;
+    request.resourcePath = record->absolutePath;
+    request.resourceKey = record->absolutePath;
+    request.displayPath = record->logicalPath;
+    request.preferredEditorId = kEditorDslExtensionId;
 
-    auto document = std::make_unique<OpenDslDocument>();
-    document->assetId = assetId;
-    document->cardId = "card_dsl_" + std::to_string(assetId);
-    document->fileName = record->name;
-    std::string error;
-    if (!document->model.open(
-            record->absolutePath, record->logicalPath, &error)) {
+    EditorDockViewOptions options;
+    options.cardId = "card_dsl_" + std::to_string(assetId);
+    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+    if (!opened) {
         setAssetBrowserStatus(
-            L"DSL open failed: " + ayt::ui::decodeUtf8Text(error), true);
+            L"DSL open failed: " + ayt::ui::decodeUtf8Text(opened.error), true);
         return false;
     }
 
-    auto card = std::make_unique<ayt::ui::DockCard>();
-    card->setId(document->cardId);
-    card->setTitle(ayt::ui::decodeUtf8Text(record->name));
-    card->setHeaderHeight(20.0f);
-    card->setClosable(true);
-    document->card = card.get();
-
-    auto* content = new ayt::ui::VBox();
-    content->setSpacing(4.0f);
-    content->setPadding(6.0f, 5.0f, 6.0f, 6.0f);
-
-    auto* toolbar = new ayt::ui::HBox();
-    toolbar->setSpacing(5.0f);
-    auto* language = new ayt::ui::TextLabel();
-    language->setText(ayt::ui::decodeUtf8Text(
-        editorDslLanguageName(document->model.language())));
-    language->setFontSize(12);
-    language->setTextColor(
-        ayt::math::FVector4(0.42f, 0.72f, 1.0f, 1.0f));
-    language->setVerticalAlignment(
-        ayt::ui::TextLabel::VAlignment::Center);
-
-    auto* save = new ayt::ui::Button();
-    save->setText(L"Save");
-    save->setAccessibilityLabel(L"Save DSL source");
-    save->setPadding(7.0f, 3.0f, 7.0f, 3.0f);
-    auto* compile = new ayt::ui::Button();
-    compile->setText(L"Compile");
-    compile->setAccessibilityLabel(L"Compile current DSL buffer");
-    compile->setPadding(7.0f, 3.0f, 7.0f, 3.0f);
-
-    auto* status = new ayt::ui::TextLabel();
-    status->setFontSize(12);
-    status->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
-    document->status = status;
-    toolbar->addWidget(language, 68.0f);
-    toolbar->addWidget(save, 54.0f);
-    toolbar->addWidget(compile, 68.0f);
-    toolbar->addWidget(status, 0.0f);
-    content->addWidget(toolbar, 26.0f);
-
-    auto* source = new ayt::ui::TextArea();
-    source->setWordWrap(false);
-    source->setLineHeight(17.0f);
-    source->setMaxLength(8u * 1024u * 1024u);
-    source->setLineNumbersVisible(true);
-    source->setTabInsertsIndent(true);
-    source->setTabWidth(4u);
-    const EditorDslLanguage sourceLanguage = document->model.language();
-    source->setSyntaxHighlighter(
-        [sourceLanguage](std::size_t, const std::wstring& line) {
-            return highlightDslLine(sourceLanguage, line);
-        });
-    source->setText(ayt::ui::decodeUtf8Text(document->model.sourceUtf8()));
-    document->source = source;
-    content->addWidget(source, 0.0f);
-
-    auto* diagnosticsHeader = new ayt::ui::TextLabel();
-    diagnosticsHeader->setText(L"DIAGNOSTICS");
-    diagnosticsHeader->setFontSize(11);
-    diagnosticsHeader->setTextColor(
-        ayt::math::FVector4(0.58f, 0.62f, 0.70f, 1.0f));
-    diagnosticsHeader->setVerticalAlignment(
-        ayt::ui::TextLabel::VAlignment::Center);
-    content->addWidget(diagnosticsHeader, 18.0f);
-
-    auto* diagnostics = new ayt::ui::TextArea();
-    diagnostics->setReadOnly(true);
-    diagnostics->setWordWrap(true);
-    diagnostics->setLineHeight(16.0f);
-    diagnostics->setText(
-        L"No compilation run yet. Compile uses the current editor buffer.");
-    document->diagnostics = diagnostics;
-    content->addWidget(diagnostics, 116.0f);
-    card->setContent(content);
-
-    OpenDslDocument* raw = document.get();
-    source->setOnTextChanged([this, raw](const std::wstring& text) {
-        raw->model.setSourceUtf8(wideToUtf8(text));
-        refreshDslDocumentChrome(*raw);
-    });
-    save->setOnClicked([this, raw]() { (void)saveDslDocument(*raw); });
-    compile->setOnClicked([this, raw]() { compileDslDocument(*raw); });
-
-    _openDslDocuments.push_back(std::move(document));
-    _mainDock->addCard(ayt::ui::DockArea::Slot::Center, std::move(card));
     // DSL cards are created after the initial shell traversal. Wire the new
     // live card immediately so it has the same tear-off behaviour as cards
     // loaded from editor_shell.ui.json.
     wirePromoteCallback();
-    refreshDslDocumentChrome(*raw);
     _ui.invalidateLayout();
     setAssetBrowserStatus(
         L"Opened DSL: " + ayt::ui::decodeUtf8Text(record->logicalPath));
     if (_repaintCallback) _repaintCallback();
-    return true;
-}
-
-bool EditorSession::requestCloseDslDocument(ayt::ui::DockCard* card)
-{
-    if (card == nullptr || _mainDock == nullptr) return false;
-    auto it = std::find_if(
-        _openDslDocuments.begin(), _openDslDocuments.end(),
-        [card](const std::unique_ptr<OpenDslDocument>& document) {
-            return document != nullptr && document->card == card;
-        });
-    if (it == _openDslDocuments.end()) return false;
-
-    OpenDslDocument& document = **it;
-    if (document.model.isDirty() && _hostWindow != nullptr) {
-        const std::wstring prompt =
-            ayt::ui::decodeUtf8Text(document.fileName)
-            + L" has unsaved changes.\n\nSave before closing?";
-        const int choice = ::MessageBoxW(
-            _hostWindow, prompt.c_str(), L"AY Editor DSL",
-            MB_YESNOCANCEL | MB_ICONWARNING);
-        if (choice == IDCANCEL) return true;
-        if (choice == IDYES && !saveDslDocument(document)) return true;
-    }
-
-    ayt::ui::Widget* focused = _ui.getFocusedWidget();
-    if (focused != nullptr
-        && (focused == card
-            || ayt::ui::UIManager::isDescendantOf(focused, card))) {
-        _ui.setFocus(nullptr);
-    }
-    const std::string cardId = document.cardId;
-    if (_mainDock->closeCard(cardId)) {
-        _openDslDocuments.erase(it);
-        _ui.invalidateLayout();
-        if (_repaintCallback) _repaintCallback();
-    }
     return true;
 }
 
@@ -3255,6 +3002,10 @@ void EditorSession::bindRenderSettingsPanel()
                             _ui.findById("chk_smaa"))) {
                         smaa->setChecked(false);
                     }
+                    if (auto* taa = dynamic_cast<ayt::ui::CheckBox*>(
+                            _ui.findById("chk_taa"))) {
+                        taa->setChecked(false);
+                    }
                 }
                 if (ayt::render::Renderer* r = rendererOrNull()) {
                     r->setFxaaEnabled(on);
@@ -3271,9 +3022,33 @@ void EditorSession::bindRenderSettingsPanel()
                             _ui.findById("chk_fxaa"))) {
                         fxaa->setChecked(false);
                     }
+                    if (auto* taa = dynamic_cast<ayt::ui::CheckBox*>(
+                            _ui.findById("chk_taa"))) {
+                        taa->setChecked(false);
+                    }
                 }
                 if (ayt::render::Renderer* r = rendererOrNull()) {
                     r->setSmaaEnabled(on);
+                }
+            });
+        }
+    }
+
+    if (auto* w = _ui.findById("chk_taa")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([this, rendererOrNull](bool on) {
+                if (on) {
+                    if (auto* fxaa = dynamic_cast<ayt::ui::CheckBox*>(
+                            _ui.findById("chk_fxaa"))) {
+                        fxaa->setChecked(false);
+                    }
+                    if (auto* smaa = dynamic_cast<ayt::ui::CheckBox*>(
+                            _ui.findById("chk_smaa"))) {
+                        smaa->setChecked(false);
+                    }
+                }
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setTaaEnabled(on);
                 }
             });
         }
@@ -3465,6 +3240,7 @@ void EditorSession::applyRenderSettingsFromPanel()
     }
     bool fxaaEnabled = false;
     bool smaaEnabled = false;
+    bool taaEnabled = false;
     if (auto* w = _ui.findById("chk_fxaa")) {
         if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
             fxaaEnabled = chk->isChecked();
@@ -3475,8 +3251,14 @@ void EditorSession::applyRenderSettingsFromPanel()
             smaaEnabled = chk->isChecked();
         }
     }
-    r.setSmaaEnabled(smaaEnabled);
-    r.setFxaaEnabled(fxaaEnabled && !smaaEnabled);
+    if (auto* w = _ui.findById("chk_taa")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            taaEnabled = chk->isChecked();
+        }
+    }
+    r.setTaaEnabled(taaEnabled);
+    r.setSmaaEnabled(smaaEnabled && !taaEnabled);
+    r.setFxaaEnabled(fxaaEnabled && !smaaEnabled && !taaEnabled);
     {
         bool enabled = false;
         if (auto* w = _ui.findById("chk_color_grading")) {
@@ -3575,8 +3357,10 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     setSlider("sld_ambient", preferences.ambientStrength);
     setSlider("sld_shadow_bias", preferences.shadowBias);
     setCombo("cmb_tonemap", preferences.tonemapMode);
-    setCheck("chk_fxaa", preferences.fxaaEnabled && !preferences.smaaEnabled);
-    setCheck("chk_smaa", preferences.smaaEnabled);
+    setCheck("chk_taa", preferences.taaEnabled);
+    setCheck("chk_fxaa", preferences.fxaaEnabled
+        && !preferences.smaaEnabled && !preferences.taaEnabled);
+    setCheck("chk_smaa", preferences.smaaEnabled && !preferences.taaEnabled);
     // Migrate the ambiguous persisted state `enabled + Neutral` to the visible
     // Warm look. Off already represents an identity transform, so preserving
     // that pair would make the checkbox appear broken on the next launch.
@@ -3690,7 +3474,13 @@ EditorPreferences EditorSession::capturePreferences() const
     out.tonemapMode = comboValue("cmb_tonemap", out.tonemapMode);
     out.fxaaEnabled = checkValue("chk_fxaa", out.fxaaEnabled);
     out.smaaEnabled = checkValue("chk_smaa", out.smaaEnabled);
-    if (out.smaaEnabled) out.fxaaEnabled = false;
+    out.taaEnabled = checkValue("chk_taa", out.taaEnabled);
+    if (out.taaEnabled) {
+        out.fxaaEnabled = false;
+        out.smaaEnabled = false;
+    } else if (out.smaaEnabled) {
+        out.fxaaEnabled = false;
+    }
     out.colorGradingEnabled = checkValue(
         "chk_color_grading", out.colorGradingEnabled);
     out.colorGradingPreset = comboValue(
@@ -4052,7 +3842,7 @@ void EditorSession::bindMenuBar() {
     ayt::ui::Menu* toolsMenu = menuBar->addMenu(L"Tools");
     if (toolsMenu != nullptr) {
         if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
-            item->setOnActivate([this]() { openLayoutEditorWindow(); });
+            item->setOnActivate([this]() { (void)openUiLayoutEditor(); });
         }
         if (auto* item = toolsMenu->addItem(L"Audio Editor...")) {
             item->setOnActivate([this]() { openAudioEditorWindow(); });
@@ -4067,145 +3857,213 @@ void EditorSession::bindMenuBar() {
     }
 }
 
-void EditorSession::syncLayoutEditorLifetime() {
-    if (_layoutEditor == nullptr) {
-        return;
+bool EditorSession::openUiLayoutEditor() {
+    if (_childWindows == nullptr || _workspace == nullptr) {
+        setAssetBrowserStatus(
+            L"UI Designer requires the AYDevice child-window host", true);
+        return false;
     }
-    if (_childWindows == nullptr || _layoutEditorHandle == nullptr) {
-        _layoutEditor.reset();
-        _layoutEditorHandle = nullptr;
-        return;
-    }
-    bool alive = false;
-    for (const auto& entry : _childWindows->entries()) {
-        if (entry.handle == _layoutEditorHandle) {
-            alive = true;
-            break;
-        }
-    }
-    if (!alive) {
-        _layoutEditor.reset();
-        _layoutEditorHandle = nullptr;
-    }
-}
 
-void EditorSession::openLayoutEditorWindow() {
-    if (_childWindows == nullptr) {
-        std::fprintf(stderr,
-            "[EditorSession] UI Layout Editor requires ChildWindowManager\n");
-        return;
+    syncUiDesignerLifetime();
+    if (_uiDesigner != nullptr && _uiDesignerHandle != nullptr) {
+        (void)_workspace->documents().activate(_uiDesignerDocumentId);
+        (void)_childWindows->activateChildWindow(_uiDesignerHandle);
+        setAssetBrowserStatus(L"UI Designer focused");
+        return true;
     }
-    syncLayoutEditorLifetime();
-    if (_layoutEditor != nullptr && _layoutEditorHandle != nullptr) {
-        // Already open — leave the existing child focused.
-        return;
+
+    EditorOpenRequest request;
+    request.resourceKey = "workspace:ui-layout:untitled";
+    request.displayPath = "Untitled UI Layout";
+    request.preferredEditorId = kEditorUiLayoutExtensionId;
+
+    EditorOpenResult opened = _workspace->documents().open(request);
+    if (!opened) {
+        setAssetBrowserStatus(
+            L"UI Designer open failed: "
+            + ayt::ui::decodeUtf8Text(opened.error), true);
+        return false;
     }
+    auto document = std::dynamic_pointer_cast<EditorUiLayoutDocument>(
+        opened.document);
+    if (document == nullptr) {
+        if (opened.status == EditorOpenStatus::Opened) {
+            (void)_workspace->documents().close(
+                opened.documentId, EditorDocumentCloseAction::Discard);
+        }
+        setAssetBrowserStatus(L"UI Designer document type mismatch", true);
+        return false;
+    }
+
+    _uiDesignerDocumentId = opened.documentId;
+    _uiDesignerDocument = std::move(document);
+
+    EditorUiLayoutExtensionConfig controllerConfig;
+    controllerConfig.openPathPicker = [this]() {
+        HWND owner = _uiDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+        return showUiJsonOpenDialog(owner);
+    };
+    controllerConfig.savePathPicker = [this]() {
+        HWND owner = _uiDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+        return showUiJsonSaveDialog(owner);
+    };
+    _uiDesigner = std::make_unique<EditorUiLayoutController>(
+        _uiDesignerDocument, std::move(controllerConfig));
+    _uiDesigner->setStateChanged([this]() {
+        refreshUiDesignerTitle();
+    });
 
     ChildWindowConfig cfg;
-    cfg.title = "UI Layout Editor";
-    cfg.layoutPath = resolveLayoutEditorChromePath();
-    cfg.x = 120;
-    cfg.y = 80;
-    cfg.width = 1280;
-    cfg.height = 720;
-    cfg.beforeMouseButton =
-        [this](ayt::ui::UIManager& /*ui*/, float x, float y, int button,
-               bool pressed) -> bool {
-            if (_layoutEditor == nullptr) {
-                return false;
-            }
-            const ayt::math::FVector2 pos(x, y);
-            return pressed ? _layoutEditor->onPointerDown(pos, button)
-                           : _layoutEditor->onPointerUp(pos, button);
-        };
-    cfg.beforeMouseMove =
-        [this](ayt::ui::UIManager& /*ui*/, float x, float y) -> bool {
-            if (_layoutEditor == nullptr) {
-                return false;
-            }
-            return _layoutEditor->onPointerMove(ayt::math::FVector2(x, y));
-        };
-    cfg.beforeMouseWheel =
-        [this](ayt::ui::UIManager& /*ui*/, float x, float y,
-               float deltaY) -> bool {
-            if (_layoutEditor == nullptr) {
-                return false;
-            }
-            return _layoutEditor->onWheel(ayt::math::FVector2(x, y), deltaY);
-        };
-    cfg.beforeKey =
-        [this](ayt::ui::UIManager& /*ui*/, ayt::device::KeyCode kc,
-               bool pressed) -> bool {
-            if (_layoutEditor == nullptr) {
-                return false;
-            }
-            const int uiKey =
-                static_cast<int>(ayt::ui::fromDeviceKey(kc));
-            if (!pressed) {
-                _layoutEditor->onKeyUp(uiKey);
-                return false;
-            }
-            if (uiKey == ayt::ui::UIKey_Shift ||
-                uiKey == ayt::ui::UIKey_Control ||
-                uiKey == ayt::ui::UIKey_Alt) {
-                return false;
-            }
-            return _layoutEditor->onKeyDown(uiKey);
-        };
-    cfg.onFocusChanged =
-        [this](ayt::ui::UIManager& /*ui*/, bool focused) {
-            if (!focused && _layoutEditor != nullptr) {
-                _layoutEditor->onKeyUp(ayt::ui::UIKey_Space);
-            }
-        };
-    cfg.resolveCursorHint =
-        [this](ayt::ui::UIManager& /*ui*/, float x, float y) {
-            if (_layoutEditor == nullptr) {
-                return ayt::ui::UiCursorHint::Default;
-            }
-            return _layoutEditor->canvasCursorHint(ayt::math::FVector2(x, y));
-        };
-    cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
-        if (_layoutEditor != nullptr) {
-            _layoutEditor->detach();
-            _layoutEditor.reset();
+    cfg.title = "AYUI Designer";
+    cfg.layoutPath = resolveLayoutEditorChromePath(_engineAssetsRoot);
+    cfg.x = 96;
+    cfg.y = 72;
+    cfg.width = 1360;
+    cfg.height = 820;
+    cfg.beforeMouseButton = [this](
+        ayt::ui::UIManager& ui, float x, float y,
+        int button, bool pressed) {
+        if (_uiDesigner == nullptr) return false;
+        const ayt::math::FVector2 logical = ui.physicalToLogical({x, y});
+        return pressed
+            ? _uiDesigner->onPointerDown(logical.x, logical.y, button)
+            : _uiDesigner->onPointerUp(logical.x, logical.y, button);
+    };
+    cfg.beforeMouseMove = [this](
+        ayt::ui::UIManager& ui, float x, float y) {
+        if (_uiDesigner == nullptr) return false;
+        const ayt::math::FVector2 logical = ui.physicalToLogical({x, y});
+        return _uiDesigner->onPointerMove(logical.x, logical.y);
+    };
+    cfg.beforeMouseWheel = [this](
+        ayt::ui::UIManager& ui, float x, float y, float deltaY) {
+        if (_uiDesigner == nullptr) return false;
+        const ayt::math::FVector2 logical = ui.physicalToLogical({x, y});
+        return _uiDesigner->onWheel(logical.x, logical.y, deltaY);
+    };
+    cfg.beforeKey = [this](
+        ayt::ui::UIManager&, ayt::device::KeyCode key, bool pressed) {
+        if (_uiDesigner == nullptr) return false;
+        const int uiKey = static_cast<int>(ayt::ui::fromDeviceKey(key));
+        if (pressed) return _uiDesigner->onKeyDown(uiKey);
+        _uiDesigner->onKeyUp(uiKey);
+        return false;
+    };
+    cfg.onFocusChanged = [this](ayt::ui::UIManager&, bool focused) {
+        if (!focused && _uiDesigner != nullptr) {
+            _uiDesigner->onKeyUp(ayt::ui::UIKey_Space);
         }
-        _layoutEditorHandle = nullptr;
+    };
+    cfg.beforeCloseRequested = [this](ayt::ui::UIManager&) {
+        return confirmUiDesignerClose();
+    };
+    cfg.beforeClose = [this](ayt::ui::UIManager&) {
+        releaseUiDesigner(true);
+    };
+    cfg.resolveCursorHint = [this](
+        ayt::ui::UIManager& ui, float x, float y) {
+        if (_uiDesigner == nullptr) {
+            return ayt::ui::UiCursorHint::Default;
+        }
+        const ayt::math::FVector2 logical = ui.physicalToLogical({x, y});
+        return _uiDesigner->cursorHint(logical.x, logical.y);
     };
 
     EditorChildWindowManager::Handle handle = nullptr;
     if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
-        std::fprintf(stderr,
-            "[EditorSession] failed to open UI Layout Editor (%s)\n",
-            cfg.layoutPath.c_str());
-        return;
+        releaseUiDesigner(true);
+        setAssetBrowserStatus(L"UI Designer window creation failed", true);
+        return false;
+    }
+    _uiDesignerHandle = handle;
+    ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
+    if (childUi == nullptr || !_uiDesigner->attach(*childUi)) {
+        _childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"UI Designer UI attach failed", true);
+        return false;
+    }
+    if (!_uiDesignerDocument->path().empty()
+        && !_uiDesigner->openDocument(_uiDesignerDocument->path())) {
+        _childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"UI Designer document load failed", true);
+        return false;
     }
 
-    ayt::ui::UIManager* childUi = nullptr;
+    refreshUiDesignerTitle();
+    setAssetBrowserStatus(L"UI Designer opened in a dedicated window");
+    return true;
+}
+
+void EditorSession::syncUiDesignerLifetime()
+{
+    if (_uiDesignerHandle == nullptr || _childWindows == nullptr) return;
     for (const auto& entry : _childWindows->entries()) {
-        if (entry.handle == handle) {
-            childUi = entry.ui.get();
-            break;
+        if (entry.handle == _uiDesignerHandle) return;
+    }
+    releaseUiDesigner(true);
+}
+
+bool EditorSession::confirmUiDesignerClose()
+{
+    if (_uiDesignerDocument == nullptr || _workspace == nullptr) return true;
+    EditorDocumentCloseAction action = EditorDocumentCloseAction::Discard;
+    if (_uiDesignerDocument->isDirty()) {
+        if (_hostWindow == nullptr) {
+            action = EditorDocumentCloseAction::Discard;
+        } else {
+            const std::wstring prompt =
+                ayt::ui::decodeUtf8Text(_uiDesignerDocument->title())
+                + L" has unsaved changes.\n\nSave before closing?";
+            HWND owner = _uiDesignerHandle != nullptr
+                ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+            const int choice = ::MessageBoxW(
+                owner, prompt.c_str(), L"AYUI Designer",
+                MB_YESNOCANCEL | MB_ICONWARNING);
+            if (choice == IDCANCEL) return false;
+            action = choice == IDYES
+                ? EditorDocumentCloseAction::Save
+                : EditorDocumentCloseAction::Discard;
         }
     }
-    if (childUi == nullptr) {
-        _childWindows->closeChildWindow(handle);
+    const EditorCloseResult closed = _workspace->documents().close(
+        _uiDesignerDocumentId, action);
+    if (!closed) {
+        if (closed.status == EditorCloseStatus::SaveFailed) {
+            setAssetBrowserStatus(
+                L"UI Designer save failed: "
+                + ayt::ui::decodeUtf8Text(closed.error), true);
+        }
+        return false;
+    }
+    return true;
+}
+
+void EditorSession::releaseUiDesigner(bool closeDocument)
+{
+    const std::string documentId = _uiDesignerDocumentId;
+    if (_uiDesigner != nullptr) _uiDesigner->detach();
+    _uiDesigner.reset();
+    _uiDesignerDocument.reset();
+    _uiDesignerDocumentId.clear();
+    _uiDesignerHandle = nullptr;
+    if (closeDocument && _workspace != nullptr && !documentId.empty()
+        && _workspace->documents().find(documentId) != nullptr) {
+        (void)_workspace->documents().close(
+            documentId, EditorDocumentCloseAction::Discard);
+    }
+}
+
+void EditorSession::refreshUiDesignerTitle()
+{
+    if (_childWindows == nullptr || _uiDesignerHandle == nullptr
+        || _uiDesignerDocument == nullptr) {
         return;
     }
-
-    auto session = std::make_unique<ayt::ui::LayoutEditorSession>();
-    HWND owner = _hostWindow;
-    session->setOpenPathPicker([owner]() { return showUiJsonOpenDialog(owner); });
-    session->setSavePathPicker([owner]() { return showUiJsonSaveDialog(owner); });
-    if (!session->attach(*childUi)) {
-        std::fprintf(stderr,
-            "[EditorSession] LayoutEditorSession::attach failed\n");
-        _childWindows->closeChildWindow(handle);
-        return;
-    }
-
-    _layoutEditor = std::move(session);
-    _layoutEditorHandle = handle;
+    std::string title = "AYUI Designer - " + _uiDesignerDocument->title();
+    if (_uiDesignerDocument->isDirty()) title += " *";
+    (void)_childWindows->setChildWindowTitle(_uiDesignerHandle, title);
 }
 
 void EditorSession::syncAudioEditorLifetime() {
@@ -4243,7 +4101,7 @@ void EditorSession::openAudioEditorWindow() {
 
     ChildWindowConfig cfg;
     cfg.title = "Audio Editor";
-    cfg.layoutPath = resolveAudioEditorChromePath();
+    cfg.layoutPath = resolveAudioEditorChromePath(_engineAssetsRoot);
     cfg.x = 140;
     cfg.y = 100;
     cfg.width = 960;

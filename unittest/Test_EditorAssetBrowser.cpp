@@ -41,7 +41,7 @@ void writeAssetBrowserFile(const std::filesystem::path& path,
 std::string resolveAssetBrowserLayout()
 {
     const std::filesystem::path path =
-        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json";
+        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json";
     return std::filesystem::exists(path) ? path.string() : std::string{};
 }
 

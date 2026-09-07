@@ -165,6 +165,62 @@ TEST_CASE(test_os_close_is_deferred_and_primary_survives) {
     primary.shutdown();
     wm.destroyWindow();
 }
+
+TEST_CASE(test_owned_tool_window_can_veto_close_and_update_title) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "D5 Editor Primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+    const HWND primaryHwnd = static_cast<HWND>(wm.getWindowHandle());
+
+    MockRenderer backend;
+    UIManager primary;
+    primary.initialize(&backend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    EditorChildWindowManager mgr(wm, primary);
+    ChildWindowConfig cfg;
+    cfg.title = "Owned tool";
+    cfg.width = 480;
+    cfg.height = 320;
+    bool allowClose = false;
+    int closeChecks = 0;
+    cfg.beforeCloseRequested = [&](UIManager&) {
+        ++closeChecks;
+        return allowClose;
+    };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    CHECK(mgr.openChildWindow(cfg, handle));
+    const HWND childHwnd = static_cast<HWND>(handle);
+    CHECK(::GetWindow(childHwnd, GW_OWNER) == primaryHwnd);
+    CHECK(mgr.uiForHandle(handle) != nullptr);
+    CHECK(mgr.setChildWindowTitle(handle, "AYUI Designer - Dirty *"));
+    wchar_t title[128] = {};
+    CHECK(::GetWindowTextW(childHwnd, title, 128) > 0);
+    CHECK(std::wstring(title) == L"AYUI Designer - Dirty *");
+
+    ::SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+    CHECK(closeChecks == 1);
+    CHECK(mgr.count() == 1u);
+    CHECK_FALSE(mgr.entries().front().closeRequested);
+    CHECK(::IsWindow(childHwnd));
+
+    allowClose = true;
+    ::SendMessageW(childHwnd, WM_CLOSE, 0, 0);
+    CHECK(closeChecks == 2);
+    CHECK(mgr.entries().front().closeRequested);
+    mgr.tickAll(0.0f);
+    CHECK(mgr.count() == 0u);
+    CHECK_FALSE(::IsWindow(childHwnd));
+    CHECK(::IsWindow(primaryHwnd));
+
+    primary.shutdown();
+    wm.destroyWindow();
+}
 #endif
 
 // -------------------------------------------------------------------------

@@ -142,7 +142,7 @@ HFONT GdiRenderBackend::fontForSize(int fontSize) {
 }
 
 void GdiRenderBackend::drawRect(const math::FRectangle& bounds, const math::FVector4& color) {
-    if (!_hdc) {
+    if (!_hdc || color.w <= 0.0f) {
         return;
     }
 

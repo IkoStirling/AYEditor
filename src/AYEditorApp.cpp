@@ -18,7 +18,9 @@
 #include "AYEntity.h"
 #include <AYEntity/components/MeshComponent.h>
 
+#include <AYApplication/EngineModuleRuntime.h>
 #include <AYApplication/IEngineHost.h>
+#include <AYEntity/ComponentRegistry.h>
 
 #include <AYEventSystem/EventBus.h>
 #include <AYIO/Env.h>
@@ -32,7 +34,6 @@
 #include <filesystem>
 #include <memory>
 #include <string>
-#include <sys/stat.h>
 #include <utility>
 #include <vector>
 
@@ -216,12 +217,6 @@ bool installEditorBorderlessChrome(ayt::device::WindowManager& window,
                               | SWP_FRAMECHANGED) != FALSE;
 }
 
-bool fileExists(const std::string& path)
-{
-    struct stat st;
-    return !path.empty() && ::stat(path.c_str(), &st) == 0;
-}
-
 void attachDebugConsole()
 {
     if (AllocConsole() == 0) {
@@ -234,62 +229,23 @@ void attachDebugConsole()
     std::fprintf(stdout, "[EditorApp] debug console attached\n");
 }
 
-std::string resolveLayoutPath()
+std::string resolveLayoutPath(const EditorProductPaths& productPaths)
 {
-    char modulePath[MAX_PATH]{};
-    const DWORD moduleLength =
-        ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    const std::filesystem::path executableDirectory =
-        moduleLength > 0 && moduleLength < MAX_PATH
-            ? std::filesystem::path(modulePath).parent_path()
-            : std::filesystem::path{};
-    const std::vector<std::string> candidates = {
-        (executableDirectory / "assets/ui/editor_shell.ui.json").string(),
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-        "../AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-        "../../AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
-    };
-
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) {
-            return path;
-        }
-    }
-    return candidates.front();
+    return productPaths.editorAsset("ui/editor_shell.ui.json").string();
 }
 
 bool isEditorIconRoot(const std::filesystem::path& root)
 {
     std::error_code error;
     const bool hasOutline = std::filesystem::is_regular_file(
-        root / "outline/pointer.svg", error);
+        root / "outline/x.svg", error);
     error.clear();
     const bool hasFilled = std::filesystem::is_regular_file(
         root / "filled/player-play.svg", error);
     return hasOutline && hasFilled;
 }
 
-void appendEditorIconCandidates(std::vector<std::filesystem::path>& candidates,
-                                const std::filesystem::path& start)
-{
-    std::filesystem::path cursor = start;
-    for (int depth = 0; depth < 10 && !cursor.empty(); ++depth) {
-        // Future packaged/in-repository location.
-        candidates.push_back(cursor / "assets/icons/tabler");
-        candidates.push_back(
-            cursor / "assets/icons/tabler-icons-3.46.0/icons");
-        // Current development AssetRepo location (sibling of AliyatEngine).
-        candidates.push_back(
-            cursor / "AssetRepo/icons/tabler-icons-3.46.0/icons");
-
-        const std::filesystem::path parent = cursor.parent_path();
-        if (parent == cursor) break;
-        cursor = parent;
-    }
-}
-
-std::string resolveEditorIconRoot()
+std::string resolveEditorIconRoot(const EditorProductPaths& productPaths)
 {
     std::vector<std::filesystem::path> candidates;
     if (const auto configured = ayt::io::env::get("AY_EDITOR_ICON_ROOT");
@@ -299,15 +255,8 @@ std::string resolveEditorIconRoot()
         candidates.push_back(root / "icons");
         candidates.push_back(root / "tabler-icons-3.46.0/icons");
     }
-
-    char modulePath[MAX_PATH]{};
-    const DWORD moduleLength =
-        ::GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    if (moduleLength > 0 && moduleLength < MAX_PATH) {
-        appendEditorIconCandidates(
-            candidates, std::filesystem::path(modulePath).parent_path());
-    }
-    appendEditorIconCandidates(candidates, std::filesystem::current_path());
+    candidates.push_back(
+        productPaths.engineAsset("Icons/Tabler"));
 
     for (const std::filesystem::path& candidate : candidates) {
         if (isEditorIconRoot(candidate)) {
@@ -455,10 +404,15 @@ EditorApp::EditorApp(const ayt::app::GameDesc& desc, const ayt::app::AppCommandL
 
 EditorApp::~EditorApp()
 {
-    // INT-02 (2026-07-15): reset provider BEFORE devices. ScriptSubSystem
-    // is owned by GameLoop and survives this dtor (GameLoop clears
-    // SubSystems on its own shutdown); if _inputProvider outlived
-    // _devices, the bridge would hold a dangling DeviceManager*.
+    if (_moduleRuntime) {
+        _moduleRuntime->shutdown();
+        _moduleRuntime.reset();
+    }
+    // INT-02 (2026-07-15): reset provider BEFORE devices. ScriptSubSystem is
+    // normally withdrawn by the module runtime above; the explicit ordering
+    // also protects compatibility paths where GameLoop still owns it. If
+    // _inputProvider outlived _devices, the bridge would hold a dangling
+    // DeviceManager*.
     // ScriptSubSystem::shutdown() also defensively calls
     // setInputProvider(nullptr), but explicit ordering here keeps
     // the invariant local to the type that owns the pointer.
@@ -489,12 +443,33 @@ ayt::event::EventBus& EditorApp::eventBus()
 
 void EditorApp::registerSubSystems()
 {
-    // Engine-host: shared Editor assembly + service table
-    // (AYApplication/docs/engine-host.md).
-    EditorModuleOptions opts{};
-    opts.enableAudio = !_cmdLine.noAudio;
-    registerDefaultEditorModules(opts);
-    ayt::app::bindBuiltinHostServices(engineHost());
+    if (!_moduleRuntime) {
+        // Engine-host: shared Editor assembly + service table
+        // (AYApplication/docs/engine-host.md).
+        EditorModuleOptions opts{};
+        opts.enableAudio = !_cmdLine.noAudio;
+
+        auto runtime = std::make_unique<ayt::app::EngineModuleRuntime>(
+            engineHost());
+        auto require = [](const ayt::module::ModuleResult& result,
+                          const char* phase) {
+            if (!result) {
+                throw ayt::app::AppException(
+                    ayt::app::AppException::Code::SubSystemInitFailed,
+                    std::string("Editor module ") + phase + " failed: " +
+                        result.message());
+            }
+        };
+
+        require(configureDefaultEditorModules(*runtime, opts),
+                "configuration");
+        require(runtime->prepare(), "type registration");
+        runtime->context().componentRegistry().seal();
+        require(runtime->install(), "installation");
+        _moduleRuntime = std::move(runtime);
+
+        ayt::app::bindBuiltinHostServices(engineHost());
+    }
 
     // INT-02: Script ← Editor-owned DeviceManager (not DeviceSubSystem).
     if (_devices && !_inputProvider) {
@@ -527,6 +502,14 @@ void EditorApp::run()
     AY_EDITOR_HEAP_DEBUG_INIT();
     AY_EDITOR_HEAP_CHECK("startup");
     attachDebugConsole();
+    std::fprintf(stderr,
+                 "[EditorApp] product root: %s\n"
+                 "[EditorApp] engine assets: %s (%s)\n"
+                 "[EditorApp] user workspace: %s\n",
+                 _productPaths.productRoot.string().c_str(),
+                 _productPaths.engineAssetsRoot.string().c_str(),
+                 _productPaths.portableLayout ? "installed" : "development",
+                 _productPaths.userWorkspaceRoot.string().c_str());
 
     // Import before registering/initializing runtime and rendering systems.
     // Asset conversion is a pure offline operation and must not share its
@@ -542,6 +525,9 @@ void EditorApp::run()
     if (projectRoot.empty()) projectRoot = _projectRoot;
     if (projectRoot.empty()) {
         projectRoot = ayt::io::env::get("AY_EDITOR_PROJECT_ROOT").value_or("");
+    }
+    if (projectRoot.empty() && _productPaths.portableLayout) {
+        projectRoot = _productPaths.userWorkspaceRoot.string();
     }
     if (projectRoot.empty()) projectRoot = detectEditorProjectRoot();
     ayt::project::Project::instance().setRoot(projectRoot);
@@ -732,7 +718,7 @@ void EditorApp::run()
     {
         EditorSession session;
 
-        const std::string layoutPath = resolveLayoutPath();
+        const std::string layoutPath = resolveLayoutPath(_productPaths);
 
     EditorSessionDesc sessionDesc{};
     sessionDesc.uiBackend = uiBackend.get();
@@ -740,7 +726,8 @@ void EditorApp::run()
     sessionDesc.editorTestSceneEnabled = _editorTestSceneEnabled;
     sessionDesc.layoutPath = layoutPath;
     sessionDesc.projectRoot = projectRoot;
-    sessionDesc.iconRootPath = resolveEditorIconRoot();
+    sessionDesc.engineAssetsRoot = _productPaths.engineAssetsRoot.string();
+    sessionDesc.iconRootPath = resolveEditorIconRoot(_productPaths);
     sessionDesc.hostWindow = hwnd;
     sessionDesc.deviceManager = _devices.get();
     sessionDesc.netClientMode = netClientMode;
@@ -1250,6 +1237,11 @@ void EditorApp::run()
 
     ayt::game::GameLoop::instance().shutdown();
     AY_EDITOR_HEAP_CHECK("after_gameloop_shutdown");
+
+    if (_moduleRuntime) {
+        _moduleRuntime->shutdown();
+        _moduleRuntime.reset();
+    }
 
     _devices->shutdown();
     onShutdown();

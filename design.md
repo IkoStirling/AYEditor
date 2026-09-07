@@ -271,11 +271,36 @@ Do **not** encode mode transitions inside JSON.
 
 ### 4.3.z UI Layout Editor (v0.5)
 
-Tools → **UI Layout Editor…** opens an `EditorChildWindowManager` child that loads `assets/ui/layout_editor.ui.json` and attaches shared `ayt::ui::LayoutEditorSession` (same core as standalone `AYUI_LayoutEditor`). Format remains `*.ui.json` via `UILayoutLoader` — see [AYUI design §20](../AYUI/design.md#20-ui-layout-editor).
+Tools → **UI Layout Editor…** 打开或聚焦唯一的 **AYUI Designer 独立工具窗**。它是由主编辑器
+HWND owner 持有的 modeless 顶层窗口，不占用 Scene View 的 Center Dock，也不伪装成可拆卸
+`DockCard`。窗口创建、激活、标题更新、关闭事件以及键鼠/滚轮/焦点都通过 AYDevice
+`WindowManager` 与 `EditorChildWindowManager`；AYUI 只接收已经归一化的逻辑坐标。
+
+`EditorUiLayoutExtension` 仍注册 `*.ui.json` 文档类型，`EditorUiLayoutDocument` 继续进入统一的
+路径、标题、revision、dirty、Save/Save As 与关闭策略。新的
+`EditorUiLayoutController` 包装共享 `ayt::ui::LayoutEditorSession`，由独立窗的 UIManager 绑定；
+扩展 View 只保留为通用 Host/测试兼容路线，正常 Shell 打开路径不再创建 Center 页面。独立
+`AYUI_LayoutEditor` 继续作为同一编辑核心的模块级回归宿主，因此保存、输入和撤销状态机没有
+第二套实现。
+
+Chrome 来自 `EngineAssets/AYUI/ui/layout_editor.ui.json`，采用 File/Edit 菜单栏、Widget Library +
+Document Outline、Canvas、可滚动 Inspector、状态栏布局。文件操作进入 File；撤销、复制粘贴、
+删除和层级调整进入 Edit；对齐、分布与 Snap 进入 Inspector 的选择上下文。Widget Library 是
+单列紧凑列表，每个类型使用独立 SVG 图标，列表行同时支持点击创建和拖放到画布。属性以紧凑
+label/control 行和动态 section 显隐呈现；空属性行不会继续占位，选择变化在同一输入事务内完成
+invalidate + layout，避免 Inspector 显示上一控件的结构。
+
+画布选择装饰是透明、像素对齐的单层轮廓与控制点，不改变被选 Widget 的填充，也不重复绘制
+第二层边框。序列化状态仍由 live `LayoutEditorSession` 持有，Document 的保存委托给绑定
+Controller，但 Document 自身不持有 Widget、HWND 或渲染对象。后续抽取独立布局模型时无需
+改变文档注册契约。
+
+文档根节点是固定 authoring origin，不提供 X/Y 或排列入口，方向键和 Ctrl+滚轮不会改写它的
+位置。普通自由定位控件支持方向键 1px 微调，Shift+方向键使用网格步长，且不会被 Snap 抵消。
 
 ### 4.3.aa Audio Editor (v0.5)
 
-Tools → **Audio Editor…** opens a child that loads `assets/ui/audio_editor.ui.json` and attaches shared `ayt::audio::AudioEditorSession` (same core as standalone `AYAudio_AudioEditor`). Mixer desk: transport, stream BGM, bus gains, duck/reverb/timeScale, spatial L/C/R. Requires `AudioSubSystem` from `registerDefaultEditorModules` (skipped with `-no-audio`).
+Tools → **Audio Editor…** opens a child that loads `EngineAssets/AYAudio/ui/audio_editor.ui.json` and attaches shared `ayt::audio::AudioEditorSession` (same core as standalone `AYAudio_AudioEditor`). Mixer desk: transport, stream BGM, bus gains, duck/reverb/timeScale, spatial L/C/R. Requires `AudioSubSystem` from `registerDefaultEditorModules` (skipped with `-no-audio`).
 
 ### 4.2.x Editor Session 持 Edit Scene（v0.3 PR-4）
 
@@ -460,7 +485,8 @@ control frames continue through the network subsystem independently.
 
 ### 5.1 Contract
 
-- **File:** `assets/ui/editor_shell.ui.json` (or path via `EditorDesc`).
+- **File:** `EngineAssets/AYEditor/ui/editor_shell.ui.json` (or an explicit
+  `EditorSessionDesc::layoutPath`).
 - **Loader:** existing `UILayoutLoader` + `WidgetFactory` — no second layout format.
 - **Styles:** optional `editor_shell.ui.styles.json` when AYUI U1 StyleSheet lands.
 - **i18n keys:** `ui.editor.*` (e.g. `ui.editor.play`, `ui.editor.stop`).
@@ -566,22 +592,17 @@ retain the existing text placeholder. Icon-only buttons set explicit
 accessibility labels, so replacing visible text does not remove their command
 names from UI Automation.
 
-The development lookup order is:
-
-1. `AY_EDITOR_ICON_ROOT` (must contain `outline/` and `filled/`),
-2. packaged `assets/icons/tabler` or `assets/icons/tabler-icons-3.46.0/icons`
-   beside an executable/repository ancestor,
-3. the current sibling development repository
-   `AssetRepo/icons/tabler-icons-3.46.0/icons`.
+The canonical icon root is `EngineAssets/Icons/Tabler`; it is deliberately not
+owned by AYEditor, AYUI, AYVideo or another feature module. Any engine surface
+may map its own command semantics to these shared files. `AY_EDITOR_ICON_ROOT`
+remains an explicit development/test override and must contain `outline/` and
+`filled/`; there is no implicit executable-ancestor scan or `AssetRepo`
+fallback.
 
 This is intentionally a direct SVG path, not SVG→PNG conversion: icons remain
 resolution-independent and no raster cache or SVG converter belongs in
-AYEditor. The current `AssetRepo` is an external development source and no
-Tabler files are copied into AliyatEngine by this change. When the selected
-icons become fixed engine assets, move them under the packaged editor asset
-root and include Tabler's MIT license/copyright notice in the repository's
-third-party notices (for example `licenses/Tabler-Icons-MIT.txt`). The present
-download does not contain a LICENSE file, so it must not be vendored as-is.
+AYEditor. The selected Tabler files are versioned engine assets and their MIT
+notice is installed from `EngineAssets/Licenses/Tabler/LICENSE.txt`.
 
 The supported SVG grammar and explicit rejection boundary are authoritative in
 [AYUI design](../AYUI/design.md); AYEditor must not grow a second parser or a
@@ -609,6 +630,43 @@ movement and synthetic input cannot leave `GetCursorPos` stale. Those Win32
 coordinates are physical pixels and must pass through the primary UIManager's
 `physicalToLogical` boundary before DockArea hit-testing; this keeps guides and
 drops aligned at 125%/150% display scaling.
+
+### 5.8 Installed product layout and path authority
+
+AYEditor uses a staged install tree rather than treating a build directory as
+the product. `EditorProductPaths` is the single path authority for both the
+root launcher and the hosted editor:
+
+```text
+AYEditor/
+├─ AYEditor.exe                 root launcher; system DLLs only
+├─ EngineAssets/                immutable, repository-owned engine assets
+│  ├─ Icons/Tabler/             shared across all engine modules
+│  ├─ AYEditor/                 editor config and shell layout
+│  ├─ AYUI/ and AYAudio/        child-tool layouts
+│  ├─ AYRenderer/               editor-required renderer data
+│  ├─ AYScript/                 editor-required script templates
+│  └─ Licenses/                 third-party asset notices
+├─ AYRuntime/                   hosted editor executable and runtime DLLs
+├─ UserAssets/                  writable user project/cache root
+│  └─ Assets/
+└─ logs/                        writable product logs
+```
+
+The launcher sets `AY_EDITOR_PRODUCT_ROOT` and starts
+`AYRuntime/AYEditorShell_Demo.exe`; keeping the host beside its DLL closure
+avoids Windows loader failures before `WinMain`. Installed runtime lookups never
+walk the source tree. Development builds use the CMake-provided
+`AY_ENGINE_ASSETS_SOURCE_HINT`; tests may explicitly override
+`AY_EDITOR_ENGINE_ASSETS_ROOT`, `AY_EDITOR_USER_WORKSPACE_ROOT` or
+`AY_EDITOR_ICON_ROOT`.
+
+`cmake --install <build> --config <config> --component AYEditorProduct` creates
+the product tree. `AYEditorStage` is the build convenience target and stages to
+`AY_EDITOR_INSTALL_ROOT`. Reinstall replaces only product-owned `EngineAssets`
+and `AYRuntime`; it preserves `UserAssets` and `logs`. Debug staging is a local
+validation layout and still requires the matching MSVC debug runtime. A release
+installer must provide the supported VC runtime prerequisite separately.
 
 Closing a promoted window is deferred until platform/UI dispatch has unwound.
 Before destroying the child host, the manager returns the card to the primary
@@ -827,6 +885,10 @@ rendering primitives:
 - Content Browser 将 `.phoskia` 归类为 Shader、`.logia` 归类为 Script；双击两类
   文件时把打开请求延迟到下一次 editor update，避免在 `TileCell` 事件派发期间修改
   Dock 树。同一资源只保留一个 Center `DockCard`，再次打开只聚焦已有页签。
+- `EditorDockViewHost` 是无 DSL 语义的通用 DockCard View Host：它通过
+  `EditorDescriptor::createView` 创建视图，统一持有文档/视图/卡片关联，并负责激活、
+  焦点命令路由、脏标题、关闭决策、tick 与两阶段 UI shutdown。`EditorSession` 不再
+  复制一套 DSL 控件树，也不保存源码区、诊断区等裸控件别名。
 - `EditorDslDocument` 是独立于控件的源码模型。它读取 UTF-8，编辑缓冲统一为 LF，
   保存时保留原文件的 UTF-8 BOM 与 CRLF 风格，并以原子替换写回；8 MiB 上限与
   Content Browser 的资源身份保持在 AYEditor，而不是下沉到 AYUI。
@@ -845,6 +907,26 @@ rendering primitives:
 - Dock、TextArea 和按钮仍是 AYUI 通用能力；DSL 类型、编译器选择、文件保存语义与
   诊断格式只存在于 AYEditor/AYShader/AYScript。TextArea 的绘制、命中、选择框与光标
   必须共享同一有效字号和内容内边距，避免紧凑编辑器行高下产生累计偏移。
+
+### 10.5 UI Layout workspace document
+
+- `EditorUiLayoutExtension` 把 `.ui.json` 注册为文档；Tools 菜单使用固定 untitled workspace key，
+  重复打开时激活同一 Document 并 bring-to-front 同一独立工具窗，不创建第二份 Controller。
+- `EditorChildWindowManager` 创建 owner 指向主编辑器的普通顶层窗口，并提供 per-window UIManager、
+  GDI backend、AYDevice 输入、逻辑坐标转换、动态标题、关闭 veto 和延迟 teardown。它不是 Scene
+  Dock 的 floating-card 路径，关闭后也不会 redock。
+- `EditorUiLayoutController` 是 AYEditor 与通用 Layout Session 的唯一行为适配层。Canvas/Palette
+  手势优先经过 Controller；普通 Button、TextInput、ComboBox、ScrollView 与 popup 仍由该窗口的
+  UIManager 正常处理。
+- `LayoutEditorSession::attach(UIManager&, Widget* chromeRoot)` 支持 scoped chrome；独立 Designer
+  当前绑定整个 child UIManager，通用 View fallback 则传子树 root。两条宿主路径共享保存、dirty、
+  undo/redo、序列化和输入状态机。
+- 用户关闭 dirty Designer 时，由 DocumentManager 执行 Save/Discard/Cancel；Cancel 阻止原生窗口
+  关闭。安全点先 detach Controller，再销毁 child UI tree/backend/HWND；Shell shutdown 使用强制
+  teardown，但仍执行同样的 detach 顺序。
+- Chrome 的 fill 区只声明主轴 `h=0`；同时声明 `w` 与 `h` 会按 Loader 契约固定尺寸，禁止用于
+  Document Outline、Canvas、Inspector Scroll 这类需要父布局拉伸的区域。集成测试锁定三者实际
+  高度/宽度，防止再次出现“控件存在但区域为 0”的视觉退化。
 
 ---
 
@@ -873,6 +955,12 @@ rendering primitives:
 | 2026-08-31 | `.phoskia` / `.logia` 双击打开唯一 Center DSL DockCard；AYEditor 保留源码、保存和编译语义，AYUI 仅提供 Dock/TextArea 通用控件 |
 | 2026-09-01 | 2D authoring 先落 UI-independent 模型：`Editor2DViewportModel` 负责正交视口换算/网格吸附，`EditorTilemapDocument` 负责 paint/fill/collision/animation 与 `.aytilemap.json` 保存加载；AYUI 后续只绑定通用控件。 |
 | 2026-09-01 | Dock 单页签保持固定宽度且仅活动页显示矢量关闭图标；浮动 DockCard 使用 AYUI 矢量窗口控件，关闭先回主 DockArea 执行持久面板/DSL 文档策略，拖回时迁移同一 live card。 |
+| 2026-09-01 | AYEditor 改用 install 产品树：根启动器、`AYRuntime` 运行库、只读 `EngineAssets`、可写 `UserAssets`/`logs` 分离；`EngineAssets/Icons` 是跨模块共享图标根，不归属任何具体模块。 |
+| 2026-09-01 | 通用 `EditorDockViewHost` 落地并成为 DSL Shell 的唯一展示路径；DSL widget/command 实现在扩展 View 内，Session 只提供工程根、状态文本、重绘与原生关闭选择。 |
+| 2026-09-01 | UI Layout Editor 迁入通用 Center DockCard Host；限定根绑定隔离 chrome id，画布输入通过 `IEditorViewInputTarget` 接入，独立 `AYUI_LayoutEditor` 保留为回归宿主。 |
+| 2026-09-01 | Dock 模板在 self-heal 后显式恢复 mid/Center fill，防止 Bottom 临时折叠把默认中心文档区压缩为 120px。 |
+| 2026-09-02 | UI Layout Editor 从 Center DockCard 迁为主窗口 owner 持有的 modeless AYDevice 工具窗；`EditorUiLayoutController` 复用同一 Layout Session，文档仍归 Workspace 管理。Chrome 重构为现代六区布局，Scene Center 不再承载 UI authoring。 |
+| 2026-09-02 | Designer 命令收敛到 File/Edit 与 Inspector 上下文；Widget Library 改为可拖放 SVG 图标列表；选择装饰改为透明像素对齐单线，Inspector 切换在同一输入事务内完成布局。 |
 
 ---
 

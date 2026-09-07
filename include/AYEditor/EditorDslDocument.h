@@ -1,6 +1,9 @@
 #pragma once
 
+#include "AYEditor/EditorExtension.h"
+
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -47,19 +50,25 @@ const char* editorDslLanguageName(EditorDslLanguage language) noexcept;
 //
 // UI widgets are intentionally absent: AYEditorSession may present this model
 // in a DockCard without coupling file/compiler tests to AYUI input dispatch.
-class EditorDslDocument final {
+class EditorDslDocument final : public IEditorDocument {
 public:
     bool open(const std::string& absolutePath,
               const std::string& displayPath,
               std::string* error = nullptr);
-    bool save(std::string* error = nullptr);
+    bool save(std::string* error = nullptr) override;
 
     void setSourceUtf8(std::string source);
     const std::string& sourceUtf8() const noexcept { return _source; }
     const std::string& absolutePath() const noexcept { return _absolutePath; }
     const std::string& displayPath() const noexcept { return _displayPath; }
     EditorDslLanguage language() const noexcept { return _language; }
-    bool isDirty() const noexcept { return _source != _savedSource; }
+    const std::string& typeId() const noexcept override { return _typeId; }
+    const std::string& path() const noexcept override { return _absolutePath; }
+    const std::string& title() const noexcept override { return _title; }
+    bool isDirty() const noexcept override { return _source != _savedSource; }
+    uint64_t revision() const noexcept override { return _revision; }
+    bool canReload() const noexcept override { return true; }
+    bool reload(std::string* error = nullptr) override;
 
     EditorDslCompileReport compile() const;
 
@@ -73,8 +82,11 @@ private:
 
     std::string _absolutePath;
     std::string _displayPath;
+    std::string _title;
     std::string _source;
     std::string _savedSource;
+    std::string _typeId = "ayeditor.dsl";
+    uint64_t _revision = 0;
     EditorDslLanguage _language = EditorDslLanguage::Unknown;
     LineEnding _lineEnding = LineEnding::Lf;
     bool _utf8Bom = false;

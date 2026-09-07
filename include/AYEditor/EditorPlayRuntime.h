@@ -69,6 +69,9 @@ public:
     EditorPlayRuntime& operator=(const EditorPlayRuntime&) = delete;
 
     void setHostWindow(HWND hostWindow);
+    void setEngineAssetsRoot(std::string root) {
+        _engineAssetsRoot = std::move(root);
+    }
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
     void setEditorTestSceneEnabled(bool enabled) noexcept {
@@ -206,7 +209,8 @@ private:
     // <assetRoot>/Scripts/PlayerController.logia via the registered
     // ScriptSubSystem so the per-tick `entity.onUpdate(dt)` path
     // flows Lua → AYReflect → C++ field mutation. Matches the
-    // canonical `examples/player_controller.logia` shape (self.position
+    // canonical `EngineAssets/AYScript/templates/player_controller.logia`
+    // shape (self.position
     // + self.speed + self.jump_force).
     void spawnPlayerControllerIfNeeded();
     bool bindPlayerScript();
@@ -244,6 +248,7 @@ private:
 
     std::string _cacheRoot;
     std::string _assetRoot;
+    std::string _engineAssetsRoot;
     std::string _meshPath;
     std::string _materialPath;
     std::string _groundMeshPath;

@@ -24,6 +24,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorAssetTilePresenter.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
+    Test_EditorFramework.cpp
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
      PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
@@ -43,7 +44,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 # stable source-tree anchor so suites that load the real shell layout do not
 # silently return before executing their assertions.
 target_compile_definitions(${MODULE_NAME} PRIVATE
-    AY_EDITOR_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/.."
+    AY_EDITOR_TEST_SOURCE_DIR="${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor"
 )
 
 # Keep registration symbols in this test-only binary. Production binaries keep
@@ -53,3 +54,30 @@ if(MSVC)
 endif()
 
 ay_add_test(${MODULE_NAME})
+
+# Keep default Editor module assembly isolated from the broad UI/editor suite.
+# The process-wide ComponentRegistry is sealed as part of the startup contract.
+add_executable(DefaultEditorModuleAssemblyTest
+    DefaultEditorModuleAssemblyTestMain.cpp
+    Test_DefaultEditorModuleAssembly.cpp
+)
+
+target_link_libraries(DefaultEditorModuleAssemblyTest PRIVATE
+    AYEditor
+    AYApplication
+    AYEntity
+    AYTest
+)
+
+target_compile_options(DefaultEditorModuleAssemblyTest PRIVATE
+    $<$<CXX_COMPILER_ID:MSVC>: /W4>
+    $<$<CXX_COMPILER_ID:GNU,Clang>: -Wall -Wextra -Wpedantic>)
+
+if(MSVC)
+    target_link_options(DefaultEditorModuleAssemblyTest PRIVATE
+        "/FORCE:MULTIPLE"
+        "/IGNORE:4005"
+        "/IGNORE:4006")
+endif()
+
+ay_add_test(DefaultEditorModuleAssemblyTest)

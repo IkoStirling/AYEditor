@@ -1,5 +1,6 @@
 #include "AYTest.h"
 #include "AYGameLoop.h"
+#include <AYEntity/EntityModule.h>
 
 #include "Test_EditorShell.cpp"
 #include "Test_EditorImporter.cpp"
@@ -19,8 +20,15 @@
 #include "Test_EditorAssetTilePresenter.cpp"    // asset tile display-only mapping
 #include "Test_EditorDslDocument.cpp"           // Phoskia/Logia dock editor
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
+#include "Test_EditorFramework.cpp"             // unified editor workspace foundation
 
 int main(int argc, char* argv[]) {
+    // This executable is the host for Editor/Entity integration tests.
+    // Register component metadata up front so typed addComponent<T>() calls
+    // may create their World storage. Keep runtime subsystem registration out
+    // of the test entry point; individual cases own that lifecycle explicitly.
+    ayt::entity::registerEntityComponents();
+
     const int result = argc > 1
         ? ayt::test::runSuite(argv[1])
         : ayt::test::runAllTests("AYEditor");

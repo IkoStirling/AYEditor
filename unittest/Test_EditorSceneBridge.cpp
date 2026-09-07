@@ -58,11 +58,7 @@ bool sceneBridgeLayoutFileExists(const std::string& path)
 std::string resolveSceneBridgeLayoutPath()
 {
     const std::string candidates[] = {
-        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
-        "assets/ui/editor_shell.ui.json",
-        "../assets/ui/editor_shell.ui.json",
-        "../../assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
+        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json",
     };
     for (const auto& p : candidates) {
         if (sceneBridgeLayoutFileExists(p)) return p;

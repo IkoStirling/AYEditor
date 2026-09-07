@@ -13,12 +13,12 @@
 //     rewrite keeps these edits end-to-end observable.
 //
 // Field names (speed / jump_force / position) MUST match
-// examples/player_controller.logia; the codegen rewrite bakes the
+// EngineAssets/AYScript/templates/player_controller.logia; the codegen rewrite bakes the
 // host-type name "PlayerController" into Lua, so the
-// `addComponent<PlayerController>()` registration in
-// EditorPlayerController.cpp must use the bare name when
-// registering with AYReflect.
+// `registerEditorPlayerControllerComponent()` registration must use the bare
+// name when registering with AYReflect.
 
+#include <AYEntity/ComponentRegistry.h>
 #include <AYEntity/components/ScriptComponent.h>
 
 #include <AYEntity/IEntity.h>
@@ -42,5 +42,10 @@ struct PlayerController : public ayt::entity::ScriptComponent {
     }
 };
 #undef AY_CURRENT_CLASS
+
+// Called by EditorComponentModule during IModule::registerTypes().
+[[nodiscard]] ayt::entity::ComponentRegistryResult
+registerEditorPlayerControllerComponent(
+    ayt::entity::ComponentRegistry& registry);
 
 } // namespace ayt::editor

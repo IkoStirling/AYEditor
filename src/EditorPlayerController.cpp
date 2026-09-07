@@ -1,7 +1,6 @@
 #include "AYEditor/EditorPlayerController.h"
 
-#include <AYEntity/EntityModule.h>
-#include <AYEntity/World.h>
+#include <AYEntity/ComponentRegistration.h>
 
 #include <AYReflect/IReflect.h>
 #include <AYReflect.h>
@@ -14,7 +13,7 @@
 // for `self.position.x` resolves the host type. Mirrors
 // Test_LogiaCodegen.cpp::codegen_full_player_controller's PCStub block
 // (lines 197-244). The host type name baked into emitted Lua is
-// "PlayerController" — must match `World::registerComponentType<T>`.
+// "PlayerController" — must match its ComponentRegistry descriptor name.
 //
 // Idempotent: the findType guard avoids duplicate registration; multiple
 // Editor startups / world resets must not double-register the same
@@ -25,7 +24,7 @@ namespace ayt::editor {
 
 namespace {
 
-bool ensurePlayerControllerRegisteredOnce()
+bool ensurePlayerControllerReflectionRegistered()
 {
     auto& reg = ayt::reflect::TypeRegistryImpl::instance();
     if (reg.findType("PlayerController") != nullptr) {
@@ -66,21 +65,26 @@ bool ensurePlayerControllerRegisteredOnce()
             ayt::reflect::FieldAttribute::Serialize));
     }
 
-    reg.registerTypeInfo("PlayerController", info);
-    return true;
+    return reg.registerTypeInfo("PlayerController", info) != nullptr;
 }
 
-struct PlayerControllerRegistrar {
-    PlayerControllerRegistrar() {
-        if (!ensurePlayerControllerRegisteredOnce()) {
-            return;
-        }
-        ayt::entity::World::registerComponentType<PlayerController>("PlayerController");
-    }
-};
-
-static PlayerControllerRegistrar g_playerControllerRegistrar;
-
 } // namespace
+
+ayt::entity::ComponentRegistryResult
+registerEditorPlayerControllerComponent(
+    ayt::entity::ComponentRegistry& registry)
+{
+    if (!ensurePlayerControllerReflectionRegistered()) {
+        return ayt::entity::ComponentRegistryResult::failure(
+            ayt::entity::ComponentRegistryError::InvalidDescriptor,
+            "Failed to register AYReflect metadata for PlayerController");
+    }
+
+    return ayt::entity::registerComponent<PlayerController>(
+        registry,
+        "PlayerController",
+        "Player Controller",
+        "Editor");
+}
 
 } // namespace ayt::editor

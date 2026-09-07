@@ -173,6 +173,29 @@ bool EditorChildWindowManager::hasActiveDrag() const {
     return false;
 }
 
+ayt::ui::UIManager* EditorChildWindowManager::uiForHandle(Handle h) noexcept {
+    Entry* entry = findEntryByHandle(h);
+    return entry != nullptr ? entry->ui.get() : nullptr;
+}
+
+const ayt::ui::UIManager* EditorChildWindowManager::uiForHandle(
+    Handle h) const noexcept {
+    for (const auto& entry : _entries) {
+        if (entry.handle == h) return entry.ui.get();
+    }
+    return nullptr;
+}
+
+bool EditorChildWindowManager::activateChildWindow(Handle h) {
+    return findEntryByHandle(h) != nullptr && _wm.activateTopLevelWindow(h);
+}
+
+bool EditorChildWindowManager::setChildWindowTitle(
+    Handle h, const std::string& title) {
+    return findEntryByHandle(h) != nullptr
+        && _wm.setTopLevelTitle(h, title.c_str());
+}
+
 void EditorChildWindowManager::resetPromotedCardChrome(
     ayt::ui::DockCard* card) {
     if (card == nullptr) return;
@@ -247,6 +270,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     d.y      = cfg.y;
     d.width  = cfg.width;
     d.height = cfg.height;
+    d.ownerHandle = _wm.getWindowHandle();
     // Live DockCard promote: no OS caption (card paints its own chrome).
     // JSON-config children keep the classic overlapped frame.
     d.borderless = (cfg.card != nullptr);
@@ -271,6 +295,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     e.ui         = std::make_shared<ayt::ui::UIManager>();
     e.layoutPath = cfg.layoutPath;
     e.beforeClose = cfg.beforeClose;
+    e.beforeCloseRequested = cfg.beforeCloseRequested;
 #if defined(_WIN32)
     // PR-Dock-TearOff: per-HWND GDI backend — the promoted card renders
     // into THIS window's DC (bgfx is process-singleton-bound to the
@@ -377,10 +402,14 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     };
     cbs.onMouseWheel = [ui, beforeWheel](float x, float y, float deltaY) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
-        if (beforeWheel && beforeWheel(*ui, x, y, deltaY)) {
+        // AYDevice reports native wheel notches (+up). AYUI consumes logical
+        // scroll pixels (+reveals lower content), matching DeviceInputBridge.
+        constexpr float kWheelPixelsPerNotch = 40.0f;
+        const float uiDelta = -deltaY * kWheelPixelsPerNotch;
+        if (beforeWheel && beforeWheel(*ui, x, y, uiDelta)) {
             return;
         }
-        ui->onMouseWheel(x, y, deltaY);
+        ui->onMouseWheel(x, y, uiDelta);
     };
     cbs.onKey = [ui, beforeKey](::ayt::device::KeyCode kc, bool pressed) {
         ayt::ui::UIManager::ActiveScope guard(ui.get());
@@ -703,6 +732,11 @@ void EditorChildWindowManager::closeChildWindow(Handle h) {
 void EditorChildWindowManager::requestCloseChildWindow(Handle h) {
     for (auto& entry : _entries) {
         if (entry.handle == h) {
+            if (entry.closeRequested) return;
+            if (entry.beforeCloseRequested != nullptr && entry.ui != nullptr) {
+                ayt::ui::UIManager::ActiveScope guard(entry.ui.get());
+                if (!entry.beforeCloseRequested(*entry.ui)) return;
+            }
             entry.closeRequested = true;
             return;
         }

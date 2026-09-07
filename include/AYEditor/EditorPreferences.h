@@ -74,6 +74,11 @@ struct EditorPreferences {
     float colorGradingStrength = 0.75f;
     bool shadowsEnabled = true;
     bool shadowPcfEnabled = true;
+
+    // Append new persisted fields at the tail: EditorPreferences crosses the
+    // demo/library boundary, so preserving existing member offsets reduces
+    // stale-object ABI failures during incremental Visual Studio builds.
+    bool taaEnabled = false;
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -125,7 +130,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.colorGradingPreset == b.colorGradingPreset
         && a.colorGradingStrength == b.colorGradingStrength
         && a.shadowsEnabled == b.shadowsEnabled
-        && a.shadowPcfEnabled == b.shadowPcfEnabled;
+        && a.shadowPcfEnabled == b.shadowPcfEnabled
+        && a.taaEnabled == b.taaEnabled;
 }
 
 inline bool operator!=(const EditorPreferences& a,

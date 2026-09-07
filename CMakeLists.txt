@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.21)
 project(AYEditor
     VERSION 0.1.0
     DESCRIPTION "AYEditor — editor shell + Play/network client + Importer mapping"
@@ -9,6 +9,27 @@ set(MODULE_NAME AYEditor)
 set(AY_RESOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYResource")
 set(AY_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader")
 include("${AY_SHADER_ROOT}/cmake/AYBgfx.cmake")
+
+if(NOT DEFINED AY_ENGINE_ASSETS_SOURCE_DIR)
+    get_filename_component(_ay_engine_superproject_root
+        "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+    set(AY_ENGINE_ASSETS_SOURCE_DIR
+        "${_ay_engine_superproject_root}/EngineAssets"
+        CACHE PATH "Versioned engine assets installed with AYEditor")
+endif()
+if(NOT DEFINED AY_EDITOR_INSTALL_ROOT)
+    get_filename_component(_ay_editor_build_tree_name "${CMAKE_BINARY_DIR}" NAME)
+    set(AY_EDITOR_INSTALL_ROOT
+        "${CMAKE_BINARY_DIR}/install/${_ay_editor_build_tree_name}/AYEditor"
+        CACHE PATH "Local portable AYEditor install root")
+endif()
+option(AY_EDITOR_ENABLE_PRODUCT_INSTALL
+    "Generate the portable AYEditor install/stage target" ON)
+if(AY_EDITOR_ENABLE_PRODUCT_INSTALL AND
+   NOT EXISTS "${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor/ui/editor_shell.ui.json")
+    message(FATAL_ERROR
+        "AYEditor product install requires ${AY_ENGINE_ASSETS_SOURCE_DIR}")
+endif()
 
 set(SRC_FILES
     src/AYEditorWorldContext.cpp
@@ -21,20 +42,31 @@ set(SRC_FILES
     src/AYEditorSceneDocument.cpp
     src/AYEditorSelection.cpp
     src/AYEditorCommandStack.cpp
+    src/AYEditorCommandSystem.cpp
+    src/AYEditorDocumentManager.cpp
+    src/AYEditorDockViewHost.cpp
+    src/AYEditorExtensionRegistry.cpp
+    src/AYEditorSelectionContext.cpp
+    src/AYEditorWorkspace.cpp
     src/AYEditorTransformGizmo.cpp
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetTilePresenter.cpp
     src/AYEditorAssetListView.cpp
     src/AYEditorDslDocument.cpp
+    src/AYEditorDslExtension.cpp
+    src/AYEditorUiLayoutDocument.cpp
+    src/AYEditorUiLayoutExtension.cpp
     src/AYEditorStartupSplash.cpp
+    src/AYEditorProductPaths.cpp
     src/AYEditor2DViewportModel.cpp
     src/AYEditorTilemapDocument.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
     src/AYImportedCharacterMapper.cpp
     src/EditorChildWindowManager.cpp  # D5+.5 (2026-07-26): child WindowManager wiring
-    src/EditorPlayerController.cpp  # INT-01 sample script host + AYReflect registration
+    src/EditorPlayerController.cpp  # INT-01 sample script host registration
+    src/AYEditorComponentModule.cpp
     # PR-Dock-TearOff (2026-08-08): per-HWND GDI render backend for
     # promoted child windows. Moved from the demo target into the lib;
     # the whole file is #if defined(_WIN32) so non-Windows builds of
@@ -59,25 +91,43 @@ set(HEAD_FILES
     include/AYEditor/EditorSceneDocument.h
     include/AYEditor/EditorSelection.h
     include/AYEditor/EditorCommandStack.h
+    include/AYEditor/EditorCommandSystem.h
+    include/AYEditor/EditorDocumentManager.h
+    include/AYEditor/EditorDockViewHost.h
+    include/AYEditor/EditorExtension.h
+    include/AYEditor/EditorExtensionRegistry.h
+    include/AYEditor/EditorSelectionContext.h
     include/AYEditor/EditorTransformGizmo.h
     include/AYEditor/EditorVisualStyle.h
     include/AYEditor/EditorAssetDatabase.h
     include/AYEditor/EditorAssetTilePresenter.h
     include/AYEditor/EditorAssetListView.h
     include/AYEditor/EditorDslDocument.h
+    include/AYEditor/EditorDslExtension.h
+    include/AYEditor/EditorUiLayoutDocument.h
+    include/AYEditor/EditorUiLayoutExtension.h
     include/AYEditor/EditorStartupSplash.h
+    include/AYEditor/EditorProductPaths.h
     include/AYEditor/Editor2DViewportModel.h
     include/AYEditor/EditorTilemapDocument.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
     include/AYEditor/ImportedCharacterMapper.h
+    include/AYEditor/EditorWorkspace.h
     ../AYDevice/include/AYDevice/WindowManager.h  # D5+.5 (2026-07-26)
     include/AYEditor/EditorPlayerController.h
+    include/AYEditor/EditorComponentModule.h
     ../AYUI/demo/layout_editor/LayoutEditorSession.h
     ../AYAudio/demo/audio_editor/AudioEditorSession.h
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
+
+file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
+    AY_ENGINE_ASSETS_SOURCE_HINT_PATH)
+target_compile_definitions(${MODULE_NAME} PRIVATE
+    AY_ENGINE_ASSETS_SOURCE_HINT="${AY_ENGINE_ASSETS_SOURCE_HINT_PATH}"
+)
 
 target_include_directories(${MODULE_NAME} PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -104,7 +154,8 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
     # 暴露 SceneManager 类型。
     PRIVATE AYScene
-    # PhysicsSubSystem via registerPhysicsModule (shared with Client/Server).
+    # PhysicsRuntimeModule in the default Editor graph (shared contract with
+    # Client/Server; direct helper remains for compatibility callers).
     PRIVATE AYPhysics
     # AudioSubSystem + Audio Editor Tools child (shared with Client).
     PRIVATE AYAudio
@@ -171,24 +222,14 @@ target_compile_definitions(AYEditorShell_Demo PRIVATE
     AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
 )
 
-# UI layouts, SVG icons, and editor configuration are runtime inputs. Make
-# them link dependencies so an asset-only edit re-runs the existing POST_BUILD
-# copy instead of leaving a stale assets directory beside the executable.
-file(GLOB_RECURSE AYEDITOR_RUNTIME_ASSET_FILES
-    CONFIGURE_DEPENDS
-    LIST_DIRECTORIES false
-    "${CMAKE_CURRENT_SOURCE_DIR}/assets/*"
-)
-set_property(TARGET AYEditorShell_Demo APPEND PROPERTY
-    LINK_DEPENDS "${AYEDITOR_RUNTIME_ASSET_FILES}"
-)
-
-add_custom_command(TARGET AYEditorShell_Demo POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:AYEditorShell_Demo>/assets
-    COMMENT "Copy AYEditor assets next to AYEditorShell_Demo"
-)
+if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
+    # The root launcher has no third-party imports.  It starts the real host
+    # from AYRuntime, where Windows can resolve every app-local DLL before the
+    # host reaches WinMain.
+    add_executable(AYEditorLauncher WIN32 demo/AYEditorLauncher.cpp)
+    set_target_properties(AYEditorLauncher PROPERTIES OUTPUT_NAME AYEditor)
+    target_link_libraries(AYEditorLauncher PRIVATE user32 shell32)
+endif()
 
 add_executable(AYEditorShutdownRepro WIN32
     demo/AYEditorDebugHeapEarly.cpp
@@ -227,16 +268,92 @@ target_compile_definitions(AYEditorShutdownRepro PRIVATE
     AY_BGFX_SHADER_INCLUDE_HINT="${AY_BGFX_SHADER_INCLUDE_DIR}"
 )
 
-set_property(TARGET AYEditorShutdownRepro APPEND PROPERTY
-    LINK_DEPENDS "${AYEDITOR_RUNTIME_ASSET_FILES}"
-)
+if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
+    set(AY_EDITOR_INSTALL_COMPONENT AYEditorProduct)
 
-add_custom_command(TARGET AYEditorShutdownRepro POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_CURRENT_SOURCE_DIR}/assets
-        $<TARGET_FILE_DIR:AYEditorShutdownRepro>/assets
-    COMMENT "Copy AYEditor assets next to AYEditorShutdownRepro"
-)
+    # Normalize dependency paths before applying the Windows system-directory
+    # filters below.  Without this policy, mixed slash/case paths can cause
+    # GET_RUNTIME_DEPENDENCIES to recurse through System32.
+    if(POLICY CMP0207)
+        cmake_policy(SET CMP0207 NEW)
+    endif()
+
+    # EngineAssets and AYRuntime are immutable product-owned directories. A
+    # reinstall mirrors them from source, while UserAssets and logs are only
+    # created and are never removed or overwritten by this cleanup step.
+    install(CODE [=[
+        set(_ay_product_root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
+        cmake_path(NORMAL_PATH _ay_product_root)
+        if(_ay_product_root STREQUAL "" OR
+           _ay_product_root STREQUAL "/" OR
+           _ay_product_root MATCHES "^[A-Za-z]:/$")
+            message(FATAL_ERROR
+                "Refusing to stage AYEditor into an unsafe install prefix")
+        endif()
+        set(_ay_product_marker
+            "${_ay_product_root}/.ayeditor-product-root")
+        set(_ay_known_legacy_product FALSE)
+        if(EXISTS "${_ay_product_root}/AYEditor.exe" AND
+           EXISTS "${_ay_product_root}/AYRuntime/AYEditorShell_Demo.exe" AND
+           EXISTS "${_ay_product_root}/EngineAssets/AYEditor/ui/editor_shell.ui.json")
+            set(_ay_known_legacy_product TRUE)
+        endif()
+        if((EXISTS "${_ay_product_root}/EngineAssets" OR
+            EXISTS "${_ay_product_root}/AYRuntime") AND
+           NOT EXISTS "${_ay_product_marker}" AND
+           NOT _ay_known_legacy_product)
+            message(FATAL_ERROR
+                "Refusing to replace unmarked EngineAssets/AYRuntime under "
+                "${_ay_product_root}")
+        endif()
+        file(MAKE_DIRECTORY "${_ay_product_root}")
+        file(WRITE "${_ay_product_marker}"
+            "Aliyat AYEditor install root\n")
+        file(REMOVE_RECURSE
+            "${_ay_product_root}/EngineAssets"
+            "${_ay_product_root}/AYRuntime")
+        file(MAKE_DIRECTORY
+            "${_ay_product_root}/UserAssets/Assets"
+            "${_ay_product_root}/logs")
+    ]=] COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+
+    install(TARGETS AYEditorLauncher
+        RUNTIME DESTINATION "."
+        COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+
+    install(TARGETS AYEditorShell_Demo
+        RUNTIME_DEPENDENCY_SET AYEditorRuntimeDependencies
+        RUNTIME DESTINATION "AYRuntime"
+        COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+
+    install(RUNTIME_DEPENDENCY_SET AYEditorRuntimeDependencies
+        DESTINATION "AYRuntime"
+        COMPONENT ${AY_EDITOR_INSTALL_COMPONENT}
+        PRE_EXCLUDE_REGEXES
+            "[Aa][Pp][Ii]-[Mm][Ss]-[Ww][Ii][Nn]-.*"
+            "[Ee][Xx][Tt]-[Mm][Ss]-.*"
+            "[Aa]zure[Aa]ttest.*\\.dll"
+            "[Hh]vsi[Ff]ile[Tt]rust\\.dll"
+            "[Pp]dm[Uu]tilities\\.dll"
+            "[Ww]paxholder\\.dll"
+        POST_EXCLUDE_REGEXES
+            ".*/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ss][Yy][Ss][Tt][Ee][Mm]32/.*"
+            ".*/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ss][Yy][Ss][Ww][Oo][Ww]64/.*")
+
+    install(DIRECTORY "${AY_ENGINE_ASSETS_SOURCE_DIR}/"
+        DESTINATION "EngineAssets"
+        COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+
+    add_custom_target(AYEditorStage
+        COMMAND "${CMAKE_COMMAND}" --install "${CMAKE_BINARY_DIR}"
+            --config "$<CONFIG>"
+            --component "${AY_EDITOR_INSTALL_COMPONENT}"
+            --prefix "${AY_EDITOR_INSTALL_ROOT}"
+        DEPENDS AYEditorLauncher AYEditorShell_Demo
+        COMMENT "Stage portable AYEditor in ${AY_EDITOR_INSTALL_ROOT}"
+        USES_TERMINAL
+        VERBATIM)
+endif()
 
 enable_testing()
 add_subdirectory(unittest)

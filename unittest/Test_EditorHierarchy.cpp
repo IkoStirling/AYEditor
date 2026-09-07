@@ -60,19 +60,12 @@ bool hierarchyLayoutFileExists(const std::string& path)
     return !path.empty() && ::stat(path.c_str(), &st) == 0;
 }
 
-// PR-5：新增两条相对路径。既有两条（"assets/ui/…"、
-// "AYRuntime/AYEditor/assets/ui/…"）在 CI/VS 的实际 cwd 下都 miss，导致
-// layout 相关 case 全部静默跳过（0 CHECK）。"../assets/ui/…" 命中
-// unittest/ 工作目录，"../../assets/ui/…" 命中 ay_add_test
-// 设置的目标专属 test_tmp/ 工作目录。
+// Product assets have one superproject-owned source anchor; tests must not
+// depend on their temporary working directory or a copied build-tree layout.
 std::string resolveHierarchyLayoutPath()
 {
     const std::string candidates[] = {
-        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
-        "assets/ui/editor_shell.ui.json",
-        "../assets/ui/editor_shell.ui.json",
-        "../../assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
+        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json",
     };
     for (const auto& p : candidates) {
         if (hierarchyLayoutFileExists(p)) return p;

@@ -2,6 +2,7 @@
 
 #include "AYApplication/IApplication.h"
 #include "AYEditor/EditorPreferences.h"
+#include "AYEditor/EditorProductPaths.h"
 #include <AYResource/IConverter.h>
 
 #include <functional>
@@ -19,6 +20,10 @@ class DeviceInputProvider;
 namespace ayt::event {
 class EventBus;
 } // namespace ayt::event
+
+namespace ayt::app {
+class EngineModuleRuntime;
+} // namespace ayt::app
 
 namespace ayt::editor {
 
@@ -41,6 +46,9 @@ public:
         _defaultAnimationImportPath = std::move(path);
     }
     void setProjectRoot(std::string path) { _projectRoot = std::move(path); }
+    void setProductPaths(EditorProductPaths paths) {
+        _productPaths = std::move(paths);
+    }
     // Demo convenience: after a character with an animation clip has been
     // imported, enter Play immediately so the clip can be previewed.
     void setAutoPlayImportedAnimation(bool enabled) {
@@ -114,6 +122,7 @@ private:
     std::string              _defaultImportPath;
     std::string              _defaultAnimationImportPath;
     std::string              _projectRoot;
+    EditorProductPaths       _productPaths = EditorProductPaths::detect();
     std::string              _materialPolicyTag;
     std::string              _opaqueMaterialIndices;
     std::string              _maskMaterialIndices;
@@ -141,6 +150,7 @@ private:
     // bridge always sees a safe state during teardown.
     std::unique_ptr<ayt::device::DeviceManager>       _devices;
     std::unique_ptr<ayt::device::DeviceInputProvider> _inputProvider;
+    std::unique_ptr<ayt::app::EngineModuleRuntime>    _moduleRuntime;
 };
 
 } // namespace ayt::editor

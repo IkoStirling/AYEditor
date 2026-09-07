@@ -1,13 +1,16 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorDslDocument.h"
+#include "AYEditor/EditorDslExtension.h"
 #include "AYEditor/EditorSession.h"
+#include "AYEditor/EditorWorkspace.h"
 #include "AYApplication.h"
 #include "AYApplication/IEngineHost.h"
 #include "AYIO/File.h"
 #include "AYUI/DockArea.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/TextArea.h"
+#include "AYUI/Widget.h"
 #include "AYUI/TileView.h"
 
 #include <chrono>
@@ -17,6 +20,28 @@
 using namespace ayt::editor;
 
 namespace {
+
+class DslTestHostServices final : public IEditorHostServices {
+public:
+    explicit DslTestHostServices(EditorWorkspace& workspace)
+        : _workspace(workspace) {}
+
+    EditorWorkspace& workspace() noexcept override { return _workspace; }
+    const std::string& projectRoot() const noexcept override {
+        return _projectRoot;
+    }
+    void requestRepaint() override { ++repaintRequests; }
+    void setStatusText(const std::wstring& text) override {
+        statusText = text;
+    }
+
+    int repaintRequests = 0;
+    std::wstring statusText;
+
+private:
+    EditorWorkspace& _workspace;
+    std::string _projectRoot;
+};
 
 std::filesystem::path dslEditorTempRoot(const char* suffix)
 {
@@ -38,7 +63,7 @@ struct DslEditorTempCleanup {
 std::string dslEditorLayoutPath()
 {
     const std::filesystem::path path =
-        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json";
+        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json";
     return std::filesystem::exists(path) ? path.string() : std::string{};
 }
 
@@ -84,6 +109,66 @@ TEST_CASE(dsl_language_detection_and_asset_classification_are_case_insensitive)
           == EditorAssetType::Shader);
     CHECK(classifyEditorAssetPath("Player.logia")
           == EditorAssetType::Script);
+}
+
+TEST_CASE(dsl_extension_opens_real_document_and_builds_workspace_view)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("workspace")};
+    const std::filesystem::path file = cleanup.root / "Assets/Tool.logia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));
+    CHECK(ayt::io::File::writeAllText(
+        file.string(), "script Tool {\n}\n"));
+
+    EditorWorkspace workspace;
+    std::string error;
+    CHECK(registerEditorDslExtension(workspace.registry(), &error));
+    CHECK(error.empty());
+
+    EditorOpenRequest request;
+    request.resourcePath = file.string();
+    request.resourceKey = file.string();
+    request.displayPath = "Assets/Tool.logia";
+    const EditorOpenResult first = workspace.documents().open(request);
+    const EditorOpenResult duplicate = workspace.documents().open(request);
+    CHECK(first.status == EditorOpenStatus::Opened);
+    CHECK(duplicate.status == EditorOpenStatus::FocusedExisting);
+    CHECK(first.documentId == duplicate.documentId);
+    CHECK(workspace.documents().size() == 1u);
+
+    auto document = std::dynamic_pointer_cast<EditorDslDocument>(
+        first.document);
+    CHECK(document != nullptr);
+    CHECK(document != nullptr && document->displayPath()
+          == "Assets/Tool.logia");
+    const uint64_t revision = document != nullptr
+        ? document->revision() : 0u;
+    if (document != nullptr) {
+        document->setSourceUtf8(
+            "script Tool {\n    on_start() { }\n}\n");
+    }
+    CHECK(document != nullptr && document->revision() == revision + 1u);
+    CHECK(document != nullptr && document->isDirty());
+
+    const EditorDescriptor* descriptor = workspace.registry().find(
+        kEditorDslExtensionId);
+    CHECK(descriptor != nullptr);
+    DslTestHostServices hostServices(workspace);
+    std::unique_ptr<IEditorView> view = descriptor != nullptr
+        ? descriptor->createView(first.document, hostServices) : nullptr;
+    CHECK(view != nullptr);
+    CHECK(view != nullptr && view->rootWidget() != nullptr);
+    CHECK(view != nullptr && view->commandTarget() != nullptr);
+    ayt::ui::Widget* root = view != nullptr
+        ? view->releaseRootWidget() : nullptr;
+    CHECK(root != nullptr);
+    if (root != nullptr) ayt::ui::destroyWidgetTree(root);
+    view.reset();
+
+    CHECK(workspace.documents().close(first.documentId,
+        EditorDocumentCloseAction::Save));
+    CHECK(workspace.documents().size() == 0u);
+    CHECK(ayt::io::File::readAllText(file.string()).find("on_start")
+          != std::string::npos);
 }
 
 TEST_CASE(dsl_document_save_preserves_utf8_bom_and_crlf)
@@ -160,6 +245,29 @@ material Unlit {
     CHECK_FALSE(phoskiaFailed.diagnostics.empty());
 }
 
+TEST_CASE(engine_player_controller_template_compiles)
+{
+#ifndef AY_EDITOR_TEST_SOURCE_DIR
+#error "AY_EDITOR_TEST_SOURCE_DIR must point at EngineAssets/AYEditor"
+#endif
+    const std::filesystem::path templatePath =
+        std::filesystem::path(AY_EDITOR_TEST_SOURCE_DIR).parent_path()
+        / "AYScript" / "templates" / "player_controller.logia";
+    CHECK(std::filesystem::is_regular_file(templatePath));
+    if (!std::filesystem::is_regular_file(templatePath)) return;
+
+    EditorDslDocument document;
+    std::string error;
+    CHECK(document.open(templatePath.string(),
+                        "EngineAssets/AYScript/templates/player_controller.logia",
+                        &error));
+    CHECK(error.empty());
+    if (!error.empty()) return;
+    const EditorDslCompileReport report = document.compile();
+    CHECK(report.success);
+    CHECK(report.generatedBytes > 0u);
+}
+
 TEST_CASE(content_browser_double_click_opens_one_dsl_tab_and_shortcuts_work)
 {
     const std::string layout = dslEditorLayoutPath();
@@ -210,6 +318,11 @@ TEST_CASE(content_browser_double_click_opens_one_dsl_tab_and_shortcuts_work)
     }
     session.update(0.0f);
     CHECK(session.openDslDocumentCount() == 1u);
+    CHECK(session.workspace().documents().size() == 1u);
+    CHECK(session.workspace().documents().active() != nullptr);
+    CHECK(session.workspace().documents().active() != nullptr
+          && session.workspace().documents().active()->editorId
+             == kEditorDslExtensionId);
 
     const EditorAssetRecord& record = session.assetDatabase().records().front();
     const std::string cardId = "card_dsl_" + std::to_string(record.id);
@@ -313,7 +426,9 @@ TEST_CASE(content_browser_double_click_opens_one_dsl_tab_and_shortcuts_work)
 
     CHECK(session.openDslAsset(record.id));
     CHECK(session.openDslDocumentCount() == 1u);
+    CHECK(session.workspace().documents().size() == 1u);
     session.shutdown();
+    CHECK(session.workspace().documents().size() == 0u);
 }
 
 TEST_SUITE_END

@@ -7,6 +7,7 @@
 // real engine-space size; the runtime never applies a per-character scale.
 
 #include "AYEditor/EditorApp.h"
+#include "AYEditor/EditorProductPaths.h"
 #include "AYGameLoop.h"
 #include "AYApplication/IEngineHost.h"      // defaultEngineHost() Meyers singleton (v0.3 PR-4)
 #include "AYRenderer/RendererSubSystem.h"
@@ -33,7 +34,6 @@
 
 namespace {
 
-constexpr const char* kEditorConfigRelativePath = "assets/config/editor.json";
 constexpr const char* kDefaultImportPathKey = "Editor.DefaultImportPath";
 constexpr const char* kDefaultAnimationImportPathKey =
     "Editor.DefaultAnimationImportPath";
@@ -218,29 +218,21 @@ void shutdownPersistentLog()
     }
 }
 
-std::filesystem::path moduleDirectory()
+std::string editorConfigPath(
+    const ayt::editor::EditorProductPaths& productPaths)
 {
-    char modulePath[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameA(nullptr, modulePath, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH) {
-        return std::filesystem::current_path();
-    }
-    return std::filesystem::path(modulePath).parent_path();
+    return productPaths.editorAsset("config/editor.json").string();
 }
 
-std::string editorConfigPath()
-{
-    return (moduleDirectory() / kEditorConfigRelativePath).string();
-}
-
-std::string editorPreferencesPath()
+std::string editorPreferencesPath(
+    const ayt::editor::EditorProductPaths& productPaths)
 {
     char localAppData[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA(
         "LOCALAPPDATA", localAppData, MAX_PATH);
     const std::filesystem::path root = length > 0 && length < MAX_PATH
         ? std::filesystem::path(localAppData)
-        : moduleDirectory();
+        : productPaths.productRoot;
     return (root / "Aliyat" / "AYEditor" / "preferences.json").string();
 }
 
@@ -353,10 +345,17 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Render.FXAA", out.fxaaEnabled);
     out.smaaEnabled = saved.getBool(
         "Editor.Render.SMAA", out.smaaEnabled);
+    out.taaEnabled = saved.getBool(
+        "Editor.Render.TAA", out.taaEnabled);
     // SMAA is the editor's preferred AA path. Older preferences only carry
     // FXAA, so the new default also performs the one-time migration without
     // ever chaining both filters.
-    if (out.smaaEnabled) out.fxaaEnabled = false;
+    if (out.taaEnabled) {
+        out.fxaaEnabled = false;
+        out.smaaEnabled = false;
+    } else if (out.smaaEnabled) {
+        out.fxaaEnabled = false;
+    }
     out.colorGradingEnabled = saved.getBool(
         "Editor.Render.ColorGrading.Enabled", out.colorGradingEnabled);
     out.colorGradingPreset = std::clamp(static_cast<int>(saved.getInt(
@@ -419,6 +418,7 @@ bool saveEditorPreferences(const std::string& path,
     config.setInt("Editor.Render.Tonemap", value.tonemapMode);
     config.setBool("Editor.Render.FXAA", value.fxaaEnabled);
     config.setBool("Editor.Render.SMAA", value.smaaEnabled);
+    config.setBool("Editor.Render.TAA", value.taaEnabled);
     config.setBool("Editor.Render.ColorGrading.Enabled",
                    value.colorGradingEnabled);
     config.setInt("Editor.Render.ColorGrading.Preset",
@@ -435,14 +435,15 @@ bool saveEditorPreferences(const std::string& path,
     return !ec && config.saveToFile(path);
 }
 
-std::string editorLogPath()
+std::string editorLogPath(
+    const ayt::editor::EditorProductPaths& productPaths)
 {
     const std::string overridePath =
         ayt::io::env::get(kEditorLogFileEnv).value_or("");
     if (!overridePath.empty()) {
         return std::filesystem::absolute(overridePath).string();
     }
-    return (moduleDirectory() / kEditorLogRelativePath).string();
+    return (productPaths.productRoot / kEditorLogRelativePath).string();
 }
 
 bool initializePersistentLog(const std::string& logFile)
@@ -551,7 +552,9 @@ bool initializePersistentLog(const std::string& logFile)
 
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
 {
-    const std::string logFile = editorLogPath();
+    const ayt::editor::EditorProductPaths productPaths =
+        ayt::editor::EditorProductPaths::detect();
+    const std::string logFile = editorLogPath(productPaths);
     if (!initializePersistentLog(logFile)) {
         // Last-resort interactive diagnostics if file setup is unavailable.
         AllocConsole();
@@ -594,7 +597,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
                      "falling back to d3d11 (accepted: d3d11, d3d12)\n");
     }
 
-    const std::string configPath = editorConfigPath();
+    const std::string configPath = editorConfigPath(productPaths);
     ayt::config::Config editorConfig;
     const bool configLoaded = editorConfig.loadFromFile(configPath);
     const std::string defaultImportPath =
@@ -602,7 +605,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
     const std::string defaultAnimationImportPath =
         editorConfig.getString(kDefaultAnimationImportPathKey);
 
-    const std::string preferencesPath = editorPreferencesPath();
+    const std::string preferencesPath = editorPreferencesPath(productPaths);
     ayt::config::Config savedPreferences;
     const bool preferencesLoaded =
         savedPreferences.loadFromFile(preferencesPath);
@@ -612,6 +615,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR commandLine, int)
     desc.height = static_cast<uint32_t>(editorPreferences.windowHeight);
 
     auto app = ayt::editor::EditorApp::create(desc);
+    app->setProductPaths(productPaths);
     // AYEditorShell_Demo is the renderer/editor integration fixture. Keep its
     // reference Character/Ground/Cube/Glass scene explicit so future product
     // editor entry points do not inherit test content by accident.

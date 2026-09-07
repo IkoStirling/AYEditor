@@ -1,6 +1,8 @@
 #include "AYTest.h"
 #include "AYEditor/EditorSession.h"
+#include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorVisualStyle.h"
+#include "AYEditor/EditorWorkspace.h"
 #include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
@@ -12,7 +14,11 @@
 #include "AYUI/Slider.h"
 #include "AYUI/TextLabel.h"  // PR-5 LM-2 test: hint TextLabel observe
 #include "AYUI/Image.h"
+#include "AYUI/ListView.h"
+#include "AYUI/Menu.h"
 #include "AYUI/MenuBar.h"
+#include "AYUI/Panel.h"
+#include "AYUI/Style.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
 #include "AYEntity.h"
@@ -26,6 +32,7 @@
 #include "AYDevice/WindowTypes.h"
 
 #include <cmath>
+#include <filesystem>
 #include <sys/stat.h>
 #include <string>
 #include <vector>
@@ -54,9 +61,7 @@ bool fileExists(const std::string& path)
 std::string resolveEditorShellLayoutPath()
 {
     const std::string candidates[] = {
-        AY_EDITOR_TEST_SOURCE_DIR "/assets/ui/editor_shell.ui.json",
-        "assets/ui/editor_shell.ui.json",
-        "AYRuntime/AYEditor/assets/ui/editor_shell.ui.json",
+        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json",
     };
     for (const std::string& path : candidates) {
         if (fileExists(path)) return path;
@@ -85,6 +90,16 @@ bool clickSessionButton(EditorSession& session, Button* button)
     session.onMouseMove(x, y);
     return session.onMouseButtonDown(x, y, 0)
         && session.onMouseButtonUp(x, y, 0);
+}
+
+Widget* findWidgetInTree(Widget* root, const std::string& id)
+{
+    if (root == nullptr || id.empty()) return nullptr;
+    if (root->getId() == id) return root;
+    for (Widget* child : root->getChildren()) {
+        if (Widget* found = findWidgetInTree(child, id)) return found;
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -156,12 +171,192 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_smaa")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_taa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_color_grading")) != nullptr);
     CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_grading_preset")) != nullptr);
     CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_color_grading_strength")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_shadows")) != nullptr);
     session.shutdown();
 }
+
+#if defined(_WIN32)
+TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor UI Designer host test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = std::filesystem::path(
+        AY_EDITOR_TEST_SOURCE_DIR).parent_path().string();
+    desc.hostWindow = static_cast<HWND>(windowManager.getWindowHandle());
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* dock = dynamic_cast<DockArea*>(session.ui().findById("main_dock"));
+    EditorChildWindowManager* children = session.childWindows();
+    CHECK(dock != nullptr);
+    CHECK(children != nullptr);
+    CHECK(session.openUiLayoutEditor());
+    session.update(0.0f);
+
+    CHECK(session.openUiLayoutDocumentCount() == 1u);
+    CHECK(session.workspace().documents().size() == 1u);
+    CHECK(children != nullptr && children->count() == 1u);
+    const EditorDocumentRecord* active =
+        session.workspace().documents().active();
+    CHECK(active != nullptr);
+    CHECK(active != nullptr && active->editorId == kEditorUiLayoutExtensionId);
+    CHECK(dock == nullptr || dock->findCard("card_ui_layout_editor") == nullptr);
+    if (children == nullptr || children->count() != 1u) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    const EditorChildWindowManager::Handle handle =
+        children->entries().front().handle;
+    auto* childUi = children->uiForHandle(handle);
+    CHECK(handle != nullptr);
+    CHECK(childUi != nullptr);
+    CHECK(::GetWindow(static_cast<HWND>(handle), GW_OWNER)
+          == static_cast<HWND>(windowManager.getWindowHandle()));
+    if (childUi == nullptr) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    childUi->layout();
+    Widget* layoutRoot = childUi->findById("layout_editor_root");
+    Widget* canvasHost = childUi->findById("canvas_host");
+    Widget* outline = childUi->findById("list_hierarchy");
+    Widget* properties = childUi->findById("props_scroll");
+    auto* addButton = dynamic_cast<Button*>(
+        childUi->findById("btn_add_button"));
+    auto* addLabel = dynamic_cast<Button*>(
+        childUi->findById("btn_add_label"));
+    auto* addPanel = dynamic_cast<Button*>(
+        childUi->findById("btn_add_panel"));
+    auto* designerMenu = dynamic_cast<MenuBar*>(
+        childUi->findById("designer_menubar"));
+    auto* hierarchy = dynamic_cast<ListView*>(outline);
+    CHECK(layoutRoot != nullptr);
+    CHECK(canvasHost != nullptr);
+    CHECK(outline != nullptr);
+    CHECK(properties != nullptr);
+    CHECK(addButton != nullptr);
+    CHECK(addLabel != nullptr);
+    CHECK(addPanel != nullptr);
+    CHECK(designerMenu != nullptr);
+    CHECK(hierarchy != nullptr);
+    CHECK(childUi->findById("toolbar_align") == nullptr);
+    CHECK(childUi->findById("props_scroll") != nullptr);
+    CHECK(childUi->findById("row_prop_id") != nullptr);
+    CHECK(childUi->findById("section_arrange") != nullptr);
+    CHECK(childUi->findById("btn_align_left") != nullptr);
+    CHECK(childUi->findById("btn_align_left") != nullptr
+          && childUi->findById("btn_align_left")->getParent() != nullptr
+          && childUi->findById("btn_align_left")->getParent()->getId()
+             == "row_arrange_horizontal");
+    CHECK(designerMenu == nullptr || designerMenu->getMenuCount() == 2u);
+    CHECK(designerMenu == nullptr || designerMenu->getMenu(1) == nullptr
+          || designerMenu->getMenu(1)->getItemCount() == 9u);
+    CHECK(addButton == nullptr || addButton->getIconDocument() != nullptr);
+    CHECK(addLabel == nullptr || addLabel->getIconDocument() != nullptr);
+    CHECK(addPanel == nullptr || addPanel->getIconDocument() != nullptr);
+    CHECK(addButton == nullptr || addLabel == nullptr
+          || addLabel->getWorldBounds().minY
+             >= addButton->getWorldBounds().maxY);
+    CHECK(canvasHost != nullptr && canvasHost->getSize().x > 500.0f);
+    CHECK(canvasHost != nullptr && canvasHost->getSize().y > 500.0f);
+    CHECK(outline != nullptr && outline->getSize().y > 200.0f);
+    CHECK(properties != nullptr && properties->getSize().y > 500.0f);
+    if (addButton == nullptr) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    CHECK(session.openUiLayoutEditor());
+    session.update(0.0f);
+    CHECK(session.openUiLayoutDocumentCount() == 1u);
+    CHECK(session.workspace().documents().size() == 1u);
+    CHECK(children->count() == 1u);
+    CHECK(children->entries().front().handle == handle);
+
+    const auto addBounds = addButton->getWorldBounds();
+    CHECK(addBounds.width() > 0.0f);
+    CHECK(addBounds.height() > 0.0f);
+    {
+        UIManager::ActiveScope childScope(childUi);
+        CHECK(clickButton(addButton));
+    }
+    auto* selectionRing = dynamic_cast<Panel*>(
+        findWidgetInTree(layoutRoot, "__le_sel_box"));
+    CHECK(selectionRing != nullptr);
+    if (selectionRing != nullptr) {
+        const ResolvedStyle ringStyle = resolveStyle(
+            selectionRing->getStyleId(), selectionRing);
+        CHECK(ringStyle.hasStyle);
+        CHECK_FLOAT_EQ(ringStyle.backgroundColor.w, 0.0f, 1e-5f);
+    }
+    Widget* textRow = childUi->findById("row_prop_text");
+    Widget* layoutSection = childUi->findById("section_layout");
+    auto* propertyTitle = dynamic_cast<TextLabel*>(
+        childUi->findById("lbl_props"));
+    CHECK(textRow != nullptr && textRow->isVisible());
+    CHECK(layoutSection != nullptr && !layoutSection->isVisible());
+    CHECK(propertyTitle != nullptr
+          && propertyTitle->getText().find(L"Button") != std::wstring::npos);
+    if (addPanel != nullptr) {
+        UIManager::ActiveScope childScope(childUi);
+        CHECK(clickButton(addPanel));
+    }
+    // Inspector visibility and positions must be final before the click
+    // callback returns; no session tick is allowed between these checks.
+    CHECK(textRow != nullptr && !textRow->isVisible());
+    CHECK(propertyTitle != nullptr
+          && propertyTitle->getText().find(L"Panel") != std::wstring::npos);
+    if (hierarchy != nullptr) {
+        hierarchy->setSelectedIndex(1);
+        CHECK(textRow != nullptr && textRow->isVisible());
+        CHECK(propertyTitle != nullptr
+              && propertyTitle->getText().find(L"Button") != std::wstring::npos);
+        hierarchy->setSelectedIndex(2);
+        CHECK(textRow != nullptr && !textRow->isVisible());
+        CHECK(propertyTitle != nullptr
+              && propertyTitle->getText().find(L"Panel") != std::wstring::npos);
+    }
+    session.update(0.0f);
+    active = session.workspace().documents().active();
+    CHECK(active != nullptr);
+    CHECK(active != nullptr && active->document != nullptr
+          && active->document->isDirty());
+
+    children->closeChildWindow(handle);
+    CHECK(session.openUiLayoutDocumentCount() == 0u);
+    CHECK(session.workspace().documents().size() == 0u);
+    CHECK(children->count() == 0u);
+    CHECK_FALSE(::IsWindow(static_cast<HWND>(handle)));
+
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+#endif
 
 TEST_CASE(editor_aa_controls_default_to_smaa_and_remain_mutually_exclusive) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
@@ -175,23 +370,35 @@ TEST_CASE(editor_aa_controls_default_to_smaa_and_remain_mutually_exclusive) {
         session.ui().findById("chk_fxaa"));
     auto* smaa = dynamic_cast<CheckBox*>(
         session.ui().findById("chk_smaa"));
+    auto* taa = dynamic_cast<CheckBox*>(
+        session.ui().findById("chk_taa"));
     CHECK(fxaa != nullptr);
     CHECK(smaa != nullptr);
-    if (fxaa != nullptr && smaa != nullptr) {
+    CHECK(taa != nullptr);
+    if (fxaa != nullptr && smaa != nullptr && taa != nullptr) {
         CHECK_FALSE(fxaa->isChecked());
         CHECK_TRUE(smaa->isChecked());
+        CHECK_FALSE(taa->isChecked());
+
+        taa->setChecked(true);
+        CHECK_TRUE(taa->isChecked());
+        CHECK_FALSE(fxaa->isChecked());
+        CHECK_FALSE(smaa->isChecked());
 
         fxaa->setChecked(true);
         CHECK_TRUE(fxaa->isChecked());
         CHECK_FALSE(smaa->isChecked());
+        CHECK_FALSE(taa->isChecked());
 
         smaa->setChecked(true);
         CHECK_FALSE(fxaa->isChecked());
         CHECK_TRUE(smaa->isChecked());
+        CHECK_FALSE(taa->isChecked());
 
         const EditorPreferences preferences = session.currentPreferences();
         CHECK_FALSE(preferences.fxaaEnabled);
         CHECK_TRUE(preferences.smaaEnabled);
+        CHECK_FALSE(preferences.taaEnabled);
     }
     session.shutdown();
 }

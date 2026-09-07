@@ -136,11 +136,18 @@ bool EditorDslDocument::open(const std::string& absolutePath,
 
     _absolutePath = absolutePath;
     _displayPath = displayPath.empty() ? absolutePath : displayPath;
+    try {
+        _title = std::filesystem::path(_displayPath).filename().string();
+    } catch (...) {
+        _title = _displayPath;
+    }
+    if (_title.empty()) _title = _displayPath;
     _language = language;
     _lineEnding = usedCrLf ? LineEnding::CrLf : LineEnding::Lf;
     _utf8Bom = utf8Bom;
     _source = std::move(normalized);
     _savedSource = _source;
+    ++_revision;
     if (error != nullptr) error->clear();
     return true;
 }
@@ -148,7 +155,10 @@ bool EditorDslDocument::open(const std::string& absolutePath,
 void EditorDslDocument::setSourceUtf8(std::string source)
 {
     bool ignoredCrLf = false;
-    _source = normalizeLineEndings(source, ignoredCrLf);
+    std::string normalized = normalizeLineEndings(source, ignoredCrLf);
+    if (_source == normalized) return;
+    _source = std::move(normalized);
+    ++_revision;
 }
 
 std::string EditorDslDocument::serializeForDisk() const
@@ -189,6 +199,17 @@ bool EditorDslDocument::save(std::string* error)
     _savedSource = _source;
     if (error != nullptr) error->clear();
     return true;
+}
+
+bool EditorDslDocument::reload(std::string* error)
+{
+    if (_absolutePath.empty()) {
+        if (error != nullptr) *error = "No DSL source is open.";
+        return false;
+    }
+    const std::string absolutePath = _absolutePath;
+    const std::string displayPath = _displayPath;
+    return open(absolutePath, displayPath, error);
 }
 
 EditorDslCompileReport EditorDslDocument::compile() const

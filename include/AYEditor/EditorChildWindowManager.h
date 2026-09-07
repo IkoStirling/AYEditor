@@ -52,6 +52,10 @@ struct ChildWindowConfig {
     std::function<bool(ayt::ui::UIManager& ui, ayt::device::KeyCode kc,
                        bool pressed)> beforeKey;
     std::function<void(ayt::ui::UIManager& ui, bool focused)> onFocusChanged;
+    // Invoked for a user/native close request before teardown is queued.
+    // Return false to keep the window open (for example, Cancel in a dirty
+    // document prompt). Programmatic forced teardown does not call this hook.
+    std::function<bool(ayt::ui::UIManager& ui)> beforeCloseRequested;
     // Runs at the deferred close safe point while the child UI tree and
     // backend are still alive. Tool sessions use this to detach callbacks
     // and raw widget pointers before UIManager::shutdown destroys them.
@@ -104,6 +108,11 @@ public:
     bool promoteCard(ayt::ui::DockCard* card, const std::wstring& title,
                      int x, int y, int w, int h);
 
+    ayt::ui::UIManager* uiForHandle(Handle h) noexcept;
+    const ayt::ui::UIManager* uiForHandle(Handle h) const noexcept;
+    bool activateChildWindow(Handle h);
+    bool setChildWindowTitle(Handle h, const std::string& title);
+
     // Primary DockArea bridge for promoted-card return. Dragging a child
     // title over the primary client previews and commits a live redock;
     // closing a promoted host returns the card through DockArea's normal
@@ -135,6 +144,7 @@ public:
         // Live promoted card (null for config-file children).
         ayt::ui::DockCard*                card = nullptr;
         std::function<void(ayt::ui::UIManager& ui)> beforeClose;
+        std::function<bool(ayt::ui::UIManager& ui)> beforeCloseRequested;
         bool                              needsDraw = false;
         // Window/card close callbacks run inside Win32/UI dispatch. They
         // only mark the entry; tickAll tears it down after dispatch returns.
