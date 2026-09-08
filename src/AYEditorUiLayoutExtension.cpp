@@ -40,6 +40,7 @@ struct EditorUiLayoutController::Impl {
         session.setOpenPathPicker(config.openPathPicker);
         session.setSavePathPicker(config.savePathPicker);
         session.setTexturePathPicker(config.texturePathPicker);
+        session.setTextureResourceProvider(config.textureResourceProvider);
         session.setDocumentStateUpdater(
             [this](const std::string& path, bool dirty) {
                 if (document != nullptr) document->updateViewState(path, dirty);

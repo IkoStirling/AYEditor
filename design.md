@@ -306,6 +306,13 @@ Widget Library、默认创建参数和 Inspector 属性集合统一读取 `Widge
 由 `PropertySchema` 生成。命令栈标注 Property/Insert/Delete/Reorder/Transform/Clipboard 类型化意图，
 并在迁移期保留完整 JSON snapshot 兜底，因此 standalone 与 AYEditor 的 undo/redo 行为仍完全一致。
 
+第三阶段的产品编辑能力仍由共享 core 提供。Collections、完整 Tree source、Tab page 与 RichText run
+使用 Structured Content Inspector 增删、重命名和排序；AYEditor 只为 `TextureResourceProvider` 枚举
+Project/Assets 与 EngineAssets，搜索、missing/invalid 状态和选中赋值由通用资源目录模型处理。
+Canvas 可切换 Desktop/HiDPI/Phone/Tablet 或自定义物理分辨率、DPI 与 Safe Area，预览 extent 不会
+写回文档 root。F6/Interact 暂时把输入交给运行时控件，退出后从进入前 snapshot 回滚交互状态；
+因此 Designer 无需复制一套游戏 UI host，也不会让试点操作污染 Workspace Document dirty 状态。
+
 文档根节点是固定 authoring origin，不提供 X/Y 或排列入口，方向键和 Ctrl+滚轮不会改写它的
 位置。普通自由定位控件支持方向键 1px 微调，Shift+方向键使用网格步长，且不会被 Snap 抵消。
 

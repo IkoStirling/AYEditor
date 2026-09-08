@@ -63,6 +63,7 @@
 #include <AYResource/assetsDefs/IMesh.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -181,6 +182,50 @@ std::string resolveLayoutEditorChromePath(
     const std::string path = (std::filesystem::path(engineAssetsRoot)
         / "AYUI" / "ui" / "layout_editor.ui.json").string();
     return path;
+}
+
+std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
+    const std::string& engineAssetsRoot, const std::string& projectRoot) {
+    namespace fs = std::filesystem;
+    std::vector<ayt::ui::LayoutTextureResource> resources;
+    std::unordered_map<std::string, bool> seen;
+    auto scan = [&](const fs::path& root, const std::wstring& prefix) {
+        std::error_code error;
+        if (!fs::is_directory(root, error)) return;
+        for (fs::recursive_directory_iterator it(
+                 root, fs::directory_options::skip_permission_denied, error), end;
+             it != end && resources.size() < 4096u; it.increment(error)) {
+            if (error) {
+                error.clear();
+                continue;
+            }
+            if (!it->is_regular_file(error)) continue;
+            std::string extension = it->path().extension().string();
+            std::transform(extension.begin(), extension.end(), extension.begin(),
+                           [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            if (extension != ".png" && extension != ".jpg" &&
+                extension != ".jpeg" && extension != ".bmp" &&
+                extension != ".tga") continue;
+            const std::string key = it->path().lexically_normal().string();
+            if (!seen.emplace(key, true).second) continue;
+            ayt::ui::LayoutTextureResource resource;
+            resource.key = key;
+            const fs::path relative = fs::relative(it->path(), root, error);
+            resource.displayName = prefix + (error
+                ? it->path().filename().wstring() : relative.generic_wstring());
+            error.clear();
+            resources.push_back(std::move(resource));
+        }
+    };
+    if (!projectRoot.empty()) {
+        scan(fs::u8path(projectRoot) / "Assets", L"Project / ");
+    }
+    if (!engineAssetsRoot.empty()) {
+        scan(fs::u8path(engineAssetsRoot), L"Engine / ");
+    }
+    return resources;
 }
 
 std::string resolveAudioEditorChromePath(
@@ -382,22 +427,6 @@ std::wstring assetSizeText(std::uintmax_t bytes)
     return buffer;
 }
 
-} // namespace
-
-EditorSession::EditorSession()
-    : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
-    _worldContext.setFallbackWorld(&ayt::entity::World::instance());
-    _playRuntime.setWorldContext(&_worldContext);
-    _workspace = std::make_unique<EditorWorkspace>();
-    std::string error;
-    if (!registerEditorDslExtension(_workspace->registry(), &error)) {
-        std::fprintf(stderr,
-            "[EditorSession] DSL workspace registration failed: %s\n",
-            error.c_str());
-    }
-    EditorUiLayoutExtensionConfig layoutConfig;
-    layoutConfig.chromePath = [this]() {
-        return resolveLayoutEditorChromePath(_engineAssetsRoot);
 std::wstring assetModifiedText(std::int64_t ticks)
 {
     if (ticks == 0) return L"unknown";
@@ -423,12 +452,32 @@ std::wstring assetModifiedText(std::int64_t ticks)
     return buffer;
 }
 
+} // namespace
+
+EditorSession::EditorSession()
+    : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
+    _worldContext.setFallbackWorld(&ayt::entity::World::instance());
+    _playRuntime.setWorldContext(&_worldContext);
+    _workspace = std::make_unique<EditorWorkspace>();
+    std::string error;
+    if (!registerEditorDslExtension(_workspace->registry(), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] DSL workspace registration failed: %s\n",
+            error.c_str());
+    }
+    EditorUiLayoutExtensionConfig layoutConfig;
+    layoutConfig.chromePath = [this]() {
+        return resolveLayoutEditorChromePath(_engineAssetsRoot);
     };
     layoutConfig.openPathPicker = [this]() {
         return showUiJsonOpenDialog(_hostWindow);
     };
     layoutConfig.savePathPicker = [this]() {
         return showUiJsonSaveDialog(_hostWindow);
+    };
+    layoutConfig.textureResourceProvider = [this]() {
+        return enumerateUiTextureResources(
+            _engineAssetsRoot, _assetDatabase.projectRoot());
     };
     error.clear();
     if (!registerEditorUiLayoutExtension(
@@ -4292,6 +4341,10 @@ bool EditorSession::openUiLayoutEditor() {
         HWND owner = _uiDesignerHandle != nullptr
             ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
         return showUiJsonSaveDialog(owner);
+    };
+    controllerConfig.textureResourceProvider = [this]() {
+        return enumerateUiTextureResources(
+            _engineAssetsRoot, _assetDatabase.projectRoot());
     };
     _uiDesigner = std::make_unique<EditorUiLayoutController>(
         _uiDesignerDocument, std::move(controllerConfig));

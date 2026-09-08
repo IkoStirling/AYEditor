@@ -287,9 +287,14 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
           && childUi->findById("btn_align_left")->getParent() != nullptr
           && childUi->findById("btn_align_left")->getParent()->getId()
              == "row_arrange_horizontal");
-    CHECK(designerMenu == nullptr || designerMenu->getMenuCount() == 2u);
+    CHECK(designerMenu == nullptr || designerMenu->getMenuCount() == 3u);
     CHECK(designerMenu == nullptr || designerMenu->getMenu(1) == nullptr
           || designerMenu->getMenu(1)->getItemCount() == 9u);
+    CHECK(designerMenu == nullptr || designerMenu->getMenu(2) == nullptr
+          || designerMenu->getMenu(2)->getItemCount() == 2u);
+    CHECK(childUi->findById("preview_preset") != nullptr);
+    CHECK(childUi->findById("texture_resource_list") != nullptr);
+    CHECK(childUi->findById("structured_items") != nullptr);
     CHECK(addButton == nullptr || addButton->getIconDocument() != nullptr);
     CHECK(addLabel == nullptr || addLabel->getIconDocument() != nullptr);
     CHECK(addPanel == nullptr || addPanel->getIconDocument() != nullptr);

@@ -1,10 +1,12 @@
 #pragma once
 
 #include "AYEditor/EditorExtensionRegistry.h"
+#include "AYUI/LayoutEditor/LayoutResourceCatalog.h"
 
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ayt::ui {
 class UIManager;
@@ -24,6 +26,8 @@ struct EditorUiLayoutExtensionConfig {
     std::function<std::string()> openPathPicker;
     std::function<std::string()> savePathPicker;
     std::function<std::string()> texturePathPicker;
+    std::function<std::vector<ayt::ui::LayoutTextureResource>()>
+        textureResourceProvider;
 };
 
 // Shared UI-layout authoring controller used by both the AYEditor tool-window
