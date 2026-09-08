@@ -29,6 +29,13 @@ GdiRenderBackend::GdiRenderBackend(HWND hwnd)
 }
 
 GdiRenderBackend::~GdiRenderBackend() {
+    for (auto& [key, texture] : _textures) {
+        (void)key;
+        if (texture != nullptr && texture->bitmap != nullptr) {
+            DeleteObject(texture->bitmap);
+        }
+    }
+    _textures.clear();
     releaseBackbuffer();
     if (_font != nullptr) {
         DeleteObject(_font);
@@ -37,6 +44,13 @@ GdiRenderBackend::~GdiRenderBackend() {
 }
 
 void GdiRenderBackend::releaseBackbuffer() {
+    while (_memDc != nullptr && !_savedStates.empty()) {
+        if (_savedStates.back().state != 0) {
+            RestoreDC(_memDc, _savedStates.back().state);
+        }
+        _savedStates.pop_back();
+    }
+    _savedStates.clear();
     if (_memDc != nullptr) {
         if (_oldBitmap != nullptr) {
             SelectObject(_memDc, _oldBitmap);
@@ -88,6 +102,14 @@ void GdiRenderBackend::setDrawTarget(HDC hdc, int width, int height) {
 }
 
 void GdiRenderBackend::beginFrame() {
+    // A malformed caller must not leak last frame's clipping region into the
+    // next frame. Balanced AYUI trees leave this loop empty in normal use.
+    while (_hdc != nullptr && !_savedStates.empty()) {
+        if (_savedStates.back().state != 0) {
+            RestoreDC(_hdc, _savedStates.back().state);
+        }
+        _savedStates.pop_back();
+    }
 }
 
 void GdiRenderBackend::endFrame() {
@@ -154,9 +176,80 @@ void GdiRenderBackend::drawRect(const math::FRectangle& bounds, const math::FVec
 
 void GdiRenderBackend::drawRect(const math::FRectangle& bounds, void* textureHandle,
                                 const math::FRectangle& uv) {
-    AYUNREFERENCED_PARAM(textureHandle);
-    AYUNREFERENCED_PARAM(uv);
-    drawRect(bounds, math::FVector4(0.25f, 0.25f, 0.28f, 1.0f));
+    const auto found = _textures.find(textureHandle);
+    if (_hdc == nullptr || found == _textures.end() || found->second == nullptr ||
+        found->second->bitmap == nullptr) {
+        drawRect(bounds, math::FVector4(0.25f, 0.25f, 0.28f, 1.0f));
+        return;
+    }
+    const TextureState& texture = *found->second;
+    HDC source = CreateCompatibleDC(_hdc);
+    if (source == nullptr) return;
+    HGDIOBJ previous = SelectObject(source, texture.bitmap);
+    const int dstX = static_cast<int>(std::floor(bounds.minX));
+    const int dstY = static_cast<int>(std::floor(bounds.minY));
+    const int dstW = (std::max)(1, static_cast<int>(std::ceil(bounds.maxX - bounds.minX)));
+    const int dstH = (std::max)(1, static_cast<int>(std::ceil(bounds.maxY - bounds.minY)));
+    const int srcX = static_cast<int>(std::floor(uv.minX * texture.width));
+    const int srcY = static_cast<int>(std::floor(uv.minY * texture.height));
+    const int srcW = (std::max)(1, static_cast<int>(std::ceil(
+        (uv.maxX - uv.minX) * texture.width)));
+    const int srcH = (std::max)(1, static_cast<int>(std::ceil(
+        (uv.maxY - uv.minY) * texture.height)));
+    BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    if (!AlphaBlend(_hdc, dstX, dstY, dstW, dstH,
+                    source, srcX, srcY, srcW, srcH, blend)) {
+        SetStretchBltMode(_hdc, HALFTONE);
+        StretchBlt(_hdc, dstX, dstY, dstW, dstH,
+                   source, srcX, srcY, srcW, srcH, SRCCOPY);
+    }
+    SelectObject(source, previous);
+    DeleteDC(source);
+}
+
+void* GdiRenderBackend::createUiTexture(int width, int height,
+                                        const void* bgraPixels) {
+    if (width <= 0 || height <= 0 || bgraPixels == nullptr) return nullptr;
+    BITMAPINFO info{};
+    info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    info.bmiHeader.biWidth = width;
+    info.bmiHeader.biHeight = -height;
+    info.bmiHeader.biPlanes = 1;
+    info.bmiHeader.biBitCount = 32;
+    info.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS,
+                                      &bits, nullptr, 0);
+    if (bitmap == nullptr || bits == nullptr) {
+        if (bitmap != nullptr) DeleteObject(bitmap);
+        return nullptr;
+    }
+    const auto* source = static_cast<const unsigned char*>(bgraPixels);
+    auto* target = static_cast<unsigned char*>(bits);
+    const size_t pixelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    for (size_t i = 0; i < pixelCount; ++i) {
+        const unsigned int alpha = source[i * 4u + 3u];
+        target[i * 4u + 0u] = static_cast<unsigned char>(source[i * 4u + 0u] * alpha / 255u);
+        target[i * 4u + 1u] = static_cast<unsigned char>(source[i * 4u + 1u] * alpha / 255u);
+        target[i * 4u + 2u] = static_cast<unsigned char>(source[i * 4u + 2u] * alpha / 255u);
+        target[i * 4u + 3u] = static_cast<unsigned char>(alpha);
+    }
+    auto texture = std::make_unique<TextureState>();
+    texture->bitmap = bitmap;
+    texture->width = width;
+    texture->height = height;
+    void* handle = texture.get();
+    _textures.emplace(handle, std::move(texture));
+    return handle;
+}
+
+void GdiRenderBackend::releaseUiTexture(void* textureHandle) {
+    const auto found = _textures.find(textureHandle);
+    if (found == _textures.end()) return;
+    if (found->second != nullptr && found->second->bitmap != nullptr) {
+        DeleteObject(found->second->bitmap);
+    }
+    _textures.erase(found);
 }
 
 void GdiRenderBackend::drawText(const math::FRectangle& bounds, const std::wstring& text,
@@ -183,8 +276,72 @@ void GdiRenderBackend::drawText(const math::FRectangle& bounds, const std::wstri
 
 void GdiRenderBackend::drawWithAlpha(const math::FRectangle& bounds, void* textureHandle,
                                      float alpha) {
-    AYUNREFERENCED_PARAM(alpha);
+    if (alpha >= 0.999f) {
+        drawRect(bounds, textureHandle, math::FRectangle(0.0f, 0.0f, 1.0f, 1.0f));
+        return;
+    }
+    // Image currently uses drawRect; keep the fallback deterministic for
+    // callers using drawWithAlpha until the GDI preview path needs tinting.
     drawRect(bounds, textureHandle, math::FRectangle(0.0f, 0.0f, 1.0f, 1.0f));
+}
+
+void GdiRenderBackend::pushClip(const math::FRectangle& bounds) {
+    if (_hdc == nullptr) return;
+    const int state = SaveDC(_hdc);
+    if (state == 0) return;
+
+    const int left = static_cast<int>(std::floor(bounds.minX));
+    const int top = static_cast<int>(std::floor(bounds.minY));
+    const int right = static_cast<int>(std::ceil(bounds.maxX));
+    const int bottom = static_cast<int>(std::ceil(bounds.maxY));
+    IntersectClipRect(_hdc, left, top, right, bottom);
+    _savedStates.push_back({state, SavedStateKind::Clip});
+}
+
+void GdiRenderBackend::popClip() {
+    if (_hdc == nullptr || _savedStates.empty() ||
+        _savedStates.back().kind != SavedStateKind::Clip) return;
+    const int state = _savedStates.back().state;
+    _savedStates.pop_back();
+    if (state != 0) RestoreDC(_hdc, state);
+}
+
+void GdiRenderBackend::pushTransform(const math::Float4x4& transform) {
+    if (_hdc == nullptr) {
+        _savedStates.push_back({0, SavedStateKind::Transform});
+        return;
+    }
+    const int state = SaveDC(_hdc);
+    if (state == 0) {
+        _savedStates.push_back({0, SavedStateKind::Transform});
+        return;
+    }
+    if (SetGraphicsMode(_hdc, GM_ADVANCED) == 0) {
+        RestoreDC(_hdc, state);
+        _savedStates.push_back({0, SavedStateKind::Transform});
+        return;
+    }
+    XFORM xform{};
+    xform.eM11 = transform(0, 0);
+    xform.eM12 = transform(1, 0);
+    xform.eM21 = transform(0, 1);
+    xform.eM22 = transform(1, 1);
+    xform.eDx = transform(0, 3);
+    xform.eDy = transform(1, 3);
+    if (!ModifyWorldTransform(_hdc, &xform, MWT_LEFTMULTIPLY)) {
+        RestoreDC(_hdc, state);
+        _savedStates.push_back({0, SavedStateKind::Transform});
+        return;
+    }
+    _savedStates.push_back({state, SavedStateKind::Transform});
+}
+
+void GdiRenderBackend::popTransform() {
+    if (_savedStates.empty() ||
+        _savedStates.back().kind != SavedStateKind::Transform) return;
+    const int state = _savedStates.back().state;
+    _savedStates.pop_back();
+    if (_hdc != nullptr && state != 0) RestoreDC(_hdc, state);
 }
 
 GdiRenderBackend::PathHandle GdiRenderBackend::createPath() {

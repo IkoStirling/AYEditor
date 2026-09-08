@@ -23,6 +23,7 @@ struct EditorUiLayoutExtensionConfig {
     std::function<std::string()> chromePath;
     std::function<std::string()> openPathPicker;
     std::function<std::string()> savePathPicker;
+    std::function<std::string()> texturePathPicker;
 };
 
 // Shared UI-layout authoring controller used by both the AYEditor tool-window

@@ -269,7 +269,7 @@ loader.bindEvent("btn_step",  "onClick", [&]{ session.gameView().stepOnce(); });
 
 Do **not** encode mode transitions inside JSON.
 
-### 4.3.z UI Layout Editor (v0.5)
+### 4.3.z UI Layout Editor (v0.6)
 
 Tools → **UI Layout Editor…** 打开或聚焦唯一的 **AYUI Designer 独立工具窗**。它是由主编辑器
 HWND owner 持有的 modeless 顶层窗口，不占用 Scene View 的 Center Dock，也不伪装成可拆卸
@@ -290,10 +290,21 @@ Document Outline、Canvas、可滚动 Inspector、状态栏布局。文件操作
 label/control 行和动态 section 显隐呈现；空属性行不会继续占位，选择变化在同一输入事务内完成
 invalidate + layout，避免 Inspector 显示上一控件的结构。
 
+Widget Library 现已覆盖 Image、集合/树、Tab、Grid/Scroll 及 Window/Modal 等常用运行时类型。
+Image 的 Browse 由 AYEditor 提供原生路径选择，预览图经 stb_image 解码后上传到该 Designer 子窗
+自己的 GDI DIB 纹理表并以 premultiplied-alpha `AlphaBlend` 绘制；句柄生命周期停留在 GDI backend，
+布局只保存 texture name。Controller 与类型有效事件可在 Inspector 中编辑为声明式名字，真正的
+C++ 回调仍由使用该布局的宿主通过 AYUI Loader 注册，AYEditor 不在 JSON 中生成或执行游戏脚本。
+
 画布选择装饰是透明、像素对齐的单层轮廓与控制点，不改变被选 Widget 的填充，也不重复绘制
-第二层边框。序列化状态仍由 live `LayoutEditorSession` 持有，Document 的保存委托给绑定
-Controller，但 Document 自身不持有 Widget、HWND 或渲染对象。后续抽取独立布局模型时无需
-改变文档注册契约。
+第二层边框。AYEditor 链接 editor-only `AYUILayoutEditorCore`；其中 `LayoutDocumentModel`、
+`LayoutSelectionModel`、`LayoutCommandStack` 和 `LayoutCanvasViewport` 分别承载 authoring 状态，
+`LayoutEditorSession` 只做 chrome/手势协调。Workspace Document 的保存仍委托绑定 Controller，且
+Document 自身不持有 Widget、HWND 或渲染对象。
+
+Widget Library、默认创建参数和 Inspector 属性集合统一读取 `WidgetAuthoringRegistry`；属性 section
+由 `PropertySchema` 生成。命令栈标注 Property/Insert/Delete/Reorder/Transform/Clipboard 类型化意图，
+并在迁移期保留完整 JSON snapshot 兜底，因此 standalone 与 AYEditor 的 undo/redo 行为仍完全一致。
 
 文档根节点是固定 authoring origin，不提供 X/Y 或排列入口，方向键和 Ctrl+滚轮不会改写它的
 位置。普通自由定位控件支持方向键 1px 微调，Shift+方向键使用网格步长，且不会被 Snap 抵消。
@@ -921,6 +932,13 @@ rendering primitives:
 - `LayoutEditorSession::attach(UIManager&, Widget* chromeRoot)` 支持 scoped chrome；独立 Designer
   当前绑定整个 child UIManager，通用 View fallback 则传子树 root。两条宿主路径共享保存、dirty、
   undo/redo、序列化和输入状态机。
+- AYEditor 不再直接编译 demo 下的 Session 源码，而是链接 `AYUILayoutEditorCore`。Document、Selection、
+  Command 与 Viewport 模型的所有权保持在共享 core，子窗口 manager 只持宿主资源与 native 生命周期。
+- 图片选择器与预览 loader 同样通过 Controller config 注入。独立 Designer 的 GDI backend 持有
+  preview bitmap，Layout Session 只持 `ImageTextureHandle` 和持久化名字；更换生产资源系统时无需
+  修改 AYUI 控件或 Serializer。
+- Inspector 可创作 controller/event handler 名字；运行时回调解析遵循 widget-id 精确覆盖、
+  controller/handler、全局 handler 的顺序。AYEditor 只编辑契约，不拥有游戏 controller。
 - 用户关闭 dirty Designer 时，由 DocumentManager 执行 Save/Discard/Cancel；Cancel 阻止原生窗口
   关闭。安全点先 detach Controller，再销毁 child UI tree/backend/HWND；Shell shutdown 使用强制
   teardown，但仍执行同样的 detach 顺序。
@@ -961,6 +979,8 @@ rendering primitives:
 | 2026-09-01 | Dock 模板在 self-heal 后显式恢复 mid/Center fill，防止 Bottom 临时折叠把默认中心文档区压缩为 120px。 |
 | 2026-09-02 | UI Layout Editor 从 Center DockCard 迁为主窗口 owner 持有的 modeless AYDevice 工具窗；`EditorUiLayoutController` 复用同一 Layout Session，文档仍归 Workspace 管理。Chrome 重构为现代六区布局，Scene Center 不再承载 UI authoring。 |
 | 2026-09-02 | Designer 命令收敛到 File/Edit 与 Inspector 上下文；Widget Library 改为可拖放 SVG 图标列表；选择装饰改为透明像素对齐单线，Inspector 切换在同一输入事务内完成布局。 |
+| 2026-09-08 | Designer 工具箱扩展到 Image、集合/树、Tab、Grid/Scroll 和 Modal；加入原生图片选择、GDI 实图预览，以及可往返的 controller/event 交互契约。 |
+| 2026-09-08 | Designer 保存/重开验证升级为对象级结构检查；生产 Loader 对称重建 Tab/Modal/Dialog payload 与深层 ID，并修复未挂载 Tab page 的重复 ID。 |
 
 ---
 

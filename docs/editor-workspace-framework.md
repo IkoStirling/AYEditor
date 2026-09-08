@@ -97,16 +97,41 @@ are offered to the Controller before normal UI dispatch. Buttons, inputs,
 combos, scrolling, focus, and popups continue through the child UIManager.
 
 The standalone `AYUI_LayoutEditor` remains a module-level regression host. Both
-hosts share the same controller/session behavior; there is no second save,
-undo, serialization, or input state machine. This is still an adapter-stage
-migration: persistent serialization belongs to the live LayoutEditorSession,
-and `EditorUiLayoutDocument::save` delegates to its bound Controller. The
-document contains no Widget, native-window, or renderer state.
+hosts link the editor-only `AYUILayoutEditorCore`; AYEditor no longer compiles a
+copy of a demo source. `LayoutDocumentModel`, `LayoutSelectionModel`,
+`LayoutCommandStack`, and `LayoutCanvasViewport` own the authoring state while
+`LayoutEditorSession` coordinates chrome and gestures. There is no second save,
+undo, serialization, or input state machine. `EditorUiLayoutDocument::save`
+delegates to its bound Controller and the workspace document contains no Widget,
+native-window, or renderer state.
+
+`WidgetAuthoringRegistry` is the common source for palette metadata, SVG icons,
+default creation parameters, initialization, and editable property/event schema.
+`PropertySchema` generates Inspector row/section visibility. The command stack
+records typed edit intents while retaining full-JSON snapshots as the migration
+fallback for reliable undo/redo of composite widgets.
 
 The Designer chrome is a modern six-region layout: title/file actions, command
 bar, Widget Library plus Document Outline, Canvas, scrolling Inspector, and a
 status bar. Fill regions use the loader's single-axis `h=0` contract so the
 outline, canvas, and inspector cannot silently collapse to zero size.
+
+The library exposes the common runtime authoring set, including Image,
+collection/tree controls, TabStrip/TabControl, Grid/Scroll containers, Window,
+Modal, and ModalDialog. Each row uses the shared AYUI SVG icon path and the
+same click/drag creation command. Structured content roots such as a tab page,
+scroll content, and modal body are fixed outline slots: widgets may be dropped
+into them, but generic hierarchy reorder never detaches the slot itself.
+
+Texture browsing is host-injected. The child host decodes PNG/JPEG/BMP/TGA
+previews into a backend-local premultiplied GDI bitmap, while the layout stores
+only the texture name. Controller and event-handler names are also authored in
+the Inspector and round-trip through AYUI serialization; executable callbacks
+remain host-registered C++ behavior and are never read as script from JSON.
+The production layout loader reconstructs Scroll, Tab, Modal and Dialog payloads
+as authored structures and registers IDs inside inactive tab pages as well as
+visible content. Detached composite defaults allocate IDs against both the live
+document and their own not-yet-mounted subtree.
 
 ## Migration order
 

@@ -73,8 +73,6 @@ set(SRC_FILES
     # the whole file is #if defined(_WIN32) so non-Windows builds of
     # the lib stay clean.
     demo/GdiRenderBackend.cpp
-    # UI Layout Editor session core (shared with AYUI_LayoutEditor demo).
-    ../AYUI/demo/layout_editor/LayoutEditorSession.cpp
     # Audio Editor session core (shared with AYAudio_AudioEditor demo).
     ../AYAudio/demo/audio_editor/AudioEditorSession.cpp
 )
@@ -118,7 +116,6 @@ set(HEAD_FILES
     ../AYDevice/include/AYDevice/WindowManager.h  # D5+.5 (2026-07-26)
     include/AYEditor/EditorPlayerController.h
     include/AYEditor/EditorComponentModule.h
-    ../AYUI/demo/layout_editor/LayoutEditorSession.h
     ../AYAudio/demo/audio_editor/AudioEditorSession.h
 )
 
@@ -143,13 +140,12 @@ target_include_directories(${MODULE_NAME} PRIVATE
     # AYUI's thirdparty_/; reuse instead of pulling a new dep into
     # AYEditor. Matches the AYUI Loader/UILayoutLoader.cpp pattern.
     ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/thirdparty_/nlohmann
-    # UI Layout Editor session headers (demo/layout_editor).
-    ${CMAKE_CURRENT_SOURCE_DIR}/../AYUI/demo/layout_editor
     # Audio Editor session headers (AYAudio/demo/audio_editor).
     ${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
+    PRIVATE AYUILayoutEditorCore
     PRIVATE AYEntity AYRenderer AYResource AYResourceImport AYIO AYProject AYScript AYShader AYPlatform AYNetwork
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
@@ -174,7 +170,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
 # non-Windows branch returns empty), so the link is gated. The demo
 # and shutdown-repro targets inherit the link transitively.
 if(WIN32)
-    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32 user32 gdi32)
+    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32 user32 gdi32 msimg32)
 endif()
 
 target_include_directories(${MODULE_NAME} PRIVATE

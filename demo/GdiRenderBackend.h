@@ -15,6 +15,7 @@
 #  define NOMINMAX
 #endif
 #include <Windows.h>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -40,6 +41,19 @@ public:
     void drawText(const math::FRectangle& bounds, const std::wstring& text, int fontSize,
                   const math::FVector4& color) override;
     void drawWithAlpha(const math::FRectangle& bounds, void* textureHandle, float alpha) override;
+
+    // IRenderBackend clips are part of the widget-container contract.  GDI
+    // does not inherit them from the interface (the defaults are no-ops), so
+    // keep a SaveDC/RestoreDC stack for nested ScrollView/ListView clips.
+    void pushClip(const math::FRectangle& bounds) override;
+    void popClip() override;
+    void pushTransform(const math::Float4x4& transform) override;
+    void popTransform() override;
+
+    // Designer image-preview textures. Handles are local to this child-window
+    // backend and stay valid until releaseUiTexture or backend destruction.
+    void* createUiTexture(int width, int height, const void* bgraPixels);
+    void releaseUiTexture(void* textureHandle);
 
     PathHandle createPath() override;
     void releasePath(PathHandle path) override;
@@ -75,6 +89,11 @@ private:
         ayt::ui::PathStrokeJoin join = ayt::ui::PathStrokeJoin::Miter;
         float miterLimit = 4.0f;
     };
+    struct TextureState {
+        HBITMAP bitmap = nullptr;
+        int width = 0;
+        int height = 0;
+    };
 
     HWND _hwnd = nullptr;
     HDC _windowDc = nullptr;
@@ -89,7 +108,14 @@ private:
     int _bbWidth = 0;
     int _bbHeight = 0;
     int _nextPathId = 1;
+    enum class SavedStateKind { Clip, Transform };
+    struct SavedDcState {
+        int state = 0;
+        SavedStateKind kind = SavedStateKind::Clip;
+    };
+    std::vector<SavedDcState> _savedStates;
     std::unordered_map<int, PathState> _paths;
+    std::unordered_map<void*, std::unique_ptr<TextureState>> _textures;
 };
 
 } // namespace ayt::editor

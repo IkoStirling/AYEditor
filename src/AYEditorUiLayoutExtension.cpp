@@ -14,10 +14,21 @@
 #include "AYUI/UIManager.h"
 #include "AYUI/Widget.h"
 #include "AYUI/WidgetFactory.h"
-#include "LayoutEditorSession.h"
+#include "AYUI/LayoutEditor/LayoutEditorSession.h"
 
+#if defined(_WIN32)
+#  define STB_IMAGE_STATIC
+#  define STB_IMAGE_IMPLEMENTATION
+#  include <stb_image.h>
+#  include "GdiRenderBackend.h"
+#endif
+
+#include <algorithm>
+#include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace ayt::editor {
 
@@ -28,6 +39,7 @@ struct EditorUiLayoutController::Impl {
     {
         session.setOpenPathPicker(config.openPathPicker);
         session.setSavePathPicker(config.savePathPicker);
+        session.setTexturePathPicker(config.texturePathPicker);
         session.setDocumentStateUpdater(
             [this](const std::string& path, bool dirty) {
                 if (document != nullptr) document->updateViewState(path, dirty);
@@ -62,6 +74,41 @@ struct EditorUiLayoutController::Impl {
     ayt::ui::LayoutEditorSession session;
     StateChanged stateChanged;
     bool attached = false;
+#if defined(_WIN32)
+    GdiRenderBackend* previewBackend = nullptr;
+    std::unordered_map<std::string, ayt::ui::ImageTextureHandle> previewTextures;
+
+    ayt::ui::ImageTextureHandle loadTexturePreview(const std::string& path)
+    {
+        const auto found = previewTextures.find(path);
+        if (found != previewTextures.end()) return found->second;
+        if (previewBackend == nullptr) return {};
+        int width = 0;
+        int height = 0;
+        int components = 0;
+        stbi_uc* rgba = stbi_load(path.c_str(), &width, &height, &components, 4);
+        if (rgba == nullptr || width <= 0 || height <= 0) {
+            if (rgba != nullptr) stbi_image_free(rgba);
+            return {};
+        }
+        const size_t byteCount = static_cast<size_t>(width)
+            * static_cast<size_t>(height) * 4u;
+        std::vector<std::uint8_t> bgra(rgba, rgba + byteCount);
+        stbi_image_free(rgba);
+        for (size_t i = 0; i < byteCount; i += 4u) {
+            std::swap(bgra[i], bgra[i + 2u]);
+        }
+        void* handle = previewBackend->createUiTexture(width, height, bgra.data());
+        if (handle == nullptr) return {};
+        ayt::ui::ImageTextureHandle texture;
+        texture.handle = handle;
+        texture.width = width;
+        texture.height = height;
+        texture.name = path;
+        previewTextures.emplace(path, texture);
+        return texture;
+    }
+#endif
 };
 
 EditorUiLayoutController::EditorUiLayoutController(
@@ -78,6 +125,14 @@ bool EditorUiLayoutController::attach(
 {
     if (_impl == nullptr) return false;
     _impl->attached = _impl->session.attach(ui, chromeRoot);
+#if defined(_WIN32)
+    if (_impl->attached) {
+        _impl->previewBackend = dynamic_cast<GdiRenderBackend*>(ui.backend());
+        _impl->session.setTexturePreviewLoader([this](const std::string& path) {
+            return _impl->loadTexturePreview(path);
+        });
+    }
+#endif
     return _impl->attached;
 }
 
