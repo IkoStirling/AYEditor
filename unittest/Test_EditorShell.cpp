@@ -291,10 +291,14 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     CHECK(designerMenu == nullptr || designerMenu->getMenu(1) == nullptr
           || designerMenu->getMenu(1)->getItemCount() == 9u);
     CHECK(designerMenu == nullptr || designerMenu->getMenu(2) == nullptr
-          || designerMenu->getMenu(2)->getItemCount() == 2u);
+          || designerMenu->getMenu(2)->getItemCount() == 3u);
     CHECK(childUi->findById("preview_preset") != nullptr);
     CHECK(childUi->findById("texture_resource_list") != nullptr);
     CHECK(childUi->findById("structured_items") != nullptr);
+    CHECK(childUi->findById("style_preview_state") != nullptr);
+    CHECK(childUi->findById("style_source_status") != nullptr);
+    CHECK(childUi->findById("validation_list") != nullptr);
+    CHECK(childUi->findById("btn_validate") != nullptr);
     CHECK(addButton == nullptr || addButton->getIconDocument() != nullptr);
     CHECK(addLabel == nullptr || addLabel->getIconDocument() != nullptr);
     CHECK(addPanel == nullptr || addPanel->getIconDocument() != nullptr);

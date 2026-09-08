@@ -189,7 +189,8 @@ std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
     namespace fs = std::filesystem;
     std::vector<ayt::ui::LayoutTextureResource> resources;
     std::unordered_map<std::string, bool> seen;
-    auto scan = [&](const fs::path& root, const std::wstring& prefix) {
+    auto scan = [&](const fs::path& root, const std::string& keyPrefix,
+                    const std::wstring& displayPrefix) {
         std::error_code error;
         if (!fs::is_directory(root, error)) return;
         for (fs::recursive_directory_iterator it(
@@ -208,22 +209,28 @@ std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
             if (extension != ".png" && extension != ".jpg" &&
                 extension != ".jpeg" && extension != ".bmp" &&
                 extension != ".tga") continue;
-            const std::string key = it->path().lexically_normal().string();
+            const fs::path relative = fs::relative(it->path(), root, error);
+            if (error) {
+                error.clear();
+                continue;
+            }
+            const std::string key = keyPrefix + relative.generic_string();
             if (!seen.emplace(key, true).second) continue;
             ayt::ui::LayoutTextureResource resource;
             resource.key = key;
-            const fs::path relative = fs::relative(it->path(), root, error);
-            resource.displayName = prefix + (error
-                ? it->path().filename().wstring() : relative.generic_wstring());
+            resource.displayName = displayPrefix + relative.generic_wstring();
+            resource.previewPath = fs::absolute(it->path(), error)
+                .lexically_normal().string();
             error.clear();
+            resource.detail = it->path().extension().wstring();
             resources.push_back(std::move(resource));
         }
     };
     if (!projectRoot.empty()) {
-        scan(fs::u8path(projectRoot) / "Assets", L"Project / ");
+        scan(fs::u8path(projectRoot) / "Assets", "Assets/", L"Project / ");
     }
     if (!engineAssetsRoot.empty()) {
-        scan(fs::u8path(engineAssetsRoot), L"Engine / ");
+        scan(fs::u8path(engineAssetsRoot), "EngineAssets/", L"Engine / ");
     }
     return resources;
 }
