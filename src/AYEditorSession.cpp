@@ -1761,6 +1761,10 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
         {"btn_stop",        "filled/player-stop.svg",        L"Stop",                  16.0f, 8.0f, 4.0f},
         {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
+        {"btn_assets_add",     "outline/file-import.svg",      L"Import asset",           15.0f, 5.0f, 4.0f},
+        {"btn_assets_up",      "outline/folder-up.svg",        L"Go to parent folder",    15.0f, 5.0f, 4.0f},
+        {"btn_assets_refresh", "outline/refresh.svg",          L"Refresh assets",         15.0f, 5.0f, 4.0f},
+        {"btn_assets_delete",  "outline/trash.svg",            L"Delete selected assets", 15.0f, 5.0f, 4.0f},
     };
 
     const std::filesystem::path root(iconRootPath);

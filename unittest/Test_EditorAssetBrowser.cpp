@@ -51,6 +51,15 @@ std::string resolveAssetBrowserLayout()
     return std::filesystem::exists(path) ? path.string() : std::string{};
 }
 
+std::string resolveAssetBrowserIconRoot()
+{
+    const std::filesystem::path path =
+        std::filesystem::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "../Icons/Tabler";
+    return std::filesystem::is_directory(path)
+        ? path.lexically_normal().string() : std::string{};
+}
+
 ayt::math::FVector2 rectCenter(const ayt::math::FRectangle& rectangle)
 {
     return ayt::math::FVector2(
@@ -158,8 +167,10 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
 TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
 {
     const std::string layout = resolveAssetBrowserLayout();
+    const std::string iconRoot = resolveAssetBrowserIconRoot();
     CHECK(!layout.empty());
-    if (layout.empty()) return;
+    CHECK(!iconRoot.empty());
+    if (layout.empty() || iconRoot.empty()) return;
     AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("session")};
     writeAssetBrowserFile(cleanup.root / "Assets/Models/Crate.aymesh", "badmesh");
 
@@ -168,6 +179,7 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
     EditorSessionDesc desc;
     desc.uiBackend = &renderer;
     desc.layoutPath = layout;
+    desc.iconRootPath = iconRoot;
     desc.projectRoot = cleanup.root.string();
     EditorSession session;
     CHECK(session.initialize(desc));
@@ -181,6 +193,18 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
     CHECK(tree != nullptr);
     CHECK(list != nullptr);
     CHECK(session.assetDatabase().records().size() == 1u);
+    const char* iconButtonIds[] = {
+        "btn_assets_add", "btn_assets_up",
+        "btn_assets_refresh", "btn_assets_delete"
+    };
+    for (const char* id : iconButtonIds) {
+        auto* button = dynamic_cast<ayt::ui::Button*>(
+            session.ui().findById(id));
+        CHECK(button != nullptr);
+        CHECK(button != nullptr && button->getText().empty());
+        CHECK(button != nullptr && button->getIconDocument() != nullptr);
+        CHECK(button != nullptr && !button->getAccessibilityLabel().empty());
+    }
     if (tree == nullptr || list == nullptr) {
         session.shutdown();
         return;
