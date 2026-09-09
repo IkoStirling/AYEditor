@@ -308,6 +308,11 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     CHECK(childUi->findById("animation_track_list") != nullptr);
     CHECK(childUi->findById("animation_key_list") != nullptr);
     CHECK(childUi->findById("btn_animation_preview") != nullptr);
+    CHECK(childUi->findById("animation_timeline_host") != nullptr);
+    CHECK(childUi->findById("btn_animation_play") != nullptr);
+    CHECK(childUi->findById("btn_animation_pause") != nullptr);
+    CHECK(childUi->findById("btn_animation_stop") != nullptr);
+    CHECK(childUi->findById("btn_animation_loop") != nullptr);
     CHECK(addButton == nullptr || addButton->getIconDocument() != nullptr);
     CHECK(addLabel == nullptr || addLabel->getIconDocument() != nullptr);
     CHECK(addPanel == nullptr || addPanel->getIconDocument() != nullptr);

@@ -49,7 +49,7 @@ public:
     bool attach(ayt::ui::UIManager& ui, ayt::ui::Widget* chromeRoot = nullptr);
     void detach();
     bool isAttached() const noexcept;
-    void pumpDeferred();
+    void pumpDeferred(float deltaSeconds = 0.0f);
 
     bool openDocument(const std::string& path);
     bool saveDocument(std::string* error = nullptr);

@@ -1057,7 +1057,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     const float dt = hostFrame.realWallDeltaTime;
     syncUiDesignerLifetime();
     if (_uiDesigner != nullptr) {
-        _uiDesigner->pumpDeferred();
+        _uiDesigner->pumpDeferred(dt);
     }
     syncAudioEditorLifetime();
     if (_audioEditor != nullptr) {

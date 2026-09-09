@@ -160,9 +160,9 @@ bool EditorUiLayoutController::isAttached() const noexcept
     return _impl != nullptr && _impl->attached;
 }
 
-void EditorUiLayoutController::pumpDeferred()
+void EditorUiLayoutController::pumpDeferred(float deltaSeconds)
 {
-    if (isAttached()) _impl->session.pumpDeferred();
+    if (isAttached()) _impl->session.pumpDeferred(deltaSeconds);
 }
 
 bool EditorUiLayoutController::openDocument(const std::string& path)
@@ -317,9 +317,9 @@ public:
         _host.requestRepaint();
     }
 
-    void tick(float) override
+    void tick(float deltaSeconds) override
     {
-        if (_attached) _controller->pumpDeferred();
+        if (_attached) _controller->pumpDeferred(deltaSeconds);
     }
 
     void prepareForUiShutdown() override
