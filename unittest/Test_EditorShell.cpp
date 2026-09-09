@@ -303,6 +303,10 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     CHECK(childUi->findById("btn_reuse_define") != nullptr);
     CHECK(childUi->findById("responsive_breakpoint") != nullptr);
     CHECK(childUi->findById("responsive_visibility") != nullptr);
+    CHECK(childUi->findById("animation_clip_list") != nullptr);
+    CHECK(childUi->findById("animation_track_list") != nullptr);
+    CHECK(childUi->findById("animation_key_list") != nullptr);
+    CHECK(childUi->findById("btn_animation_preview") != nullptr);
     CHECK(addButton == nullptr || addButton->getIconDocument() != nullptr);
     CHECK(addLabel == nullptr || addLabel->getIconDocument() != nullptr);
     CHECK(addPanel == nullptr || addPanel->getIconDocument() != nullptr);
