@@ -315,7 +315,10 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
           || addLabel->getWorldBounds().minY
              >= addButton->getWorldBounds().maxY);
     CHECK(canvasHost != nullptr && canvasHost->getSize().x > 500.0f);
-    CHECK(canvasHost != nullptr && canvasHost->getSize().y > 500.0f);
+    // The integrated animation timeline reserves 196 DIP below the canvas.
+    // Keep enough vertical authoring space without asserting the obsolete
+    // pre-timeline layout height.
+    CHECK(canvasHost != nullptr && canvasHost->getSize().y > 400.0f);
     CHECK(outline != nullptr && outline->getSize().y > 200.0f);
     CHECK(properties != nullptr && properties->getSize().y > 500.0f);
     if (addButton == nullptr) {
