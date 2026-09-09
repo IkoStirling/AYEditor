@@ -44,10 +44,28 @@ bool EditorUiLayoutDocument::saveAs(
     return invokeSave(path, true, error);
 }
 
-void EditorUiLayoutDocument::bindView(void* owner, SaveHandler handler)
+bool EditorUiLayoutDocument::writeRecoveryCopy(
+    const std::string& path, std::string* error) const
+{
+    if (_recoveryHandler == nullptr) {
+        if (error != nullptr) *error = "UI Layout view is not available.";
+        return false;
+    }
+    std::string localError;
+    const bool saved = _recoveryHandler(path, localError);
+    if (!saved && localError.empty()) {
+        localError = "UI layout recovery save failed.";
+    }
+    if (error != nullptr) *error = std::move(localError);
+    return saved;
+}
+
+void EditorUiLayoutDocument::bindView(
+    void* owner, SaveHandler handler, RecoveryHandler recoveryHandler)
 {
     _viewOwner = owner;
     _saveHandler = std::move(handler);
+    _recoveryHandler = std::move(recoveryHandler);
 }
 
 void EditorUiLayoutDocument::unbindView(void* owner) noexcept
@@ -55,6 +73,7 @@ void EditorUiLayoutDocument::unbindView(void* owner) noexcept
     if (_viewOwner != owner) return;
     _viewOwner = nullptr;
     _saveHandler = {};
+    _recoveryHandler = {};
 }
 
 void EditorUiLayoutDocument::updateViewState(

@@ -74,6 +74,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::Audio: return L"AUD";
     case EditorAssetType::UiLayout: return L"UI";
     case EditorAssetType::SourceModel: return L"MODEL";
+    case EditorAssetType::Tilemap: return L"MAP";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -102,6 +103,8 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
         return EditorAssetTileCategory::Audio;
     case EditorAssetType::UiLayout:
         return EditorAssetTileCategory::UserInterface;
+    case EditorAssetType::Tilemap:
+        return EditorAssetTileCategory::Scene;
     case EditorAssetType::Unknown:
         break;
     }
@@ -142,8 +145,9 @@ bool EditorAssetTilePresenter::isEngineNativeFileName(
     // Keep compound suffixes before their shorter constituents if the table
     // grows. Metadata sidecars are not listed: the asset database deliberately
     // filters .aydep.json out of the browser.
-    constexpr std::array<std::string_view, 10> nativeSuffixes = {
-        ".ui.json", ".aymesh", ".aymat", ".aytex", ".ayscene",
+    constexpr std::array<std::string_view, 12> nativeSuffixes = {
+        ".aytilemap.json", ".ui.json", ".aytilemap",
+        ".aymesh", ".aymat", ".aytex", ".ayscene",
         ".ayanm", ".ayanim", ".ayskel", ".logia", ".phoskia",
     };
     for (const std::string_view suffix : nativeSuffixes) {

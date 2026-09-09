@@ -69,6 +69,8 @@ public:
     uint64_t revision() const noexcept override { return _revision; }
     bool canReload() const noexcept override { return true; }
     bool reload(std::string* error = nullptr) override;
+    bool writeRecoveryCopy(const std::string& path,
+                           std::string* error = nullptr) const override;
 
     EditorDslCompileReport compile() const;
 

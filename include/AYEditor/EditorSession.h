@@ -70,6 +70,9 @@ class IEditorHostServices;
 class EditorUiLayoutController;
 class EditorUiLayoutDocument;
 class EditorAssetPreviewCache;
+class EditorAssetTrash;
+class EditorAssetOperations;
+class EditorRecoveryStore;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -216,9 +219,19 @@ public:
     // Opens or focuses the source-backed Phoskia/Logia DockCard for an asset.
     // Returns false for non-DSL records or when the source cannot be read.
     bool openDslAsset(EditorAssetId assetId);
+    bool openAsset(EditorAssetId assetId);
     std::size_t openDslDocumentCount() const noexcept;
-    bool openUiLayoutEditor();
+    bool openUiLayoutEditor(const std::string& path = {});
     std::size_t openUiLayoutDocumentCount() const noexcept;
+    bool createProjectAsset(EditorAssetType type);
+    bool restoreLastDeletedAssets();
+    bool runCurrentProject();
+    bool autosaveNow();
+    bool hasCrashRecovery() const noexcept;
+    bool restoreCrashRecovery();
+    bool renameSelectedAsset(const std::string& newFileName);
+    bool moveSelectedAssets(const std::string& destinationLogicalFolder);
+    bool copySelectedAssets(const std::string& destinationLogicalFolder);
     EditorWorkspace& workspace() noexcept;
     const EditorWorkspace& workspace() const noexcept;
     const EditorFreecam& freecam() const noexcept { return _freecam; }
@@ -237,11 +250,13 @@ private:
     void bindShellIcons(const std::string& iconRootPath);
     void bindMenuBar();
     void openAudioEditorWindow();
+    void validateProjectContent();
     void syncAudioEditorLifetime();
     void syncUiDesignerLifetime();
     bool confirmUiDesignerClose();
     void releaseUiDesigner(bool closeDocument);
     void refreshUiDesignerTitle();
+    bool openRegisteredTool(const std::string& editorId);
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
@@ -257,6 +272,9 @@ private:
     void commitInspectorBoolField(const std::string& componentType,
                                   const std::string& fieldName,
                                   bool value);
+    void commitInspectorColorField(const std::string& componentType,
+                                   const std::string& fieldName,
+                                   const ayt::math::FVector4& value);
     void refreshTransformInspector();
     void newSceneDocument();
     void openSceneDocument();
@@ -272,6 +290,11 @@ private:
     void resetWorkspacePreferences();
     void setActiveTool(EditorTool tool);
     void setLocalTransformSpace(bool local);
+    void toggleViewportProjection();
+    void toggleViewportShading();
+    void beginOrResumePlay();
+    void pausePlay();
+    void stopPlay();
     void setViewportOrientationAxisVisible(bool visible);
     void setDockCardVisible(const char* cardId, bool visible);
     void toggleDockCard(const char* cardId, bool& visibleFlag);
@@ -383,6 +406,11 @@ private:
     void importAssetFromDialog();
     void reloadSelectedAsset();
     void requestDeleteSelectedAssets();
+    void requestRenameSelectedAsset();
+    void requestRelocateSelectedAssets(bool copy);
+    void showAssetOperationDialog(const std::wstring& title,
+                                  const std::wstring& initialValue,
+                                  bool rename, bool copy);
     void deleteSelectedAssetsConfirmed();
     void refreshAssetDeleteButton();
     void setAssetBrowserStatus(const std::wstring& text,
@@ -512,11 +540,17 @@ private:
     std::string _pendingAssetSelectionPath;
     EditorAssetId _selectedAssetId = 0;
     std::vector<EditorAssetId> _selectedAssetIds;
-    EditorAssetId _pendingDslAssetOpenId = 0;
+    EditorAssetId _pendingAssetOpenId = 0;
     std::unique_ptr<EditorAssetPreviewCache> _assetPreviewCache;
+    std::unique_ptr<EditorAssetTrash> _assetTrash;
+    std::unique_ptr<EditorAssetOperations> _assetOperations;
+    std::unique_ptr<EditorRecoveryStore> _recoveryStore;
+    float _autosaveCountdown = 30.0f;
     ayt::ui::Image* _assetInspectorPreview = nullptr;
     ayt::ui::Button* _assetDeleteButton = nullptr;
     std::unique_ptr<ayt::ui::ModalDialog> _assetDeleteDialog;
+    std::unique_ptr<ayt::ui::ModalDialog> _assetOperationDialog;
+    ayt::ui::TextInput* _assetOperationInput = nullptr;
     struct AssetDragData {
         EditorAssetId id = 0;
         EditorAssetType type = EditorAssetType::Unknown;
@@ -542,6 +576,8 @@ private:
     bool _controlDown = false;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;
     ayt::ui::MenuItem* _redoMenuItem = nullptr;
+    ayt::ui::MenuItem* _restoreDeletedMenuItem = nullptr;
+    ayt::ui::MenuItem* _restoreRecoveryMenuItem = nullptr;
     ayt::ui::MenuItem* _viewportOrientationAxisMenuItem = nullptr;
     // Session-persistent editor preference. Renderer itself defaults off so
     // non-editor hosts never receive the widget accidentally.

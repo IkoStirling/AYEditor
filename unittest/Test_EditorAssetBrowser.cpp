@@ -1,6 +1,8 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorAssetDatabase.h"
+#include "AYEditor/EditorAssetDeleteAnalysis.h"
+#include "AYEditor/EditorShortcutRegistry.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorSession.h"
 #include "AYApplication.h"
@@ -15,6 +17,7 @@
 #include "AYUI/TextLabel.h"
 #include "AYUI/TreeView.h"
 #include "AYUI/UIKeyCode.h"
+#include "../src/EditorAssetPreviewCache.h"
 
 #include <chrono>
 #include <cstdint>
@@ -94,10 +97,13 @@ TEST_CASE(editor_asset_type_classification_covers_runtime_and_source_files)
     CHECK(classifyEditorAssetPath("hero.ayskel") == EditorAssetType::Skeleton);
     CHECK(classifyEditorAssetPath("scene.ayscene") == EditorAssetType::Scene);
     CHECK(classifyEditorAssetPath("editor.ui.json") == EditorAssetType::UiLayout);
+    CHECK(classifyEditorAssetPath("ground.aytilemap.json")
+          == EditorAssetType::Tilemap);
     CHECK(classifyEditorAssetPath("Hero.FBX") == EditorAssetType::SourceModel);
     CHECK(classifyEditorAssetPath("albedo.PNG") == EditorAssetType::Texture);
     CHECK(classifyEditorAssetPath("material.phoskia") == EditorAssetType::Shader);
     CHECK(classifyEditorAssetPath("controller.logia") == EditorAssetType::Script);
+    CHECK(classifyEditorAssetPath("music.ayaudio") == EditorAssetType::Audio);
 }
 
 TEST_CASE(editor_runtime_cache_follows_open_project_root)
@@ -131,6 +137,7 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     CHECK(database.scanNow(&error));
     CHECK(error.empty());
     CHECK(database.records().size() == 3u);
+    CHECK(std::filesystem::is_regular_file(database.indexPath()));
     CHECK(database.findByLogicalPath("Assets/Characters/Hero.fbx") != nullptr);
     const EditorAssetRecord* mesh =
         database.findByLogicalPath("Imported/meshes/Hero.aymesh");
@@ -146,6 +153,7 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     if (source != nullptr) {
         CHECK(database.portableAssetPath(*source)
               == "Characters/Hero.fbx");
+        CHECK(source->importState == EditorAssetImportState::NeedsImport);
     }
     const EditorAssetId stableId = mesh->id;
 
@@ -162,6 +170,124 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     mesh = database.findByLogicalPath("Imported/meshes/Hero.aymesh");
     CHECK(mesh != nullptr);
     if (mesh != nullptr) CHECK(mesh->id == stableId);
+}
+
+TEST_CASE(editor_asset_delete_analysis_reports_text_asset_references)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("delete_analysis")};
+    writeAssetBrowserFile(cleanup.root / "Assets/meshes/crate.aymesh", "mesh");
+    writeAssetBrowserFile(cleanup.root / "Assets/worlds/demo.ayscene",
+        "{\"mesh\":\"meshes/crate.aymesh\"}");
+
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const EditorAssetRecord* target = database.findByLogicalPath(
+        "Assets/meshes/crate.aymesh");
+    CHECK(target != nullptr);
+    if (target != nullptr) {
+        const EditorAssetDeleteAnalysis analysis = analyzeEditorAssetDeletion(
+            database, {target->id});
+        CHECK(analysis.hasExternalReferences());
+        CHECK(analysis.references.size() == 1u);
+        if (!analysis.references.empty()) {
+            CHECK(analysis.references[0].referencingPath
+                  == "Assets/worlds/demo.ayscene");
+        }
+    }
+}
+
+TEST_CASE(editor_shortcut_registry_loads_overrides_and_rejects_conflicts)
+{
+    EditorShortcutRegistry& shortcuts = EditorShortcutRegistry::instance();
+    shortcuts.resetToDefaults();
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_F5, 0) == "play.toggle");
+    std::string error;
+    CHECK(shortcuts.setShortcut("play.toggle", L"Ctrl+P", &error));
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_P, 0x02u) == "play.toggle");
+    CHECK_FALSE(shortcuts.setShortcut("play.pause", L"Ctrl+P", &error));
+    CHECK(error.find("conflict") != std::string::npos);
+}
+
+TEST_CASE(editor_asset_preview_cache_builds_semantic_mesh_thumbnail_once)
+{
+    int uploads = 0;
+    int releases = 0;
+    EditorAssetPreviewCache cache(
+        [&](std::uint16_t width, std::uint16_t height, const void* pixels) {
+            ++uploads;
+            CHECK(width == 144u);
+            CHECK(height == 96u);
+            CHECK(pixels != nullptr);
+            return reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x5678));
+        },
+        [&](void* handle) {
+            CHECK(handle == reinterpret_cast<void*>(
+                static_cast<std::uintptr_t>(0x5678)));
+            ++releases;
+        });
+    EditorAssetRecord record;
+    record.absolutePath = "semantic-preview/crate.aymesh";
+    record.type = EditorAssetType::Mesh;
+    record.size = 42u;
+    CHECK(EditorAssetPreviewCache::supports(record));
+    CHECK_FALSE(cache.request(record).isValid());
+    for (int attempt = 0; attempt < 100 && uploads == 0; ++attempt) {
+        (void)cache.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(uploads == 1);
+    CHECK(cache.request(record).isValid());
+    CHECK(uploads == 1);
+    cache.clear();
+    CHECK(releases == 1);
+}
+
+TEST_CASE(editor_asset_preview_cache_reuses_persisted_thumbnail_after_restart)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("preview_disk")};
+    const auto asset = cleanup.root / "Assets/crate.aymesh";
+    writeAssetBrowserFile(asset, "bad mesh uses semantic fallback");
+    EditorAssetRecord record;
+    record.absolutePath = asset.string();
+    record.type = EditorAssetType::Mesh;
+    record.size = std::filesystem::file_size(asset);
+    record.lastModified = static_cast<std::int64_t>(
+        std::filesystem::last_write_time(asset).time_since_epoch().count());
+    const auto cacheRoot = cleanup.root / ".ayeditor/cache/previews";
+
+    auto populate = [&](EditorAssetPreviewCache& cache, int& uploads) {
+        CHECK_FALSE(cache.request(record).isValid());
+        for (int attempt = 0; attempt < 200 && uploads == 0; ++attempt) {
+            (void)cache.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+    int firstUploads = 0;
+    {
+        EditorAssetPreviewCache cache(
+            [&](std::uint16_t, std::uint16_t, const void*) {
+                ++firstUploads;
+                return reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+            }, [](void*) {});
+        cache.setDiskCacheRoot(cacheRoot.string());
+        populate(cache, firstUploads);
+        CHECK(firstUploads == 1);
+        CHECK(cache.diskCacheHitCount() == 0u);
+    }
+    int secondUploads = 0;
+    {
+        EditorAssetPreviewCache cache(
+            [&](std::uint16_t, std::uint16_t, const void*) {
+                ++secondUploads;
+                return reinterpret_cast<void*>(static_cast<std::uintptr_t>(2));
+            }, [](void*) {});
+        cache.setDiskCacheRoot(cacheRoot.string());
+        populate(cache, secondUploads);
+        CHECK(secondUploads == 1);
+        CHECK(cache.diskCacheHitCount() == 1u);
+    }
 }
 
 TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
@@ -195,7 +321,8 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
     CHECK(session.assetDatabase().records().size() == 1u);
     const char* iconButtonIds[] = {
         "btn_assets_add", "btn_assets_up",
-        "btn_assets_refresh", "btn_assets_delete"
+        "btn_assets_refresh", "btn_assets_rename", "btn_assets_move",
+        "btn_assets_copy", "btn_assets_delete"
     };
     for (const char* id : iconButtonIds) {
         auto* button = dynamic_cast<ayt::ui::Button*>(

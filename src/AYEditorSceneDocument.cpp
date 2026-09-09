@@ -98,6 +98,24 @@ bool EditorSceneDocument::saveAs(const std::string& path, std::string* error)
     return true;
 }
 
+bool EditorSceneDocument::writeRecoveryCopy(
+    const std::string& path, std::string* error) const
+{
+    if (path.empty()) {
+        setError(error, "Recovery scene path is empty.");
+        return false;
+    }
+    std::error_code directoryError;
+    std::filesystem::create_directories(
+        std::filesystem::path(path).parent_path(), directoryError);
+    if (directoryError || !_scene->save(path)) {
+        setError(error, "Unable to write scene recovery copy: " + path);
+        return false;
+    }
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 void EditorSceneDocument::markDirty() noexcept
 {
     _dirty = true;

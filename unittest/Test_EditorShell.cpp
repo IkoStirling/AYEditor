@@ -26,6 +26,7 @@
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/HealthComponent.h>
 #include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/components/SkeletonComponent.h>
 #include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 #include "AYScene.h"
@@ -622,12 +623,12 @@ TEST_CASE(editor_menu_bar_stays_inside_top_chrome_row) {
     if (row != nullptr && bar != nullptr) {
         const auto rowBounds = row->getWorldBounds();
         const auto barBounds = bar->getWorldBounds();
-        CHECK(bar->getSize().y == 20.0f);
+        CHECK(bar->getSize().y == 24.0f);
         CHECK(barBounds.minY >= rowBounds.minY);
         CHECK(barBounds.maxY <= rowBounds.maxY);
         for (Widget* child : bar->getChildren()) {
             if (auto* anchor = dynamic_cast<Button*>(child)) {
-                CHECK(anchor->getSize().y == 20.0f);
+                CHECK(anchor->getSize().y == 24.0f);
                 CHECK(anchor->getWorldBounds().maxY <= rowBounds.maxY);
             }
         }
@@ -1193,10 +1194,8 @@ TEST_CASE(editor_viewport_click_selects_entity_in_play_world)
             "inspector_component_properties");
         Widget* positionRow = findWidgetInTree(
             properties, "inspector_field_position");
-        auto* positionX = positionRow != nullptr
-            && !positionRow->getChildren().empty()
-            ? dynamic_cast<TextInput*>(positionRow->getChildren().front())
-            : nullptr;
+        auto* positionX = dynamic_cast<TextInput*>(findWidgetInTree(
+            positionRow, "inspector_field_position_0"));
         CHECK(positionX != nullptr);
         if (positionX != nullptr) {
             CHECK(positionX->getText() != L"-");
@@ -1609,10 +1608,8 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
         "inspector_component_properties");
     Widget* positionRow = findWidgetInTree(
         propertyBody, "inspector_field_position");
-    auto* positionX = positionRow != nullptr
-        && !positionRow->getChildren().empty()
-        ? dynamic_cast<TextInput*>(positionRow->getChildren().front())
-        : nullptr;
+    auto* positionX = dynamic_cast<TextInput*>(findWidgetInTree(
+        positionRow, "inspector_field_position_0"));
     CHECK(positionX != nullptr);
     CHECK(findWidgetInTree(propertyBody, "inspector_field_rotation") != nullptr);
     CHECK(findWidgetInTree(propertyBody, "inspector_field_scale") != nullptr);
@@ -1631,7 +1628,8 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
         session.onKeyUp(UIKey_Control);
         CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1.0e-5f);
         CHECK(positionX->getText() == L"0.000");
-        CHECK(positionX == positionRow->getChildren().front());
+        CHECK(positionX == findWidgetInTree(
+            positionRow, "inspector_field_position_0"));
     }
 
     session.shutdown();
@@ -1737,6 +1735,8 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
                 CHECK(clickButton(add));
                 CHECK(entity->getComponent<
                     ayt::entity::AnimationComponent>() != nullptr);
+                CHECK(entity->getComponent<
+                    ayt::entity::SkeletonComponent>() != nullptr);
                 CHECK(findWidgetInTree(propertyBody,
                                        "inspector_field_clipPath") != nullptr);
 
@@ -1755,13 +1755,37 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
                     ayt::entity::AnimationComponent>() == nullptr);
             }
 
-            // With no dependency metadata in ComponentRegistry, every attached
-            // component is removable. Removing the final component preserves
-            // the entity itself as an empty Hierarchy node.
-            CHECK(clickButton(remove));
-            CHECK(entity->getComponent<ayt::entity::Transform>() == nullptr);
+            auto selectAttached = [attached](const wchar_t* name) {
+                for (std::size_t i = 0; i < attached->getItemCount(); ++i) {
+                    if (attached->getItem(i).find(name) != std::wstring::npos) {
+                        attached->setSelectedIndexAndNotify(static_cast<int>(i));
+                        return true;
+                    }
+                }
+                return false;
+            };
+
+            // Authoring policy protects prerequisites while dependants exist.
+            CHECK(selectAttached(L"Transform"));
+            CHECK_FALSE(remove->isEnabled());
+            CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+
+            CHECK(selectAttached(L"Mesh"));
+            CHECK(remove->isEnabled());
             CHECK(clickButton(remove));
             CHECK(entity->getComponent<ayt::entity::MeshComponent>() == nullptr);
+
+            CHECK(selectAttached(L"Skeleton"));
+            CHECK(remove->isEnabled());
+            CHECK(clickButton(remove));
+            CHECK(entity->getComponent<ayt::entity::SkeletonComponent>() == nullptr);
+
+            CHECK(selectAttached(L"Transform"));
+            CHECK(remove->isEnabled());
+            CHECK(clickButton(remove));
+            CHECK(entity->getComponent<ayt::entity::Transform>() == nullptr);
+
+            // Removing the final component keeps an empty Hierarchy entity.
             CHECK(world->findEntity(entity->getId()) == entity);
             CHECK(attached->getItemCount() == 1u);
             CHECK(attached->getItem(0) == L"No components attached");

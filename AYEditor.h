@@ -1,5 +1,6 @@
 #pragma once
 
+#include <AYEditor/EditorVersion.h>
 #include <AYEditor/EditorApp.h>
 #include <AYEditor/EditorFreecam.h>
 #include <AYEditor/EditorSceneDocument.h>
@@ -18,8 +19,16 @@
 #include <AYEditor/EditorSession.h>
 #include <AYEditor/EditorWorldContext.h>
 #include <AYEditor/EditorAssetTilePresenter.h>
+#include <AYEditor/EditorAssetTrash.h>
+#include <AYEditor/EditorAssetOperations.h>
+#include <AYEditor/EditorBuiltInExtensions.h>
 #include <AYEditor/EditorDslDocument.h>
 #include <AYEditor/EditorDslExtension.h>
+#include <AYEditor/EditorProjectAssetFactory.h>
+#include <AYEditor/EditorProjectDescriptor.h>
+#include <AYEditor/EditorProjectRunner.h>
+#include <AYEditor/EditorProjectRuntimeValidator.h>
+#include <AYEditor/EditorRecoveryStore.h>
 #include <AYEditor/EditorUiLayoutDocument.h>
 #include <AYEditor/EditorUiLayoutExtension.h>
 #include <AYEditor/Editor2DViewportModel.h>

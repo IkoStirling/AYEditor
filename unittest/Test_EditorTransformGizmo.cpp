@@ -307,4 +307,51 @@ TEST_CASE(gizmo_local_move_uses_rotated_basis_and_uniform_scale_is_proportional)
     CHECK(nearlyEqual(uniformlyScaled.scale.z, 4.0f * factor));
 }
 
+TEST_CASE(gizmo_continuous_drag_remains_finite_and_uses_drag_origin)
+{
+    EditorTransformGizmo gizmo;
+    EditorTransformState transform;
+    transform.rotation = ayt::math::FQuaternion::identity();
+    const ayt::math::FVector3 eye(0.0f, 0.0f, 5.0f);
+    const float scale = EditorTransformGizmo::worldScale(
+        transform.position, eye);
+    CHECK(gizmo.beginUniversal(
+        EditorGizmoHandle::AxisX, transform, false, eye,
+        rayTo(eye, {scale * 0.65f, 0.0f, 0.0f}), 0.0f));
+
+    EditorTransformState current;
+    bool allUpdatesAccepted = true;
+    bool allValuesFinite = true;
+    for (int sample = 0; sample < 10000; ++sample) {
+        const float fraction = static_cast<float>(sample) / 9999.0f;
+        const ayt::math::FVector3 point(
+            scale * (0.65f + fraction * 0.75f),
+            std::sin(fraction * 50.0f) * scale * 0.002f, 0.0f);
+        allUpdatesAccepted = gizmo.update(
+            eye, rayTo(eye, point), fraction * 800.0f, 0.0f, current);
+        if (!allUpdatesAccepted) break;
+        allValuesFinite = std::isfinite(current.position.x)
+            && std::isfinite(current.position.y)
+            && std::isfinite(current.position.z)
+            && std::isfinite(current.rotation.x)
+            && std::isfinite(current.rotation.y)
+            && std::isfinite(current.rotation.z)
+            && std::isfinite(current.rotation.w)
+            && std::isfinite(current.scale.x)
+            && std::isfinite(current.scale.y)
+            && std::isfinite(current.scale.z);
+        if (!allValuesFinite) break;
+    }
+    CHECK(allUpdatesAccepted);
+    CHECK(allValuesFinite);
+
+    EditorTransformState repeated;
+    CHECK(gizmo.update(eye,
+        rayTo(eye, {scale * 1.40f, 0.0f, 0.0f}),
+        800.0f, 0.0f, repeated));
+    CHECK(nearlyEqual(repeated.position.x, scale * 0.75f));
+    CHECK(nearlyEqual(repeated.position.y, 0.0f));
+    CHECK(nearlyEqual(repeated.position.z, 0.0f));
+}
+
 TEST_SUITE_END

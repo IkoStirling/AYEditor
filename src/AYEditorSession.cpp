@@ -4,6 +4,16 @@
 #include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
+#include "AYEditor/EditorAssetDeleteAnalysis.h"
+#include "AYEditor/EditorAssetTrash.h"
+#include "AYEditor/EditorAssetOperations.h"
+#include "AYEditor/EditorProjectAssetFactory.h"
+#include "AYEditor/EditorProjectRunner.h"
+#include "AYEditor/EditorRecoveryStore.h"
+#include "AYEditor/EditorProjectRuntimeValidator.h"
+#include "AYEditor/EditorBuiltInExtensions.h"
+#include "AYEditor/EditorComponentPolicy.h"
+#include "AYEditor/EditorShortcutRegistry.h"
 #include "AYEditor/EditorDslDocument.h"
 #include "AYEditor/EditorDslExtension.h"
 #include "AYEditor/EditorDockViewHost.h"
@@ -15,6 +25,7 @@
 #include "AYUI/Button.h"
 #include "AYUI/CheckBox.h"
 #include "AYUI/ComboBox.h"
+#include "AYUI/ColorPicker.h"
 #include "AYUI/Box.h"
 #include "AYGameLoop.h"
 #include "AYUI/MenuBar.h"
@@ -29,6 +40,7 @@
 #include "AYUI/TextArea.h"
 #include "AYUI/Image.h"
 #include "AYUI/Theme.h"
+#include "AYUI/Tooltip.h"
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYUI/ListView.h"
 #include "AYUI/TileView.h"
@@ -88,6 +100,31 @@
 namespace ayt::editor {
 
 namespace {
+
+std::unordered_map<const EditorSession*, std::vector<ayt::ui::Tooltip*>>
+    gEditorTooltips;
+
+void attachEditorTooltip(const EditorSession* session, ayt::ui::Widget* target,
+                         const std::wstring& text)
+{
+    if (session == nullptr || target == nullptr || text.empty()) return;
+    if (auto* tooltip = ayt::ui::Tooltip::attachTo(target)) {
+        tooltip->setText(text);
+        gEditorTooltips[session].push_back(tooltip);
+    }
+}
+
+void clearEditorTooltips(const EditorSession* session)
+{
+    const auto found = gEditorTooltips.find(session);
+    if (found == gEditorTooltips.end()) return;
+    for (ayt::ui::Tooltip* tooltip : found->second) {
+        if (tooltip == nullptr) continue;
+        tooltip->detach();
+        ayt::ui::destroyWidgetTree(tooltip);
+    }
+    gEditorTooltips.erase(found);
+}
 
 class EditorSessionHostServices final : public IEditorHostServices {
 public:
@@ -260,13 +297,15 @@ std::string showOpenAudioFileDialog(HWND owner) {
     return std::string(path);
 }
 
-std::string showUiJsonOpenDialog(HWND owner) {
+std::string showUiJsonOpenDialog(HWND owner,
+                                 const std::string& initialDirectory = {}) {
     char path[MAX_PATH] = {};
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter =
         "AYUI Layout (*.ui.json)\0*.ui.json\0"
         "JSON (*.json)\0*.json\0"
@@ -280,13 +319,34 @@ std::string showUiJsonOpenDialog(HWND owner) {
     return std::string(path);
 }
 
-std::string showUiJsonSaveDialog(HWND owner) {
+std::string showAssetReferenceDialog(HWND owner, const std::string& projectRoot)
+{
+    char path[MAX_PATH] = {};
+    const std::string initialDirectory =
+        (std::filesystem::path(projectRoot) / "Assets").string();
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrInitialDir = initialDirectory.c_str();
+    ofn.lpstrFilter =
+        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string showUiJsonSaveDialog(HWND owner,
+                                 const std::string& initialDirectory = {}) {
     char path[MAX_PATH] = {};
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter =
         "AYUI Layout (*.ui.json)\0*.ui.json\0"
         "JSON (*.json)\0*.json\0"
@@ -300,13 +360,33 @@ std::string showUiJsonSaveDialog(HWND owner) {
     return std::string(path);
 }
 
-std::string showSceneOpenDialog(HWND owner) {
+std::string showUiTextureOpenDialog(HWND owner,
+                                    const std::string& initialDirectory = {}) {
     char path[MAX_PATH] = {};
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
+    ofn.lpstrFilter =
+        "Images (*.png;*.jpg;*.jpeg;*.bmp;*.tga)\0*.png;*.jpg;*.jpeg;*.bmp;*.tga\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!::GetOpenFileNameA(&ofn)) return {};
+    return std::string(path);
+}
+
+std::string showSceneOpenDialog(HWND owner,
+                                const std::string& initialDirectory = {}) {
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -314,13 +394,15 @@ std::string showSceneOpenDialog(HWND owner) {
     return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
 }
 
-std::string showSceneSaveDialog(HWND owner) {
+std::string showSceneSaveDialog(HWND owner,
+                                const std::string& initialDirectory = {}) {
     char path[MAX_PATH] = {};
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -477,10 +559,19 @@ EditorSession::EditorSession()
         return resolveLayoutEditorChromePath(_engineAssetsRoot);
     };
     layoutConfig.openPathPicker = [this]() {
-        return showUiJsonOpenDialog(_hostWindow);
+        return showUiJsonOpenDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
     };
     layoutConfig.savePathPicker = [this]() {
-        return showUiJsonSaveDialog(_hostWindow);
+        return showUiJsonSaveDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    layoutConfig.texturePathPicker = [this]() {
+        return showUiTextureOpenDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "textures").string());
     };
     layoutConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
@@ -491,6 +582,15 @@ EditorSession::EditorSession()
             _workspace->registry(), std::move(layoutConfig), &error)) {
         std::fprintf(stderr,
             "[EditorSession] UI Layout workspace registration failed: %s\n",
+            error.c_str());
+    }
+    error.clear();
+    EditorBuiltInExtensionConfig builtIns;
+    builtIns.openAudioMixer = [this]() { openAudioEditorWindow(); };
+    if (!registerEditorBuiltInExtensions(
+            _workspace->registry(), std::move(builtIns), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] built-in extension registration failed: %s\n",
             error.c_str());
     }
 }
@@ -535,15 +635,48 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     };
     reportStartup(0.02f, L"Preparing editor UI...");
     _hostWindow = desc.hostWindow;
+    EditorComponentPolicyRegistry::instance().installDefaults();
     _devices = desc.deviceManager;
     _hostFocused = _devices != nullptr && _devices->window().isFocused();
     _layoutPath = desc.layoutPath;
     _engineAssetsRoot = desc.engineAssetsRoot;
+    _assetTrash = std::make_unique<EditorAssetTrash>(desc.projectRoot);
+    _assetOperations = std::make_unique<EditorAssetOperations>(desc.projectRoot);
+    _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
+    std::string recoveryError;
+    if (!_recoveryStore->beginSession(&recoveryError)) {
+        std::fprintf(stderr, "[EditorSession] recovery unavailable: %s\n",
+                     recoveryError.c_str());
+    }
     if (_engineAssetsRoot.empty()) {
         _engineAssetsRoot =
             EditorProductPaths::detect().engineAssetsRoot.string();
     }
+    auto& shortcuts = EditorShortcutRegistry::instance();
+    shortcuts.resetToDefaults();
+    std::string shortcutError;
+    const std::filesystem::path engineShortcutPath =
+        std::filesystem::path(_engineAssetsRoot) / "AYEditor" / "config"
+        / "editor_shortcuts.json";
+    if (!shortcuts.loadOverrides(engineShortcutPath.string(), &shortcutError)) {
+        std::fprintf(stderr, "[EditorSession] shortcut defaults: %s\n",
+                     shortcutError.c_str());
+    }
+    shortcutError.clear();
+    const std::filesystem::path projectShortcutPath =
+        std::filesystem::path(desc.projectRoot) / ".ayeditor"
+        / "editor_shortcuts.json";
+    if (!shortcuts.loadOverrides(projectShortcutPath.string(), &shortcutError)) {
+        std::fprintf(stderr, "[EditorSession] shortcut overrides: %s\n",
+                     shortcutError.c_str());
+    }
     _preferences = desc.preferences;
+    if (desc.createAssetPreviewTexture
+        && desc.releaseAssetPreviewTexture) {
+        _assetPreviewCache = std::make_unique<EditorAssetPreviewCache>(
+            desc.createAssetPreviewTexture,
+            desc.releaseAssetPreviewTexture);
+    }
     _preferences.viewportOrientationAxisVisible =
         desc.viewportOrientationAxisVisible;
     _viewportOrientationAxisVisible =
@@ -563,12 +696,6 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _netClientAutoPlay = desc.netClientMode;
     auto* host = ayt::app::currentEngineHost();
     _worldContext.setSceneManager(host != nullptr ? host->scenes() : nullptr);
-    if (desc.createAssetPreviewTexture
-        && desc.releaseAssetPreviewTexture) {
-        _assetPreviewCache = std::make_unique<EditorAssetPreviewCache>(
-            desc.createAssetPreviewTexture,
-            desc.releaseAssetPreviewTexture);
-    }
     // Pre-existing _CrtCheckMemory() failure on session_after_set_host
     // in Debug builds. Commented to keep the build runnable; the four
     // checks later in initialize() remain enabled as debug invariants.
@@ -626,6 +753,17 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             L"Asset database unavailable: "
             + ayt::ui::decodeUtf8Text(assetDatabaseError), true);
     } else {
+        if (_assetTrash != nullptr) {
+            _assetTrash->setProjectRoot(_assetDatabase.projectRoot());
+        }
+        if (_assetOperations != nullptr) {
+            _assetOperations->setProjectRoot(_assetDatabase.projectRoot());
+        }
+        if (_assetPreviewCache != nullptr) {
+            _assetPreviewCache->setDiskCacheRoot(
+                (std::filesystem::path(_assetDatabase.projectRoot())
+                 / ".ayeditor" / "cache" / "previews").string());
+        }
         refreshAssetBrowser();
         setAssetBrowserStatus(L"Indexing project assets...");
         (void)_assetDatabase.requestScan();
@@ -723,6 +861,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     //         mode 有 Scene 关联；applyMode 仍走 EditorPlayRuntime 私有通路
     // 决策 4a: 不接 hook 拦 beginPlay；UX 弹窗由 caller 决定
     _document = std::make_unique<EditorSceneDocument>();
+    EditorSelectionContext& sceneSelection =
+        _workspace->selections().contextFor("scene.main");
+    _selection.bind(&sceneSelection);
+    (void)_workspace->selections().activate("scene.main");
+    _workspace->commands().setActiveTarget(&_commands);
     _commands.setChangedCallback([this]() {
         if (_document) _document->markDirty();
         refreshTransformInspector();
@@ -767,6 +910,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
         wirePromoteCallback();
     }
 
+    if (hasCrashRecovery()) {
+        setAssetBrowserStatus(
+            L"A previous editor session ended unexpectedly. Use File > "
+            L"Restore Crash Recovery to recover autosaved documents.", true);
+    }
     reportStartup(1.0f, L"Editor workspace ready");
     return true;
 }
@@ -786,6 +934,7 @@ void EditorSession::shutdown() {
 
     finishTransformGizmoDrag(false);
     savePreferencesNow();
+    if (_recoveryStore != nullptr) _recoveryStore->markCleanShutdown();
 
     _gameView.setModeChangedCallback({});
     _repaintCallback = nullptr;
@@ -807,6 +956,14 @@ void EditorSession::shutdown() {
     _playRuntime.shutdownEngine();
     _gameView.setMode(EditorMode::Edit);
 
+    _assetDeleteDialog.reset();
+    _assetOperationDialog.reset();
+    _assetOperationInput = nullptr;
+    if (_assetInspectorPreview != nullptr) {
+        _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
+    }
+    _assetPreviewCache.reset();
+
     // v0.3+ PR-5 — Landmine E: 清 Outliner 状态**早于** _ui.shutdown()
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
     // 链上 deref）。
@@ -815,33 +972,33 @@ void EditorSession::shutdown() {
     _assetTree = nullptr;
     _assetSearch = nullptr;
     _assetTypeFilter = nullptr;
+    _assetInspectorPreview = nullptr;
+    _assetDeleteButton = nullptr;
     _componentPicker = nullptr;
     _attachedComponentPicker = nullptr;
     _componentPropertyBody = nullptr;
     _componentPickerTypeNames.clear();
     _attachedComponentTypeNames.clear();
     _inspectedComponentTypeName.clear();
-    _pendingDslAssetOpenId = 0;
+    _pendingAssetOpenId = 0;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
+    _restoreDeletedMenuItem = nullptr;
+    _restoreRecoveryMenuItem = nullptr;
     _viewportOrientationAxisMenuItem = nullptr;
     _onViewportOrientationAxisVisibilityChanged = {};
-    _assetDeleteDialog.reset();
-    if (_assetInspectorPreview != nullptr) {
-        _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
-    }
-    _assetPreviewCache.reset();
-
     _onPreferencesChanged = {};
     _outlinerEntityIds.clear();
     _assetEntries.clear();
+    _selectedAssetIds.clear();
     _assetFolderSourcePaths.clear();
     _assetFolderFlatPaths.clear();
     _assetFolderSourceExpanded.clear();
     _assetDatabase.close();
+    _assetTrash.reset();
+    _assetOperations.reset();
+    _recoveryStore.reset();
     clearSelectedEntity(false);
-    _assetInspectorPreview = nullptr;
-    _assetDeleteButton = nullptr;
     _outlinerRefreshPending = false;
     _outlinerRootExpanded = true;
     _updatingOutlinerSelection = false;
@@ -856,7 +1013,7 @@ void EditorSession::shutdown() {
         }
     }
 
-    _selectedAssetIds.clear();
+    clearEditorTooltips(this);
     _ui.shutdown();
     if (_dockViewHost != nullptr) {
         _dockViewHost->releaseAfterUiShutdown();
@@ -922,6 +1079,11 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     // without going through an EditorSession command. Reconcile the document
     // indicator once per host frame so it cannot remain visually stale.
     refreshUnsavedIndicator();
+    _autosaveCountdown -= std::max(0.0f, dt);
+    if (_autosaveCountdown <= 0.0f) {
+        _autosaveCountdown = 30.0f;
+        (void)autosaveNow();
+    }
 
     // v0.3+ PR-5 — Landmine B: 延迟消费 Outliner 重建（禁止在 TreeNode
     // 事件派发内重建；onOutlinerSelectionChanged 注释）。
@@ -931,6 +1093,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     }
     if (_assetDatabase.pollScan()) {
         _assetBrowserRefreshPending = true;
+    }
+    if (_assetPreviewCache != nullptr && _assetPreviewCache->poll()) {
+        refreshVisibleAssetPreviews();
+        refreshAssetInspector();
     }
     if (_assetBrowserRefreshPending) {
         _assetBrowserRefreshPending = false;
@@ -945,16 +1111,12 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                 + ayt::ui::decodeUtf8Text(_assetDatabase.lastError()), true);
         }
     }
-    if (_pendingDslAssetOpenId != 0) {
-        const EditorAssetId assetId = _pendingDslAssetOpenId;
-        _pendingDslAssetOpenId = 0;
-        (void)openDslAsset(assetId);
+    if (_pendingAssetOpenId != 0) {
+        const EditorAssetId assetId = _pendingAssetOpenId;
+        _pendingAssetOpenId = 0;
+        (void)openAsset(assetId);
     }
     // Per-frame reconcile: if the last known cursor is not on a splitter
-    if (_assetPreviewCache != nullptr && _assetPreviewCache->poll()) {
-        refreshVisibleAssetPreviews();
-        refreshAssetInspector();
-    }
     // band, force every SplitterHandle un-revealed. Leave events alone
     // are not sufficient (capture path / coalesced pointer movement).
     syncSplitterRevealToMouse();
@@ -1585,29 +1747,58 @@ bool EditorSession::onKeyDown(int keyCode)
     if (_dockViewHost != nullptr) {
         _dockViewHost->syncCommandTargetFromFocus();
     }
+    if (_workspace != nullptr
+        && _workspace->commands().activeTarget() == nullptr) {
+        _workspace->commands().setActiveTarget(&_commands);
+    }
     IEditorCommandTarget* commandTarget = _workspace != nullptr
         ? _workspace->commands().activeTarget() : nullptr;
+    std::uint8_t modifiers = static_cast<std::uint8_t>(
+        _ui.getModifiers() & 0x07u);
+    if (_controlDown) modifiers |= 0x02u;
+    const std::string command =
+        EditorShortcutRegistry::instance().commandFor(keyCode, modifiers);
     if (textEditing) {
-        if (commandTarget != nullptr) {
-            if (_controlDown && keyCode == ayt::ui::UIKey_S) {
+        if (commandTarget != nullptr && !command.empty()) {
+            if (command == "file.save") {
                 return _workspace->commands().execute("file.save");
             }
-            if (keyCode == ayt::ui::UIKey_F7) {
+            if (command == "dsl.compile") {
                 return _workspace->commands().execute(
                     kEditorDslCompileCommand);
             }
         }
     }
-    if (!textEditing && _controlDown && _gameView.mode() == EditorMode::Edit) {
-        if (keyCode == ayt::ui::UIKey_Z) return _commands.undo();
-        if (keyCode == ayt::ui::UIKey_Y) return _commands.redo();
-        if (keyCode == ayt::ui::UIKey_S) {
+    if (!textEditing && _gameView.mode() == EditorMode::Edit) {
+        if (command == "edit.undo" || command == "edit.redo") {
+            return _workspace != nullptr
+                && _workspace->commands().execute(command);
+        }
+        if (command == "file.save") {
             saveSceneDocument();
             return true;
         }
     }
-    if (!textEditing && keyCode == ayt::ui::UIKey_Delete) {
+    if (!textEditing && command == "edit.delete") {
+        if (!_selectedAssetIds.empty() && _assetTileView != nullptr
+            && (focused == _assetTileView
+                || isDescendantOf(focused, _assetTileView))) {
+            requestDeleteSelectedAssets();
+            return true;
+        }
         deleteSelectedEntity();
+        return true;
+    }
+    if (!textEditing && command == "play.toggle") {
+        beginOrResumePlay();
+        return true;
+    }
+    if (!textEditing && command == "play.pause") {
+        pausePlay();
+        return true;
+    }
+    if (!textEditing && command == "play.stop") {
+        stopPlay();
         return true;
     }
     return _ui.onKeyDown(keyCode);
@@ -1626,12 +1817,6 @@ bool EditorSession::onKeyUp(int keyCode)
 }
 
 void EditorSession::onWindowFocusChanged(bool focused)
-        if (!_selectedAssetIds.empty() && _assetTileView != nullptr
-            && (focused == _assetTileView
-                || isDescendantOf(focused, _assetTileView))) {
-            requestDeleteSelectedAssets();
-            return true;
-        }
 {
     _hostFocused = focused;
     if (focused) return;
@@ -1702,29 +1887,51 @@ void EditorSession::bindToolbar() {
     bindButton("btn_maximize", [this]() { requestHostMaximizeToggle(); });
     bindButton("btn_close", [this]() { requestHostClose(); });
 
+    bindButton("btn_tool_ui_layout", [this]() {
+        (void)openUiLayoutEditor();
+    });
+    bindButton("btn_tool_audio", [this]() {
+        (void)openRegisteredTool(kEditorAudioToolExtensionId);
+    });
+    bindButton("btn_run_project", [this]() { (void)runCurrentProject(); });
+
     // Selection now exposes one Universal transform gizmo. The legacy
     // Select/Move/Rotate/Scale buttons are deliberately not bound even when
     // loading an older custom layout.
     bindButton("btn_tool_space", [this]() {
         setLocalTransformSpace(!_localTransformSpace);
     });
-    bindButton("btn_view_camera", [this]() {
-        _orthographicView = !_orthographicView;
-        if (auto* widget = _ui.findById("btn_view_camera")) {
-            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
-                button->setText(_orthographicView ? L"Orthographic" : L"Perspective");
-            }
+    bindButton("btn_view_camera", [this]() { toggleViewportProjection(); });
+    bindButton("btn_view_shading", [this]() { toggleViewportShading(); });
+
+    auto* viewportOptions = new ayt::ui::Menu();
+    viewportOptions->setId("viewport_options_menu");
+    if (ayt::ui::Widget* root = _ui.root()) root->addChild(viewportOptions);
+    if (auto* item = viewportOptions->addItem(L"Perspective Projection")) {
+        item->setId("menu_view_projection");
+        item->setOnActivate([this]() { toggleViewportProjection(); });
+    }
+    if (auto* item = viewportOptions->addItem(L"Shaded Rendering")) {
+        item->setId("menu_view_shading");
+        item->setOnActivate([this]() { toggleViewportShading(); });
+    }
+    viewportOptions->addSeparator();
+    if (auto* item = viewportOptions->addItem(L"[x] Orientation Axis")) {
+        item->setId("menu_view_orientation_axis");
+        item->setOnActivate([this]() {
+            setViewportOrientationAxisVisible(
+                !_viewportOrientationAxisVisible);
+        });
+    }
+    bindButton("btn_view_options", [this, viewportOptions]() {
+        auto* anchor = _ui.findById("btn_view_options");
+        if (anchor == nullptr) return;
+        if (viewportOptions->isOpen()) {
+            viewportOptions->close();
+        } else {
+            const auto bounds = anchor->getWorldBounds();
+            viewportOptions->open(anchor, {bounds.minX, bounds.maxY + 2.0f});
         }
-        if (_repaintCallback) _repaintCallback();
-    });
-    bindButton("btn_view_shading", [this]() {
-        _wireframeView = !_wireframeView;
-        if (auto* widget = _ui.findById("btn_view_shading")) {
-            if (auto* button = dynamic_cast<ayt::ui::Button*>(widget)) {
-                button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
-            }
-        }
-        if (_repaintCallback) _repaintCallback();
     });
     bindButton("btn_console_clear", [this]() {
         if (auto* widget = _ui.findById("console_output")) {
@@ -1749,7 +1956,8 @@ void EditorSession::bindToolbar() {
         "color.text.muted", ayt::math::FVector4(0.68f, 0.71f, 0.76f, 1.0f));
     const char* accentButtons[] = {
         "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
-        "btn_view_camera", "btn_view_shading", "btn_view_options"
+        "btn_view_camera", "btn_view_shading", "btn_view_options",
+        "btn_tool_ui_layout", "btn_tool_audio", "btn_run_project"
     };
     for (const char* id : accentButtons) {
         if (auto* button = dynamic_cast<ayt::ui::Button*>(_ui.findById(id))) {
@@ -1773,7 +1981,6 @@ void EditorSession::bindToolbar() {
     styleLabel("lbl_document_title", muted, false);
     styleLabel("lbl_active_tool", muted, true);
     styleLabel("lbl_viewport_scene", muted, false);
-    styleLabel("toolbar_divider_left", muted, true);
     styleLabel("lbl_status_scene", muted, false);
     styleLabel("lbl_status_network", muted, false);
     styleLabel("lbl_status_renderer", muted, false);
@@ -1789,6 +1996,21 @@ void EditorSession::bindToolbar() {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.29f, 0.50f, 1.0f));
         }
     }
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("app_logo"))) {
+        label->setTextColor(ayt::math::FVector4(0.96f, 0.98f, 1.0f, 1.0f));
+        label->setBackgroundColor(accent);
+        label->setFontSize(10);
+        label->setHorizontalAlignment(
+            ayt::ui::TextLabel::HAlignment::Center);
+        label->setVerticalAlignment(
+            ayt::ui::TextLabel::VAlignment::Center);
+    }
+
+    attachEditorTooltip(this, _ui.findById("btn_view_camera"),
+        L"Toggle Perspective / Orthographic projection");
+    attachEditorTooltip(this, _ui.findById("btn_view_shading"),
+        L"Toggle Shaded / Wireframe rendering");
 }
 
 void EditorSession::bindShellIcons(const std::string& iconRootPath)
@@ -1816,11 +2038,18 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_pause",       "filled/player-pause.svg",       L"Pause",                 16.0f, 8.0f, 4.0f},
         {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
         {"btn_stop",        "filled/player-stop.svg",        L"Stop",                  16.0f, 8.0f, 4.0f},
+        {"btn_tool_ui_layout", "outline/layout.svg",         L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_audio",  "outline/music-cog.svg",         L"Open Audio Editor",     20.0f, 7.0f, 7.0f},
+        {"btn_run_project", "outline/rocket.svg",            L"Run current project",   20.0f, 7.0f, 7.0f},
+        {"btn_tool_space",  "outline/world.svg",             L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
         {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
-        {"btn_assets_add",     "outline/file-import.svg",      L"Import asset",           15.0f, 5.0f, 4.0f},
-        {"btn_assets_up",      "outline/folder-up.svg",        L"Go to parent folder",    15.0f, 5.0f, 4.0f},
-        {"btn_assets_refresh", "outline/refresh.svg",          L"Refresh assets",         15.0f, 5.0f, 4.0f},
-        {"btn_assets_delete",  "outline/trash.svg",            L"Delete selected assets", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_add",   "outline/file-import.svg",      L"Import asset",          15.0f, 5.0f, 4.0f},
+        {"btn_assets_up",    "outline/folder-up.svg",        L"Go to parent folder",   15.0f, 5.0f, 4.0f},
+        {"btn_assets_refresh", "outline/refresh.svg",        L"Refresh assets",        15.0f, 5.0f, 4.0f},
+        {"btn_assets_rename", "outline/edit.svg",            L"Rename selected asset", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_move", "outline/folder-symlink.svg",    L"Move selected assets",  15.0f, 5.0f, 4.0f},
+        {"btn_assets_copy", "outline/copy.svg",              L"Copy selected assets",  15.0f, 5.0f, 4.0f},
+        {"btn_assets_delete", "outline/trash.svg",           L"Delete selected assets", 15.0f, 5.0f, 4.0f},
     };
 
     const std::filesystem::path root(iconRootPath);
@@ -1852,6 +2081,18 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         button->setIconColor(iconColor);
         button->setPadding(binding.horizontalPadding, binding.verticalPadding,
                            binding.horizontalPadding, binding.verticalPadding);
+        std::wstring tooltipText(binding.accessibleLabel);
+        const char* shortcutId = nullptr;
+        if (std::strcmp(binding.buttonId, "btn_play") == 0) shortcutId = "play.toggle";
+        else if (std::strcmp(binding.buttonId, "btn_pause") == 0) shortcutId = "play.pause";
+        else if (std::strcmp(binding.buttonId, "btn_stop") == 0) shortcutId = "play.stop";
+        else if (std::strcmp(binding.buttonId, "btn_assets_delete") == 0) shortcutId = "edit.delete";
+        if (shortcutId != nullptr) {
+            const std::wstring shortcut =
+                EditorShortcutRegistry::instance().shortcutFor(shortcutId);
+            if (!shortcut.empty()) tooltipText += L" (" + shortcut + L")";
+        }
+        attachEditorTooltip(this, button, tooltipText);
         ++loadedCount;
     }
 
@@ -1874,7 +2115,20 @@ void EditorSession::bindTransportBar() {
     // 决策 1a: enable = host->scenes()->canBeginPlay()
     // 决策 4a: Save/Discard/Cancel 三选项 Win32 MessageBoxW
     // 决策 5a: lbl_unsaved period refresh（mode changed 时同步）
-    bindButton("btn_play", [this]() {
+    bindButton("btn_play", [this]() { beginOrResumePlay(); });
+    bindButton("btn_pause", [this]() { pausePlay(); });
+    bindButton("btn_step", [this]() {
+        _gameView.stepOnce();
+        if (_repaintCallback) _repaintCallback();
+    });
+    bindButton("btn_stop", [this]() { stopPlay(); });
+
+    refreshUnsavedIndicator();
+    refreshTransformInspector();
+}
+
+void EditorSession::beginOrResumePlay()
+{
         // Paused -> Play is a resume command for the existing Play Scene,
         // not a request to begin a second session. In this state
         // SceneManager::canBeginPlay() is intentionally false, so resume must
@@ -1907,23 +2161,20 @@ void EditorSession::bindTransportBar() {
         // _runtime.startPlay() 头部 (F3.a)。保持"single source of truth =
         // EditorPlayRuntime"。Save/Discard/Cancel UX 完整不动。
         _gameView.setMode(EditorMode::Play);
-    });
+}
 
-    // v0.4 PR-1: btn_stop 不直接调 sm->endPlay()；委托给
-    // _gameView.setMode(Edit) → applyMode(Edit) → _runtime.enterEdit()
-    // 头部 (F3.b) → sm->endPlay()（idempotent；G2/G5 收口）。
-    bindButton("btn_pause", [this]() { _gameView.setMode(EditorMode::Paused); });
-    bindButton("btn_step", [this]() {
-        _gameView.stepOnce();
-        if (_repaintCallback) {
-            _repaintCallback();
-        }
-    });
-    bindButton("btn_stop", [this]() { _gameView.setMode(EditorMode::Edit); });
+void EditorSession::pausePlay()
+{
+    if (_gameView.mode() == EditorMode::Play) {
+        _gameView.setMode(EditorMode::Paused);
+    }
+}
 
-    // v0.3 PR-4 — lbl_unsaved 初始 refresh（design §4.3.x 决策 5a）
-    refreshUnsavedIndicator();
-    refreshTransformInspector();
+void EditorSession::stopPlay()
+{
+    if (_gameView.mode() != EditorMode::Edit) {
+        _gameView.setMode(EditorMode::Edit);
+    }
 }
 
 // helper：刷新 lbl_unsaved TextLabel（visible + text）
@@ -2190,6 +2441,10 @@ void EditorSession::bindAssetBrowser()
         _ui.findById("assets_search"));
     _assetTypeFilter = dynamic_cast<ayt::ui::ComboBox*>(
         _ui.findById("cmb_assets_type"));
+    _assetInspectorPreview = dynamic_cast<ayt::ui::Image*>(
+        _ui.findById("inspector_asset_preview"));
+    _assetDeleteButton = dynamic_cast<ayt::ui::Button*>(
+        _ui.findById("btn_assets_delete"));
 
     if (_assetTree != nullptr) {
         _assetTree->setItemHeight(18.0f);
@@ -2209,10 +2464,6 @@ void EditorSession::bindAssetBrowser()
             const std::string path = _assetFolderFlatPaths[flatIndex];
             for (std::size_t i = 0; i < _assetFolderSourcePaths.size(); ++i) {
                 if (_assetFolderSourcePaths[i] == path) {
-    _assetInspectorPreview = dynamic_cast<ayt::ui::Image*>(
-        _ui.findById("inspector_asset_preview"));
-    _assetDeleteButton = dynamic_cast<ayt::ui::Button*>(
-        _ui.findById("btn_assets_delete"));
                     _assetFolderSourceExpanded[i] = expanded;
                     break;
                 }
@@ -2231,6 +2482,7 @@ void EditorSession::bindAssetBrowser()
                     || index >= static_cast<int>(_assetEntries.size())) {
                     return;
                 }
+                const EditorAssetEntry& entry = _assetEntries.at(index);
                 const EditorAssetTilePresentation presentation =
                     _assetTilePresenter.present(entry);
                 cell.setText(presentation.fullFileName);
@@ -2241,19 +2493,6 @@ void EditorSession::bindAssetBrowser()
                 cell.setCornerMarkerVisible(
                     presentation.showEngineResourceMarker);
                 cell.clearThumbnail();
-            });
-        _assetTileView->setOnItemDoubleClicked(
-                const EditorAssetEntry& entry = _assetEntries.at(index);
-            [this](int index, ayt::ui::TileCell::HitRegion) {
-                if (index < 0
-                    || index >= static_cast<int>(_assetEntries.size())) {
-                    return;
-                }
-                const EditorAssetEntry& entry = _assetEntries[index];
-                if (!entry.folder) {
-                    const EditorAssetRecord* record =
-                        _assetDatabase.find(entry.assetId);
-                    if (record != nullptr
                 if (!entry.folder && _assetPreviewCache != nullptr) {
                     if (const EditorAssetRecord* record =
                             _assetDatabase.find(entry.assetId)) {
@@ -2268,12 +2507,22 @@ void EditorSession::bindAssetBrowser()
         _assetTileView->setOnSelectionIndicesChanged(
             [this](const std::vector<int>& indices) {
                 if (!_updatingAssetSelection) selectAssetsFromIndices(indices);
-                        && editorDslLanguageFromPath(record->name)
-                               != EditorDslLanguage::Unknown) {
+            });
+        _assetTileView->setOnItemDoubleClicked(
+            [this](int index, ayt::ui::TileCell::HitRegion) {
+                if (index < 0
+                    || index >= static_cast<int>(_assetEntries.size())) {
+                    return;
+                }
+                const EditorAssetEntry& entry = _assetEntries[index];
+                if (!entry.folder) {
+                    const EditorAssetRecord* record =
+                        _assetDatabase.find(entry.assetId);
+                    if (record != nullptr) {
                         // Do not mutate the DockArea while TileCell is still
                         // dispatching its second mouse-up. The next editor
                         // update opens or focuses the document atomically.
-                        _pendingDslAssetOpenId = entry.assetId;
+                        _pendingAssetOpenId = entry.assetId;
                         if (_repaintCallback) _repaintCallback();
                     }
                     return;
@@ -2322,6 +2571,14 @@ void EditorSession::bindAssetBrowser()
         }
     };
     bindButton("btn_assets_add", [this]() { importAssetFromDialog(); });
+    bindButton("btn_assets_delete",
+               [this]() { requestDeleteSelectedAssets(); });
+    bindButton("btn_assets_rename",
+               [this]() { requestRenameSelectedAsset(); });
+    bindButton("btn_assets_move",
+               [this]() { requestRelocateSelectedAssets(false); });
+    bindButton("btn_assets_copy",
+               [this]() { requestRelocateSelectedAssets(true); });
     bindButton("btn_assets_refresh", [this]() {
         if (_assetDatabase.requestScan()) {
             setAssetBrowserStatus(L"Refreshing asset index...");
@@ -2334,6 +2591,7 @@ void EditorSession::bindAssetBrowser()
         refreshAssetBrowser();
     });
     bindButton("btn_asset_reload", [this]() { reloadSelectedAsset(); });
+    refreshAssetDeleteButton();
 
     auto bindViewportAssetDrop = [this](const char* id) {
         ayt::ui::Widget* target = _ui.findById(id);
@@ -2341,8 +2599,6 @@ void EditorSession::bindAssetBrowser()
         target->setAcceptDrops(true);
         target->setAcceptDropKinds({"EditorAsset"});
         target->setOnDrop([this](const ayt::ui::DragPayload& payload) {
-    bindButton("btn_assets_delete",
-               [this]() { requestDeleteSelectedAssets(); });
             if (payload.kind != "EditorAsset" || payload.data == nullptr) return;
             const auto* drag = static_cast<const AssetDragData*>(payload.data);
             if (drag != &_assetDragData || drag->type != EditorAssetType::Mesh) {
@@ -2355,7 +2611,6 @@ void EditorSession::bindAssetBrowser()
             if (!isViewportSurfacePoint(physical.x, physical.y)) return;
             (void)placeAssetInViewport(drag->id, physical.x, physical.y);
         });
-    refreshAssetDeleteButton();
     };
     // panel_viewport is temporarily hidden while the host punches the native
     // composite hole. Input can arrive during that interval, in which case
@@ -2537,6 +2792,8 @@ void EditorSession::refreshAssetList()
         ? 0 : _selectedAssetIds.back();
     _assetTileView->setSelectedIndices(selectedIndices);
     _updatingAssetSelection = false;
+    if (_selectedAssetIds.empty()) setInspectorAssetMode(false);
+    refreshAssetDeleteButton();
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_asset_path"))) {
         label->setText(ayt::ui::decodeUtf8Text(_assetCurrentFolder));
@@ -2556,8 +2813,6 @@ void EditorSession::selectAsset(EditorAssetId assetId)
     // TreeView's visual selection as well as EditorSelection; otherwise a
     // resource picked while (for example) Character is highlighted leaves
     // that same row selected. Clicking Character again then produces no
-    if (_selectedAssetIds.empty()) setInspectorAssetMode(false);
-    refreshAssetDeleteButton();
     // TreeView selection-change callback and the resource Inspector remains
     // visible, including its Reload button.
     if (_outliner != nullptr && _outliner->getSelectedIndex() >= 0) {
@@ -2565,8 +2820,10 @@ void EditorSession::selectAsset(EditorAssetId assetId)
     }
     clearSelectedEntity(true, false);
     _selectedAssetId = assetId;
+    _selectedAssetIds = {assetId};
     setInspectorAssetMode(true);
     refreshAssetInspector();
+    refreshAssetDeleteButton();
     if (_repaintCallback) _repaintCallback();
 }
 
@@ -2614,18 +2871,24 @@ void EditorSession::selectAssetsFromIndices(const std::vector<int>& indices)
         setInspectorAssetMode(true);
         refreshAssetInspector();
     }
+    refreshAssetDeleteButton();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::clearSelectedAsset()
+{
     _selectedAssetId = 0;
+    _selectedAssetIds.clear();
     setInspectorAssetMode(false);
     if (_assetTileView != nullptr && !_updatingAssetSelection) {
         _updatingAssetSelection = true;
         _assetTileView->clearSelection();
         _updatingAssetSelection = false;
     }
+    refreshAssetDeleteButton();
 }
-    _selectedAssetIds = {assetId};
 
 void EditorSession::setInspectorAssetMode(bool assetMode)
-    refreshAssetDeleteButton();
 {
     bool changed = false;
     if (ayt::ui::Widget* entity = _ui.findById("inspector_entity_body")) {
@@ -2635,21 +2898,13 @@ void EditorSession::setInspectorAssetMode(bool assetMode)
     }
     if (ayt::ui::Widget* asset = _ui.findById("inspector_asset_body")) {
         changed = changed || asset->isVisible() != assetMode;
-    refreshAssetDeleteButton();
-    if (_repaintCallback) _repaintCallback();
-}
-
-void EditorSession::clearSelectedAsset()
-{
         asset->setVisible(assetMode);
-    _selectedAssetIds.clear();
     }
     if (changed) {
         // UIManager caches layout by client size. Visibility changes alter
         // VBox participation without resizing the window. Invalidate here
         // and let populateFrame consume it before opening the native viewport
         // hole; synchronous re-entry from an input callback can corrupt the
-    refreshAssetDeleteButton();
         // composite layout.
         _ui.invalidateLayout();
     }
@@ -2662,25 +2917,6 @@ void EditorSession::refreshAssetInspector()
             label->setText(text);
         }
     };
-    set("inspector_hint", L"Project asset selected");
-    set("inspector_asset_header", ayt::ui::decodeUtf8Text(record->name));
-    set("inspector_asset_type", L"Type: "
-        + ayt::ui::decodeUtf8Text(editorAssetTypeName(record->type)));
-    set("inspector_asset_origin", record->origin == EditorAssetOrigin::Source
-        ? L"Origin: Assets (source)" : L"Origin: Imported (generated)");
-    set("inspector_asset_size", L"Size: " + assetSizeText(record->size));
-    set("inspector_asset_path", L"Path: "
-        + ayt::ui::decodeUtf8Text(record->logicalPath));
-    const auto state = ayt::resource::ResourceManager::instance()
-        .getLoadState(record->runtimePath);
-    const wchar_t* stateName = L"not loaded";
-    switch (state) {
-    case ayt::resource::ResourceLoadState::Loading: stateName = L"loading"; break;
-    case ayt::resource::ResourceLoadState::Ready: stateName = L"ready"; break;
-    case ayt::resource::ResourceLoadState::Failed: stateName = L"failed"; break;
-    case ayt::resource::ResourceLoadState::NotLoaded: break;
-    }
-    set("inspector_asset_state", std::wstring(L"State: ") + stateName);
     if (_selectedAssetIds.empty()) return;
 
     if (_selectedAssetIds.size() > 1u) {
@@ -2732,13 +2968,40 @@ void EditorSession::refreshAssetInspector()
 
     const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
     if (record == nullptr) return;
+    set("inspector_hint", L"Project asset selected");
+    set("inspector_asset_header", ayt::ui::decodeUtf8Text(record->name));
+    set("inspector_asset_type", L"Type: "
+        + ayt::ui::decodeUtf8Text(editorAssetTypeName(record->type)));
+    set("inspector_asset_origin", record->origin == EditorAssetOrigin::Source
+        ? L"Origin: Assets (source)" : L"Origin: Imported (generated)");
+    set("inspector_asset_size", L"Size: " + assetSizeText(record->size));
+    set("inspector_asset_modified", L"Modified: "
+        + assetModifiedText(record->lastModified));
+    set("inspector_asset_path", L"Path: "
+        + ayt::ui::decodeUtf8Text(record->logicalPath));
+    const auto state = ayt::resource::ResourceManager::instance()
+        .getLoadState(record->runtimePath);
+    const wchar_t* stateName = L"not loaded";
+    switch (state) {
+    case ayt::resource::ResourceLoadState::Loading: stateName = L"loading"; break;
+    case ayt::resource::ResourceLoadState::Ready: stateName = L"ready"; break;
+    case ayt::resource::ResourceLoadState::Failed: stateName = L"failed"; break;
+    case ayt::resource::ResourceLoadState::NotLoaded: break;
+    }
+    std::wstring stateText = std::wstring(L"State: ") + stateName;
+    if (record->importState != EditorAssetImportState::NotApplicable) {
+        stateText += L" | Import: ";
+        stateText += ayt::ui::decodeUtf8Text(
+            editorAssetImportStateName(record->importState));
+    }
+    set("inspector_asset_state", stateText);
     if (auto* reload = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_asset_reload"))) {
         reload->setEnabled(true);
     }
 
-    const bool showPreview = record->type == EditorAssetType::Texture
-        && _assetPreviewCache != nullptr;
+    const bool showPreview = _assetPreviewCache != nullptr
+        && EditorAssetPreviewCache::supports(*record);
     if (_assetInspectorPreview != nullptr) {
         const bool visibilityChanged =
             _assetInspectorPreview->isVisible() != showPreview;
@@ -2776,8 +3039,6 @@ void EditorSession::setAssetBrowserStatus(const std::wstring& text,
                                           bool mirrorToConsole)
 {
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
-    set("inspector_asset_modified", L"Modified: "
-        + assetModifiedText(record->lastModified));
             _ui.findById("assets_status"))) label->setText(text);
     if (mirrorToConsole) {
         if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
@@ -2838,6 +3099,7 @@ void EditorSession::importAssetFromDialog()
 
 void EditorSession::reloadSelectedAsset()
 {
+    if (_selectedAssetIds.size() != 1u) return;
     const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
     if (record == nullptr) return;
     ayt::resource::ResourceManager::instance().reloadResource(
@@ -2847,30 +3109,183 @@ void EditorSession::reloadSelectedAsset()
         + ayt::ui::decodeUtf8Text(record->name));
 }
 
-bool EditorSession::openDslAsset(EditorAssetId assetId)
+bool EditorSession::renameSelectedAsset(const std::string& newFileName)
 {
-    if (_dockViewHost == nullptr) return false;
-    const EditorAssetRecord* record = _assetDatabase.find(assetId);
-    if (record == nullptr
-        || editorDslLanguageFromPath(record->name)
-               == EditorDslLanguage::Unknown) {
+    if (_assetOperations == nullptr || _selectedAssetIds.size() != 1u) {
         return false;
     }
+    const EditorAssetRecord* selected =
+        _assetDatabase.find(_selectedAssetIds.front());
+    if (selected == nullptr) return false;
+    const EditorAssetRecord before = *selected;
+    ayt::resource::ResourceManager::instance().unloadResource(
+        before.runtimePath);
+    const EditorAssetOperationResult result = _assetOperations->rename(
+        _assetDatabase, before, newFileName);
+    if (!result) {
+        setAssetBrowserStatus(L"Rename failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+        return false;
+    }
+    if (_assetPreviewCache != nullptr) {
+        _assetPreviewCache->erase(before.absolutePath);
+    }
+    clearSelectedAsset();
+    _assetCurrentFolder = std::filesystem::path(
+        result.resultingLogicalPaths.front()).parent_path().generic_string();
+    (void)rescanAssetsNow();
+    if (const EditorAssetRecord* renamed = _assetDatabase.findByLogicalPath(
+            result.resultingLogicalPaths.front())) {
+        selectAsset(renamed->id);
+    }
+    setAssetBrowserStatus(L"Renamed asset; updated "
+        + std::to_wstring(result.updatedReferences) + L" reference(s).", true);
+    return true;
+}
 
+bool EditorSession::moveSelectedAssets(
+    const std::string& destinationLogicalFolder)
+{
+    if (_assetOperations == nullptr || _selectedAssetIds.empty()) return false;
+    std::vector<EditorAssetRecord> records;
+    for (EditorAssetId id : _selectedAssetIds) {
+        if (const EditorAssetRecord* record = _assetDatabase.find(id)) {
+            records.push_back(*record);
+        }
+    }
+    const EditorAssetOperationResult result = _assetOperations->move(
+        _assetDatabase, records, destinationLogicalFolder);
+    if (!result) {
+        setAssetBrowserStatus(L"Move failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+        return false;
+    }
+    for (const EditorAssetRecord& record : records) {
+        ayt::resource::ResourceManager::instance().unloadResource(
+            record.runtimePath);
+        if (_assetPreviewCache != nullptr) {
+            _assetPreviewCache->erase(record.absolutePath);
+        }
+    }
+    clearSelectedAsset();
+    _assetCurrentFolder = destinationLogicalFolder;
+    (void)rescanAssetsNow();
+    std::vector<int> selectedIndices;
+    for (std::size_t index = 0; index < _assetEntries.size(); ++index) {
+        if (_assetEntries[index].folder) continue;
+        const EditorAssetRecord* record =
+            _assetDatabase.find(_assetEntries[index].assetId);
+        if (record != nullptr && std::find(result.resultingLogicalPaths.begin(),
+                result.resultingLogicalPaths.end(), record->logicalPath)
+                != result.resultingLogicalPaths.end()) {
+            selectedIndices.push_back(static_cast<int>(index));
+        }
+    }
+    if (_assetTileView != nullptr && !selectedIndices.empty()) {
+        _assetTileView->setSelectedIndices(selectedIndices);
+        selectAssetsFromIndices(selectedIndices);
+    }
+    setAssetBrowserStatus(L"Moved " + std::to_wstring(result.affectedAssets)
+        + L" asset(s); updated " + std::to_wstring(result.updatedReferences)
+        + L" reference(s).", true);
+    return true;
+}
+
+bool EditorSession::copySelectedAssets(
+    const std::string& destinationLogicalFolder)
+{
+    if (_assetOperations == nullptr || _selectedAssetIds.empty()) return false;
+    std::vector<EditorAssetRecord> records;
+    for (EditorAssetId id : _selectedAssetIds) {
+        if (const EditorAssetRecord* record = _assetDatabase.find(id)) {
+            records.push_back(*record);
+        }
+    }
+    const EditorAssetOperationResult result = _assetOperations->copy(
+        _assetDatabase, records, destinationLogicalFolder);
+    if (!result) {
+        setAssetBrowserStatus(L"Copy failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+        return false;
+    }
+    clearSelectedAsset();
+    _assetCurrentFolder = destinationLogicalFolder;
+    (void)rescanAssetsNow();
+    setAssetBrowserStatus(L"Copied "
+        + std::to_wstring(result.affectedAssets) + L" asset(s).", true);
+    return true;
+}
+
+void EditorSession::showAssetOperationDialog(
+    const std::wstring& titleText, const std::wstring& initialValue,
+    bool rename, bool copy)
+{
+    _assetOperationDialog = std::make_unique<ayt::ui::ModalDialog>();
+    _assetOperationDialog->setId("asset_operation_dialog");
+    _assetOperationDialog->setSize({460.0f, 168.0f});
+    _assetOperationDialog->setAcceptText(copy ? L"Copy" :
+        (rename ? L"Rename" : L"Move"));
+    _assetOperationDialog->setRejectText(L"Cancel");
+    auto* body = new ayt::ui::VBox();
+    body->setSpacing(8.0f);
+    body->setSize({428.0f, 96.0f});
+    auto* title = new ayt::ui::TextLabel();
+    title->setText(titleText);
+    title->setFontSize(14);
+    body->addWidget(title, 26.0f);
+    _assetOperationInput = new ayt::ui::TextInput();
+    _assetOperationInput->setText(initialValue);
+    _assetOperationInput->setSize({428.0f, 28.0f});
+    _assetOperationInput->selectAll();
+    body->addWidget(_assetOperationInput, 28.0f);
+    _assetOperationDialog->setBodyContentOwned(body);
+    _assetOperationDialog->setOnResult([this, rename, copy](int result) {
+        if (result != ayt::ui::ModalDialog::Ok
+            || _assetOperationInput == nullptr) return;
+        const std::string value = std::filesystem::path(
+            _assetOperationInput->getText()).string();
+        if (rename) (void)renameSelectedAsset(value);
+        else if (copy) (void)copySelectedAssets(value);
+        else (void)moveSelectedAssets(value);
+    });
+    _assetOperationDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::requestRenameSelectedAsset()
+{
     if (_selectedAssetIds.size() != 1u) return;
-    EditorOpenRequest request;
-    request.resourcePath = record->absolutePath;
-    request.resourceKey = record->absolutePath;
-    request.displayPath = record->logicalPath;
-    request.preferredEditorId = kEditorDslExtensionId;
+    const EditorAssetRecord* record =
+        _assetDatabase.find(_selectedAssetIds.front());
+    if (record == nullptr) return;
+    showAssetOperationDialog(L"Rename project asset",
+        ayt::ui::decodeUtf8Text(record->name), true, false);
+}
 
-    EditorDockViewOptions options;
-    options.cardId = "card_dsl_" + std::to_string(assetId);
-    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+void EditorSession::requestRelocateSelectedAssets(bool copy)
+{
+    if (_selectedAssetIds.empty()) return;
+    showAssetOperationDialog(copy ? L"Copy to asset folder"
+                                  : L"Move to asset folder",
+        ayt::ui::decodeUtf8Text(_assetCurrentFolder), false, copy);
+}
+
 void EditorSession::refreshAssetDeleteButton()
 {
+    const bool any = !_selectedAssetIds.empty();
     if (_assetDeleteButton != nullptr) {
-        _assetDeleteButton->setEnabled(!_selectedAssetIds.empty());
+        _assetDeleteButton->setEnabled(any);
+    }
+    const struct { const char* id; bool enabled; } states[] = {
+        {"btn_assets_rename", _selectedAssetIds.size() == 1u},
+        {"btn_assets_move", any},
+        {"btn_assets_copy", any},
+    };
+    for (const auto& state : states) {
+        if (auto* button = dynamic_cast<ayt::ui::Button*>(
+                _ui.findById(state.id))) {
+            button->setEnabled(state.enabled);
+        }
     }
 }
 
@@ -2878,15 +3293,24 @@ void EditorSession::requestDeleteSelectedAssets()
 {
     if (_selectedAssetIds.empty()) return;
 
+    const EditorAssetDeleteAnalysis impact = analyzeEditorAssetDeletion(
+        _assetDatabase, _selectedAssetIds);
+
     _assetDeleteDialog = std::make_unique<ayt::ui::ModalDialog>();
     _assetDeleteDialog->setId("asset_delete_confirmation");
-    _assetDeleteDialog->setSize({460.0f, 240.0f});
-    _assetDeleteDialog->setAcceptText(L"Delete");
+    _assetDeleteDialog->setSize(
+        impact.hasExternalReferences()
+            ? ayt::math::FVector2(520.0f, 326.0f)
+            : ayt::math::FVector2(460.0f, 240.0f));
+    _assetDeleteDialog->setAcceptText(
+        impact.hasExternalReferences() ? L"Delete Anyway" : L"Delete");
     _assetDeleteDialog->setRejectText(L"Cancel");
 
     auto* body = new ayt::ui::VBox();
     body->setSpacing(8.0f);
-    body->setSize({428.0f, 168.0f});
+    body->setSize(impact.hasExternalReferences()
+        ? ayt::math::FVector2(488.0f, 254.0f)
+        : ayt::math::FVector2(428.0f, 168.0f));
     auto* title = new ayt::ui::TextLabel();
     title->setText(_selectedAssetIds.size() == 1u
         ? L"Delete this project asset?"
@@ -2915,8 +3339,34 @@ void EditorSession::requestDeleteSelectedAssets()
     list->setSize({428.0f, 104.0f});
     body->addWidget(list, 104.0f);
 
+    if (impact.hasExternalReferences()) {
+        std::wstring dependencies = L"Used by:\n";
+        constexpr std::size_t maxReferences = 5u;
+        for (std::size_t index = 0;
+             index < std::min(maxReferences, impact.references.size());
+             ++index) {
+            if (index != 0u) dependencies += L"\n";
+            dependencies += L"• " + ayt::ui::decodeUtf8Text(
+                impact.references[index].referencingPath);
+        }
+        if (impact.references.size() > maxReferences) {
+            dependencies += L"\n• and "
+                + std::to_wstring(impact.references.size() - maxReferences)
+                + L" more references";
+        }
+        auto* references = new ayt::ui::TextLabel();
+        references->setId("asset_delete_references");
+        references->setText(dependencies);
+        references->setSize({488.0f, 72.0f});
+        references->setTextColor(
+            ayt::math::FVector4(1.0f, 0.70f, 0.28f, 1.0f));
+        body->addWidget(references, 72.0f);
+    }
+
     auto* warning = new ayt::ui::TextLabel();
-    warning->setText(L"This removes the files from disk and cannot be undone.");
+    warning->setText(impact.hasExternalReferences()
+        ? L"Referenced files may break. Files can be restored from Edit."
+        : L"Files move to the project trash and can be restored from Edit.");
     warning->setSize({428.0f, 22.0f});
     body->addWidget(warning, 22.0f);
     _assetDeleteDialog->setBodyContentOwned(body);
@@ -2939,38 +3389,307 @@ void EditorSession::deleteSelectedAssetsConfirmed()
         }
     }
 
-    std::size_t deleted = 0;
-    std::wstring failure;
     for (const EditorAssetRecord& record : records) {
         ayt::resource::ResourceManager::instance().unloadResource(
             record.runtimePath);
-        std::error_code error;
-        const bool removed = std::filesystem::remove(record.absolutePath, error);
-        if (removed) {
-            ++deleted;
+    }
+    const EditorAssetTrashResult result = _assetTrash != nullptr
+        ? _assetTrash->moveToTrash(records)
+        : EditorAssetTrashResult{0u, "Project trash is unavailable."};
+    if (result) {
+        for (const EditorAssetRecord& record : records) {
             if (_assetPreviewCache != nullptr) {
                 _assetPreviewCache->erase(record.absolutePath);
             }
-        } else if (failure.empty()) {
-            failure = ayt::ui::decodeUtf8Text(record.logicalPath)
-                + L": " + ayt::ui::decodeUtf8Text(
-                    error ? error.message() : "file was not removed");
         }
     }
 
     clearSelectedAsset();
     (void)rescanAssetsNow();
-    if (failure.empty()) {
+    if (_restoreDeletedMenuItem != nullptr) {
+        _restoreDeletedMenuItem->setEnabled(
+            _assetTrash != nullptr && _assetTrash->canRestoreLast());
+    }
+    if (result) {
         setAssetBrowserStatus(
-            L"Deleted " + std::to_wstring(deleted)
-            + (deleted == 1u ? L" asset." : L" assets."), true);
+            L"Moved " + std::to_wstring(result.moved)
+            + (result.moved == 1u ? L" asset to project trash."
+                                  : L" assets to project trash."), true);
     } else {
         setAssetBrowserStatus(
-            L"Deleted " + std::to_wstring(deleted)
-            + L" asset(s); failed: " + failure, true);
+            L"Asset deletion failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
     }
 }
 
+bool EditorSession::restoreLastDeletedAssets()
+{
+    if (_assetTrash == nullptr) return false;
+    const EditorAssetTrashResult result = _assetTrash->restoreLast();
+    if (_restoreDeletedMenuItem != nullptr) {
+        _restoreDeletedMenuItem->setEnabled(_assetTrash->canRestoreLast());
+    }
+    if (!result) {
+        setAssetBrowserStatus(L"Restore failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+        return false;
+    }
+    (void)rescanAssetsNow();
+    setAssetBrowserStatus(L"Restored " + std::to_wstring(result.moved)
+        + (result.moved == 1u ? L" asset." : L" assets."), true);
+    return true;
+}
+
+bool EditorSession::runCurrentProject()
+{
+    std::string error;
+    const EditorProjectRunConfig config = EditorProjectRunner::resolve(
+        _assetDatabase.projectRoot(), &error);
+    if (!config) {
+        setAssetBrowserStatus(L"Run project: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return false;
+    }
+    const EditorProjectLaunchResult launched =
+        EditorProjectRunner::launch(config);
+    if (!launched) {
+        setAssetBrowserStatus(L"Run project failed: "
+            + ayt::ui::decodeUtf8Text(launched.error), true);
+        return false;
+    }
+    setAssetBrowserStatus(L"Project started (process "
+        + std::to_wstring(launched.processId) + L").", true);
+    return true;
+}
+
+void EditorSession::validateProjectContent()
+{
+    const EditorRuntimeValidationResult headless =
+        EditorProjectRuntimeValidator::validate(
+            _assetDatabase.projectRoot(),
+            EditorRuntimeValidationProfile::Headless);
+    const EditorRuntimeValidationResult client =
+        EditorProjectRuntimeValidator::validate(
+            _assetDatabase.projectRoot(),
+            EditorRuntimeValidationProfile::FullClient);
+    if (!headless || !client) {
+        const EditorRuntimeValidationIssue* issue = !headless.issues.empty()
+            ? &headless.issues.front()
+            : (!client.issues.empty() ? &client.issues.front() : nullptr);
+        setAssetBrowserStatus(L"Content validation failed"
+            + (issue != nullptr ? L": "
+                + ayt::ui::decodeUtf8Text(issue->path + " - " + issue->message)
+                : std::wstring{}), true);
+        return;
+    }
+    setAssetBrowserStatus(L"Validated "
+        + std::to_wstring(client.scenes) + L" Scene, "
+        + std::to_wstring(client.uiLayouts) + L" UI and "
+        + std::to_wstring(client.tilemaps)
+        + L" Tilemap asset(s) for headless and full client.", true);
+}
+
+bool EditorSession::autosaveNow()
+{
+    if (_recoveryStore == nullptr) return false;
+    std::vector<const IEditorDocument*> documents;
+    if (_document != nullptr) documents.push_back(_document.get());
+    if (_workspace != nullptr) {
+        for (const EditorDocumentRecord& record :
+             _workspace->documents().records()) {
+            if (record.document != nullptr) {
+                documents.push_back(record.document.get());
+            }
+        }
+    }
+    const EditorRecoveryResult result = _recoveryStore->autosave(documents);
+    if (!result && !result.error.empty()) {
+        setAssetBrowserStatus(L"Autosave warning: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+    }
+    return result.error.empty();
+}
+
+bool EditorSession::hasCrashRecovery() const noexcept
+{
+    return _recoveryStore != nullptr
+        && _recoveryStore->hasRecoverableSession();
+}
+
+bool EditorSession::restoreCrashRecovery()
+{
+    if (_recoveryStore == nullptr) return false;
+    const std::string openScenePath = _document != nullptr
+        ? _document->path() : std::string{};
+    const EditorRecoveryResult result = _recoveryStore->restorePrevious();
+    if (_restoreRecoveryMenuItem != nullptr) {
+        _restoreRecoveryMenuItem->setEnabled(hasCrashRecovery());
+    }
+    if (!result) {
+        setAssetBrowserStatus(L"Recovery failed: "
+            + ayt::ui::decodeUtf8Text(result.error), true);
+        return false;
+    }
+    if (!openScenePath.empty() && _document != nullptr) {
+        std::string ignored;
+        if (_document->open(openScenePath, &ignored)) afterDocumentReload();
+    }
+    (void)rescanAssetsNow();
+    setAssetBrowserStatus(L"Restored " + std::to_wstring(result.documents)
+        + L" autosaved document(s). Original files were backed up with a "
+          L".before-recovery suffix.", true);
+    return true;
+}
+
+bool EditorSession::createProjectAsset(EditorAssetType type)
+{
+    const EditorProjectAssetCreateResult created = createEditorProjectAsset(
+        _assetDatabase.projectRoot(), type);
+    if (!created) {
+        setAssetBrowserStatus(L"Create asset failed: "
+            + ayt::ui::decodeUtf8Text(created.error), true);
+        return false;
+    }
+    _pendingAssetSelectionPath = created.absolutePath;
+    _assetCurrentFolder = std::filesystem::path(created.logicalPath)
+        .parent_path().generic_string();
+    (void)rescanAssetsNow();
+    const EditorAssetRecord* record =
+        _assetDatabase.findByLogicalPath(created.logicalPath);
+    const bool opened = record != nullptr && openAsset(record->id);
+    setAssetBrowserStatus(
+        (opened ? L"Created and opened " : L"Created ")
+        + ayt::ui::decodeUtf8Text(created.logicalPath));
+    return true;
+}
+
+bool EditorSession::openAsset(EditorAssetId assetId)
+{
+    const EditorAssetRecord* record = _assetDatabase.find(assetId);
+    if (record == nullptr) return false;
+    switch (record->type) {
+    case EditorAssetType::Scene: {
+        if (_document == nullptr || _gameView.mode() != EditorMode::Edit) {
+            return false;
+        }
+        if (_document->isDirty()) {
+            const int choice = ::MessageBoxW(
+                _hostWindow,
+                L"The current scene has unsaved changes.\n\nDiscard them and open another scene?",
+                L"AYEditor", MB_YESNO | MB_ICONWARNING);
+            if (choice != IDYES) return false;
+        }
+        std::string error;
+        if (!_document->open(record->absolutePath, &error)) {
+            setAssetBrowserStatus(L"Scene open failed: "
+                + ayt::ui::decodeUtf8Text(error), true);
+            return false;
+        }
+        afterDocumentReload();
+        setAssetBrowserStatus(L"Opened scene: "
+            + ayt::ui::decodeUtf8Text(record->logicalPath));
+        return true;
+    }
+    case EditorAssetType::UiLayout:
+        return openUiLayoutEditor(record->absolutePath);
+    case EditorAssetType::Animation:
+    case EditorAssetType::Audio: {
+        if (_dockViewHost == nullptr) return false;
+        EditorOpenRequest request;
+        request.resourcePath = record->absolutePath;
+        request.resourceKey = record->absolutePath;
+        request.displayPath = record->logicalPath;
+        request.assetType = editorAssetTypeName(record->type);
+        request.preferredEditorId = record->type == EditorAssetType::Animation
+            ? kEditorAnimationTimelineExtensionId
+            : kEditorAudioTimelineExtensionId;
+        EditorDockViewOptions options;
+        options.cardId = "card_timed_asset_" + std::to_string(assetId);
+        const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+        if (!opened) {
+            setAssetBrowserStatus(L"Timeline asset open failed: "
+                + ayt::ui::decodeUtf8Text(opened.error), true);
+            return false;
+        }
+        (void)openRegisteredTool(kEditorTimelineToolExtensionId);
+        wirePromoteCallback();
+        _ui.invalidateLayout();
+        setAssetBrowserStatus(L"Opened timeline asset: "
+            + ayt::ui::decodeUtf8Text(record->logicalPath));
+        return true;
+    }
+    case EditorAssetType::Tilemap: {
+        if (_dockViewHost == nullptr) return false;
+        EditorOpenRequest request;
+        request.resourcePath = record->absolutePath;
+        request.resourceKey = record->absolutePath;
+        request.displayPath = record->logicalPath;
+        request.assetType = "Tilemap";
+        request.preferredEditorId = kEditorTilemapExtensionId;
+        EditorDockViewOptions options;
+        options.cardId = "card_tilemap_" + std::to_string(assetId);
+        const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+        if (!opened) {
+            setAssetBrowserStatus(L"Tilemap open failed: "
+                + ayt::ui::decodeUtf8Text(opened.error), true);
+            return false;
+        }
+        wirePromoteCallback();
+        _ui.invalidateLayout();
+        setAssetBrowserStatus(L"Opened tilemap: "
+            + ayt::ui::decodeUtf8Text(record->logicalPath));
+        return true;
+    }
+    default:
+        return openDslAsset(assetId);
+    }
+}
+
+bool EditorSession::openRegisteredTool(const std::string& editorId)
+{
+    if (_dockViewHost == nullptr || _workspace == nullptr) return false;
+    const EditorDescriptor* descriptor = _workspace->registry().find(editorId);
+    if (descriptor == nullptr
+        || descriptor->surfaceKind != EditorSurfaceKind::ToolPanel) {
+        setAssetBrowserStatus(L"Tool is not registered", true);
+        return false;
+    }
+    EditorOpenRequest request;
+    request.resourceKey = "tool:" + editorId;
+    request.preferredEditorId = editorId;
+    EditorDockViewOptions options;
+    options.cardId = "card_tool_" + editorId;
+    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+    if (!opened) {
+        setAssetBrowserStatus(L"Tool open failed: "
+            + ayt::ui::decodeUtf8Text(opened.error), true);
+        return false;
+    }
+    wirePromoteCallback();
+    _ui.invalidateLayout();
+    if (_repaintCallback) _repaintCallback();
+    return true;
+}
+
+bool EditorSession::openDslAsset(EditorAssetId assetId)
+{
+    if (_dockViewHost == nullptr) return false;
+    const EditorAssetRecord* record = _assetDatabase.find(assetId);
+    if (record == nullptr
+        || editorDslLanguageFromPath(record->name)
+               == EditorDslLanguage::Unknown) {
+        return false;
+    }
+
+    EditorOpenRequest request;
+    request.resourcePath = record->absolutePath;
+    request.resourceKey = record->absolutePath;
+    request.displayPath = record->logicalPath;
+    request.preferredEditorId = kEditorDslExtensionId;
+
+    EditorDockViewOptions options;
+    options.cardId = "card_dsl_" + std::to_string(assetId);
+    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
     if (!opened) {
         setAssetBrowserStatus(
             L"DSL open failed: " + ayt::ui::decodeUtf8Text(opened.error), true);
@@ -3766,6 +4485,22 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
             _ui.findById("btn_view_shading"))) {
         button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
     }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_projection"))) {
+        item->setText((_orthographicView ? L"[x] " : L"[ ] ")
+                      + std::wstring(L"Orthographic Projection"));
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_shading"))) {
+        item->setText((_wireframeView ? L"[x] " : L"[ ] ")
+                      + std::wstring(L"Wireframe Rendering"));
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_orientation_axis"))) {
+        item->setText(_viewportOrientationAxisVisible
+                          ? L"[x] Orientation Axis"
+                          : L"[ ] Orientation Axis");
+    }
 
     auto setSlider = [this](const char* id, float value) {
         if (auto* slider = dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) {
@@ -4012,9 +4747,69 @@ void EditorSession::setLocalTransformSpace(bool local)
     _gizmoHoverHandle = EditorGizmoHandle::None;
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_tool_space"))) {
-        button->setText(local ? L"Local" : L"World");
+        const wchar_t* accessibleLabel = local
+            ? L"Transform orientation: Local"
+            : L"Transform orientation: World";
+        button->setAccessibilityLabel(accessibleLabel);
+
+        // Production shells bind the World icon before preferences are
+        // applied. Keep text as the fallback for test/custom shells that do
+        // not provide an icon root, and swap the glyph only for icon-backed
+        // buttons.
+        if (button->getIconDocument() != nullptr) {
+            const std::filesystem::path iconPath =
+                std::filesystem::path(_engineAssetsRoot)
+                / "Icons" / "Tabler" / "outline"
+                / (local ? "box.svg" : "world.svg");
+            std::string error;
+            auto icon = ayt::ui::SvgDocument::loadFromFile(iconPath, &error);
+            if (icon != nullptr) {
+                button->setText(L"");
+                button->setIconDocument(std::move(icon));
+            } else {
+                button->setIconDocument({});
+                button->setText(local ? L"L" : L"W");
+            }
+        } else {
+            button->setText(local ? L"Local" : L"World");
+        }
     }
     syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::toggleViewportProjection()
+{
+    _orthographicView = !_orthographicView;
+    const std::wstring label = _orthographicView
+        ? L"Orthographic" : L"Perspective";
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_camera"))) {
+        button->setText(label);
+        button->setAccessibilityLabel(label + L" projection");
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_projection"))) {
+        item->setText((_orthographicView ? L"[x] " : L"[ ] ")
+                      + std::wstring(L"Orthographic Projection"));
+    }
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::toggleViewportShading()
+{
+    _wireframeView = !_wireframeView;
+    const std::wstring label = _wireframeView ? L"Wireframe" : L"Shaded";
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_shading"))) {
+        button->setText(label);
+        button->setAccessibilityLabel(label + L" rendering");
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_shading"))) {
+        item->setText((_wireframeView ? L"[x] " : L"[ ] ")
+                      + std::wstring(L"Wireframe Rendering"));
+    }
     if (_repaintCallback) _repaintCallback();
 }
 
@@ -4026,6 +4821,11 @@ void EditorSession::setViewportOrientationAxisVisible(bool visible)
         _viewportOrientationAxisMenuItem->setText(
             visible ? L"[x] Viewport Orientation Axis"
                     : L"[ ] Viewport Orientation Axis");
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_orientation_axis"))) {
+        item->setText(visible ? L"[x] Orientation Axis"
+                              : L"[ ] Orientation Axis");
     }
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
         sub->renderer().setViewportOrientationAxisEnabled(visible);
@@ -4062,7 +4862,9 @@ void EditorSession::openSceneDocument()
             L"AYEditor", MB_YESNO | MB_ICONWARNING);
         if (choice != IDYES) return;
     }
-    const std::string path = showSceneOpenDialog(_hostWindow);
+    const std::string path = showSceneOpenDialog(_hostWindow,
+        (std::filesystem::path(_assetDatabase.projectRoot())
+            / "Assets" / "worlds").string());
     if (path.empty()) return;
 
     std::string error;
@@ -4095,7 +4897,9 @@ void EditorSession::saveSceneDocument()
 void EditorSession::saveSceneDocumentAs()
 {
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
-    const std::string path = showSceneSaveDialog(_hostWindow);
+    const std::string path = showSceneSaveDialog(_hostWindow,
+        (std::filesystem::path(_assetDatabase.projectRoot())
+            / "Assets" / "worlds").string());
     if (path.empty()) return;
     std::string error;
     if (!_document->saveAs(path, &error)) {
@@ -4175,17 +4979,40 @@ void EditorSession::bindMenuBar() {
 
     ayt::ui::Menu* fileMenu = menuBar->addMenu(L"File");
     if (fileMenu != nullptr) {
-        if (auto* item = fileMenu->addItem(L"New")) {
-            item->setOnActivate([this]() { newSceneDocument(); });
+        if (auto* item = fileMenu->addItem(L"New Scene")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::Scene);
+            });
         }
-        if (auto* item = fileMenu->addItem(L"Open...")) {
+        if (auto* item = fileMenu->addItem(L"New UI Layout")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::UiLayout);
+            });
+        }
+        if (auto* item = fileMenu->addItem(L"New Tilemap")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::Tilemap);
+            });
+        }
+        fileMenu->addSeparator();
+        if (auto* item = fileMenu->addItem(L"Open Scene...")) {
             item->setOnActivate([this]() { openSceneDocument(); });
         }
         if (auto* item = fileMenu->addItem(L"Save")) {
+            item->setShortcut(
+                EditorShortcutRegistry::instance().shortcutFor("file.save"));
             item->setOnActivate([this]() { saveSceneDocument(); });
         }
         if (auto* item = fileMenu->addItem(L"Save As...")) {
             item->setOnActivate([this]() { saveSceneDocumentAs(); });
+        }
+        if (auto* item = fileMenu->addItem(L"Autosave Now")) {
+            item->setOnActivate([this]() { (void)autosaveNow(); });
+        }
+        if (auto* item = fileMenu->addItem(L"Restore Crash Recovery")) {
+            _restoreRecoveryMenuItem = item;
+            item->setEnabled(hasCrashRecovery());
+            item->setOnActivate([this]() { (void)restoreCrashRecovery(); });
         }
         if (auto* item = fileMenu->addItem(L"Import...")) {
             item->setOnActivate([this]() { importCharacterFromDialog(); });
@@ -4200,14 +5027,34 @@ void EditorSession::bindMenuBar() {
     if (editMenu != nullptr) {
         if (auto* item = editMenu->addItem(L"Undo")) {
             _undoMenuItem = item;
+            item->setShortcut(
+                EditorShortcutRegistry::instance().shortcutFor("edit.undo"));
             item->setOnActivate([this]() {
-                if (_gameView.mode() == EditorMode::Edit) _commands.undo();
+                if (_gameView.mode() == EditorMode::Edit
+                    && _workspace != nullptr) {
+                    _workspace->commands().setActiveTarget(&_commands);
+                    (void)_workspace->commands().execute("edit.undo");
+                }
             });
         }
         if (auto* item = editMenu->addItem(L"Redo")) {
             _redoMenuItem = item;
+            item->setShortcut(
+                EditorShortcutRegistry::instance().shortcutFor("edit.redo"));
             item->setOnActivate([this]() {
-                if (_gameView.mode() == EditorMode::Edit) _commands.redo();
+                if (_gameView.mode() == EditorMode::Edit
+                    && _workspace != nullptr) {
+                    _workspace->commands().setActiveTarget(&_commands);
+                    (void)_workspace->commands().execute("edit.redo");
+                }
+            });
+        }
+        if (auto* item = editMenu->addItem(L"Restore Last Deleted Assets")) {
+            _restoreDeletedMenuItem = item;
+            item->setEnabled(_assetTrash != nullptr
+                && _assetTrash->canRestoreLast());
+            item->setOnActivate([this]() {
+                (void)restoreLastDeletedAssets();
             });
         }
         editMenu->addSeparator();
@@ -4215,6 +5062,8 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { createEmptyEntity(); });
         }
         if (auto* item = editMenu->addItem(L"Delete Selected")) {
+            item->setShortcut(
+                EditorShortcutRegistry::instance().shortcutFor("edit.delete"));
             item->setOnActivate([this]() { deleteSelectedEntity(); });
         }
     }
@@ -4281,11 +5130,26 @@ void EditorSession::bindMenuBar() {
 
     ayt::ui::Menu* toolsMenu = menuBar->addMenu(L"Tools");
     if (toolsMenu != nullptr) {
+        if (auto* item = toolsMenu->addItem(L"Run Current Project")) {
+            item->setOnActivate([this]() { (void)runCurrentProject(); });
+        }
+        toolsMenu->addSeparator();
         if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
             item->setOnActivate([this]() { (void)openUiLayoutEditor(); });
         }
         if (auto* item = toolsMenu->addItem(L"Audio Editor...")) {
-            item->setOnActivate([this]() { openAudioEditorWindow(); });
+            item->setOnActivate([this]() {
+                (void)openRegisteredTool(kEditorAudioToolExtensionId);
+            });
+        }
+        if (auto* item = toolsMenu->addItem(L"Timeline")) {
+            item->setOnActivate([this]() {
+                (void)openRegisteredTool(kEditorTimelineToolExtensionId);
+            });
+        }
+        toolsMenu->addSeparator();
+        if (auto* item = toolsMenu->addItem(L"Validate Project Content")) {
+            item->setOnActivate([this]() { validateProjectContent(); });
         }
     }
 
@@ -4295,9 +5159,16 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([]() {});
         }
     }
+
+    for (ayt::ui::Widget* child : menuBar->getChildren()) {
+        if (auto* anchor = dynamic_cast<ayt::ui::Button*>(child)) {
+            anchor->setStyleId("editor_menu_anchor");
+            anchor->setPadding(8.0f, 1.0f, 8.0f, 1.0f);
+        }
+    }
 }
 
-bool EditorSession::openUiLayoutEditor() {
+bool EditorSession::openUiLayoutEditor(const std::string& path) {
     if (_childWindows == nullptr || _workspace == nullptr) {
         setAssetBrowserStatus(
             L"UI Designer requires the AYDevice child-window host", true);
@@ -4306,15 +5177,32 @@ bool EditorSession::openUiLayoutEditor() {
 
     syncUiDesignerLifetime();
     if (_uiDesigner != nullptr && _uiDesignerHandle != nullptr) {
-        (void)_workspace->documents().activate(_uiDesignerDocumentId);
-        (void)_childWindows->activateChildWindow(_uiDesignerHandle);
-        setAssetBrowserStatus(L"UI Designer focused");
-        return true;
+        const bool sameDocument = path.empty()
+            || EditorDocumentManager::normalizeResourceKey(path)
+                == EditorDocumentManager::normalizeResourceKey(
+                    _uiDesignerDocument != nullptr
+                        ? _uiDesignerDocument->path() : std::string{});
+        if (sameDocument) {
+            (void)_workspace->documents().activate(_uiDesignerDocumentId);
+            (void)_childWindows->activateChildWindow(_uiDesignerHandle);
+            setAssetBrowserStatus(L"UI Designer focused");
+            return true;
+        }
+        if (!confirmUiDesignerClose()) return false;
+        const EditorChildWindowManager::Handle previousHandle =
+            _uiDesignerHandle;
+        // confirmUiDesignerClose() has already removed the document from the
+        // workspace. Release the controller before closing the native window
+        // so its close callback does not try to close the same document again.
+        releaseUiDesigner(false);
+        (void)_childWindows->closeChildWindow(previousHandle);
     }
 
     EditorOpenRequest request;
-    request.resourceKey = "workspace:ui-layout:untitled";
-    request.displayPath = "Untitled UI Layout";
+    request.resourcePath = path;
+    request.resourceKey = path.empty()
+        ? "workspace:ui-layout:untitled" : path;
+    request.displayPath = path.empty() ? "Untitled UI Layout" : path;
     request.preferredEditorId = kEditorUiLayoutExtensionId;
 
     EditorOpenResult opened = _workspace->documents().open(request);
@@ -4342,12 +5230,23 @@ bool EditorSession::openUiLayoutEditor() {
     controllerConfig.openPathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
             ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
-        return showUiJsonOpenDialog(owner);
+        return showUiJsonOpenDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
     };
     controllerConfig.savePathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
             ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
-        return showUiJsonSaveDialog(owner);
+        return showUiJsonSaveDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    controllerConfig.texturePathPicker = [this]() {
+        HWND owner = _uiDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+        return showUiTextureOpenDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "textures").string());
     };
     controllerConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
@@ -4785,7 +5684,10 @@ void EditorSession::bindComponentBrowser()
             }
             _inspectedComponentTypeName = _attachedComponentTypeNames[
                 static_cast<std::size_t>(index)];
-            rebuildComponentPropertyEditor();
+            // Selection changes also change dependency-aware remove state.
+            // Rebuild the browser under the existing re-entry guard so the
+            // button cannot retain the previous component's policy.
+            refreshComponentBrowser();
         });
     }
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
@@ -4882,13 +5784,22 @@ void EditorSession::refreshComponentBrowser()
         ? nullptr
         : ayt::entity::ComponentRegistry::instance().find(
             _inspectedComponentTypeName);
-    const bool canRemove = canAdd && inspectedDescriptor != nullptr
+    std::string removeReason;
+    const bool mechanicallyRemovable = canAdd && inspectedDescriptor != nullptr
         && inspectedDescriptor->remove != nullptr
         && inspectedDescriptor->has != nullptr
         && inspectedDescriptor->has(*entity);
+    const bool canRemove = mechanicallyRemovable
+        && EditorComponentPolicyRegistry::instance().canRemove(
+            *entity, _inspectedComponentTypeName, &removeReason);
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_remove_component"))) {
         button->setEnabled(canRemove);
+        button->setAccessibilityDescription(canRemove
+            ? L"Remove the selected component"
+            : (removeReason.empty()
+                   ? L"The selected component cannot be removed"
+                   : ayt::ui::decodeUtf8Text(removeReason)));
     }
 
     _componentPickerTypeNames.clear();
@@ -4933,15 +5844,14 @@ void EditorSession::addSelectedComponent()
 
     const std::string typeName = _componentPickerTypeNames[
         static_cast<std::size_t>(selected)];
-    const auto* descriptor =
-        ayt::entity::ComponentRegistry::instance().find(typeName);
-    if (descriptor == nullptr || !descriptor->editorAddable
-        || descriptor->add == nullptr
-        || (descriptor->has != nullptr && descriptor->has(*entity))) {
+    std::vector<std::string> added;
+    std::string error;
+    if (!EditorComponentPolicyRegistry::instance().addWithRequirements(
+            *entity, typeName, &added, &error)) {
+        if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
         refreshComponentBrowser();
         return;
     }
-    if (descriptor->add(*entity) == nullptr) return;
 
     _inspectedComponentTypeName = typeName;
     _commands.clear();
@@ -4967,6 +5877,13 @@ void EditorSession::removeSelectedComponent()
         refreshComponentBrowser();
         return;
     }
+    std::string removeReason;
+    if (!EditorComponentPolicyRegistry::instance().canRemove(
+            *entity, _inspectedComponentTypeName, &removeReason)) {
+        setInspectorHint(ayt::ui::decodeUtf8Text(removeReason));
+        refreshComponentBrowser();
+        return;
+    }
     if (_inspectedComponentTypeName == "Transform") {
         finishTransformGizmoDrag(false);
     }
@@ -4984,6 +5901,9 @@ void EditorSession::rebuildComponentPropertyEditor()
 {
     if (_componentPropertyBody == nullptr) return;
 
+    const EditorDensityMetrics& density =
+        editorDensityMetrics(_preferences.density);
+
     if (ayt::ui::Widget* focused = _ui.getFocusedWidget();
         focused != nullptr && isDescendantOf(focused, _componentPropertyBody)) {
         _ui.clearFocusNoDispatch(focused);
@@ -4995,11 +5915,14 @@ void EditorSession::rebuildComponentPropertyEditor()
         ayt::ui::destroyWidgetTree(child);
     }
 
-    auto addLabel = [this](const std::wstring& text, float height,
-                           const std::string& id = {}) {
+    auto addLabel = [this, &density](const std::wstring& text, float height,
+                                    const std::string& id = {}) {
         auto* label = new ayt::ui::TextLabel();
         if (!id.empty()) label->setId(id);
         label->setText(text);
+        label->setFontSize(density.bodyFontSize);
+        label->setVerticalAlignment(
+            ayt::ui::TextLabel::VAlignment::Center);
         label->setSize({240.0f, height});
         _componentPropertyBody->addWidget(label, height);
         return label;
@@ -5052,36 +5975,38 @@ void EditorSession::rebuildComponentPropertyEditor()
         std::wstring displayName = ayt::ui::decodeUtf8Text(
             reflectedDisplayName != nullptr && reflectedDisplayName[0] != '\0'
                 ? reflectedDisplayName : field->getName());
+        const char* reflectedTooltip = field->getTooltip();
+        const std::wstring tooltip = ayt::ui::decodeUtf8Text(
+            reflectedTooltip != nullptr ? reflectedTooltip : "");
+        if (field->hasAttribute(ayt::reflect::FieldAttribute::Angle)) {
+            displayName += L" (degrees)";
+        }
         const bool readOnly = sessionReadOnly
             || field->hasAttribute(
                 ayt::reflect::FieldAttribute::BlueprintReadOnly);
 
         int elementCount = 0;
-        std::wstring elementSuffix;
+        bool angleValues = false;
         if (isReflectedType<ayt::math::FVector2>(fieldType)) {
             elementCount = 2;
-            elementSuffix = L"  X / Y";
         } else if (isReflectedType<ayt::math::FVector3>(fieldType)) {
             elementCount = 3;
-            elementSuffix = L"  X / Y / Z";
         } else if (isReflectedType<ayt::math::FVector4>(fieldType)) {
             elementCount = 4;
-            elementSuffix = L"  X / Y / Z / W";
         } else if (isReflectedType<ayt::math::FQuaternion>(fieldType)) {
             elementCount = 3;
-            elementSuffix = L"  Euler X / Y / Z (degrees)";
+            angleValues = true;
         }
-        addLabel(displayName + elementSuffix, 18.0f,
-                 "inspector_field_label_" + fieldName);
 
         auto makeInput = [this, componentTypeName, fieldName, readOnly](
                              const std::wstring& valueText,
                              int elementIndex) {
             auto* input = new ayt::ui::TextInput();
+            input->setStyleId("editor_property_input");
             input->setText(valueText);
             input->setReadOnly(readOnly);
             input->setNumericScrubEnabled(true);
-            input->setSize({70.0f, 24.0f});
+            input->setSize({70.0f, 26.0f});
             input->setOnSubmit(
                 [this, componentTypeName, fieldName, elementIndex](
                     const std::wstring& value) {
@@ -5099,9 +6024,9 @@ void EditorSession::rebuildComponentPropertyEditor()
         if (elementCount > 0) {
             auto* row = new ayt::ui::HBox();
             row->setId("inspector_field_" + fieldName);
-            row->setSpacing(4.0f);
+            row->setSpacing(1.0f);
             row->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-            row->setSize({240.0f, 24.0f});
+            row->setSize({240.0f, 26.0f});
             float values[4]{};
             if (isReflectedType<ayt::math::FVector2>(fieldType)) {
                 const auto& vector =
@@ -5129,12 +6054,85 @@ void EditorSession::rebuildComponentPropertyEditor()
                 values[1] = euler.y * radiansToDegrees;
                 values[2] = euler.z * radiansToDegrees;
             }
-            for (int element = 0; element < elementCount; ++element) {
-                row->addWidget(makeInput(formatFloat(values[element]), element));
+
+            // The Inspector's 240-DIP baseline is too narrow for a label
+            // plus four useful editors. Vector4 keeps its label above as the
+            // compact-width fallback; Vector2/3 and Euler values use one row.
+            if (elementCount == 4) {
+                auto* label = addLabel(displayName, 18.0f,
+                    "inspector_field_label_" + fieldName);
+                if (!tooltip.empty()) label->setAccessibilityDescription(tooltip);
+            } else {
+                auto* fieldLabel = new ayt::ui::TextLabel();
+                fieldLabel->setId("inspector_field_label_" + fieldName);
+                fieldLabel->setText(displayName);
+                fieldLabel->setFontSize(density.bodyFontSize);
+                fieldLabel->setTextColor(
+                    ayt::math::FVector4(0.82f, 0.85f, 0.90f, 1.0f));
+                fieldLabel->setVerticalAlignment(
+                    ayt::ui::TextLabel::VAlignment::Center);
+                if (!tooltip.empty()) {
+                    fieldLabel->setAccessibilityDescription(tooltip);
+                }
+                row->addWidget(fieldLabel, 56.0f);
             }
-            _componentPropertyBody->addWidget(row, 24.0f);
+
+            static constexpr wchar_t axisNames[] = {L'X', L'Y', L'Z', L'W'};
+            static constexpr float axisColors[][3] = {
+                {0.86f, 0.42f, 0.42f},
+                {0.48f, 0.75f, 0.43f},
+                {0.42f, 0.60f, 0.90f},
+                {0.70f, 0.72f, 0.78f},
+            };
+            for (int element = 0; element < elementCount; ++element) {
+                auto* axis = new ayt::ui::TextLabel();
+                axis->setId("inspector_field_axis_" + fieldName + "_"
+                            + std::to_string(element));
+                std::wstring axisText(1, axisNames[element]);
+                if (angleValues) axisText += L"°";
+                axis->setText(axisText);
+                axis->setFontSize(density.secondaryFontSize);
+                axis->setTextColor(ayt::math::FVector4(
+                    axisColors[element][0], axisColors[element][1],
+                    axisColors[element][2], 1.0f));
+                axis->setHorizontalAlignment(
+                    ayt::ui::TextLabel::HAlignment::Center);
+                axis->setVerticalAlignment(
+                    ayt::ui::TextLabel::VAlignment::Center);
+                row->addWidget(axis, angleValues ? 12.0f : 9.0f);
+
+                auto* input = makeInput(formatFloat(values[element]), element);
+                input->setId("inspector_field_" + fieldName + "_"
+                             + std::to_string(element));
+                row->addWidget(input);
+                if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
+            }
+            _componentPropertyBody->addWidget(row, 26.0f);
+
+            if (elementCount == 4
+                && field->hasAttribute(ayt::reflect::FieldAttribute::Color)) {
+                auto* picker = new ayt::ui::ColorPicker();
+                picker->setId("inspector_color_" + fieldName);
+                picker->setSize({240.0f, 224.0f});
+                picker->setColor(*static_cast<ayt::math::FVector4*>(fieldValue),
+                                 false);
+                if (!tooltip.empty()) picker->setAccessibilityDescription(tooltip);
+                if (!readOnly) {
+                    picker->setOnColorCommitted(
+                        [this, componentTypeName, fieldName](
+                            const ayt::math::FVector4& color) {
+                            commitInspectorColorField(
+                                componentTypeName, fieldName, color);
+                        });
+                }
+                _componentPropertyBody->addWidget(picker, 224.0f);
+            }
             continue;
         }
+
+        auto* scalarLabel = addLabel(displayName, 18.0f,
+            "inspector_field_label_" + fieldName);
+        if (!tooltip.empty()) scalarLabel->setAccessibilityDescription(tooltip);
 
         if (isReflectedType<bool>(fieldType)) {
             auto* check = new ayt::ui::CheckBox();
@@ -5154,13 +6152,19 @@ void EditorSession::rebuildComponentPropertyEditor()
 
         std::wstring valueText;
         bool editableText = true;
+        bool numericScalar = false;
+        double scalarValue = 0.0;
         if (isReflectedType<std::string>(fieldType)) {
             valueText = ayt::ui::decodeUtf8Text(
                 *static_cast<std::string*>(fieldValue));
         } else if (isReflectedType<float>(fieldType)) {
-            valueText = formatFloat(*static_cast<float*>(fieldValue));
+            scalarValue = *static_cast<float*>(fieldValue);
+            numericScalar = true;
+            valueText = formatFloat(static_cast<float>(scalarValue));
         } else if (isReflectedType<double>(fieldType)) {
-            valueText = std::to_wstring(*static_cast<double*>(fieldValue));
+            scalarValue = *static_cast<double*>(fieldValue);
+            numericScalar = true;
+            valueText = std::to_wstring(scalarValue);
         } else if (isReflectedType<std::int8_t>(fieldType)) {
             valueText = std::to_wstring(
                 static_cast<int>(*static_cast<std::int8_t*>(fieldValue)));
@@ -5174,8 +6178,9 @@ void EditorSession::rebuildComponentPropertyEditor()
             valueText = std::to_wstring(
                 static_cast<unsigned>(*static_cast<std::uint16_t*>(fieldValue)));
         } else if (isReflectedType<std::int32_t>(fieldType)) {
-            valueText = std::to_wstring(
-                *static_cast<std::int32_t*>(fieldValue));
+            scalarValue = *static_cast<std::int32_t*>(fieldValue);
+            numericScalar = true;
+            valueText = std::to_wstring(static_cast<std::int64_t>(scalarValue));
         } else if (isReflectedType<std::uint32_t>(fieldType)) {
             valueText = std::to_wstring(
                 *static_cast<std::uint32_t*>(fieldValue));
@@ -5196,19 +6201,115 @@ void EditorSession::rebuildComponentPropertyEditor()
                 + L" (read only)";
             editableText = false;
         }
+
+        if (numericScalar
+            && field->hasAttribute(ayt::reflect::FieldAttribute::Slider)
+            && std::isfinite(field->getMinValue())
+            && std::isfinite(field->getMaxValue())
+            && field->getMaxValue() > field->getMinValue()) {
+            auto* row = new ayt::ui::HBox();
+            row->setId("inspector_field_" + fieldName);
+            row->setSpacing(5.0f);
+            row->setSize({240.0f, 26.0f});
+            auto* slider = new ayt::ui::Slider();
+            slider->setId("inspector_field_slider_" + fieldName);
+            slider->setValueRange(field->getMinValue(), field->getMaxValue());
+            slider->setValue(static_cast<float>(scalarValue));
+            slider->setEnabled(!readOnly);
+            if (!tooltip.empty()) slider->setAccessibilityDescription(tooltip);
+            row->addWidget(slider);
+            auto* input = makeInput(valueText, -1);
+            input->setSize({68.0f, 26.0f});
+            input->setId("inspector_field_value_" + fieldName);
+            const float step = field->getStep();
+            slider->setOnValueChanged(
+                [this, componentTypeName, fieldName, input, step](float value) {
+                    if (step > 0.0f) value = std::round(value / step) * step;
+                    const std::wstring text = formatFloat(value);
+                    input->setText(text);
+                    commitInspectorTextField(
+                        componentTypeName, fieldName, -1, text);
+                });
+            row->addWidget(input, 68.0f);
+            _componentPropertyBody->addWidget(row, 26.0f);
+            continue;
+        }
+
+        if (isReflectedType<std::string>(fieldType)
+            && field->hasAttribute(ayt::reflect::FieldAttribute::Asset)) {
+            auto* row = new ayt::ui::HBox();
+            row->setId("inspector_field_" + fieldName);
+            row->setSpacing(4.0f);
+            row->setSize({240.0f, 26.0f});
+            auto* input = makeInput(valueText, -1);
+            input->setId("inspector_field_value_" + fieldName);
+            if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
+            row->addWidget(input);
+            auto* browse = new ayt::ui::Button();
+            browse->setStyleId("editor_parameter_button");
+            browse->setText(L"...");
+            browse->setSize({30.0f, 26.0f});
+            browse->setEnabled(!readOnly);
+            browse->setAccessibilityLabel(L"Choose project asset");
+            browse->setOnClicked(
+                [this, componentTypeName, fieldName, input]() {
+                    const std::string selected = showAssetReferenceDialog(
+                        _hostWindow, _assetDatabase.projectRoot());
+                    if (selected.empty()) return;
+                    const std::wstring portable = ayt::ui::decodeUtf8Text(
+                        _assetDatabase.portableAssetPath(selected));
+                    input->setText(portable);
+                    commitInspectorTextField(
+                        componentTypeName, fieldName, -1, portable);
+                });
+            row->addWidget(browse, 30.0f);
+            _componentPropertyBody->addWidget(row, 26.0f);
+            continue;
+        }
         auto* input = makeInput(valueText, -1);
         input->setId("inspector_field_" + fieldName);
         input->setReadOnly(readOnly || !editableText);
         input->setNumericScrubEnabled(
             editableText && !isReflectedType<std::string>(fieldType));
-        input->setSize({240.0f, 24.0f});
-        _componentPropertyBody->addWidget(input, 24.0f);
+        input->setSize({240.0f, 26.0f});
+        if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
+        _componentPropertyBody->addWidget(input, 26.0f);
     }
     if (visibleFieldCount == 0) {
         addLabel(L"No visible reflected properties", 20.0f,
                  "inspector_property_placeholder");
     }
     _ui.invalidateLayout();
+}
+
+void EditorSession::commitInspectorColorField(
+    const std::string& componentType, const std::string& fieldName,
+    const ayt::math::FVector4& next)
+{
+    if (_gameView.mode() != EditorMode::Edit || _document == nullptr) return;
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
+        componentType);
+    ayt::entity::IComponent* component = entity != nullptr
+        && descriptor != nullptr && descriptor->get != nullptr
+        ? descriptor->get(*entity) : nullptr;
+    auto* type = descriptor != nullptr
+        ? ayt::reflect::TypeRegistryImpl::instance().findType(
+            descriptor->type.hash_code()) : nullptr;
+    auto* field = type != nullptr ? type->findField(fieldName.c_str()) : nullptr;
+    if (component == nullptr || field == nullptr
+        || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)
+        || field->hasAttribute(ayt::reflect::FieldAttribute::BlueprintReadOnly)
+        || !isReflectedType<ayt::math::FVector4>(field->getType())) {
+        return;
+    }
+    auto* current = static_cast<ayt::math::FVector4*>(field->get(component));
+    if (current == nullptr || *current == next) return;
+    *current = next;
+    _commands.clear();
+    _document->markDirty();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::commitInspectorTextField(
@@ -5390,13 +6491,12 @@ void EditorSession::refreshTransformInspector()
                             const float* values,
                             std::size_t valueCount) {
         ayt::ui::Widget* row = findDescendantById(_componentPropertyBody, id);
-        if (row == nullptr || row->getChildren().size() < valueCount) {
-            return false;
-        }
+        if (row == nullptr) return false;
         const bool readOnly = _gameView.mode() != EditorMode::Edit;
         for (std::size_t index = 0; index < valueCount; ++index) {
             auto* input = dynamic_cast<ayt::ui::TextInput*>(
-                row->getChildren()[index]);
+                findDescendantById(
+                    row, std::string(id) + "_" + std::to_string(index)));
             if (input == nullptr) return false;
             input->setText(formatFloat(values[index]));
             input->setReadOnly(readOnly);

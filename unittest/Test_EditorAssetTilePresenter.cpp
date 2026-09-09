@@ -92,6 +92,8 @@ TEST_CASE(asset_tile_presenter_abbreviates_every_asset_type)
     CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
               EditorAssetType::UiLayout)) == L"UI");
     CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
+              EditorAssetType::Tilemap)) == L"MAP");
+    CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
               EditorAssetType::Unknown)) == L"FILE");
 }
 

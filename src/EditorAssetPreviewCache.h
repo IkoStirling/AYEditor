@@ -29,6 +29,10 @@ public:
     EditorAssetPreviewCache& operator=(const EditorAssetPreviewCache&) = delete;
 
     ayt::ui::ImageTextureHandle request(const EditorAssetRecord& record);
+    static bool supports(const EditorAssetRecord& record);
+    void setDiskCacheRoot(std::string rootPath);
+    const std::string& diskCacheRoot() const noexcept { return _diskCacheRoot; }
+    std::size_t diskCacheHitCount() const noexcept { return _diskCacheHits; }
     bool poll();
     void erase(const std::string& absolutePath);
     void clear();
@@ -39,6 +43,7 @@ private:
         int width = 0;
         int height = 0;
         std::vector<std::uint8_t> bgra;
+        bool fromDisk = false;
     };
     struct Entry {
         std::uintmax_t fileSize = 0;
@@ -50,12 +55,22 @@ private:
         bool failed = false;
     };
 
-    static bool supports(const EditorAssetRecord& record);
     static DecodedImage decode(const std::string& path);
+    static DecodedImage renderResourcePreview(
+        const std::string& path, EditorAssetType type);
+    static DecodedImage loadDiskPreview(
+        const std::string& cachePath, std::uintmax_t sourceSize,
+        std::int64_t sourceModified);
+    static void storeDiskPreview(
+        const std::string& cachePath, std::uintmax_t sourceSize,
+        std::int64_t sourceModified, const DecodedImage& image);
+    std::string cachePathFor(const std::string& absolutePath) const;
     void release(Entry& entry);
 
     CreateTexture _createTexture;
     ReleaseTexture _releaseTexture;
+    std::string _diskCacheRoot;
+    std::size_t _diskCacheHits = 0;
     std::unordered_map<std::string, Entry> _entries;
 };
 

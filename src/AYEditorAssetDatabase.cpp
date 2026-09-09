@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cctype>
+#include <fstream>
+#include <iomanip>
 #include <system_error>
 
 namespace ayt::editor {
@@ -97,7 +99,8 @@ template<typename SnapshotT>
 void appendRoot(SnapshotT& snapshot,
                 const std::filesystem::path& root,
                 const char* virtualRoot,
-                EditorAssetOrigin origin)
+                EditorAssetOrigin origin,
+                const std::filesystem::path& importSidecarRoot = {})
 {
     snapshot.folders.push_back(EditorAssetFolder{
         virtualRoot, virtualRoot, {}, origin});
@@ -149,11 +152,58 @@ void appendRoot(SnapshotT& snapshot,
         } else {
             ec.clear();
         }
+        if (origin == EditorAssetOrigin::Imported) {
+            record.importState = EditorAssetImportState::Ready;
+        } else if (record.type == EditorAssetType::SourceModel) {
+            record.importState = EditorAssetImportState::NeedsImport;
+            const std::filesystem::path sidecar = importSidecarRoot
+                / (entry.path().stem().string() + ".aydep.json");
+            const auto sidecarSize = std::filesystem::file_size(sidecar, ec);
+            if (!ec) {
+                if (sidecarSize == 0u) {
+                    record.importState = EditorAssetImportState::Failed;
+                } else {
+                    const auto sidecarModified =
+                        std::filesystem::last_write_time(sidecar, ec);
+                    if (!ec && sidecarModified >= modified) {
+                        record.importState = EditorAssetImportState::Ready;
+                    }
+                }
+            }
+            ec.clear();
+        }
         snapshot.records.push_back(std::move(record));
     }
     if (ec && snapshot.error.empty()) {
         snapshot.error = "asset scan failed under " + root.string()
             + ": " + ec.message();
+    }
+}
+
+void writeIndex(const std::filesystem::path& path,
+                const std::vector<EditorAssetRecord>& records)
+{
+    std::error_code error;
+    std::filesystem::create_directories(path.parent_path(), error);
+    if (error) return;
+    const std::filesystem::path temporary = path.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    if (!output) return;
+    output << "AYEDITOR_ASSET_INDEX\t1\n";
+    for (const EditorAssetRecord& record : records) {
+        output << record.id << '\t' << std::quoted(record.logicalPath) << '\t'
+               << static_cast<unsigned>(record.type) << '\t'
+               << static_cast<unsigned>(record.origin) << '\t'
+               << static_cast<unsigned>(record.importState) << '\t'
+               << record.size << '\t' << record.lastModified << '\n';
+    }
+    output.close();
+    if (!output) return;
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        std::filesystem::remove(path, error);
+        error.clear();
+        std::filesystem::rename(temporary, path, error);
     }
 }
 
@@ -173,9 +223,21 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::Audio: return "Audio";
     case EditorAssetType::UiLayout: return "UI Layout";
     case EditorAssetType::SourceModel: return "Source Model";
+    case EditorAssetType::Tilemap: return "Tilemap";
     case EditorAssetType::Unknown: break;
     }
     return "File";
+}
+
+const char* editorAssetImportStateName(EditorAssetImportState state) noexcept
+{
+    switch (state) {
+    case EditorAssetImportState::NeedsImport: return "Needs import";
+    case EditorAssetImportState::Ready: return "Ready";
+    case EditorAssetImportState::Failed: return "Failed";
+    case EditorAssetImportState::NotApplicable: break;
+    }
+    return "";
 }
 
 EditorAssetType classifyEditorAssetPath(const std::string& path)
@@ -184,6 +246,10 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
     if (lower.size() >= 8
         && lower.compare(lower.size() - 8, 8, ".ui.json") == 0) {
         return EditorAssetType::UiLayout;
+    }
+    if (lower.size() >= 15
+        && lower.compare(lower.size() - 15, 15, ".aytilemap.json") == 0) {
+        return EditorAssetType::Tilemap;
     }
     const std::string extension =
         lowerAscii(std::filesystem::path(lower).extension().string());
@@ -196,6 +262,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         return EditorAssetType::Texture;
     }
     if (extension == ".ayscene") return EditorAssetType::Scene;
+    if (extension == ".aytilemap") return EditorAssetType::Tilemap;
     if (extension == ".ayanm" || extension == ".ayanim") {
         return EditorAssetType::Animation;
     }
@@ -206,7 +273,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         || extension == ".vert" || extension == ".frag") {
         return EditorAssetType::Shader;
     }
-    if (extension == ".wav" || extension == ".ogg"
+    if (extension == ".ayaudio" || extension == ".wav" || extension == ".ogg"
         || extension == ".mp3" || extension == ".flac") {
         return EditorAssetType::Audio;
     }
@@ -248,6 +315,8 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
     _projectRoot = slashNormalized(root.string());
     _sourceRoot = slashNormalized(source.string());
     _derivedRoot = slashNormalized(derived.string());
+    _indexPath = slashNormalized((root / ".ayeditor" / "cache"
+        / "asset-index.tsv").string());
     Snapshot initial;
     initial.folders.push_back(EditorAssetFolder{
         "Assets", "Assets", {}, EditorAssetOrigin::Source});
@@ -268,6 +337,7 @@ void EditorAssetDatabase::close()
     _sourceRoot.clear();
     _derivedRoot.clear();
     _lastError.clear();
+    _indexPath.clear();
     _records.clear();
     _folders.clear();
     _recordById.clear();
@@ -279,7 +349,8 @@ EditorAssetDatabase::Snapshot EditorAssetDatabase::scanRoots(
     const std::filesystem::path& derivedRoot)
 {
     Snapshot snapshot;
-    appendRoot(snapshot, sourceRoot, "Assets", EditorAssetOrigin::Source);
+    appendRoot(snapshot, sourceRoot, "Assets", EditorAssetOrigin::Source,
+               derivedRoot);
     appendRoot(snapshot, derivedRoot, "Imported", EditorAssetOrigin::Imported);
     auto byPath = [](const auto& a, const auto& b) {
         return lowerAscii(a.logicalPath) < lowerAscii(b.logicalPath);
@@ -315,6 +386,7 @@ void EditorAssetDatabase::applySnapshot(Snapshot snapshot)
         _recordByLogicalPath.emplace(
             lowerAscii(_records[i].logicalPath), i);
     }
+    if (!_indexPath.empty()) writeIndex(_indexPath, _records);
 }
 
 bool EditorAssetDatabase::scanNow(std::string* error)

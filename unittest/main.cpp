@@ -21,6 +21,7 @@
 #include "Test_EditorDslDocument.cpp"           // Phoskia/Logia dock editor
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
 #include "Test_EditorFramework.cpp"             // unified editor workspace foundation
+#include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
 
 int main(int argc, char* argv[]) {
     // This executable is the host for Editor/Entity integration tests.

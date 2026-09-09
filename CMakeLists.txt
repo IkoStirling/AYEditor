@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 project(AYEditor
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "AYEditor — editor shell + Play/network client + Importer mapping"
 )
 
@@ -52,6 +52,17 @@ set(SRC_FILES
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetTilePresenter.cpp
+    src/AYEditorAssetDeleteAnalysis.cpp
+    src/AYEditorAssetTrash.cpp
+    src/AYEditorAssetOperations.cpp
+    src/AYEditorProjectAssetFactory.cpp
+    src/AYEditorProjectDescriptor.cpp
+    src/AYEditorProjectRunner.cpp
+    src/AYEditorProjectRuntimeValidator.cpp
+    src/AYEditorRecoveryStore.cpp
+    src/AYEditorBuiltInExtensions.cpp
+    src/AYEditorComponentPolicy.cpp
+    src/AYEditorShortcutRegistry.cpp
     src/EditorAssetPreviewCache.cpp
     src/AYEditorAssetListView.cpp
     src/AYEditorDslDocument.cpp
@@ -100,6 +111,18 @@ set(HEAD_FILES
     include/AYEditor/EditorVisualStyle.h
     include/AYEditor/EditorAssetDatabase.h
     include/AYEditor/EditorAssetTilePresenter.h
+    include/AYEditor/EditorAssetDeleteAnalysis.h
+    include/AYEditor/EditorAssetTrash.h
+    include/AYEditor/EditorAssetOperations.h
+    include/AYEditor/EditorProjectAssetFactory.h
+    include/AYEditor/EditorProjectDescriptor.h
+    include/AYEditor/EditorProjectRunner.h
+    include/AYEditor/EditorVersion.h
+    include/AYEditor/EditorProjectRuntimeValidator.h
+    include/AYEditor/EditorRecoveryStore.h
+    include/AYEditor/EditorBuiltInExtensions.h
+    include/AYEditor/EditorComponentPolicy.h
+    include/AYEditor/EditorShortcutRegistry.h
     include/AYEditor/EditorAssetListView.h
     include/AYEditor/EditorDslDocument.h
     include/AYEditor/EditorDslExtension.h
@@ -120,6 +143,9 @@ set(HEAD_FILES
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
+
+target_compile_definitions(${MODULE_NAME} PUBLIC
+    AYEDITOR_SOURCE_ABI_VERSION=2)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)
@@ -145,6 +171,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplication
+    PUBLIC AY2DEditorCore
     PRIVATE AYUILayoutEditorCore
     PRIVATE AYEntity AYRenderer AYResource AYResourceImport AYIO AYProject AYScript AYShader AYPlatform AYNetwork
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
@@ -172,6 +199,11 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
 if(WIN32)
     target_link_libraries(${MODULE_NAME} PRIVATE comdlg32 user32 gdi32 msimg32)
 endif()
+
+add_executable(AYEditorProjectValidator
+    tools/AYEditorProjectValidator.cpp)
+target_link_libraries(AYEditorProjectValidator PRIVATE AYEditor)
+target_link_libraries(AYEditorProjectValidator PRIVATE AYEntity)
 
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/demo
@@ -355,4 +387,4 @@ endif()
 enable_testing()
 add_subdirectory(unittest)
 
-message(STATUS "AYEditor v0.1.0 (Play/runtime + net-client + D5.5 Card promotion + Importer mapping) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")
+message(STATUS "AYEditor v${PROJECT_VERSION} (Play/runtime + net-client + D5.5 Card promotion + Importer mapping) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")

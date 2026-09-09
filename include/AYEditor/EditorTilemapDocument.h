@@ -1,17 +1,15 @@
 #pragma once
 
+#include <AY2DEditor/TilemapDocument.h>
+
 #include <cstdint>
-#include <map>
 #include <string>
 #include <vector>
 
 namespace ayt::editor
 {
 
-struct EditorTileAnimationFrame {
-    uint32_t tileId = 0;
-    uint32_t durationMs = 0;
-};
+using EditorTileAnimationFrame = ayt::ay2d::editor::TileAnimationFrame;
 
 // Authoring model for AYResource's `.aytilemap.json` schema. It deliberately
 // contains no AYUI widget or GPU handle and is safe to use in import tools.
@@ -23,12 +21,12 @@ public:
     bool load(const std::string& path, std::string* error = nullptr);
     bool save(const std::string& path = {}, std::string* error = nullptr);
 
-    [[nodiscard]] uint32_t cols() const noexcept { return _cols; }
-    [[nodiscard]] uint32_t rows() const noexcept { return _rows; }
-    [[nodiscard]] uint32_t tileWidth() const noexcept { return _tileWidth; }
-    [[nodiscard]] uint32_t tileHeight() const noexcept { return _tileHeight; }
-    [[nodiscard]] bool dirty() const noexcept { return _dirty; }
-    [[nodiscard]] const std::string& path() const noexcept { return _path; }
+    [[nodiscard]] uint32_t cols() const noexcept { return _document.cols(); }
+    [[nodiscard]] uint32_t rows() const noexcept { return _document.rows(); }
+    [[nodiscard]] uint32_t tileWidth() const noexcept { return _document.tileWidth(); }
+    [[nodiscard]] uint32_t tileHeight() const noexcept { return _document.tileHeight(); }
+    [[nodiscard]] bool dirty() const noexcept { return _document.dirty(); }
+    [[nodiscard]] const std::string& path() const noexcept { return _document.path(); }
 
     [[nodiscard]] uint32_t tileAt(uint32_t col, uint32_t row) const noexcept;
     bool paint(uint32_t col, uint32_t row, uint32_t tileId) noexcept;
@@ -38,26 +36,17 @@ public:
                       std::vector<EditorTileAnimationFrame> frames);
 
     [[nodiscard]] const std::map<uint32_t, uint32_t>& collisionFlags() const noexcept {
-        return _collisionFlags;
+        return _document.collisionFlags();
     }
     [[nodiscard]] const std::map<uint32_t,
         std::vector<EditorTileAnimationFrame>>& animations() const noexcept {
-        return _animations;
+        return _document.animations();
     }
 
 private:
-    [[nodiscard]] size_t indexOf(uint32_t col, uint32_t row) const noexcept;
-
-    std::string _path;
-    uint32_t _cols = 0;
-    uint32_t _rows = 0;
-    uint32_t _tileWidth = 0;
-    uint32_t _tileHeight = 0;
-    uint32_t _defaultTileId = 0;
-    std::vector<uint32_t> _tiles;
-    std::map<uint32_t, uint32_t> _collisionFlags;
-    std::map<uint32_t, std::vector<EditorTileAnimationFrame>> _animations;
-    bool _dirty = false;
+    // Compatibility facade over the single AY2D authoring model. New editor
+    // features should consume AY2DEditor::TilemapDocument directly.
+    ayt::ay2d::editor::TilemapDocument _document;
 };
 
 } // namespace ayt::editor

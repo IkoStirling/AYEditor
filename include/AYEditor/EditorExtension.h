@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AYEditor/EditorVersion.h"
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -70,6 +72,14 @@ public:
     virtual bool canReload() const noexcept { return false; }
     virtual bool reload(std::string* error = nullptr) {
         if (error != nullptr) *error = "Reload is not supported.";
+        return false;
+    }
+
+    // Serialize the current in-memory document to a recovery-only path
+    // without changing its title, source path, dirty flag, or undo history.
+    virtual bool writeRecoveryCopy(const std::string& /*path*/,
+                                   std::string* error = nullptr) const {
+        if (error != nullptr) *error = "Crash recovery is not supported.";
         return false;
     }
 };

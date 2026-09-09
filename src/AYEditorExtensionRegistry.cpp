@@ -98,10 +98,9 @@ const EditorDescriptor* EditorExtensionRegistry::resolve(
     const EditorOpenRequest& request) const noexcept
 {
     if (!request.preferredEditorId.empty()) {
-        const EditorDescriptor* preferred = find(request.preferredEditorId);
-        return preferred != nullptr
-            && preferred->surfaceKind == EditorSurfaceKind::Document
-            ? preferred : nullptr;
+        // Explicit tool launchers address ToolPanel descriptors by id. Path
+        // based resolution below remains document-only.
+        return find(request.preferredEditorId);
     }
 
     const std::string assetType = normalizeAssetType(request.assetType);

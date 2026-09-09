@@ -11,6 +11,8 @@ class EditorUiLayoutDocument final : public IEditorDocument {
 public:
     using SaveHandler = std::function<bool(
         const std::string& path, bool saveAs, std::string& error)>;
+    using RecoveryHandler = std::function<bool(
+        const std::string& path, std::string& error)>;
 
     bool initialize(const std::string& path,
                     const std::string& displayPath,
@@ -26,8 +28,11 @@ public:
     bool canSaveAs() const noexcept override { return true; }
     bool saveAs(const std::string& path,
                 std::string* error = nullptr) override;
+    bool writeRecoveryCopy(const std::string& path,
+                           std::string* error = nullptr) const override;
 
-    void bindView(void* owner, SaveHandler handler);
+    void bindView(void* owner, SaveHandler handler,
+                  RecoveryHandler recoveryHandler = {});
     void unbindView(void* owner) noexcept;
     void updateViewState(const std::string& path, bool dirty);
 
@@ -43,6 +48,7 @@ private:
     uint64_t _revision = 1;
     void* _viewOwner = nullptr;
     SaveHandler _saveHandler;
+    RecoveryHandler _recoveryHandler;
 };
 
 } // namespace ayt::editor

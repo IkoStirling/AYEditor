@@ -1,8 +1,9 @@
 # AYEditor Workspace Framework
 
 This document defines the AYEditor-side foundation for future editor surfaces.
-The DSL and UI Layout editors are migrated production surfaces; Scene, Audio,
-and Tilemap remain on their existing integration paths.
+The DSL and UI Layout editors are migrated production surfaces. Scene
+selection/commands, Tilemap, Audio and Timeline now use the same workspace
+services, while Scene rendering remains the shell's dedicated center surface.
 
 ## Editor surface kinds
 
@@ -135,12 +136,49 @@ document and their own not-yet-mounted subtree.
 
 ## Migration order
 
-1. Move Scene selection and transform commands onto workspace services.
-2. Resolve duplicate Tilemap authoring models and host the selected module core.
-3. Classify the current Audio mixer as a ToolPanel; a future waveform/resource
-   editor is a separate Document editor.
-4. Add Timeline as a contextual ToolPanel consuming an active document's future
-   timeline-source capability.
+All four initial migrations are complete:
 
-Until those migrations occur, the framework must remain additive and existing
-`EditorSession` behavior remains the fallback baseline.
+1. Scene entity selection is mirrored by the `scene.main` typed selection
+   context, and Undo/Redo reaches the transform command target through
+   `EditorCommandRouter`.
+2. `EditorTilemapDocument` is now a compatibility facade over
+   `AY2DEditor::TilemapDocument`; new tilemap documents and views consume the
+   shared `AY2DEditorCore` model and serializer.
+3. The Audio mixer is registered as the singleton
+   `ayeditor.tool.audio` ToolPanel. It is embedded in the workspace and exposes
+   master/bus controls; the full native audio editor remains available from
+   that panel.
+4. `ayeditor.tool.timeline` is a singleton contextual ToolPanel with a ruler,
+   track rows, scrubbing, playhead, and playback controls. Animation and Audio
+   asset documents expose the shared `IEditorTimelineSource` adapter without
+   introducing those module dependencies into the workspace core.
+
+Explicit `preferredEditorId` requests may resolve ToolPanel descriptors. Normal
+extension and asset-type routing remains Document-only, so tools cannot capture
+resource opens accidentally.
+
+## Project authoring workflow
+
+- File -> New Scene/UI Layout/Tilemap creates a valid, uniquely named document
+  below `Assets/worlds`, `Assets/ui`, or `Assets/tilemaps`, rescans the project,
+  selects the result, and opens its registered editor.
+- Scene and UI file dialogs start in those project folders. Content Browser
+  double-click routes Scene, UI Layout, Tilemap, Phoskia and Logia assets rather
+  than treating recognized authoring files as inert entries.
+- Content Browser deletion first reports text-file references, then moves the
+  selected transaction below `.ayeditor/trash`. Edit -> Restore Last Deleted
+  Assets restores the whole transaction if none of its original paths has been
+  reused.
+- Raster previews and Mesh/Material/Animation/Skeleton previews share one
+  asynchronous path/size/mtime cache. Mesh thumbnails project cooked geometry;
+  Material thumbnails use authored base color; Animation thumbnails plot the
+  first authored track and fall back safely for malformed resources.
+- Rename and Move repair portable authored references transactionally; Copy
+  preserves the source references. Trash transactions, preview thumbnails, and
+  the metadata/import-state index persist below the project `.ayeditor` tree.
+- Run Current Project resolves `.ayeditor/run.json`, while Validate Project
+  Content loads Scene, UI Layout, and Tilemap assets without a window or
+  renderer. Autosave and crash recovery cover all editable document types.
+
+The concrete project paths and operational behavior are documented in
+[project-workflow.md](project-workflow.md).

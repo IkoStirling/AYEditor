@@ -894,9 +894,13 @@ rendering primitives:
   标记。Session binder 把这些值写入 AYUI 的通用 `InfoStrip`/`CornerMarker`；AYUI
   不包含 EngineAsset、Mesh 等编辑器语义。Presenter 不读取 SVG/PNG、不创建控件，
   也不执行重命名或其他文件系统操作；预览图来源与缓存延后到缩略图阶段实现。
-- P0 仍不包含缩略图缓存、右键菜单、重命名/移动/删除、文件系统 watcher、
-  `.meta` GUID、依赖图、材质/场景双击编辑器以及资源引用修复。稳定后可把通用的
-  项目身份、导入策略和资源语义继续留在 AYEditor/AYProject/AYResource。
+- 当前 Content Browser 已包含异步缩略图缓存、Shift/Ctrl/框选、多选删除确认、
+  小型文本资源的引用提示、项目内可恢复 trash，以及 Scene/UI/Tilemap/DSL 的
+  双击打开。Mesh/Material/Animation 预览读取实际资源数据并按路径、大小、mtime
+  缓存；PNG/JPEG/BMP/TGA 使用真实图像预览。
+- 仍未包含右键菜单、重命名/移动、文件系统 watcher、`.meta` GUID、完整依赖图与
+  自动引用修复。项目身份、导入策略和资源语义继续留在
+  AYEditor/AYProject/AYResource。
 
 ### 10.4 Phoskia / Logia DSL document tabs
 

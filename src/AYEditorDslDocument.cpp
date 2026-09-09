@@ -201,6 +201,21 @@ bool EditorDslDocument::save(std::string* error)
     return true;
 }
 
+bool EditorDslDocument::writeRecoveryCopy(
+    const std::string& path, std::string* error) const
+{
+    const std::string serialized = serializeForDisk();
+    const bool written = serialized.empty()
+        ? ayt::io::File::writeAllText(path, serialized)
+        : ayt::io::File::atomicWrite(path, serialized.data(), serialized.size());
+    if (!written && error != nullptr) {
+        *error = "Failed to write DSL recovery copy.";
+    } else if (error != nullptr) {
+        error->clear();
+    }
+    return written;
+}
+
 bool EditorDslDocument::reload(std::string* error)
 {
     if (_absolutePath.empty()) {

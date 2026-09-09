@@ -107,4 +107,24 @@ void EditorCommandStack::notifyChanged()
     if (_changed) _changed();
 }
 
+bool EditorCommandStack::handlesCommand(const std::string& commandId) const
+{
+    return commandId == "edit.undo" || commandId == "edit.redo";
+}
+
+bool EditorCommandStack::canExecuteCommand(
+    const std::string& commandId) const
+{
+    if (commandId == "edit.undo") return canUndo();
+    if (commandId == "edit.redo") return canRedo();
+    return false;
+}
+
+bool EditorCommandStack::executeCommand(const std::string& commandId)
+{
+    if (commandId == "edit.undo") return undo();
+    if (commandId == "edit.redo") return redo();
+    return false;
+}
+
 } // namespace ayt::editor

@@ -59,6 +59,17 @@ struct EditorUiLayoutController::Impl {
                         ? session.saveAs(path) : session.save();
                     if (!saved) error = "UI Layout session could not save.";
                     return saved;
+                },
+                [this](const std::string& path, std::string& error) {
+                    if (!attached) {
+                        error = "UI Layout controller is not attached.";
+                        return false;
+                    }
+                    const bool saved = session.writeRecoveryCopy(path);
+                    if (!saved) {
+                        error = "UI Layout recovery copy could not be written.";
+                    }
+                    return saved;
                 });
         }
     }

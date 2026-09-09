@@ -46,6 +46,23 @@ For hosts/tests that have not opened a project, the compatibility fallback is
         └── *.txt
 ```
 
+Editor metadata that is safe to delete but is not an imported runtime asset is
+kept in a separate tree:
+
+```
+<project>/.ayeditor/
+├── cache/
+│   ├── asset-index.tsv
+│   └── previews/*.aypreview
+├── recovery/
+└── trash/<transaction>/manifest.tsv
+```
+
+`.ayeditor_cache` remains the runtime/import output root. `.ayeditor/cache`
+contains only editor indexing and thumbnail acceleration data; recovery and
+trash are transaction stores and must not be treated as ordinary cache during
+an editor session.
+
 ### assets/ subdirectories
 
 `meshes/`, `materials/`, `skeletons/`, `animations/`, `textures/` are

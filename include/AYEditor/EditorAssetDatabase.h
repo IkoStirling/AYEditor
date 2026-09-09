@@ -1,5 +1,7 @@
 #pragma once
 
+#include "AYEditor/EditorVersion.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <future>
@@ -25,11 +27,20 @@ enum class EditorAssetType : std::uint8_t {
     Audio,
     UiLayout,
     SourceModel,
+    // Appended to preserve the numeric values of the public asset-type ABI.
+    Tilemap,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {
     Source = 0,
     Imported,
+};
+
+enum class EditorAssetImportState : std::uint8_t {
+    NotApplicable = 0,
+    NeedsImport,
+    Ready,
+    Failed,
 };
 
 struct EditorAssetRecord {
@@ -46,6 +57,10 @@ struct EditorAssetRecord {
     EditorAssetOrigin origin = EditorAssetOrigin::Source;
     std::uintmax_t size = 0;
     std::int64_t lastModified = 0;
+    // Appended so consumers built against the earlier record layout retain
+    // all existing field offsets. Source-model state is also persisted in the
+    // editor index for fast project status display.
+    EditorAssetImportState importState = EditorAssetImportState::NotApplicable;
 };
 
 struct EditorAssetFolder {
@@ -65,6 +80,7 @@ struct EditorAssetEntry {
 };
 
 const char* editorAssetTypeName(EditorAssetType type) noexcept;
+const char* editorAssetImportStateName(EditorAssetImportState state) noexcept;
 EditorAssetType classifyEditorAssetPath(const std::string& path);
 
 // AYEditor-owned catalog for loose project files. This is deliberately not a
@@ -92,6 +108,7 @@ public:
     const std::string& sourceRoot() const noexcept { return _sourceRoot; }
     const std::string& derivedRoot() const noexcept { return _derivedRoot; }
     const std::string& lastError() const noexcept { return _lastError; }
+    const std::string& indexPath() const noexcept { return _indexPath; }
 
     const std::vector<EditorAssetRecord>& records() const noexcept {
         return _records;
@@ -133,6 +150,7 @@ private:
     std::string _sourceRoot;
     std::string _derivedRoot;
     std::string _lastError;
+    std::string _indexPath;
     std::vector<EditorAssetRecord> _records;
     std::vector<EditorAssetFolder> _folders;
     std::unordered_map<EditorAssetId, std::size_t> _recordById;

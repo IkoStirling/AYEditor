@@ -1,9 +1,11 @@
 #pragma once
 
+#include "AYEditor/EditorExtension.h"
 #include "AYMath/MathTypes.h"
 
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,7 +19,7 @@ struct EditorTransformState {
     ayt::math::FVector3 scale{1.0f, 1.0f, 1.0f};
 };
 
-class EditorCommandStack {
+class EditorCommandStack : public IEditorCommandTarget {
 public:
     using ChangedCallback = std::function<void()>;
 
@@ -29,6 +31,10 @@ public:
     bool canUndo() const noexcept { return !_undo.empty(); }
     bool canRedo() const noexcept { return !_redo.empty(); }
     void setChangedCallback(ChangedCallback callback) { _changed = std::move(callback); }
+
+    bool handlesCommand(const std::string& commandId) const override;
+    bool canExecuteCommand(const std::string& commandId) const override;
+    bool executeCommand(const std::string& commandId) override;
 
 private:
     struct TransformCommand {
