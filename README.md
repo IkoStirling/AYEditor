@@ -8,7 +8,10 @@ AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play �
 恢复体系；PNG 图集现在通过宿主 authoring-image cache 接入原始像素与共享 GPU
 纹理，主编辑器内可使用模态切片导入、Source Sheet 原图选砖和真实纹理画布；
 导入支持 Tiled/TexturePacker 伴随元数据识别、手工自由矩形，以及可保存和撤销的
-多格 Stamp 笔刷。
+多格 Stamp 笔刷。Tilemap 也提供独立 Shadow 模式、16 种四象限遮罩、显隐和地图级
+RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
+主界面可通过 `Tools -> 2D Tilemap Editor...` 或第二行网格图标直接打开同一套
+Tilemap 工作区；不再要求先在 Content Browser 中找到并双击地图资产。
 
 ## 公开接口
 

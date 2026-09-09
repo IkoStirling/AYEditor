@@ -1027,6 +1027,58 @@ rendering primitives:
   history gesture. Canvas clipping skips only cells that land outside the map;
   it never shifts the selected pattern to fit.
 
+### 10.9 Semantic Tilemap shadow authoring
+
+- AYEditor binds the shared AY2D quarter-cell shadow plane rather than creating
+  shadow Tile assets or invoking the 3D shadow-map settings. `Shadow` is a
+  distinct toolbar mode and therefore cannot be confused with an inactive Tile
+  brush.
+- A labelled mask selector exposes the complete 4-bit brush space, including
+  full/half/quarter presets and `Clear`. Selection changes only the Shadow brush;
+  painting replaces the cell mask and is grouped by the core gesture history.
+- The Tilemap canvas draws the persisted RGBA mask as four pixel-aligned
+  half-cell overlays and previews the selected mask under the pointer. Runtime
+  dynamic-light occluders remain outside this authoring integration.
+
+### 10.10 Tilemap tool-level shell entry
+
+- Registering a Tilemap document editor is not, by itself, complete shell
+  integration. The main AYEditor exposes the same Tilemap workspace from both
+  `Tools -> 2D Tilemap Editor...` and the second-row tool-launcher toolbar.
+- The toolbar uses a dedicated grid icon and an explicit `Open 2D Tilemap
+  Editor` accessibility label. A text fallback remains visible when the SVG
+  asset cannot be loaded.
+- Both entry points open the same stable untitled Tilemap resource key in the
+  Center dock. Repeated activation focuses that live workspace rather than
+  creating nested or duplicate documents. Asset-backed Tilemaps continue to
+  open per resource through the Content Browser or `File -> New Tilemap`.
+
+Verification after this slice: `AYEditor_UnitTests` and `AYEditorShell_Demo`
+link, the 993-check `AYEditor_Shell` suite passes, the shell JSON parses, and
+the toolbar/menu regression opens then refocuses one live Tilemap workspace.
+
+### 10.11 Tilemap compact controls and modal ownership
+
+- Tile-sheet import is a main-window modal owned by the Tilemap view's explicit
+  `UIManager`. Opening is scoped to that manager, the logical dialog size is
+  clamped to the current client area, and its position is recomputed from the
+  live logical client size on every open. This keeps the scrim, focus trap,
+  hit-testing and dialog on the same window and prevents a previously active
+  secondary window from receiving only part of the modal interaction.
+- The Tilemap paint toolbar is icon-first: Pencil, Eraser, Fill, Rectangle,
+  Stamp, Shadow, Grid, Collision overlay, Shadow overlay and Frame are compact
+  square SVG buttons. Active tool and enabled overlays use accent icon color;
+  the permanent canvas badge remains the authoritative textual mode signal.
+  Every icon button keeps an accessibility label, hover tooltip and a short
+  text fallback if its SVG cannot be parsed.
+- Render-layer add/remove/reorder/visibility/rename actions use the same square
+  icon-button contract. The layer-name field remains textual. This change is a
+  local density and clipping correction, not a wider Tilemap visual redesign.
+- Semantic icon mapping remains AYEditor-owned while SVG parsing/rendering stays
+  in AYUI. Missing Tabler outline icons are vendored from the shared AssetRepo
+  into immutable `EngineAssets/Icons/Tabler/outline`; production code never
+  depends on the developer-only AssetRepo path.
+
 ---
 
 ## 11. Decisions log
@@ -1064,6 +1116,7 @@ rendering primitives:
 | 2026-09-08 | Designer 保存/重开验证升级为对象级结构检查；生产 Loader 对称重建 Tab/Modal/Dialog payload 与深层 ID，并修复未挂载 Tab page 的重复 ID。 |
 | 2026-09-09 | Tilemap 作者保存与运行时烘焙结果分离；共享 `AY2DEditorCore` 的 Tilemap 文档页由摘要占位升级为可绘制、可取样、可缩放平移、可管理图层和 Tile 属性的 AYEditor 工作区。 |
 | 2026-09-09 | Tilemap 主编辑器图集工作流统一走宿主 authoring-image cache；原图选砖、模态切片和画布纹理共享 AY2D 的切片规划；随后 Timeline 公共编辑契约加入，AYEditor Source ABI 最终升至 4。 |
+| 2026-09-09 | Tilemap 从仅资源触发的文档扩展补齐为主壳层工具入口：Tools 菜单和第二行网格图标打开同一未命名 Center Dock 工作区，重复点击只聚焦现有页。 |
 
 ---
 

@@ -1,6 +1,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 
 #include "AYEditor/EditorCommandSystem.h"
+#include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEditorTileAtlasPicker.h"
 #include "AYEditorTilemapCanvas.h"
@@ -19,8 +20,10 @@
 #include <AYUI/Modal.h>
 #include <AYUI/Panel.h>
 #include <AYUI/Slider.h>
+#include <AYUI/SvgIcon.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/TextInput.h>
+#include <AYUI/Tooltip.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/UnicodeText.h>
@@ -28,6 +31,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -54,7 +58,11 @@ struct TilemapSaveResult {
 bool runtimeV2CanRepresent(
     const ayt::ay2d::editor::TilemapDocument& document) noexcept
 {
-    if (document.layerCount() != 1u || !document.tileAtlases().empty()) {
+    if (document.layerCount() != 1u || !document.tileAtlases().empty()
+        || document.shadowColor() != 0x00000080u
+        || std::any_of(document.shadowMasks().begin(),
+                       document.shadowMasks().end(),
+                       [](uint8_t mask) { return mask != 0u; })) {
         return false;
     }
     return std::none_of(
@@ -63,6 +71,48 @@ bool runtimeV2CanRepresent(
             return pair.second.atlasId != 0u
                 || pair.second.tintRgba != 0xffffffffu;
         });
+}
+
+constexpr std::array<uint8_t, 16> kShadowBrushMasks{
+    ayt::ay2d::editor::ShadowMask_All,
+    ayt::ay2d::editor::ShadowMask_TopLeft
+        | ayt::ay2d::editor::ShadowMask_TopRight,
+    ayt::ay2d::editor::ShadowMask_BottomLeft
+        | ayt::ay2d::editor::ShadowMask_BottomRight,
+    ayt::ay2d::editor::ShadowMask_TopLeft
+        | ayt::ay2d::editor::ShadowMask_BottomLeft,
+    ayt::ay2d::editor::ShadowMask_TopRight
+        | ayt::ay2d::editor::ShadowMask_BottomRight,
+    ayt::ay2d::editor::ShadowMask_TopLeft,
+    ayt::ay2d::editor::ShadowMask_TopRight,
+    ayt::ay2d::editor::ShadowMask_BottomLeft,
+    ayt::ay2d::editor::ShadowMask_BottomRight,
+    ayt::ay2d::editor::ShadowMask_TopLeft
+        | ayt::ay2d::editor::ShadowMask_BottomRight,
+    ayt::ay2d::editor::ShadowMask_TopRight
+        | ayt::ay2d::editor::ShadowMask_BottomLeft,
+    0x07u, 0x0bu, 0x0du, 0x0eu,
+    ayt::ay2d::editor::ShadowMask_None,
+};
+
+const std::vector<std::wstring>& shadowBrushLabels()
+{
+    static const std::vector<std::wstring> labels{
+        L"Shadow: Full", L"Shadow: Top", L"Shadow: Bottom",
+        L"Shadow: Left", L"Shadow: Right", L"Shadow: Top-left",
+        L"Shadow: Top-right", L"Shadow: Bottom-left",
+        L"Shadow: Bottom-right", L"Shadow: Diagonal \\ ",
+        L"Shadow: Diagonal /", L"Shadow: Except BR",
+        L"Shadow: Except BL", L"Shadow: Except TR",
+        L"Shadow: Except TL", L"Shadow: Clear"};
+    return labels;
+}
+
+std::wstring rgbaText(uint32_t rgba)
+{
+    wchar_t buffer[11]{};
+    std::swprintf(buffer, 11u, L"0x%08X", rgba);
+    return buffer;
 }
 
 TilemapSaveResult saveTilemapSourceAndTryCook(
@@ -74,7 +124,8 @@ TilemapSaveResult saveTilemapSourceAndTryCook(
     result.sourceSaved = true;
     if (!runtimeV2CanRepresent(model.document())) {
         result.notice = "Authoring source saved. Runtime v2 was not updated "
-            "because it cannot represent layers, atlas regions, or tile tint.";
+            "because it cannot represent layers, atlas regions, tile tint, "
+            "or semantic shadows.";
         if (error != nullptr) error->clear();
         return result;
     }
@@ -264,6 +315,22 @@ bool parseUint32(const std::wstring& text, uint32_t& value)
     return true;
 }
 
+bool parseRgba(const std::wstring& text, uint32_t& value)
+{
+    if (text.size() == 9u && text.front() == L'#') {
+        wchar_t* end = nullptr;
+        const unsigned long long parsed = std::wcstoull(
+            text.c_str() + 1, &end, 16);
+        if (end != text.c_str() + text.size()
+            || parsed > (std::numeric_limits<uint32_t>::max)()) {
+            return false;
+        }
+        value = static_cast<uint32_t>(parsed);
+        return true;
+    }
+    return parseUint32(text, value);
+}
+
 enum class AtlasImportMode : uint8_t {
     Grid,
     Metadata,
@@ -379,7 +446,9 @@ class TilemapWorkspaceView final
 public:
     TilemapWorkspaceView(std::shared_ptr<TilemapWorkspaceDocument> document,
                          IEditorHostServices& host)
-        : _document(std::move(document)), _host(host)
+        : _document(std::move(document)), _host(host),
+          _iconRoot(EditorProductPaths::detect().engineAssetsRoot
+                    / "Icons/Tabler/outline")
     {
         auto* root = new ayt::ui::VBox();
         _root = root;
@@ -390,49 +459,87 @@ public:
         auto* toolbar = new ayt::ui::HBox();
         toolbar->setId("tilemap_workspace_toolbar");
         toolbar->setSpacing(4.0f);
-        _pencil = addButton(toolbar, L"Pencil  P", 86.0f, [this]() {
-            setTool(ayt::ay2d::editor::PaintTool::Pencil);
-        });
-        _pencil->setId("tilemap_tool_pencil");
-        _eraser = addButton(toolbar, L"Eraser  E", 86.0f, [this]() {
-            setTool(ayt::ay2d::editor::PaintTool::Eraser);
-        });
-        _eraser->setId("tilemap_tool_eraser");
-        _fill = addButton(toolbar, L"Fill  F", 72.0f, [this]() {
-            setTool(ayt::ay2d::editor::PaintTool::FloodFill);
-        });
-        _fill->setId("tilemap_tool_fill");
-        _rectangle = addButton(toolbar, L"Rectangle  R", 108.0f, [this]() {
-            setTool(ayt::ay2d::editor::PaintTool::Rectangle);
-        });
-        _rectangle->setId("tilemap_tool_rectangle");
-        _stamp = addButton(toolbar, L"Stamp  S", 82.0f, [this]() {
-            if (_document->model().selectedStampId() == 0u) {
-                _host.setStatusText(
-                    L"Choose a saved Stamp or create one from Source Sheet.");
+        _pencil = addIconButton(
+            toolbar, "tilemap_tool_pencil", "pencil.svg", L"P",
+            L"Pencil (P)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::Pencil);
+            });
+        _eraser = addIconButton(
+            toolbar, "tilemap_tool_eraser", "eraser.svg", L"E",
+            L"Eraser (E)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::Eraser);
+            });
+        _fill = addIconButton(
+            toolbar, "tilemap_tool_fill", "bucket.svg", L"F",
+            L"Flood Fill (F)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::FloodFill);
+            });
+        _rectangle = addIconButton(
+            toolbar, "tilemap_tool_rectangle", "rectangle.svg", L"R",
+            L"Rectangle (R)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::Rectangle);
+            });
+        _stamp = addIconButton(
+            toolbar, "tilemap_tool_stamp", "rubber-stamp.svg", L"S",
+            L"Stamp (S)", [this]() {
+                if (_document->model().selectedStampId() == 0u) {
+                    _host.setStatusText(
+                        L"Choose a saved Stamp or create one from Source Sheet.");
+                    return;
+                }
+                setTool(ayt::ay2d::editor::PaintTool::Stamp);
+            });
+        _shadow = addIconButton(
+            toolbar, "tilemap_tool_shadow", "shadow.svg", L"H",
+            L"Shadow mask (H)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::Shadow);
+            });
+        _shadowMaskSelector = new ayt::ui::ComboBox();
+        _shadowMaskSelector->setId("tilemap_workspace_shadow_mask");
+        _shadowMaskSelector->setItems(shadowBrushLabels());
+        _shadowMaskSelector->setSelectedIndex(0);
+        _shadowMaskSelector->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(kShadowBrushMasks.size())) {
                 return;
             }
-            setTool(ayt::ay2d::editor::PaintTool::Stamp);
+            if (_document->model().setSelectedShadowMask(
+                    kShadowBrushMasks[static_cast<size_t>(index)])) {
+                setTool(ayt::ay2d::editor::PaintTool::Shadow);
+            }
         });
-        _stamp->setId("tilemap_tool_stamp");
-        _grid = addButton(toolbar, L"Grid: On", 78.0f, [this]() {
-            _canvas->setShowGrid(!_canvas->showGrid());
-            refresh();
-            _host.requestRepaint();
-        });
-        _collision = addButton(toolbar, L"Collision: On", 108.0f, [this]() {
-            _canvas->setShowCollision(!_canvas->showCollision());
-            refresh();
-            _host.requestRepaint();
-        });
-        addButton(toolbar, L"Frame  Home", 104.0f, [this]() {
-            _canvas->frameDocument();
-            _host.requestRepaint();
-        });
+        toolbar->addWidget(_shadowMaskSelector, 142.0f);
+        _grid = addIconButton(
+            toolbar, "tilemap_tool_grid", "grid.svg", L"G",
+            L"Show or hide grid", [this]() {
+                _canvas->setShowGrid(!_canvas->showGrid());
+                refresh();
+                _host.requestRepaint();
+            });
+        _collision = addIconButton(
+            toolbar, "tilemap_tool_collision", "shield.svg", L"C",
+            L"Show or hide collision overlay", [this]() {
+                _canvas->setShowCollision(!_canvas->showCollision());
+                refresh();
+                _host.requestRepaint();
+            });
+        _shadowVisibility = addIconButton(
+            toolbar, "tilemap_tool_shadow_visibility", "eye.svg", L"V",
+            L"Show or hide shadow overlay", [this]() {
+                _canvas->setShowShadows(!_canvas->showShadows());
+                refresh();
+                _host.requestRepaint();
+            });
+        _frame = addIconButton(
+            toolbar, "tilemap_tool_frame", "frame.svg", L"Home",
+            L"Frame map (Home)", [this]() {
+                _canvas->frameDocument();
+                _host.requestRepaint();
+            });
         _summary = new ayt::ui::TextLabel();
         _summary->setFontSize(12);
         toolbar->addWidget(_summary, 0.0f);
-        root->addWidget(toolbar, 30.0f);
+        root->addWidget(toolbar, 32.0f);
 
         auto* body = new ayt::ui::HBox();
         body->setId("tilemap_workspace_body");
@@ -520,10 +627,12 @@ public:
         _stampSelect = new ayt::ui::Button();
         _stampSelect->setId("tilemap_workspace_stamp_select");
         _stampSelect->setText(L"Select");
+        _stampSelect->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _stampSelect->setOnClicked([this]() { toggleStampSelection(); });
         stampRow->addWidget(_stampSelect, 58.0f);
         _stampDelete = new ayt::ui::Button();
         _stampDelete->setText(L"−");
+        _stampDelete->setPadding(6.0f, 2.0f, 6.0f, 2.0f);
         _stampDelete->setOnClicked([this]() { deleteSelectedStamp(); });
         stampRow->addWidget(_stampDelete, 34.0f);
         assets->addWidget(stampRow, 29.0f);
@@ -604,38 +713,68 @@ public:
         inspector->addWidget(_layerList, 0.0f);
         auto* layerButtons = new ayt::ui::HBox();
         layerButtons->setSpacing(3.0f);
-        addButton(layerButtons, L"+", 42.0f, [this]() {
-            const size_t number =
-                _document->model().document().layerCount() + 1u;
-            mutate(_document->model().addLayer(
-                "Layer " + std::to_string(number)));
-        });
-        addButton(layerButtons, L"−", 42.0f, [this]() {
-            mutate(_document->model().removeLayer(activeLayer()));
-        });
-        addButton(layerButtons, L"Up", 48.0f, [this]() {
-            mutate(_document->model().moveLayer(activeLayer(), 1));
-        });
-        addButton(layerButtons, L"Down", 54.0f, [this]() {
-            mutate(_document->model().moveLayer(activeLayer(), -1));
-        });
-        inspector->addWidget(layerButtons, 28.0f);
-        addButton(inspector, L"Show / hide active layer", 29.0f, [this]() {
-            const size_t layer = activeLayer();
-            const auto& layers = _document->model().document().layers();
-            if (layer < layers.size()) {
-                mutate(_document->model().setLayerVisible(
-                    layer, !layers[layer].visible));
-            }
-        });
+        addIconButton(
+            layerButtons, "tilemap_layer_add", "plus.svg", L"+",
+            L"Add render layer", [this]() {
+                const size_t number =
+                    _document->model().document().layerCount() + 1u;
+                mutate(_document->model().addLayer(
+                    "Layer " + std::to_string(number)));
+            });
+        addIconButton(
+            layerButtons, "tilemap_layer_remove", "minus.svg", L"−",
+            L"Remove active render layer", [this]() {
+                mutate(_document->model().removeLayer(activeLayer()));
+            });
+        addIconButton(
+            layerButtons, "tilemap_layer_up", "arrow-up.svg", L"↑",
+            L"Move active layer up", [this]() {
+                mutate(_document->model().moveLayer(activeLayer(), 1));
+            });
+        addIconButton(
+            layerButtons, "tilemap_layer_down", "arrow-down.svg", L"↓",
+            L"Move active layer down", [this]() {
+                mutate(_document->model().moveLayer(activeLayer(), -1));
+            });
+        _layerVisibility = addIconButton(
+            layerButtons, "tilemap_layer_visibility", "eye.svg", L"V",
+            L"Show or hide active layer", [this]() {
+                const size_t layer = activeLayer();
+                const auto& layers = _document->model().document().layers();
+                if (layer < layers.size()) {
+                    mutate(_document->model().setLayerVisible(
+                        layer, !layers[layer].visible));
+                }
+            });
+        inspector->addWidget(layerButtons, 32.0f);
         _layerName = new ayt::ui::TextInput();
         _layerName->setId("tilemap_workspace_layer_name");
         _layerName->setPlaceholder(L"Active layer name");
-        inspector->addWidget(_layerName, 27.0f);
-        addButton(inspector, L"Rename active layer", 29.0f, [this]() {
-            mutate(_document->model().renameLayer(
-                activeLayer(), encodeUtf8(_layerName->getText())));
-        });
+        auto* layerNameRow = new ayt::ui::HBox();
+        layerNameRow->setSpacing(3.0f);
+        layerNameRow->addWidget(_layerName, 0.0f);
+        addIconButton(
+            layerNameRow, "tilemap_layer_rename", "edit.svg", L"R",
+            L"Rename active layer", [this]() {
+                mutate(_document->model().renameLayer(
+                    activeLayer(), encodeUtf8(_layerName->getText())));
+            });
+        inspector->addWidget(layerNameRow, 32.0f);
+        inspector->addWidget(makeLabel(L"Map Shadow Color · #RRGGBBAA", 13),
+                             23.0f);
+        _shadowColor = new ayt::ui::TextInput();
+        _shadowColor->setId("tilemap_workspace_shadow_color");
+        _shadowColor->setPlaceholder(L"0x00000080");
+        inspector->addWidget(_shadowColor, 27.0f);
+        addButton(inspector, L"Apply shadow color", 29.0f, [this]() {
+            uint32_t rgba = 0u;
+            if (!parseRgba(_shadowColor->getText(), rgba)) {
+                _host.setStatusText(
+                    L"Shadow color must be #RRGGBBAA or 0xRRGGBBAA.");
+                return;
+            }
+            mutate(_document->model().setShadowColor(rgba));
+        })->setId("tilemap_workspace_shadow_color_apply");
         inspector->addWidget(makeLabel(L"Selected Tile Collision", 13), 23.0f);
         _collisionFlags = new ayt::ui::TextInput();
         _collisionFlags->setId("tilemap_workspace_collision_flags");
@@ -662,6 +801,7 @@ public:
         refresh();
     }
     ~TilemapWorkspaceView() override {
+        clearTooltips();
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
     ayt::ui::Widget* rootWidget() noexcept override { return _root; }
@@ -671,6 +811,8 @@ public:
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     IEditorViewInputTarget* inputTarget() noexcept override { return this; }
     void prepareForUiShutdown() override {
+        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        clearTooltips();
         if (_importCancel != nullptr) _importCancel->setOnClicked({});
         if (_importCommit != nullptr) _importCommit->setOnClicked({});
         if (_skipEmpty != nullptr) _skipEmpty->setOnClicked({});
@@ -682,6 +824,9 @@ public:
         if (_stampDelete != nullptr) _stampDelete->setOnClicked({});
         for (ayt::ui::TextInput* input : _importInputs) {
             if (input != nullptr) input->setOnTextChanged({});
+        }
+        if (_importPreview != nullptr) {
+            _importPreview->setOnRectangleSelected({});
         }
         if (_importModal != nullptr && _importModal->isOpen()) {
             _importModal->closeModal();
@@ -697,15 +842,15 @@ public:
             _atlasPicker->setOnStatus({});
             _atlasPicker->setOnRectangleSelected({});
         }
-        if (_importPreview != nullptr) {
-            _importPreview->setOnRectangleSelected({});
-        }
         if (_tileList != nullptr) _tileList->setOnSelectionChanged({});
         if (_atlasSelector != nullptr) {
             _atlasSelector->setOnSelectionChanged({});
         }
         if (_stampSelector != nullptr) {
             _stampSelector->setOnSelectionChanged({});
+        }
+        if (_shadowMaskSelector != nullptr) {
+            _shadowMaskSelector->setOnSelectionChanged({});
         }
         if (_layerList != nullptr) _layerList->setOnSelectionChanged({});
         for (ayt::ui::Button* button : _buttons) {
@@ -718,6 +863,7 @@ public:
         _tileId = nullptr;
         _layerName = nullptr;
         _collisionFlags = nullptr;
+        _shadowColor = nullptr;
         _summary = nullptr;
         _atlasSelector = nullptr;
         _pencil = nullptr;
@@ -725,8 +871,13 @@ public:
         _fill = nullptr;
         _rectangle = nullptr;
         _stamp = nullptr;
+        _shadow = nullptr;
+        _shadowMaskSelector = nullptr;
         _grid = nullptr;
         _collision = nullptr;
+        _shadowVisibility = nullptr;
+        _frame = nullptr;
+        _layerVisibility = nullptr;
         _importPreview = nullptr;
         _importSourceLabel = nullptr;
         _importInfo = nullptr;
@@ -818,6 +969,9 @@ public:
                     L"Choose a saved Stamp or create one from Source Sheet.");
             }
             return true;
+        case ayt::ui::UIKey_H:
+            setTool(ayt::ay2d::editor::PaintTool::Shadow);
+            return true;
         case ayt::ui::UIKey_Space:
             if (_canvas != nullptr) _canvas->setSpacePan(true);
             return true;
@@ -862,6 +1016,7 @@ private:
     {
         auto* button = new ayt::ui::Button();
         button->setText(text);
+        button->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         button->setOnClicked(std::move(clicked));
         parent->addWidget(button, width);
         _buttons.push_back(button);
@@ -874,10 +1029,71 @@ private:
     {
         auto* button = new ayt::ui::Button();
         button->setText(text);
+        button->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         button->setOnClicked(std::move(clicked));
         parent->addWidget(button, height);
         _buttons.push_back(button);
         return button;
+    }
+
+    ayt::ui::Button* addIconButton(
+        ayt::ui::HBox* parent, const char* id,
+        const std::filesystem::path& iconName,
+        const std::wstring& fallbackText,
+        const std::wstring& accessibleLabel,
+        std::function<void()> clicked)
+    {
+        auto* button = new ayt::ui::Button();
+        button->setId(id);
+        button->setText(fallbackText);
+        button->setAccessibilityLabel(accessibleLabel);
+        button->setPadding(6.0f, 4.0f, 6.0f, 4.0f);
+        button->setOnClicked(std::move(clicked));
+        std::string error;
+        if (auto icon = ayt::ui::SvgDocument::loadFromFile(
+                _iconRoot / iconName, &error)) {
+            button->setText(L"");
+            button->setIconDocument(std::move(icon));
+            button->setIconSize(18.0f);
+            button->setIconColor(inactiveIconColor());
+        }
+        parent->addWidget(button, 32.0f);
+        _buttons.push_back(button);
+        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        if (auto* tooltip = ayt::ui::Tooltip::attachTo(button)) {
+            tooltip->setText(accessibleLabel);
+            _tooltips.push_back(tooltip);
+        }
+        return button;
+    }
+
+    static ayt::math::FVector4 inactiveIconColor() noexcept {
+        return {0.82f, 0.85f, 0.90f, 1.0f};
+    }
+
+    static ayt::math::FVector4 activeIconColor() noexcept {
+        return {0.28f, 0.66f, 1.0f, 1.0f};
+    }
+
+    static void setIconState(ayt::ui::Button* button, bool active,
+                             const std::wstring& label)
+    {
+        if (button == nullptr) return;
+        button->setIconColor(
+            active ? activeIconColor() : inactiveIconColor());
+        button->setAccessibilityLabel(
+            active ? label + L", active" : label);
+    }
+
+    void clearTooltips() noexcept {
+        if (_tooltips.empty()) return;
+        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        for (ayt::ui::Tooltip* tooltip : _tooltips) {
+            if (tooltip == nullptr) continue;
+            tooltip->detach();
+            ayt::ui::destroyWidgetTree(tooltip);
+        }
+        _tooltips.clear();
     }
 
     ayt::ui::TextInput* addImportField(
@@ -917,6 +1133,7 @@ private:
         sourceRow->addWidget(_importSourceLabel, 0.0f);
         _importChoose = new ayt::ui::Button();
         _importChoose->setText(L"Choose PNG…");
+        _importChoose->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importChoose->setOnClicked([this]() { chooseAtlasImage(); });
         sourceRow->addWidget(_importChoose, 132.0f);
         root->addWidget(sourceRow, 29.0f);
@@ -944,6 +1161,7 @@ private:
         _importModeButton = new ayt::ui::Button();
         _importModeButton->setId("tilemap_import_mode");
         _importModeButton->setText(L"Mode: Grid");
+        _importModeButton->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importModeButton->setOnClicked([this]() { cycleImportMode(); });
         settings->addWidget(_importModeButton, 29.0f);
         _importTileWidth = addImportField(settings, L"Tile width", "tilemap_import_tile_w");
@@ -959,6 +1177,7 @@ private:
         _importRegionUndo = new ayt::ui::Button();
         _importRegionUndo->setId("tilemap_import_region_undo");
         _importRegionUndo->setText(L"Undo Region");
+        _importRegionUndo->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importRegionUndo->setOnClicked([this]() {
             if (_manualRegions.empty()) return;
             _manualRegions.pop_back();
@@ -970,6 +1189,7 @@ private:
         regionButtons->addWidget(_importRegionUndo, 0.0f);
         _importRegionClear = new ayt::ui::Button();
         _importRegionClear->setText(L"Clear");
+        _importRegionClear->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importRegionClear->setOnClicked([this]() {
             _manualRegions.clear();
             if (_importPreview != nullptr) {
@@ -980,6 +1200,7 @@ private:
         regionButtons->addWidget(_importRegionClear, 70.0f);
         settings->addWidget(regionButtons, 29.0f);
         _skipEmpty = new ayt::ui::Button();
+        _skipEmpty->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _skipEmpty->setOnClicked([this]() {
             _skipTransparent = !_skipTransparent;
             refreshImportPlan();
@@ -998,12 +1219,14 @@ private:
             0.0f);
         _importCancel = new ayt::ui::Button();
         _importCancel->setText(L"Cancel");
+        _importCancel->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importCancel->setOnClicked([this]() {
             if (_importModal != nullptr) _importModal->closeModal();
         });
         footer->addWidget(_importCancel, 96.0f);
         _importCommit = new ayt::ui::Button();
         _importCommit->setText(L"Import");
+        _importCommit->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importCommit->setEnabled(false);
         _importCommit->setOnClicked([this]() { commitAtlasImport(); });
         footer->addWidget(_importCommit, 132.0f);
@@ -1013,12 +1236,29 @@ private:
 
     void openAtlasImport()
     {
-        if (_host.uiManager() == nullptr) {
+        ayt::ui::UIManager* ui = _host.uiManager();
+        if (ui == nullptr) {
             _host.setStatusText(L"Tile-sheet import requires an AYUI host.");
             return;
         }
+        auto activeScope = ayt::ui::UIManager::pushActive(ui);
         buildAtlasImportDialog();
         if (_pendingAtlasPath.empty()) chooseAtlasImage();
+        const ayt::math::FVector2 client = ui->getClientSize();
+        ayt::math::FVector2 dialogSize{930.0f, 650.0f};
+        constexpr float kOuterMargin = 24.0f;
+        if (client.x > 0.0f) {
+            dialogSize.x = std::min(
+                dialogSize.x, std::max(1.0f, client.x - kOuterMargin * 2.0f));
+        }
+        if (client.y > 0.0f) {
+            dialogSize.y = std::min(
+                dialogSize.y, std::max(1.0f, client.y - kOuterMargin * 2.0f));
+        }
+        _importModal->setSize(dialogSize);
+        _importModal->setPosition({
+            std::round(std::max(0.0f, (client.x - dialogSize.x) * 0.5f)),
+            std::round(std::max(0.0f, (client.y - dialogSize.y) * 0.5f))});
         _importModal->openModal();
         _host.requestRepaint();
     }
@@ -1487,6 +1727,10 @@ private:
 
     void setTool(ayt::ay2d::editor::PaintTool tool) {
         if (_canvas != nullptr && _canvas->editingGestureActive()) return;
+        if (tool == ayt::ay2d::editor::PaintTool::Shadow
+            && _canvas != nullptr) {
+            _canvas->setShowShadows(true);
+        }
         _document->model().setTool(tool);
         refresh();
         _host.requestRepaint();
@@ -1526,15 +1770,26 @@ private:
             == ayt::ay2d::editor::PaintTool::Rectangle;
         const bool stamp = model.tool()
             == ayt::ay2d::editor::PaintTool::Stamp;
-        _pencil->setText(pencil ? L"[Pencil  P]" : L"Pencil  P");
-        _eraser->setText(eraser ? L"[! ERASER !]" : L"Eraser  E");
-        _fill->setText(fill ? L"[Fill  F]" : L"Fill  F");
-        _rectangle->setText(
-            rectangle ? L"[Rectangle  R]" : L"Rectangle  R");
-        _stamp->setText(stamp ? L"[Stamp  S]" : L"Stamp  S");
-        _grid->setText(_canvas->showGrid() ? L"Grid: On" : L"Grid: Off");
-        _collision->setText(
-            _canvas->showCollision() ? L"Collision: On" : L"Collision: Off");
+        const bool shadow = model.tool()
+            == ayt::ay2d::editor::PaintTool::Shadow;
+        setIconState(_pencil, pencil, L"Pencil (P)");
+        setIconState(_eraser, eraser, L"Eraser (E)");
+        setIconState(_fill, fill, L"Flood Fill (F)");
+        setIconState(_rectangle, rectangle, L"Rectangle (R)");
+        setIconState(_stamp, stamp, L"Stamp (S)");
+        setIconState(_shadow, shadow, L"Shadow mask (H)");
+        const auto selectedShadow = std::find(
+            kShadowBrushMasks.begin(), kShadowBrushMasks.end(),
+            model.selectedShadowMask());
+        _shadowMaskSelector->setSelectedIndex(
+            selectedShadow == kShadowBrushMasks.end() ? 0
+                : static_cast<int>(selectedShadow
+                    - kShadowBrushMasks.begin()));
+        setIconState(_grid, _canvas->showGrid(), L"Grid overlay");
+        setIconState(_collision, _canvas->showCollision(),
+                     L"Collision overlay");
+        setIconState(_shadowVisibility, _canvas->showShadows(),
+                     L"Shadow overlay");
 
         _tileIds.clear();
         std::vector<std::wstring> tileLabels;
@@ -1588,14 +1843,20 @@ private:
         if (document.activeLayerIndex() < document.layers().size()) {
             _layerName->setText(ayt::ui::decodeUtf8Text(
                 document.layers()[document.activeLayerIndex()].name));
+            setIconState(
+                _layerVisibility,
+                document.layers()[document.activeLayerIndex()].visible,
+                L"Active layer visibility");
         }
         _collisionFlags->setText(std::to_wstring(
             document.collisionFlagsFor(model.selectedTileId())));
+        _shadowColor->setText(rgbaText(document.shadowColor()));
         _syncing = false;
     }
 
     std::shared_ptr<TilemapWorkspaceDocument> _document;
     IEditorHostServices& _host;
+    std::filesystem::path _iconRoot;
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _summary = nullptr;
     ayt::ui::ComboBox* _atlasSelector = nullptr;
@@ -1607,15 +1868,21 @@ private:
     ayt::ui::TextInput* _tileId = nullptr;
     ayt::ui::TextInput* _layerName = nullptr;
     ayt::ui::TextInput* _collisionFlags = nullptr;
+    ayt::ui::TextInput* _shadowColor = nullptr;
     ayt::ui::Button* _pencil = nullptr;
     ayt::ui::Button* _eraser = nullptr;
     ayt::ui::Button* _fill = nullptr;
     ayt::ui::Button* _rectangle = nullptr;
     ayt::ui::Button* _stamp = nullptr;
+    ayt::ui::Button* _shadow = nullptr;
+    ayt::ui::ComboBox* _shadowMaskSelector = nullptr;
     ayt::ui::Button* _stampSelect = nullptr;
     ayt::ui::Button* _stampDelete = nullptr;
     ayt::ui::Button* _grid = nullptr;
     ayt::ui::Button* _collision = nullptr;
+    ayt::ui::Button* _shadowVisibility = nullptr;
+    ayt::ui::Button* _frame = nullptr;
+    ayt::ui::Button* _layerVisibility = nullptr;
     std::unique_ptr<ayt::ui::Modal> _importModal;
     EditorTileAtlasPicker* _importPreview = nullptr;
     ayt::ui::TextLabel* _importSourceLabel = nullptr;
@@ -1648,6 +1915,7 @@ private:
     AtlasImportMode _importMode = AtlasImportMode::Grid;
     uint32_t _shownAtlasId = 0u;
     std::vector<ayt::ui::Button*> _buttons;
+    std::vector<ayt::ui::Tooltip*> _tooltips;
     std::vector<uint32_t> _tileIds;
     std::vector<uint32_t> _atlasIds;
     std::vector<uint32_t> _stampIds;

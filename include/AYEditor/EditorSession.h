@@ -227,6 +227,7 @@ public:
     bool openDslAsset(EditorAssetId assetId);
     bool openAsset(EditorAssetId assetId);
     std::size_t openDslDocumentCount() const noexcept;
+    bool openTilemapEditor(const std::string& path = {});
     bool openUiLayoutEditor(const std::string& path = {});
     std::size_t openUiLayoutDocumentCount() const noexcept;
     bool createProjectAsset(EditorAssetType type);

@@ -1962,6 +1962,9 @@ void EditorSession::bindToolbar() {
     bindButton("btn_tool_ui_layout", [this]() {
         (void)openUiLayoutEditor();
     });
+    bindButton("btn_tool_2d", [this]() {
+        (void)openTilemapEditor();
+    });
     bindButton("btn_tool_audio", [this]() {
         (void)openRegisteredTool(kEditorAudioToolExtensionId);
     });
@@ -2029,7 +2032,8 @@ void EditorSession::bindToolbar() {
     const char* accentButtons[] = {
         "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
         "btn_view_camera", "btn_view_shading", "btn_view_options",
-        "btn_tool_ui_layout", "btn_tool_audio", "btn_run_project"
+        "btn_tool_ui_layout", "btn_tool_2d", "btn_tool_audio",
+        "btn_run_project"
     };
     for (const char* id : accentButtons) {
         if (auto* button = dynamic_cast<ayt::ui::Button*>(_ui.findById(id))) {
@@ -2111,6 +2115,7 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
         {"btn_stop",        "filled/player-stop.svg",        L"Stop",                  16.0f, 8.0f, 4.0f},
         {"btn_tool_ui_layout", "outline/layout.svg",         L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_2d",     "outline/grid.svg",              L"Open 2D Tilemap Editor", 20.0f, 7.0f, 7.0f},
         {"btn_tool_audio",  "outline/music-cog.svg",         L"Open Audio Editor",     20.0f, 7.0f, 7.0f},
         {"btn_run_project", "outline/rocket.svg",            L"Run current project",   20.0f, 7.0f, 7.0f},
         {"btn_tool_space",  "outline/world.svg",             L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
@@ -3936,6 +3941,39 @@ bool EditorSession::openAsset(EditorAssetId assetId)
     }
 }
 
+bool EditorSession::openTilemapEditor(const std::string& path)
+{
+    if (_dockViewHost == nullptr || _workspace == nullptr) {
+        setAssetBrowserStatus(L"2D Tilemap Editor is unavailable", true);
+        return false;
+    }
+
+    EditorOpenRequest request;
+    request.resourcePath = path;
+    request.resourceKey = path.empty()
+        ? "workspace:tilemap:untitled" : path;
+    request.displayPath = path.empty() ? "Untitled Tilemap" : path;
+    request.assetType = "Tilemap";
+    request.preferredEditorId = kEditorTilemapExtensionId;
+
+    EditorDockViewOptions options;
+    if (path.empty()) options.cardId = "card_tilemap_workspace";
+    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+    if (!opened) {
+        setAssetBrowserStatus(L"2D Tilemap Editor open failed: "
+            + ayt::ui::decodeUtf8Text(opened.error), true);
+        return false;
+    }
+    wirePromoteCallback();
+    _ui.invalidateLayout();
+    setAssetBrowserStatus(opened.document.status
+            == EditorOpenStatus::FocusedExisting
+        ? L"2D Tilemap Editor focused"
+        : L"2D Tilemap Editor opened");
+    if (_repaintCallback) _repaintCallback();
+    return true;
+}
+
 bool EditorSession::openRegisteredTool(const std::string& editorId)
 {
     if (_dockViewHost == nullptr || _workspace == nullptr) return false;
@@ -5433,6 +5471,10 @@ void EditorSession::bindMenuBar() {
         toolsMenu->addSeparator();
         if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
             item->setOnActivate([this]() { (void)openUiLayoutEditor(); });
+        }
+        if (auto* item = toolsMenu->addItem(L"2D Tilemap Editor...")) {
+            item->setId("menu_tools_tilemap_editor");
+            item->setOnActivate([this]() { (void)openTilemapEditor(); });
         }
         if (auto* item = toolsMenu->addItem(L"Audio Editor...")) {
             item->setOnActivate([this]() {

@@ -30,6 +30,8 @@ public:
     [[nodiscard]] bool showCollision() const noexcept {
         return _showCollision;
     }
+    void setShowShadows(bool show) { _showShadows = show; markDirty(); }
+    [[nodiscard]] bool showShadows() const noexcept { return _showShadows; }
     void setSpacePan(bool enabled);
     [[nodiscard]] bool spacePan() const noexcept { return _spacePan; }
     [[nodiscard]] bool editingGestureActive() const noexcept;
@@ -82,6 +84,7 @@ private:
     bool _cameraInitialized = false;
     bool _showGrid = true;
     bool _showCollision = true;
+    bool _showShadows = true;
     bool _drawing = false;
     bool _panning = false;
     bool _spacePan = false;

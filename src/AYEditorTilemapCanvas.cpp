@@ -86,6 +86,32 @@ ayt::math::FVector4 withAlpha(ayt::math::FVector4 color, float alpha)
     return color;
 }
 
+void drawShadowMask(ayt::ui::IRenderBackend& renderer,
+                    const ayt::math::FRectangle& cell,
+                    uint8_t mask, const ayt::math::FVector4& color)
+{
+    const float middleX = std::floor(
+        (cell.minX + cell.maxX) * 0.5f + 0.5f);
+    const float middleY = std::floor(
+        (cell.minY + cell.maxY) * 0.5f + 0.5f);
+    if ((mask & ayt::ay2d::editor::ShadowMask_TopLeft) != 0u) {
+        renderer.drawRect(
+            {cell.minX, cell.minY, middleX, middleY}, color);
+    }
+    if ((mask & ayt::ay2d::editor::ShadowMask_TopRight) != 0u) {
+        renderer.drawRect(
+            {middleX, cell.minY, cell.maxX, middleY}, color);
+    }
+    if ((mask & ayt::ay2d::editor::ShadowMask_BottomLeft) != 0u) {
+        renderer.drawRect(
+            {cell.minX, middleY, middleX, cell.maxY}, color);
+    }
+    if ((mask & ayt::ay2d::editor::ShadowMask_BottomRight) != 0u) {
+        renderer.drawRect(
+            {middleX, middleY, cell.maxX, cell.maxY}, color);
+    }
+}
+
 } // namespace
 
 EditorTilemapCanvas::EditorTilemapCanvas(
@@ -449,6 +475,13 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             label = L"STAMP  ·  Pattern "
                 + std::to_wstring(_model.selectedStampId());
             break;
+        case PaintTool::Shadow:
+            label = _model.selectedShadowMask() == 0u
+                ? L"SHADOW  ·  CLEAR"
+                : L"SHADOW  ·  Mask "
+                    + std::to_wstring(_model.selectedShadowMask());
+            accent = {0.70f, 0.48f, 0.94f, 1.0f};
+            break;
         }
         const ayt::math::FRectangle badge{
             bounds.minX + 12.0f, bounds.minY + 12.0f,
@@ -544,6 +577,12 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
                         inset > 0.0f ? 1.5f : 0.0f);
                 }
             }
+            if (_showShadows) {
+                drawShadowMask(renderer, cell,
+                    document.shadowMaskAt(static_cast<uint32_t>(col),
+                                          static_cast<uint32_t>(row)),
+                    unpackRgba(document.shadowColor()));
+            }
             if (_showGrid && cellWidthPx >= 9.0f && cellHeightPx >= 9.0f) {
                 renderer.drawBorderRect(
                     cell, {0.035f, 0.040f, 0.050f, 0.52f}, 1.0f);
@@ -588,6 +627,30 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
         renderer.drawBorderRect(preview, {0.48f, 0.76f, 1.0f, 1.0f},
                                 2.0f);
     } else if (isInDocument(_hover)) {
+        if (_model.tool() == PaintTool::Shadow) {
+            const auto a = _viewport.worldToScreen(
+                {static_cast<float>(_hover.x) * tileWidth,
+                 static_cast<float>(_hover.y + 1) * tileHeight});
+            const auto b = _viewport.worldToScreen(
+                {static_cast<float>(_hover.x + 1) * tileWidth,
+                 static_cast<float>(_hover.y) * tileHeight});
+            const ayt::math::FRectangle hover = normalizedRect(a, b, offset);
+            if (_model.selectedShadowMask() == 0u) {
+                renderer.drawRect(
+                    hover, {0.92f, 0.27f, 0.30f, 0.20f});
+            } else {
+                ayt::math::FVector4 color = unpackRgba(
+                    document.shadowColor());
+                color.w = std::max(color.w, 0.34f);
+                drawShadowMask(renderer, hover,
+                    _model.selectedShadowMask(), color);
+            }
+            renderer.drawBorderRect(
+                hover, {0.78f, 0.59f, 1.0f, 1.0f}, 2.0f);
+            drawToolBadge();
+            renderer.popClip();
+            return;
+        }
         if (_model.tool() == PaintTool::Stamp) {
             if (const ayt::ay2d::editor::TileStampDefinition* stamp =
                     document.tileStamp(

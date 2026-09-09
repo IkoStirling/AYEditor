@@ -1,4 +1,5 @@
 #include "AYTest.h"
+#include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorVisualStyle.h"
@@ -170,6 +171,8 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(session.ui().findById("card_assets") != nullptr);
     CHECK(session.ui().findById("card_console") != nullptr);
     CHECK(session.ui().findById("editor_status_bar") != nullptr);
+    CHECK(dynamic_cast<Button*>(
+        session.ui().findById("btn_tool_2d")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_depth_haze")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
@@ -192,6 +195,64 @@ TEST_CASE(test_editor_session_loads_shell_json) {
         session.ui().findById("btn_remove_component")) != nullptr);
     CHECK(dynamic_cast<VBox*>(
         session.ui().findById("inspector_component_properties")) != nullptr);
+    session.shutdown();
+}
+
+TEST_CASE(tilemap_tool_launcher_opens_and_refocuses_one_untitled_workspace)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* launcher = dynamic_cast<Button*>(
+        session.ui().findById("btn_tool_2d"));
+    CHECK(launcher != nullptr);
+    if (launcher == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    CHECK(clickSessionButton(session, launcher));
+    const EditorDocumentRecord* active = session.workspace().documents().active();
+    CHECK(active != nullptr);
+    CHECK(active != nullptr && active->editorId == kEditorTilemapExtensionId);
+    CHECK(findWidgetInTree(
+        session.ui().root(), "tilemap_workspace_canvas") != nullptr);
+    const size_t openedCount = session.workspace().documents().size();
+
+    CHECK(clickSessionButton(session, launcher));
+    CHECK(session.workspace().documents().size() == openedCount);
+    CHECK(session.workspace().documents().activeDocumentId()
+        == (active != nullptr ? active->documentId : std::string{}));
+
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    MenuItem* menuEntry = nullptr;
+    if (menuBar != nullptr) {
+        for (size_t menuIndex = 0u;
+             menuIndex < menuBar->getMenuCount(); ++menuIndex) {
+            if (menuBar->getMenuTitle(menuIndex) != L"Tools") continue;
+            Menu* tools = menuBar->getMenu(menuIndex);
+            if (tools == nullptr) break;
+            for (size_t itemIndex = 0u;
+                 itemIndex < tools->getItemCount(); ++itemIndex) {
+                MenuItem* item = tools->getItem(itemIndex);
+                if (item != nullptr
+                    && item->getText() == L"2D Tilemap Editor...") {
+                    menuEntry = item;
+                    break;
+                }
+            }
+        }
+    }
+    CHECK(menuEntry != nullptr);
+    CHECK(menuEntry != nullptr && menuEntry->handleClick());
+    CHECK(session.workspace().documents().size() == openedCount);
+
     session.shutdown();
 }
 
