@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetTrash.h"
+#include "AYEditor/EditorAssetOperations.h"
 
 #include <algorithm>
 #include <chrono>
@@ -73,10 +74,15 @@ void EditorAssetTrash::setProjectRoot(std::string projectRoot)
     std::filesystem::path root = projectRoot.empty()
         ? std::filesystem::path{} : std::filesystem::absolute(projectRoot, ec);
     _projectRoot = ec ? std::string{} : root.lexically_normal().string();
-    _lastTransactionPath.clear();
-    _last.clear();
+    reload();
+}
+
+void EditorAssetTrash::reload()
+{
+    _transactions.clear();
     if (_projectRoot.empty()) return;
 
+    std::error_code ec;
     const std::filesystem::path trashRoot =
         std::filesystem::path(_projectRoot) / ".ayeditor" / "trash";
     std::vector<std::filesystem::path> transactions;
@@ -92,21 +98,18 @@ void EditorAssetTrash::setProjectRoot(std::string projectRoot)
         if (!std::getline(input, marker) || marker != "AYEDITOR_TRASH\t1") {
             continue;
         }
-        std::vector<Entry> loaded;
+        EditorAssetTrashTransaction loaded;
+        loaded.id = transaction.filename().string();
         std::string original;
         std::string trashed;
         while (input >> std::quoted(original) >> std::quoted(trashed)) {
             if (!std::filesystem::exists(trashed)) {
-                loaded.clear();
+                loaded.entries.clear();
                 break;
             }
-            loaded.push_back({original, trashed});
+            loaded.entries.push_back({original, trashed});
         }
-        if (!loaded.empty()) {
-            _last = std::move(loaded);
-            _lastTransactionPath = transaction.string();
-            break;
-        }
+        if (!loaded.entries.empty()) _transactions.push_back(std::move(loaded));
     }
 }
 
@@ -123,7 +126,7 @@ EditorAssetTrashResult EditorAssetTrash::moveToTrash(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const std::filesystem::path transaction = root / ".ayeditor" / "trash"
         / std::to_string(serial);
-    std::vector<Entry> moved;
+    std::vector<EditorAssetTrashEntry> moved;
     for (const EditorAssetRecord& record : records) {
         const std::filesystem::path original =
             std::filesystem::absolute(record.absolutePath).lexically_normal();
@@ -150,7 +153,7 @@ EditorAssetTrashResult EditorAssetTrash::moveToTrash(
     }
     std::vector<std::pair<std::string, std::string>> manifestEntries;
     manifestEntries.reserve(moved.size());
-    for (const Entry& entry : moved) {
+    for (const EditorAssetTrashEntry& entry : moved) {
         manifestEntries.emplace_back(entry.originalPath, entry.trashPath);
     }
     std::error_code manifestError;
@@ -163,28 +166,46 @@ EditorAssetTrashResult EditorAssetTrash::moveToTrash(
             + manifestError.message();
         return result;
     }
-    _last = std::move(moved);
-    _lastTransactionPath = transaction.string();
-    result.moved = _last.size();
+    result.moved = moved.size();
+    for (const EditorAssetTrashEntry& entry : moved) {
+        (void)appendEditorAssetOperationHistory(_projectRoot,
+            EditorAssetOperationHistoryEntry{
+                serial, "Delete", entry.originalPath, entry.trashPath, {}});
+    }
+    reload();
     return result;
 }
 
 EditorAssetTrashResult EditorAssetTrash::restoreLast()
 {
+    if (_transactions.empty()) {
+        return {0u, "There is no deleted asset transaction to restore."};
+    }
+    return restore(_transactions.front().id);
+}
+
+EditorAssetTrashResult EditorAssetTrash::restore(
+    const std::string& transactionId)
+{
     EditorAssetTrashResult result;
-    if (_last.empty()) {
+    const auto transaction = std::find_if(
+        _transactions.begin(), _transactions.end(),
+        [&](const EditorAssetTrashTransaction& candidate) {
+            return candidate.id == transactionId;
+        });
+    if (transaction == _transactions.end()) {
         result.error = "There is no deleted asset transaction to restore.";
         return result;
     }
-    for (const Entry& entry : _last) {
+    for (const EditorAssetTrashEntry& entry : transaction->entries) {
         if (std::filesystem::exists(entry.originalPath)) {
             result.error = "Restore destination already exists: "
                 + entry.originalPath;
             return result;
         }
     }
-    std::vector<Entry> restored;
-    for (const Entry& entry : _last) {
+    std::vector<EditorAssetTrashEntry> restored;
+    for (const EditorAssetTrashEntry& entry : transaction->entries) {
         std::error_code error;
         if (!moveFile(entry.trashPath, entry.originalPath, error)) {
             result.error = entry.originalPath + ": " + error.message();
@@ -197,11 +218,65 @@ EditorAssetTrashResult EditorAssetTrash::restoreLast()
         restored.push_back(entry);
     }
     result.moved = restored.size();
-    _last.clear();
-    if (!_lastTransactionPath.empty()) {
-        std::error_code ignored;
-        std::filesystem::remove_all(_lastTransactionPath, ignored);
-        _lastTransactionPath.clear();
+    const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    for (const EditorAssetTrashEntry& entry : restored) {
+        (void)appendEditorAssetOperationHistory(_projectRoot,
+            EditorAssetOperationHistoryEntry{
+                timestamp, "Restore", entry.trashPath,
+                entry.originalPath, {}});
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(std::filesystem::path(_projectRoot)
+        / ".ayeditor" / "trash" / transactionId, ignored);
+    reload();
+    return result;
+}
+
+EditorAssetTrashResult EditorAssetTrash::purge(
+    const std::string& transactionId)
+{
+    EditorAssetTrashResult result;
+    const auto transaction = std::find_if(
+        _transactions.begin(), _transactions.end(),
+        [&](const EditorAssetTrashTransaction& candidate) {
+            return candidate.id == transactionId;
+        });
+    if (transaction == _transactions.end()) {
+        result.error = "Trash transaction does not exist.";
+        return result;
+    }
+    const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    const auto entries = transaction->entries;
+    std::error_code error;
+    std::filesystem::remove_all(std::filesystem::path(_projectRoot)
+        / ".ayeditor" / "trash" / transactionId, error);
+    if (error) {
+        result.error = "Could not permanently clear trash: " + error.message();
+        return result;
+    }
+    result.moved = entries.size();
+    for (const EditorAssetTrashEntry& entry : entries) {
+        (void)appendEditorAssetOperationHistory(_projectRoot,
+            EditorAssetOperationHistoryEntry{
+                timestamp, "Purge", entry.trashPath, {}, {}});
+    }
+    reload();
+    return result;
+}
+
+EditorAssetTrashResult EditorAssetTrash::purgeAll()
+{
+    EditorAssetTrashResult result;
+    const std::vector<EditorAssetTrashTransaction> transactions = _transactions;
+    for (const EditorAssetTrashTransaction& transaction : transactions) {
+        const EditorAssetTrashResult current = purge(transaction.id);
+        if (!current) {
+            result.error = current.error;
+            return result;
+        }
+        result.moved += current.moved;
     }
     return result;
 }

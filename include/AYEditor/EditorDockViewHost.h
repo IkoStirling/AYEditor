@@ -108,6 +108,13 @@ public:
     ayt::ui::UIManager* uiManager() noexcept override {
         return _uiManager;
     }
+    std::string chooseImageFile() override {
+        return _outerHost.chooseImageFile();
+    }
+    EditorAuthoringImage loadAuthoringImage(
+        const std::string& path, std::string* error = nullptr) override {
+        return _outerHost.loadAuthoringImage(path, error);
+    }
     void requestRepaint() override;
     void setStatusText(const std::wstring& text) override {
         _outerHost.setStatusText(text);

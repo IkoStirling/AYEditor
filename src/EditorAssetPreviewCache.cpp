@@ -459,6 +459,93 @@ ayt::ui::ImageTextureHandle EditorAssetPreviewCache::request(
     return {};
 }
 
+EditorAuthoringImage EditorAssetPreviewCache::loadAuthoringImage(
+    const std::string& path, std::string* error)
+{
+    if (error != nullptr) error->clear();
+    if (!_createTexture || path.empty()) {
+        if (error != nullptr) *error = "The image service is unavailable.";
+        return {};
+    }
+    std::error_code fileError;
+    const std::filesystem::path source =
+        std::filesystem::absolute(std::filesystem::u8path(path), fileError)
+            .lexically_normal();
+    if (fileError || !std::filesystem::is_regular_file(source, fileError)) {
+        if (error != nullptr) *error = "The source image does not exist.";
+        return {};
+    }
+    const std::string key = source.string();
+    const std::uintmax_t fileSize = std::filesystem::file_size(source, fileError);
+    if (fileError) {
+        if (error != nullptr) *error = "The source image cannot be inspected.";
+        return {};
+    }
+    const auto modified = std::filesystem::last_write_time(source, fileError);
+    const std::int64_t lastModified = fileError ? 0
+        : static_cast<std::int64_t>(modified.time_since_epoch().count());
+    auto found = _authoringEntries.find(key);
+    if (found != _authoringEntries.end()
+        && (found->second.fileSize != fileSize
+            || found->second.lastModified != lastModified)) {
+        release(found->second);
+        _authoringEntries.erase(found);
+        found = _authoringEntries.end();
+    }
+    if (found != _authoringEntries.end()) return found->second.image;
+
+    int width = 0;
+    int height = 0;
+    int components = 0;
+    stbi_uc* rgba = stbi_load(key.c_str(), &width, &height, &components, 4);
+    if (rgba == nullptr || width <= 0 || height <= 0) {
+        if (rgba != nullptr) stbi_image_free(rgba);
+        if (error != nullptr) *error = "The source image could not be decoded.";
+        return {};
+    }
+    const uint64_t pixelCount = static_cast<uint64_t>(width)
+        * static_cast<uint64_t>(height);
+    if (pixelCount > 64u * 1024u * 1024u
+        || width > (std::numeric_limits<uint16_t>::max)()
+        || height > (std::numeric_limits<uint16_t>::max)()) {
+        stbi_image_free(rgba);
+        if (error != nullptr) {
+            *error = "The source image exceeds the authoring texture budget.";
+        }
+        return {};
+    }
+    auto pixels = std::make_shared<std::vector<uint8_t>>(
+        static_cast<size_t>(pixelCount) * 4u);
+    for (size_t pixel = 0u; pixel < static_cast<size_t>(pixelCount); ++pixel) {
+        (*pixels)[pixel * 4u + 0u] = rgba[pixel * 4u + 2u];
+        (*pixels)[pixel * 4u + 1u] = rgba[pixel * 4u + 1u];
+        (*pixels)[pixel * 4u + 2u] = rgba[pixel * 4u + 0u];
+        (*pixels)[pixel * 4u + 3u] = rgba[pixel * 4u + 3u];
+    }
+    stbi_image_free(rgba);
+    void* handle = _createTexture(
+        static_cast<uint16_t>(width), static_cast<uint16_t>(height),
+        pixels->data());
+    if (handle == nullptr) {
+        if (error != nullptr) *error = "The source texture could not be uploaded.";
+        return {};
+    }
+
+    AuthoringEntry entry;
+    entry.fileSize = fileSize;
+    entry.lastModified = lastModified;
+    entry.image.texture.handle = handle;
+    entry.image.texture.width = width;
+    entry.image.texture.height = height;
+    entry.image.texture.format = ayt::ui::TextureFormat::RGBA8;
+    entry.image.width = static_cast<uint32_t>(width);
+    entry.image.height = static_cast<uint32_t>(height);
+    entry.image.bgraPixels = std::move(pixels);
+    const EditorAuthoringImage result = entry.image;
+    _authoringEntries.emplace(key, std::move(entry));
+    return result;
+}
+
 bool EditorAssetPreviewCache::poll()
 {
     bool changed = false;
@@ -500,18 +587,29 @@ void EditorAssetPreviewCache::release(Entry& entry)
     entry.texture = {};
 }
 
+void EditorAssetPreviewCache::release(AuthoringEntry& entry)
+{
+    if (entry.image.texture.isValid() && _releaseTexture) {
+        _releaseTexture(entry.image.texture.handle);
+    }
+    entry.image = {};
+}
+
 void EditorAssetPreviewCache::erase(const std::string& absolutePath)
 {
     const auto found = _entries.find(absolutePath);
-    if (found == _entries.end()) return;
-    release(found->second);
-    _entries.erase(found);
+    if (found != _entries.end()) {
+        release(found->second);
+        _entries.erase(found);
+    }
 }
 
 void EditorAssetPreviewCache::clear()
 {
     for (auto& pair : _entries) release(pair.second);
     _entries.clear();
+    for (auto& pair : _authoringEntries) release(pair.second);
+    _authoringEntries.clear();
 }
 
 } // namespace ayt::editor

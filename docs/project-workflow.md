@@ -20,8 +20,18 @@ features below are not demo-specific copies.
   Their disk cache is stored below `.ayeditor/cache/previews`; source size and
   modification time invalidate stale entries.
 - `.ayeditor/cache/asset-index.tsv` stores the scanned file metadata and import
-  status. Source models appear as `Needs import`, `Ready`, or `Failed` in the
-  asset Inspector. Generated assets are `Ready`.
+  status. Startup restores this index before the first directory walk, then
+  recursive `AYIO::FileWatcher` subscriptions patch changed files and import
+  dependency state in place. Source models appear as `Needs import`, `Ready`,
+  or `Failed` in the asset Inspector. Generated assets are `Ready`.
+- Imports run through one sequential background queue. The Content Browser
+  remains responsive, reports progress and the converter's failure reason,
+  supports forced retry, and exposes **Tools -> Reimport Changed Source
+  Assets** for dependency invalidations.
+- Move and Copy choose an existing project directory. The Project Trash view
+  can restore individual delete transactions or permanently clear selected
+  transactions after confirmation. Rename, Move, Copy, Delete, Restore,
+  Purge, and Recovery actions are recorded in the resource-operation history.
 
 All serialized references remain slash-normalized project paths. Absolute
 paths may be used transiently for loading and previews but are not written to
@@ -33,12 +43,13 @@ Tools -> Audio opens an embedded mixer panel with master and bus gain controls.
 The same panel can open the full standalone audio editor when deeper tooling is
 needed.
 
-Opening an Animation or Audio asset creates a read-only timed document and
-opens the shared Timeline panel. Timeline sources expose duration, position,
-playback state, and typed Animation, Audio, or Event tracks through
-`IEditorTimelineSource`. The panel provides a ruler, track list, playhead,
-scrubbing, and play/pause/stop controls. Future editable animation and audio
-documents should implement the same adapter rather than add another timeline.
+Opening an Animation or Audio asset creates a timed document and opens the
+shared Timeline panel. Timeline sources expose typed tracks, clips, keyframes,
+waveform envelopes, duration, position, and playback state through
+`IEditorTimelineSource`. The panel can add, move and remove clips/keyframes,
+undo/redo edits, scrub, and save a portable `<asset>.timeline.json` sidecar.
+Imported PCM audio registers a real AYAudio clip; its device voice-frame
+cursor drives the playhead and supports exact seek when the user scrubs.
 
 ## Run current project
 
@@ -67,12 +78,13 @@ data file.
 
 ## Validation profiles
 
-Tools -> Validate Project Content loads every `.ayscene`, `.ui.json`, and
-`.aytilemap`/`.aytilemap.json` without creating a window or renderer. Headless
-validation checks the UI document/widget structure without constructing UI
-objects; Full Client validation also builds the tree through `UILayoutLoader`.
-The editor reports both profiles separately so a project can be checked before
-launch.
+`AYProjectContentValidationCore` is an application-layer tool library kept out
+of `AYApplication` itself. `AYProjectContentValidator` loads every `.ayscene`,
+`.ui.json`, and `.aytilemap`/`.aytilemap.json` from an actual selected build
+profile. Headless validation checks UI structure without constructing widgets;
+Full Client validation also builds the tree through `UILayoutLoader`.
+Renderer-free `AYEntity2DComponents` metadata lets headless builds deserialize
+the same mixed 2D/3D Scene files without linking 2D render systems.
 
 Saving a Tilemap authoring document below project `Assets` also cooks the
 matching `Assets/tilemaps/<name>.aytilemap`. Scene components reference the
@@ -80,8 +92,8 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 2. AYUI 1.1.0 publishes source ABI
-version 110. MSVC object files embed link mismatch records and the public
+AYEditor 0.2.0 publishes source ABI version 4. AYUI 1.1.0 publishes source ABI
+version 111. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.
 The editor extension registry remains an in-process compile-time registry; this
@@ -89,8 +101,9 @@ versioning does not claim a stable binary plugin ABI.
 
 Repository verification remains split by assembly:
 
-- `windows-headless-debug` builds without Device, Renderer, Audio, or AY2D and
-  runs the core application smoke test plus Scene serialization tests.
+- `windows-headless-debug` builds without Device, Renderer, Audio, or AY2D
+  runtime systems, while retaining renderer-free 2D component schemas for
+  Scene validation.
 - `windows-client-debug` builds the complete runtime, including UI, 2D,
   Renderer, and Audio, without editor tooling.
 - `windows-debug` builds the editor and runs the project-content validator,
@@ -107,6 +120,7 @@ Recovery data lives below `.ayeditor/recovery` and is removed on a clean editor
 shutdown.
 
 When an old session lock is found, its transaction is preserved as
-`.ayeditor/recovery-crash-<timestamp>`. File -> Restore Crash Recovery replaces
-the affected files and keeps each previous file beside it with the
-`.before-recovery` suffix.
+`.ayeditor/recovery-crash-<timestamp>`. Startup presents each recoverable
+document separately; selected files can be restored while the rest remain for
+later. Every replaced file is kept beside it with the `.before-recovery`
+suffix.

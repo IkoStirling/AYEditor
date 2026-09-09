@@ -5,12 +5,26 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <chrono>
+#include <iomanip>
 #include <unordered_map>
 
 namespace ayt::editor {
 namespace {
 
 namespace fs = std::filesystem;
+
+fs::path historyPath(const std::string& projectRoot)
+{
+    return fs::path(projectRoot) / ".ayeditor" / "history"
+        / "resource-operations.tsv";
+}
+
+std::int64_t nowMicros()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
 std::string slashes(std::string value)
 {
@@ -107,7 +121,8 @@ EditorAssetOperationResult relocate(
     const std::string& projectRoot,
     const EditorAssetDatabase& database,
     std::vector<MoveEntry> entries,
-    bool copying)
+    bool copying,
+    const char* operation)
 {
     EditorAssetOperationResult result;
     if (projectRoot.empty()) {
@@ -223,6 +238,10 @@ EditorAssetOperationResult relocate(
     result.affectedAssets = entries.size();
     for (const MoveEntry& entry : entries) {
         result.resultingLogicalPaths.push_back(entry.newLogical);
+        (void)appendEditorAssetOperationHistory(projectRoot,
+            EditorAssetOperationHistoryEntry{
+                nowMicros(), operation, entry.oldLogical,
+                entry.newLogical, {}});
     }
     return result;
 }
@@ -243,6 +262,55 @@ fs::path absoluteFolder(const fs::path& projectRoot,
 }
 
 } // namespace
+
+std::vector<EditorAssetOperationHistoryEntry> readEditorAssetOperationHistory(
+    const std::string& projectRoot)
+{
+    std::vector<EditorAssetOperationHistoryEntry> result;
+    if (projectRoot.empty()) return result;
+    std::ifstream input(historyPath(projectRoot), std::ios::binary);
+    std::string marker;
+    if (!std::getline(input, marker)
+        || marker != "AYEDITOR_RESOURCE_HISTORY\t1") return result;
+    EditorAssetOperationHistoryEntry entry;
+    while (input >> entry.timestamp >> std::quoted(entry.operation)
+                 >> std::quoted(entry.source)
+                 >> std::quoted(entry.destination)
+                 >> std::quoted(entry.error)) {
+        result.push_back(entry);
+    }
+    std::reverse(result.begin(), result.end());
+    return result;
+}
+
+bool appendEditorAssetOperationHistory(
+    const std::string& projectRoot,
+    const EditorAssetOperationHistoryEntry& entry)
+{
+    if (projectRoot.empty()) return false;
+    const fs::path path = historyPath(projectRoot);
+    std::error_code error;
+    fs::create_directories(path.parent_path(), error);
+    if (error) return false;
+    const bool needsHeader = !fs::exists(path, error)
+        || fs::file_size(path, error) == 0u;
+    std::ofstream output(path, std::ios::binary | std::ios::app);
+    if (!output) return false;
+    if (needsHeader) output << "AYEDITOR_RESOURCE_HISTORY\t1\n";
+    output << entry.timestamp << '\t' << std::quoted(entry.operation) << '\t'
+           << std::quoted(entry.source) << '\t'
+           << std::quoted(entry.destination) << '\t'
+           << std::quoted(entry.error) << '\n';
+    return static_cast<bool>(output);
+}
+
+bool clearEditorAssetOperationHistory(const std::string& projectRoot)
+{
+    if (projectRoot.empty()) return false;
+    std::error_code error;
+    (void)fs::remove(historyPath(projectRoot), error);
+    return !error;
+}
 
 EditorAssetOperations::EditorAssetOperations(std::string projectRoot)
 {
@@ -273,7 +341,8 @@ EditorAssetOperationResult EditorAssetOperations::rename(
     MoveEntry entry{from, to, record.logicalPath, newLogical,
                     database.portableAssetPath(record),
                     database.portableAssetPath(newLogical)};
-    return relocate(_projectRoot, database, {std::move(entry)}, false);
+    return relocate(_projectRoot, database, {std::move(entry)}, false,
+                    "Rename");
 }
 
 EditorAssetOperationResult EditorAssetOperations::move(
@@ -293,7 +362,8 @@ EditorAssetOperationResult EditorAssetOperations::move(
             record.logicalPath, logical, database.portableAssetPath(record),
             database.portableAssetPath(logical)});
     }
-    return relocate(_projectRoot, database, std::move(entries), false);
+    return relocate(_projectRoot, database, std::move(entries), false,
+                    "Move");
 }
 
 EditorAssetOperationResult EditorAssetOperations::copy(
@@ -313,7 +383,8 @@ EditorAssetOperationResult EditorAssetOperations::copy(
             record.logicalPath, logical, database.portableAssetPath(record),
             database.portableAssetPath(logical)});
     }
-    return relocate(_projectRoot, database, std::move(entries), true);
+    return relocate(_projectRoot, database, std::move(entries), true,
+                    "Copy");
 }
 
 } // namespace ayt::editor

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorVersion.h"
+#include <AYUI/ImageTexture.h>
 
 #include <cstdint>
 #include <functional>
@@ -20,6 +21,21 @@ class EditorCommandRouter;
 class EditorDocumentManager;
 class EditorSelectionContext;
 class EditorWorkspace;
+
+// Original-resolution image data borrowed from the editor session. The host
+// owns the GPU handle; shared pixels remain alive while a view is planning an
+// import. Pixels are BGRA8, top-left origin.
+struct EditorAuthoringImage {
+    ayt::ui::ImageTextureHandle texture;
+    uint32_t width = 0u;
+    uint32_t height = 0u;
+    std::shared_ptr<const std::vector<uint8_t>> bgraPixels;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return texture.isValid() && width != 0u && height != 0u
+            && bgraPixels != nullptr;
+    }
+};
 
 enum class EditorSurfaceKind : uint8_t {
     Document,
@@ -101,6 +117,14 @@ public:
     virtual EditorWorkspace& workspace() noexcept = 0;
     virtual const std::string& projectRoot() const noexcept = 0;
     virtual ayt::ui::UIManager* uiManager() noexcept { return nullptr; }
+    virtual std::string chooseImageFile() { return {}; }
+    virtual EditorAuthoringImage loadAuthoringImage(
+        const std::string& /*path*/, std::string* error = nullptr) {
+        if (error != nullptr) {
+            *error = "Authoring images are not available in this host.";
+        }
+        return {};
+    }
     virtual void requestRepaint() = 0;
     virtual void setStatusText(const std::wstring& text) = 0;
 };

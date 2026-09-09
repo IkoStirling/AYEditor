@@ -36,6 +36,10 @@ public:
     // Generic Content Browser picker. The converter remains the authority on
     // supported extensions; this filter only keeps the common choices handy.
     static std::string showOpenAssetFileDialog(void* ownerWindowHandle);
+
+    // Tile/sprite source-image picker. Kept separate from generic import so
+    // choosing an authoring reference does not copy it into project assets.
+    static std::string showOpenImageFileDialog(void* ownerWindowHandle);
 };
 
 } // namespace ayt::editor

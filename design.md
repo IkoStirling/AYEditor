@@ -898,9 +898,10 @@ rendering primitives:
   小型文本资源的引用提示、项目内可恢复 trash，以及 Scene/UI/Tilemap/DSL 的
   双击打开。Mesh/Material/Animation 预览读取实际资源数据并按路径、大小、mtime
   缓存；PNG/JPEG/BMP/TGA 使用真实图像预览。
-- 仍未包含右键菜单、重命名/移动、文件系统 watcher、`.meta` GUID、完整依赖图与
-  自动引用修复。项目身份、导入策略和资源语义继续留在
-  AYEditor/AYProject/AYResource。
+- 当前已包含重命名、目录选择式移动/复制、启动磁盘索引、文件系统 watcher、
+  顺序异步导入队列、源依赖失效重导、引用修复、可浏览回收站与资源操作历史。
+  仍未包含右键菜单、`.meta` GUID 和跨所有资源格式的完整依赖图。项目身份、
+  导入策略和资源语义继续留在 AYEditor/AYProject/AYResource。
 
 ### 10.4 Phoskia / Logia DSL document tabs
 
@@ -957,6 +958,75 @@ rendering primitives:
   Document Outline、Canvas、Inspector Scroll 这类需要父布局拉伸的区域。集成测试锁定三者实际
   高度/宽度，防止再次出现“控件存在但区域为 0”的视觉退化。
 
+### 10.6 Tilemap workspace first integration
+
+- Tilemap 的作者文件保存与运行时烘焙是两个不同结果。只要
+  `.aytilemap.json` 已成功落盘，文档保存就成功并清除 dirty；运行时格式暂时无法表达的多图层、
+  图集切片或逐 Tile tint 只产生明确的“作者数据已保存、运行时资源未更新”状态，不能把已经
+  完成的作者保存误报为失败，也不能在关闭文档时阻止用户离开。
+- `TilemapWorkspaceDocument` 继续唯一持有共享 `AY2DEditorCore::TilemapEditorModel`。AYEditor View
+  只负责控件、输入和状态映射，不复制 paint/fill/terrain/history/serialization 规则。
+- 首次集成把原尺寸摘要页替换成可操作的三栏工作区：Tile 列表、中心正交画布、图层/Tile
+  属性；工具栏提供 Pencil、Eraser、Fill、Rectangle、Grid、Collision 和 Frame。画布支持连续
+  笔划、矩形预览、右键取样、滚轮缩放，以及中键或 Space+拖动平移。
+- 无图像来源或来源暂时不可用的 Tile 使用作者数据中的确定性预览色；正常路径通过宿主图片
+  服务显示完整 Source Sheet 与共享 PNG texture。View 不直接持有 Renderer 私有对象，AY2D
+  core 也不依赖 AYUI。
+- 视图命令继续进入统一 `EditorCommandRouter`；Save/Undo/Redo、脏页签、自动恢复和关闭决策
+  不建立第二套状态。快捷键 P/E/F/R、Space 和 Home 由 `IEditorViewInputTarget` 映射，文本输入
+  获得焦点时不得截获字母工具键。
+
+### 10.7 Tilemap atlas authoring in the main editor
+
+- `IEditorHostServices` exposes an editor-authoring image service and an image
+  file picker. `EditorAuthoringImage` carries a borrowed `ImageTextureHandle`,
+  original dimensions, and shared immutable BGRA8 source pixels. The Session
+  cache owns the GPU handle and keeps authoring handles stable until Session
+  teardown; extension views never release renderer resources.
+  Because this extends a public virtual interface, AYEditor Source ABI advances
+  from 2 to 3.
+- Authoring images are decoded at original resolution with the same
+  64-megapixel budget as AY2D import planning. Content Browser thumbnails stay
+  independently capped at 512 px; atlas slicing must never inspect the resized
+  thumbnail because it would change transparency and boundary decisions.
+- Tile-sheet parameters live in a blocking import dialog, not Inspector. The
+  preview receives the flexible majority of that dialog, numeric grid controls
+  stay in a fixed side column, and commit delegates to
+  `AY2DEditorCore::TileAtlasImportModel` before the document performs its atomic
+  duplicate-ID validation.
+- The permanent left side is source-first: it shows the original sheet with its
+  spatial grid, including skipped transparent cells, and direct cell clicks
+  select a Tile and return to Pencil. The textual Tile list remains a secondary
+  lookup surface. Reopening a document resolves saved atlas paths and restores
+  those textures through the same host cache.
+- Canvas rendering uses one borrowed atlas texture per source, exact persisted
+  source rectangles, render tint, and the established half-texel UV inset.
+  Missing source files or unavailable GPU services fall back to deterministic
+  preview color and produce a status message instead of invalidating the
+  authoring document.
+
+### 10.8 Smart atlas import and Stamp authoring
+
+- On image selection the Tilemap workspace inspects bounded sibling `.json`,
+  `.tsj`, and `.tsx` files through the shared AY2D metadata parser. It accepts only a
+  Tiled tileset or TexturePacker atlas whose declared image matches the chosen
+  bitmap, reports the exact metadata file, and keeps Grid/Free Regions as
+  explicit user-selectable modes. The host owns discovery and file I/O; no
+  filesystem dependency enters the picker or document model.
+- The import preview supports integer source-space rectangle creation. Free
+  Regions have local undo/clear before commit, while metadata regions are
+  read-only. The preview and committed atlas use the same shared plan and the
+  main Source Sheet renders arbitrary region outlines instead of a fabricated
+  uniform grid.
+- A regular-grid Source Sheet can enter Stamp Select mode. Dragging a rectangle
+  creates one persisted `TileStampDefinition`; skipped source cells remain
+  holes. A Stamp selector recalls definitions, delete is undoable, and the
+  toolbar exposes Stamp as a distinct active tool so painting cannot be
+  confused with Pencil or Eraser.
+- Stamp placement delegates to `TilemapEditorModel` and remains a single
+  history gesture. Canvas clipping skips only cells that land outside the map;
+  it never shifts the selected pattern to fit.
+
 ---
 
 ## 11. Decisions log
@@ -992,6 +1062,8 @@ rendering primitives:
 | 2026-09-02 | Designer 命令收敛到 File/Edit 与 Inspector 上下文；Widget Library 改为可拖放 SVG 图标列表；选择装饰改为透明像素对齐单线，Inspector 切换在同一输入事务内完成布局。 |
 | 2026-09-08 | Designer 工具箱扩展到 Image、集合/树、Tab、Grid/Scroll 和 Modal；加入原生图片选择、GDI 实图预览，以及可往返的 controller/event 交互契约。 |
 | 2026-09-08 | Designer 保存/重开验证升级为对象级结构检查；生产 Loader 对称重建 Tab/Modal/Dialog payload 与深层 ID，并修复未挂载 Tab page 的重复 ID。 |
+| 2026-09-09 | Tilemap 作者保存与运行时烘焙结果分离；共享 `AY2DEditorCore` 的 Tilemap 文档页由摘要占位升级为可绘制、可取样、可缩放平移、可管理图层和 Tile 属性的 AYEditor 工作区。 |
+| 2026-09-09 | Tilemap 主编辑器图集工作流统一走宿主 authoring-image cache；原图选砖、模态切片和画布纹理共享 AY2D 的切片规划，AYEditor Source ABI 升至 3。 |
 
 ---
 

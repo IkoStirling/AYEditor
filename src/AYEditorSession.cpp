@@ -5,6 +5,7 @@
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/EditorAssetDeleteAnalysis.h"
+#include "AYEditor/EditorAssetImportQueue.h"
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
@@ -132,10 +133,13 @@ public:
         EditorWorkspace& workspace,
         ayt::ui::UIManager& ui,
         std::string projectRoot,
+        EditorAssetPreviewCache* imageCache,
+        void* ownerWindow,
         std::function<void()> repaint,
         std::function<void(const std::wstring&)> setStatus)
         : _workspace(workspace), _ui(ui),
           _projectRoot(std::move(projectRoot)),
+          _imageCache(imageCache), _ownerWindow(ownerWindow),
           _repaint(std::move(repaint)), _setStatus(std::move(setStatus)) {}
 
     EditorWorkspace& workspace() noexcept override { return _workspace; }
@@ -144,6 +148,17 @@ public:
     }
     ayt::ui::UIManager* uiManager() noexcept override {
         return &_ui;
+    }
+    std::string chooseImageFile() override {
+        return ImportDialog::showOpenImageFileDialog(_ownerWindow);
+    }
+    EditorAuthoringImage loadAuthoringImage(
+        const std::string& path, std::string* error = nullptr) override {
+        if (_imageCache == nullptr) {
+            if (error != nullptr) *error = "The image cache is unavailable.";
+            return {};
+        }
+        return _imageCache->loadAuthoringImage(path, error);
     }
     void requestRepaint() override {
         if (_repaint) _repaint();
@@ -156,6 +171,8 @@ private:
     EditorWorkspace& _workspace;
     ayt::ui::UIManager& _ui;
     std::string _projectRoot;
+    EditorAssetPreviewCache* _imageCache = nullptr;
+    void* _ownerWindow = nullptr;
     std::function<void()> _repaint;
     std::function<void(const std::wstring&)> _setStatus;
 };
@@ -642,6 +659,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _engineAssetsRoot = desc.engineAssetsRoot;
     _assetTrash = std::make_unique<EditorAssetTrash>(desc.projectRoot);
     _assetOperations = std::make_unique<EditorAssetOperations>(desc.projectRoot);
+    _assetImportQueue = std::make_unique<EditorAssetImportQueue>();
+    _assetImportProgressPercent = -1;
     _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
     std::string recoveryError;
     if (!_recoveryStore->beginSession(&recoveryError)) {
@@ -765,7 +784,13 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
                  / ".ayeditor" / "cache" / "previews").string());
         }
         refreshAssetBrowser();
-        setAssetBrowserStatus(L"Indexing project assets...");
+        if (_assetDatabase.loadedFromIndex()) {
+            setAssetBrowserStatus(L"Loaded "
+                + std::to_wstring(_assetDatabase.records().size())
+                + L" cached assets; checking for changes...");
+        } else {
+            setAssetBrowserStatus(L"Indexing project assets...");
+        }
         (void)_assetDatabase.requestScan();
     }
     reportStartup(0.78f, L"Restoring editor workspace...");
@@ -774,6 +799,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     if (_mainDock != nullptr) {
         _editorHostServices = std::make_unique<EditorSessionHostServices>(
             *_workspace, _ui, desc.projectRoot,
+            _assetPreviewCache.get(), _hostWindow,
             [this]() {
                 if (_repaintCallback) _repaintCallback();
             },
@@ -912,8 +938,9 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
 
     if (hasCrashRecovery()) {
         setAssetBrowserStatus(
-            L"A previous editor session ended unexpectedly. Use File > "
-            L"Restore Crash Recovery to recover autosaved documents.", true);
+            L"A previous editor session ended unexpectedly. Choose the "
+            L"documents to recover in the recovery dialog.", true);
+        showCrashRecoveryDialog();
     }
     reportStartup(1.0f, L"Editor workspace ready");
     return true;
@@ -959,10 +986,18 @@ void EditorSession::shutdown() {
     _assetDeleteDialog.reset();
     _assetOperationDialog.reset();
     _assetOperationInput = nullptr;
+    _assetOperationFolderPicker = nullptr;
+    _recoveryDialog.reset();
+    _recoveryChecks.clear();
+    _assetTrashDialog.reset();
+    _assetTrashList = nullptr;
+    _assetHistoryDialog.reset();
     if (_assetInspectorPreview != nullptr) {
         _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
     }
     _assetPreviewCache.reset();
+    _assetImportQueue.reset();
+    _assetImportProgressPercent = -1;
 
     // v0.3+ PR-5 — Landmine E: 清 Outliner 状态**早于** _ui.shutdown()
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
@@ -1091,8 +1126,45 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         _outlinerRefreshPending = false;
         refreshOutliner();
     }
-    if (_assetDatabase.pollScan()) {
+    const bool completedAssetScan = _assetDatabase.pollScan();
+    const bool changedAssets = _assetDatabase.pollFileChanges();
+    if (completedAssetScan || changedAssets) {
         _assetBrowserRefreshPending = true;
+    }
+    if (_assetImportQueue != nullptr && _assetImportQueue->poll()) {
+        const auto& jobs = _assetImportQueue->jobs();
+        const auto completed = std::find_if(jobs.rbegin(), jobs.rend(),
+            [](const EditorAssetImportJob& job) { return job.finished(); });
+        if (completed != jobs.rend()) {
+            if (completed->state == EditorAssetImportJobState::Failed) {
+                setAssetBrowserStatus(L"Import failed: "
+                    + ayt::ui::decodeUtf8Text(completed->message), true);
+            } else {
+                if (!completed->outputPaths.empty()) {
+                    std::filesystem::path output(completed->outputPaths.front());
+                    if (output.is_relative()) output =
+                        std::filesystem::path(_assetDatabase.derivedRoot()) / output;
+                    _pendingAssetSelectionPath = output.lexically_normal().string();
+                }
+                _assetCurrentFolder = "Imported";
+                (void)_assetDatabase.requestScan();
+                setAssetBrowserStatus(completed->state
+                    == EditorAssetImportJobState::CacheHit
+                    ? L"Import cache reused; refreshing assets."
+                    : L"Import complete; refreshing assets.", true);
+            }
+        }
+    }
+    if (_assetImportQueue != nullptr && _assetImportQueue->busy()) {
+        const int percent = static_cast<int>(std::round(
+            _assetImportQueue->overallProgress() * 100.0f));
+        if (percent != _assetImportProgressPercent) {
+            _assetImportProgressPercent = percent;
+            setAssetBrowserStatus(L"Importing assets... "
+                + std::to_wstring(percent) + L"%", true);
+        }
+    } else {
+        _assetImportProgressPercent = -1;
     }
     if (_assetPreviewCache != nullptr && _assetPreviewCache->poll()) {
         refreshVisibleAssetPreviews();
@@ -2998,6 +3070,8 @@ void EditorSession::refreshAssetInspector()
     if (auto* reload = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_asset_reload"))) {
         reload->setEnabled(true);
+        reload->setText(record->type == EditorAssetType::SourceModel
+            ? L"Reimport Source" : L"Reload Asset");
     }
 
     const bool showPreview = _assetPreviewCache != nullptr
@@ -3072,29 +3146,15 @@ void EditorSession::importAssetFromDialog()
             + ayt::ui::decodeUtf8Text(source), true);
         return;
     }
-    setAssetBrowserStatus(L"Importing "
+    setAssetBrowserStatus(L"Queued import: "
         + ayt::ui::decodeUtf8Text(std::filesystem::path(source).filename().string())
-        + L"...", true);
-    const Importer::Result result = Importer::importAssetFile(
-        source, _assetDatabase.derivedRoot());
-    if (!result.success) {
-        setAssetBrowserStatus(L"Import failed: "
-            + ayt::ui::decodeUtf8Text(result.errorMessage), true);
+        + L"", true);
+    if (_assetImportQueue == nullptr) {
+        setAssetBrowserStatus(L"Import queue is unavailable.", true);
         return;
     }
-    for (const auto& resource : result.conversion.resources) {
-        if (resource.path.empty()) continue;
-        std::filesystem::path output(resource.path);
-        if (output.is_relative()) output =
-            std::filesystem::path(_assetDatabase.derivedRoot()) / output;
-        _pendingAssetSelectionPath = output.lexically_normal().string();
-        break;
-    }
-    _assetCurrentFolder = "Imported";
-    (void)rescanAssetsNow();
-    setAssetBrowserStatus(result.usedCache
-        ? L"Import cache reused; asset index refreshed."
-        : L"Import complete; asset index refreshed.", true);
+    (void)_assetImportQueue->enqueue(
+        source, _assetDatabase.derivedRoot(), false);
 }
 
 void EditorSession::reloadSelectedAsset()
@@ -3102,6 +3162,14 @@ void EditorSession::reloadSelectedAsset()
     if (_selectedAssetIds.size() != 1u) return;
     const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
     if (record == nullptr) return;
+    if (record->type == EditorAssetType::SourceModel) {
+        if (_assetImportQueue == nullptr) return;
+        (void)_assetImportQueue->enqueue(
+            record->absolutePath, _assetDatabase.derivedRoot(), true);
+        setAssetBrowserStatus(L"Queued reimport: "
+            + ayt::ui::decodeUtf8Text(record->name), true);
+        return;
+    }
     ayt::resource::ResourceManager::instance().reloadResource(
         record->runtimePath);
     refreshAssetInspector();
@@ -3222,28 +3290,59 @@ void EditorSession::showAssetOperationDialog(
 {
     _assetOperationDialog = std::make_unique<ayt::ui::ModalDialog>();
     _assetOperationDialog->setId("asset_operation_dialog");
-    _assetOperationDialog->setSize({460.0f, 168.0f});
+    _assetOperationDialog->setSize({460.0f, 184.0f});
     _assetOperationDialog->setAcceptText(copy ? L"Copy" :
         (rename ? L"Rename" : L"Move"));
     _assetOperationDialog->setRejectText(L"Cancel");
     auto* body = new ayt::ui::VBox();
     body->setSpacing(8.0f);
-    body->setSize({428.0f, 96.0f});
+    body->setSize({428.0f, 112.0f});
     auto* title = new ayt::ui::TextLabel();
     title->setText(titleText);
     title->setFontSize(14);
     body->addWidget(title, 26.0f);
-    _assetOperationInput = new ayt::ui::TextInput();
-    _assetOperationInput->setText(initialValue);
-    _assetOperationInput->setSize({428.0f, 28.0f});
-    _assetOperationInput->selectAll();
-    body->addWidget(_assetOperationInput, 28.0f);
+    _assetOperationInput = nullptr;
+    _assetOperationFolderPicker = nullptr;
+    if (rename) {
+        _assetOperationInput = new ayt::ui::TextInput();
+        _assetOperationInput->setText(initialValue);
+        _assetOperationInput->setSize({428.0f, 28.0f});
+        _assetOperationInput->selectAll();
+        body->addWidget(_assetOperationInput, 28.0f);
+    } else {
+        auto* hint = new ayt::ui::TextLabel();
+        hint->setText(L"Choose a project folder");
+        hint->setFontSize(12);
+        body->addWidget(hint, 20.0f);
+        _assetOperationFolderPicker = new ayt::ui::ComboBox();
+        std::vector<std::wstring> folders;
+        int selected = -1;
+        for (const EditorAssetFolder& folder : _assetDatabase.folders()) {
+            if (folder.logicalPath.empty()) continue;
+            if (folder.logicalPath == std::filesystem::path(initialValue).generic_string()) {
+                selected = static_cast<int>(folders.size());
+            }
+            folders.push_back(ayt::ui::decodeUtf8Text(folder.logicalPath));
+        }
+        _assetOperationFolderPicker->setItems(folders);
+        if (selected < 0 && !folders.empty()) selected = 0;
+        _assetOperationFolderPicker->setSelectedIndex(selected);
+        _assetOperationFolderPicker->setSize({428.0f, 28.0f});
+        _assetOperationFolderPicker->setMaxPopupItems(10);
+        body->addWidget(_assetOperationFolderPicker, 28.0f);
+    }
     _assetOperationDialog->setBodyContentOwned(body);
     _assetOperationDialog->setOnResult([this, rename, copy](int result) {
-        if (result != ayt::ui::ModalDialog::Ok
-            || _assetOperationInput == nullptr) return;
-        const std::string value = std::filesystem::path(
-            _assetOperationInput->getText()).string();
+        if (result != ayt::ui::ModalDialog::Ok) return;
+        std::string value;
+        if (rename && _assetOperationInput != nullptr) {
+            value = std::filesystem::path(
+                _assetOperationInput->getText()).string();
+        } else if (_assetOperationFolderPicker != nullptr) {
+            value = std::filesystem::path(
+                _assetOperationFolderPicker->getSelectedItem()).generic_string();
+        }
+        if (value.empty()) return;
         if (rename) (void)renameSelectedAsset(value);
         else if (copy) (void)copySelectedAssets(value);
         else (void)moveSelectedAssets(value);
@@ -3462,6 +3561,133 @@ bool EditorSession::runCurrentProject()
     return true;
 }
 
+void EditorSession::showAssetTrashDialog()
+{
+    if (_assetTrash == nullptr || _assetTrash->transactions().empty()) {
+        setAssetBrowserStatus(L"Project trash is empty.");
+        return;
+    }
+    const auto transactions = _assetTrash->transactions();
+    _assetTrashDialog = std::make_unique<ayt::ui::ModalDialog>();
+    _assetTrashDialog->setId("asset_trash_dialog");
+    _assetTrashDialog->setSize({680.0f, 420.0f});
+    _assetTrashDialog->setAcceptText(L"Clear Selected Permanently");
+    _assetTrashDialog->setRejectText(L"Close");
+    auto* body = new ayt::ui::VBox();
+    body->setSpacing(8.0f);
+    body->setSize({648.0f, 348.0f});
+    auto* title = new ayt::ui::TextLabel();
+    title->setText(L"Project Trash");
+    title->setFontSize(15);
+    body->addWidget(title, 28.0f);
+    auto* hint = new ayt::ui::TextLabel();
+    hint->setText(L"Ctrl/Shift selects multiple deletion transactions.");
+    hint->setFontSize(12);
+    body->addWidget(hint, 22.0f);
+    _assetTrashList = new ayt::ui::ListView();
+    _assetTrashList->setSelectionMode(
+        ayt::ui::ListView::SelectionMode::Extended);
+    std::vector<std::wstring> items;
+    for (const EditorAssetTrashTransaction& transaction : transactions) {
+        std::string label = transaction.id + "  —  "
+            + std::to_string(transaction.entries.size()) + " item(s)";
+        if (!transaction.entries.empty()) {
+            label += "  —  " + std::filesystem::path(
+                transaction.entries.front().originalPath).filename().string();
+        }
+        items.push_back(ayt::ui::decodeUtf8Text(label));
+    }
+    _assetTrashList->setItems(items);
+    _assetTrashList->setSize({648.0f, 230.0f});
+    body->addWidget(_assetTrashList, 230.0f);
+    auto* restore = new ayt::ui::Button();
+    restore->setText(L"Restore Selected");
+    restore->setStyleId("editor_property_button");
+    restore->setSize({150.0f, 28.0f});
+    restore->setOnClicked([this, transactions]() {
+        if (_assetTrash == nullptr || _assetTrashList == nullptr) return;
+        std::size_t restored = 0;
+        for (const int index : _assetTrashList->getSelectedIndices()) {
+            if (index < 0 || static_cast<std::size_t>(index) >= transactions.size()) continue;
+            const EditorAssetTrashResult result = _assetTrash->restore(
+                transactions[static_cast<std::size_t>(index)].id);
+            if (!result) {
+                setAssetBrowserStatus(L"Restore failed: "
+                    + ayt::ui::decodeUtf8Text(result.error), true);
+                return;
+            }
+            restored += result.moved;
+        }
+        (void)rescanAssetsNow();
+        setAssetBrowserStatus(L"Restored " + std::to_wstring(restored)
+            + L" asset(s) from project trash.", true);
+        if (_assetTrashDialog != nullptr) _assetTrashDialog->rejectDialog();
+    });
+    body->addWidget(restore, 28.0f);
+    _assetTrashDialog->setBodyContentOwned(body);
+    _assetTrashDialog->setOnResult([this, transactions](int result) {
+        if (result != ayt::ui::ModalDialog::Ok || _assetTrash == nullptr
+            || _assetTrashList == nullptr) return;
+        const auto selected = _assetTrashList->getSelectedIndices();
+        if (selected.empty()) return;
+#if defined(_WIN32)
+        if (::MessageBoxW(_hostWindow,
+                L"Permanently delete the selected trash transactions? This cannot be undone.",
+                L"Clear Project Trash", MB_YESNO | MB_ICONWARNING)
+            != IDYES) return;
+#endif
+        std::size_t purged = 0;
+        for (const int index : selected) {
+            if (index < 0 || static_cast<std::size_t>(index) >= transactions.size()) continue;
+            const EditorAssetTrashResult cleared = _assetTrash->purge(
+                transactions[static_cast<std::size_t>(index)].id);
+            if (!cleared) {
+                setAssetBrowserStatus(L"Trash clear failed: "
+                    + ayt::ui::decodeUtf8Text(cleared.error), true);
+                return;
+            }
+            purged += cleared.moved;
+        }
+        setAssetBrowserStatus(L"Permanently cleared "
+            + std::to_wstring(purged) + L" asset(s).", true);
+    });
+    _assetTrashDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::showAssetHistoryDialog()
+{
+    const auto history = readEditorAssetOperationHistory(
+        _assetDatabase.projectRoot());
+    _assetHistoryDialog = std::make_unique<ayt::ui::ModalDialog>();
+    _assetHistoryDialog->setId("asset_history_dialog");
+    _assetHistoryDialog->setSize({760.0f, 420.0f});
+    _assetHistoryDialog->setAcceptText(L"Close");
+    _assetHistoryDialog->setRejectText(L"Close");
+    auto* body = new ayt::ui::VBox();
+    body->setSpacing(8.0f);
+    body->setSize({728.0f, 348.0f});
+    auto* title = new ayt::ui::TextLabel();
+    title->setText(L"Resource Operation History");
+    title->setFontSize(15);
+    body->addWidget(title, 28.0f);
+    auto* list = new ayt::ui::ListView();
+    std::vector<std::wstring> items;
+    if (history.empty()) items.push_back(L"No resource operations recorded.");
+    for (const EditorAssetOperationHistoryEntry& entry : history) {
+        std::string label = entry.operation + "  |  " + entry.source;
+        if (!entry.destination.empty()) label += "  ->  " + entry.destination;
+        if (!entry.error.empty()) label += "  |  " + entry.error;
+        items.push_back(ayt::ui::decodeUtf8Text(label));
+    }
+    list->setItems(items);
+    list->setSize({728.0f, 292.0f});
+    body->addWidget(list, 292.0f);
+    _assetHistoryDialog->setBodyContentOwned(body);
+    _assetHistoryDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
+}
+
 void EditorSession::validateProjectContent()
 {
     const EditorRuntimeValidationResult headless =
@@ -3519,9 +3745,22 @@ bool EditorSession::hasCrashRecovery() const noexcept
 bool EditorSession::restoreCrashRecovery()
 {
     if (_recoveryStore == nullptr) return false;
+    std::vector<std::size_t> indices;
+    const auto documents = _recoveryStore->recoverableDocuments();
+    indices.reserve(documents.size());
+    for (std::size_t index = 0; index < documents.size(); ++index) {
+        indices.push_back(index);
+    }
+    return restoreCrashRecovery(indices);
+}
+
+bool EditorSession::restoreCrashRecovery(
+    const std::vector<std::size_t>& indices)
+{
+    if (_recoveryStore == nullptr) return false;
     const std::string openScenePath = _document != nullptr
         ? _document->path() : std::string{};
-    const EditorRecoveryResult result = _recoveryStore->restorePrevious();
+    const EditorRecoveryResult result = _recoveryStore->restorePrevious(indices);
     if (_restoreRecoveryMenuItem != nullptr) {
         _restoreRecoveryMenuItem->setEnabled(hasCrashRecovery());
     }
@@ -3539,6 +3778,58 @@ bool EditorSession::restoreCrashRecovery()
         + L" autosaved document(s). Original files were backed up with a "
           L".before-recovery suffix.", true);
     return true;
+}
+
+void EditorSession::showCrashRecoveryDialog()
+{
+    if (_recoveryStore == nullptr) return;
+    const auto documents = _recoveryStore->recoverableDocuments();
+    if (documents.empty()) return;
+    _recoveryChecks.clear();
+    _recoveryDialog = std::make_unique<ayt::ui::ModalDialog>();
+    _recoveryDialog->setId("crash_recovery_dialog");
+    const float height = std::min(440.0f,
+        150.0f + 28.0f * static_cast<float>(documents.size()));
+    _recoveryDialog->setSize({560.0f, height});
+    _recoveryDialog->setAcceptText(L"Restore Selected");
+    _recoveryDialog->setRejectText(L"Later");
+    auto* body = new ayt::ui::VBox();
+    body->setSpacing(7.0f);
+    body->setSize({528.0f, height - 64.0f});
+    auto* title = new ayt::ui::TextLabel();
+    title->setText(L"Recover documents from the previous editor session");
+    title->setFontSize(15);
+    body->addWidget(title, 28.0f);
+    auto* hint = new ayt::ui::TextLabel();
+    hint->setText(L"Existing files receive a .before-recovery backup.");
+    hint->setFontSize(12);
+    body->addWidget(hint, 22.0f);
+    for (const EditorRecoveryDocument& document : documents) {
+        auto* check = new ayt::ui::CheckBox();
+        check->setChecked(true);
+        const std::string label = document.title.empty()
+            ? document.originalPath : document.title + "  —  " + document.originalPath;
+        check->setText(ayt::ui::decodeUtf8Text(label));
+        check->setSize({528.0f, 24.0f});
+        body->addWidget(check, 24.0f);
+        _recoveryChecks.push_back(check);
+    }
+    _recoveryDialog->setBodyContentOwned(body);
+    _recoveryDialog->setOnResult([this](int result) {
+        if (result != ayt::ui::ModalDialog::Ok) return;
+        std::vector<std::size_t> selected;
+        for (std::size_t index = 0; index < _recoveryChecks.size(); ++index) {
+            if (_recoveryChecks[index] != nullptr
+                && _recoveryChecks[index]->isChecked()) selected.push_back(index);
+        }
+        if (selected.empty()) {
+            setAssetBrowserStatus(L"No recovery documents selected.", true);
+            return;
+        }
+        (void)restoreCrashRecovery(selected);
+    });
+    _recoveryDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
 }
 
 bool EditorSession::createProjectAsset(EditorAssetType type)
@@ -5012,7 +5303,7 @@ void EditorSession::bindMenuBar() {
         if (auto* item = fileMenu->addItem(L"Restore Crash Recovery")) {
             _restoreRecoveryMenuItem = item;
             item->setEnabled(hasCrashRecovery());
-            item->setOnActivate([this]() { (void)restoreCrashRecovery(); });
+            item->setOnActivate([this]() { showCrashRecoveryDialog(); });
         }
         if (auto* item = fileMenu->addItem(L"Import...")) {
             item->setOnActivate([this]() { importCharacterFromDialog(); });
@@ -5056,6 +5347,12 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() {
                 (void)restoreLastDeletedAssets();
             });
+        }
+        if (auto* item = editMenu->addItem(L"Project Trash...")) {
+            item->setOnActivate([this]() { showAssetTrashDialog(); });
+        }
+        if (auto* item = editMenu->addItem(L"Resource Operation History...")) {
+            item->setOnActivate([this]() { showAssetHistoryDialog(); });
         }
         editMenu->addSeparator();
         if (auto* item = editMenu->addItem(L"Create Empty Entity")) {
@@ -5148,6 +5445,17 @@ void EditorSession::bindMenuBar() {
             });
         }
         toolsMenu->addSeparator();
+        if (auto* item = toolsMenu->addItem(L"Reimport Changed Source Assets")) {
+            item->setOnActivate([this]() {
+                if (_assetImportQueue == nullptr) return;
+                const std::size_t count =
+                    _assetImportQueue->enqueueChangedDependencies(_assetDatabase);
+                setAssetBrowserStatus(count == 0u
+                    ? L"No changed source assets require reimport."
+                    : L"Queued " + std::to_wstring(count)
+                        + L" changed source asset(s).", true);
+            });
+        }
         if (auto* item = toolsMenu->addItem(L"Validate Project Content")) {
             item->setOnActivate([this]() { validateProjectContent(); });
         }

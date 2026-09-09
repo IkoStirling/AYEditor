@@ -2,35 +2,82 @@
 
 #include "AYEditor/EditorCommandSystem.h"
 #include "AYEditor/EditorWorkspace.h"
+#include "AYEditorTileAtlasPicker.h"
+#include "AYEditorTilemapCanvas.h"
 
+#include <AY2DEditor/TileAtlasImportModel.h>
 #include <AY2DEditor/TilemapEditorModel.h>
 #include <AYAudio/AudioSubSystem.h>
+#include <AYAudio/AudioEngine.h>
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYResource/Converter/TilemapConverter.h>
 #include <AYUI/Box.h>
 #include <AYUI/Button.h>
+#include <AYUI/ComboBox.h>
+#include <AYUI/ListView.h>
+#include <AYUI/Modal.h>
+#include <AYUI/Panel.h>
 #include <AYUI/Slider.h>
 #include <AYUI/TextLabel.h>
+#include <AYUI/TextInput.h>
+#include <AYUI/UIKeyCode.h>
+#include <AYUI/UIManager.h>
 #include <AYUI/UnicodeText.h>
 #include <AYUI/Widget.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
+#include <map>
 #include <sstream>
+#include <stdexcept>
 #include <utility>
 
 namespace ayt::editor {
 namespace {
 
-bool saveAndCookTilemap(ayt::ay2d::editor::TilemapEditorModel& model,
-                        const std::string& path, std::string* error)
+struct TilemapSaveResult {
+    bool sourceSaved = false;
+    bool cooked = false;
+    std::string notice;
+};
+
+bool runtimeV2CanRepresent(
+    const ayt::ay2d::editor::TilemapDocument& document) noexcept
 {
-    if (!model.save(path, error)) return false;
+    if (document.layerCount() != 1u || !document.tileAtlases().empty()) {
+        return false;
+    }
+    return std::none_of(
+        document.tileAssets().begin(), document.tileAssets().end(),
+        [](const auto& pair) {
+            return pair.second.atlasId != 0u
+                || pair.second.tintRgba != 0xffffffffu;
+        });
+}
+
+TilemapSaveResult saveTilemapSourceAndTryCook(
+    ayt::ay2d::editor::TilemapEditorModel& model,
+    const std::string& path, std::string* error)
+{
+    TilemapSaveResult result;
+    if (!model.save(path, error)) return result;
+    result.sourceSaved = true;
+    if (!runtimeV2CanRepresent(model.document())) {
+        result.notice = "Authoring source saved. Runtime v2 was not updated "
+            "because it cannot represent layers, atlas regions, or tile tint.";
+        if (error != nullptr) error->clear();
+        return result;
+    }
     const std::filesystem::path source =
         std::filesystem::absolute(path).lexically_normal();
     std::filesystem::path assetRoot;
@@ -44,23 +91,23 @@ bool saveAndCookTilemap(ayt::ay2d::editor::TilemapEditorModel& model,
         if (parent == cursor) break;
     }
     if (assetRoot.empty()) {
-        if (error != nullptr) {
-            *error = "Tilemap source was saved, but cooking requires it below "
-                     "the project Assets folder.";
-        }
-        return false;
+        result.notice = "Authoring source saved. Runtime cooking was skipped "
+            "because the file is outside the project Assets folder.";
+        if (error != nullptr) error->clear();
+        return result;
     }
     ayt::resource::TilemapConverter converter(source.string());
     converter.setOutputDir(assetRoot.string());
     const ayt::resource::ConversionResult cooked = converter.convert();
     if (cooked.resources.size() != 1u) {
-        if (error != nullptr) {
-            *error = "Tilemap source was saved, but runtime cooking failed.";
-        }
-        return false;
+        result.notice =
+            "Authoring source saved, but runtime cooking failed.";
+        if (error != nullptr) error->clear();
+        return result;
     }
+    result.cooked = true;
     if (error != nullptr) error->clear();
-    return true;
+    return result;
 }
 
 class ToolDocument final : public IEditorDocument {
@@ -110,20 +157,27 @@ public:
             if (error != nullptr) *error = "Tilemap has no file path.";
             return false;
         }
-        const bool saved = saveAndCookTilemap(_model, _path, error);
-        if (saved) ++_revision;
-        return saved;
+        const TilemapSaveResult result = saveTilemapSourceAndTryCook(
+            _model, _path, error);
+        _lastSaveNotice = result.notice;
+        if (result.sourceSaved) ++_revision;
+        return result.sourceSaved;
     }
     bool canSaveAs() const noexcept override { return true; }
     bool saveAs(const std::string& path, std::string* error) override {
-        const bool saved = !path.empty()
-            && saveAndCookTilemap(_model, path, error);
-        if (saved) {
+        if (path.empty()) {
+            if (error != nullptr) *error = "Tilemap has no file path.";
+            return false;
+        }
+        const TilemapSaveResult result = saveTilemapSourceAndTryCook(
+            _model, path, error);
+        _lastSaveNotice = result.notice;
+        if (result.sourceSaved) {
             _path = path;
             _title = std::filesystem::path(path).filename().string();
             ++_revision;
         }
-        return saved;
+        return result.sourceSaved;
     }
     bool writeRecoveryCopy(const std::string& path,
                            std::string* error) const override {
@@ -135,17 +189,193 @@ public:
         return false;
     }
     ayt::ay2d::editor::TilemapEditorModel& model() noexcept { return _model; }
+    const std::string& lastSaveNotice() const noexcept {
+        return _lastSaveNotice;
+    }
     void changed() noexcept { ++_revision; }
 private:
     std::string _type = "ayeditor.tilemap.document";
     std::string _path;
     std::string _title = "Untitled Tilemap";
+    std::string _lastSaveNotice;
     uint64_t _revision = 1u;
     ayt::ay2d::editor::TilemapEditorModel _model;
 };
 
+void appendUtf8CodePoint(std::string& output, uint32_t codePoint)
+{
+    if (codePoint <= 0x7fu) {
+        output.push_back(static_cast<char>(codePoint));
+    } else if (codePoint <= 0x7ffu) {
+        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    } else if (codePoint <= 0xffffu) {
+        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    } else {
+        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 12u) & 0x3fu)));
+        output.push_back(static_cast<char>(
+            0x80u | ((codePoint >> 6u) & 0x3fu)));
+        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
+    }
+}
+
+std::string encodeUtf8(const std::wstring& text)
+{
+    std::string output;
+    output.reserve(text.size());
+    for (size_t index = 0u; index < text.size(); ++index) {
+        uint32_t codePoint = static_cast<uint32_t>(text[index]);
+        if constexpr (sizeof(wchar_t) == 2) {
+            if (codePoint >= 0xd800u && codePoint <= 0xdbffu
+                && index + 1u < text.size()) {
+                const uint32_t low = static_cast<uint32_t>(text[index + 1u]);
+                if (low >= 0xdc00u && low <= 0xdfffu) {
+                    codePoint = 0x10000u
+                        + ((codePoint - 0xd800u) << 10u)
+                        + (low - 0xdc00u);
+                    ++index;
+                }
+            }
+        }
+        if (codePoint >= 0xd800u && codePoint <= 0xdfffu) {
+            codePoint = 0xfffdu;
+        }
+        appendUtf8CodePoint(
+            output, std::min(codePoint, uint32_t{0x10ffffu}));
+    }
+    return output;
+}
+
+bool parseUint32(const std::wstring& text, uint32_t& value)
+{
+    if (text.empty()) return false;
+    wchar_t* end = nullptr;
+    const unsigned long long parsed = std::wcstoull(text.c_str(), &end, 0);
+    if (end == text.c_str() || *end != L'\0'
+        || parsed > (std::numeric_limits<uint32_t>::max)()) {
+        return false;
+    }
+    value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
+enum class AtlasImportMode : uint8_t {
+    Grid,
+    Metadata,
+    FreeRegions,
+};
+
+struct AtlasMetadataDiscovery {
+    std::filesystem::path path;
+    ayt::ay2d::editor::TileAtlasMetadataParseResult parsed;
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return static_cast<bool>(parsed);
+    }
+};
+
+std::string lowerPathName(const std::filesystem::path& path)
+{
+    std::string name = path.filename().string();
+    std::transform(name.begin(), name.end(), name.begin(),
+        [](unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    return name;
+}
+
+bool metadataImageMatches(const std::filesystem::path& metadataFile,
+                          const std::string& declaredImage,
+                          const std::filesystem::path& chosenImage)
+{
+    try {
+        std::filesystem::path declared = std::filesystem::u8path(declaredImage);
+        if (declared.is_relative()) declared = metadataFile.parent_path() / declared;
+        declared = std::filesystem::absolute(declared).lexically_normal();
+        std::filesystem::path chosen = std::filesystem::absolute(
+            chosenImage).lexically_normal();
+        std::string declaredKey = declared.generic_string();
+        std::string chosenKey = chosen.generic_string();
+        std::transform(declaredKey.begin(), declaredKey.end(),
+            declaredKey.begin(), [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        std::transform(chosenKey.begin(), chosenKey.end(), chosenKey.begin(),
+            [](unsigned char character) {
+                return static_cast<char>(std::tolower(character));
+            });
+        return declaredKey == chosenKey;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+AtlasMetadataDiscovery discoverAtlasMetadata(
+    const std::filesystem::path& imagePath,
+    uint32_t imageWidth, uint32_t imageHeight)
+{
+    constexpr uintmax_t kMaxMetadataBytes = 8u * 1024u * 1024u;
+    constexpr size_t kMaxSiblingCandidates = 64u;
+    AtlasMetadataDiscovery firstInvalid;
+    std::vector<std::filesystem::path> candidates;
+    const std::filesystem::path directory = imagePath.parent_path();
+    for (const char* extension : {".json", ".tsj", ".tsx"}) {
+        std::filesystem::path exact = directory / imagePath.stem();
+        exact += extension;
+        candidates.push_back(std::move(exact));
+    }
+    std::error_code scanError;
+    for (std::filesystem::directory_iterator iterator(
+             directory, std::filesystem::directory_options::skip_permission_denied,
+             scanError), end;
+         !scanError && iterator != end
+         && candidates.size() < kMaxSiblingCandidates;
+         iterator.increment(scanError)) {
+        if (!iterator->is_regular_file(scanError)) continue;
+        const std::string extension = lowerPathName(
+            iterator->path().extension());
+        if (extension != ".json" && extension != ".tsj"
+            && extension != ".tsx") continue;
+        const auto duplicate = std::find_if(
+            candidates.begin(), candidates.end(),
+            [&iterator](const std::filesystem::path& candidate) {
+                return lowerPathName(candidate) == lowerPathName(iterator->path());
+            });
+        if (duplicate == candidates.end()) candidates.push_back(iterator->path());
+    }
+
+    for (const std::filesystem::path& candidate : candidates) {
+        std::error_code fileError;
+        const uintmax_t size = std::filesystem::file_size(candidate, fileError);
+        if (fileError || size == 0u || size > kMaxMetadataBytes) continue;
+        std::ifstream file(candidate, std::ios::binary);
+        if (!file) continue;
+        std::string text(static_cast<size_t>(size), '\0');
+        if (!file.read(text.data(), static_cast<std::streamsize>(text.size()))) {
+            continue;
+        }
+        auto parsed = ayt::ay2d::editor::parseTileAtlasMetadata(
+            text, candidate.extension().string(), imageWidth, imageHeight);
+        if (!parsed.recognized || !metadataImageMatches(
+                candidate, parsed.metadata.imagePath, imagePath)) continue;
+        AtlasMetadataDiscovery discovery{candidate, std::move(parsed)};
+        if (discovery) return discovery;
+        if (!firstInvalid.parsed.recognized) {
+            firstInvalid = std::move(discovery);
+        }
+    }
+    return firstInvalid;
+}
+
 class TilemapWorkspaceView final
-    : public IEditorView, public IEditorCommandTarget {
+    : public IEditorView,
+      public IEditorCommandTarget,
+      public IEditorViewInputTarget {
 public:
     TilemapWorkspaceView(std::shared_ptr<TilemapWorkspaceDocument> document,
                          IEditorHostServices& host)
@@ -153,19 +383,282 @@ public:
     {
         auto* root = new ayt::ui::VBox();
         _root = root;
-        root->setSpacing(8.0f);
-        root->setPadding(12.0f, 10.0f, 12.0f, 10.0f);
-        auto* heading = new ayt::ui::TextLabel();
-        heading->setText(L"Tilemap");
-        heading->setFontSize(15);
-        root->addWidget(heading, 26.0f);
+        root->setId("tilemap_workspace");
+        root->setSpacing(6.0f);
+        root->setPadding(8.0f, 6.0f, 8.0f, 8.0f);
+
+        auto* toolbar = new ayt::ui::HBox();
+        toolbar->setId("tilemap_workspace_toolbar");
+        toolbar->setSpacing(4.0f);
+        _pencil = addButton(toolbar, L"Pencil  P", 86.0f, [this]() {
+            setTool(ayt::ay2d::editor::PaintTool::Pencil);
+        });
+        _pencil->setId("tilemap_tool_pencil");
+        _eraser = addButton(toolbar, L"Eraser  E", 86.0f, [this]() {
+            setTool(ayt::ay2d::editor::PaintTool::Eraser);
+        });
+        _eraser->setId("tilemap_tool_eraser");
+        _fill = addButton(toolbar, L"Fill  F", 72.0f, [this]() {
+            setTool(ayt::ay2d::editor::PaintTool::FloodFill);
+        });
+        _fill->setId("tilemap_tool_fill");
+        _rectangle = addButton(toolbar, L"Rectangle  R", 108.0f, [this]() {
+            setTool(ayt::ay2d::editor::PaintTool::Rectangle);
+        });
+        _rectangle->setId("tilemap_tool_rectangle");
+        _stamp = addButton(toolbar, L"Stamp  S", 82.0f, [this]() {
+            if (_document->model().selectedStampId() == 0u) {
+                _host.setStatusText(
+                    L"Choose a saved Stamp or create one from Source Sheet.");
+                return;
+            }
+            setTool(ayt::ay2d::editor::PaintTool::Stamp);
+        });
+        _stamp->setId("tilemap_tool_stamp");
+        _grid = addButton(toolbar, L"Grid: On", 78.0f, [this]() {
+            _canvas->setShowGrid(!_canvas->showGrid());
+            refresh();
+            _host.requestRepaint();
+        });
+        _collision = addButton(toolbar, L"Collision: On", 108.0f, [this]() {
+            _canvas->setShowCollision(!_canvas->showCollision());
+            refresh();
+            _host.requestRepaint();
+        });
+        addButton(toolbar, L"Frame  Home", 104.0f, [this]() {
+            _canvas->frameDocument();
+            _host.requestRepaint();
+        });
         _summary = new ayt::ui::TextLabel();
         _summary->setFontSize(12);
-        root->addWidget(_summary, 48.0f);
-        auto* note = new ayt::ui::TextLabel();
-        note->setText(L"Backed by the shared AY2DEditorCore model. Canvas tools can be added here without another document format.");
-        note->setFontSize(12);
-        root->addWidget(note, 42.0f);
+        toolbar->addWidget(_summary, 0.0f);
+        root->addWidget(toolbar, 30.0f);
+
+        auto* body = new ayt::ui::HBox();
+        body->setId("tilemap_workspace_body");
+        body->setSpacing(7.0f);
+        root->addWidget(body, 0.0f);
+
+        auto* assets = new ayt::ui::VBox();
+        assets->setSpacing(5.0f);
+        assets->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
+        assets->addWidget(makeLabel(L"Source Sheet", 14), 24.0f);
+        _atlasSelector = new ayt::ui::ComboBox();
+        _atlasSelector->setId("tilemap_workspace_atlas_selector");
+        _atlasSelector->setItems({L"No tile sheet imported"});
+        _atlasSelector->setSelectedIndex(0);
+        _atlasSelector->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_atlasIds.size())) return;
+            const uint32_t atlasId = _atlasIds[static_cast<size_t>(index)];
+            for (const auto& [tileId, asset] :
+                 _document->model().document().tileAssets()) {
+                if (asset.atlasId == atlasId) {
+                    _shownAtlasId = atlasId;
+                    selectTile(tileId);
+                    return;
+                }
+            }
+            _shownAtlasId = atlasId;
+            syncSourcePicker();
+            _host.requestRepaint();
+        });
+        assets->addWidget(_atlasSelector, 28.0f);
+        auto* pickerPanel = new ayt::ui::Panel();
+        pickerPanel->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        _atlasPicker = new EditorTileAtlasPicker();
+        _atlasPicker->setId("tilemap_workspace_source_sheet");
+        _atlasPicker->setOnTileSelected([this](uint32_t tileId) {
+            selectTile(tileId);
+        });
+        _atlasPicker->setOnRectangleSelected(
+            [this](const EditorTileAtlasPicker::SourceRect& rectangle) {
+                createStampFromSourceRectangle(rectangle);
+            });
+        _atlasPicker->setOnStatus([this](const std::wstring& text) {
+            _host.setStatusText(text);
+        });
+        pickerPanel->addChild(_atlasPicker);
+        assets->addWidget(pickerPanel, 0.0f);
+        auto* sourceButtons = new ayt::ui::HBox();
+        sourceButtons->setSpacing(4.0f);
+        addButton(sourceButtons, L"Import Sheet…", 142.0f, [this]() {
+            openAtlasImport();
+        })->setId("tilemap_workspace_import_sheet");
+        addButton(sourceButtons, L"Frame", 70.0f, [this]() {
+            if (_atlasPicker != nullptr) _atlasPicker->frameAtlas();
+            _host.requestRepaint();
+        });
+        assets->addWidget(sourceButtons, 29.0f);
+        auto* stampRow = new ayt::ui::HBox();
+        stampRow->setSpacing(4.0f);
+        _stampSelector = new ayt::ui::ComboBox();
+        _stampSelector->setId("tilemap_workspace_stamp_selector");
+        _stampSelector->setItems({L"Single tile"});
+        _stampSelector->setSelectedIndex(0);
+        _stampSelector->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_stampIds.size())) return;
+            if (index == 0) {
+                _document->model().setSelectedTileId(
+                    _document->model().selectedTileId());
+                _document->model().setTool(
+                    ayt::ay2d::editor::PaintTool::Pencil);
+                refresh();
+                _host.requestRepaint();
+                return;
+            }
+            const uint32_t stampId = _stampIds[static_cast<size_t>(index)];
+            if (_document->model().setSelectedStampId(stampId)) {
+                _document->model().setTool(
+                    ayt::ay2d::editor::PaintTool::Stamp);
+                refresh();
+                _host.requestRepaint();
+            }
+        });
+        stampRow->addWidget(_stampSelector, 0.0f);
+        _stampSelect = new ayt::ui::Button();
+        _stampSelect->setId("tilemap_workspace_stamp_select");
+        _stampSelect->setText(L"Select");
+        _stampSelect->setOnClicked([this]() { toggleStampSelection(); });
+        stampRow->addWidget(_stampSelect, 58.0f);
+        _stampDelete = new ayt::ui::Button();
+        _stampDelete->setText(L"−");
+        _stampDelete->setOnClicked([this]() { deleteSelectedStamp(); });
+        stampRow->addWidget(_stampDelete, 34.0f);
+        assets->addWidget(stampRow, 29.0f);
+        assets->addWidget(makeLabel(L"Tile Assets", 13), 22.0f);
+        _tileList = new ayt::ui::ListView();
+        _tileList->setId("tilemap_workspace_tile_list");
+        _tileList->setItemHeight(25.0f);
+        _tileList->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_tileIds.size())) return;
+            _document->model().setSelectedTileId(
+                _tileIds[static_cast<size_t>(index)]);
+            _document->model().setTool(
+                ayt::ay2d::editor::PaintTool::Pencil);
+            refresh();
+            _host.requestRepaint();
+        });
+        assets->addWidget(_tileList, 132.0f);
+        _tileId = new ayt::ui::TextInput();
+        _tileId->setId("tilemap_workspace_tile_id");
+        _tileId->setPlaceholder(L"Tile ID (decimal or 0x...)");
+        assets->addWidget(_tileId, 27.0f);
+        addButton(assets, L"Select / add tile", 30.0f, [this]() {
+            uint32_t tileId = 0u;
+            if (!parseUint32(_tileId->getText(), tileId)) {
+                _host.setStatusText(L"Tile ID must be a 32-bit number.");
+                return;
+            }
+            const bool added = _document->model().ensureTileAsset(tileId);
+            _document->model().setSelectedTileId(tileId);
+            _document->model().setTool(
+                ayt::ay2d::editor::PaintTool::Pencil);
+            if (added) _document->changed();
+            refresh();
+            _host.requestRepaint();
+        });
+        body->addWidget(assets, 300.0f);
+
+        auto* canvasPanel = new ayt::ui::Panel();
+        canvasPanel->setId("tilemap_workspace_canvas_panel");
+        canvasPanel->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        _canvas = new EditorTilemapCanvas(_document->model());
+        _canvas->setAtlasTextures(&_atlasTextures);
+        _canvas->setOnEdited([this]() {
+            _document->changed();
+            refresh();
+            _host.requestRepaint();
+        });
+        _canvas->setOnTilePicked([this](uint32_t tileId) {
+            _document->model().setSelectedTileId(tileId);
+            _document->model().setTool(
+                ayt::ay2d::editor::PaintTool::Pencil);
+            refresh();
+            _host.requestRepaint();
+        });
+        _canvas->setOnViewChanged([this](float zoom) {
+            _zoomPercent = zoom;
+            updateSummary();
+        });
+        canvasPanel->addChild(_canvas);
+        body->addWidget(canvasPanel, 0.0f);
+
+        auto* inspector = new ayt::ui::VBox();
+        inspector->setSpacing(5.0f);
+        inspector->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
+        inspector->addWidget(makeLabel(L"Render Layers", 14), 24.0f);
+        _layerList = new ayt::ui::ListView();
+        _layerList->setId("tilemap_workspace_layer_list");
+        _layerList->setItemHeight(25.0f);
+        _layerList->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0) return;
+            if (_document->model().setActiveLayer(
+                    static_cast<size_t>(index))) {
+                refresh();
+                _host.requestRepaint();
+            }
+        });
+        inspector->addWidget(_layerList, 0.0f);
+        auto* layerButtons = new ayt::ui::HBox();
+        layerButtons->setSpacing(3.0f);
+        addButton(layerButtons, L"+", 42.0f, [this]() {
+            const size_t number =
+                _document->model().document().layerCount() + 1u;
+            mutate(_document->model().addLayer(
+                "Layer " + std::to_string(number)));
+        });
+        addButton(layerButtons, L"−", 42.0f, [this]() {
+            mutate(_document->model().removeLayer(activeLayer()));
+        });
+        addButton(layerButtons, L"Up", 48.0f, [this]() {
+            mutate(_document->model().moveLayer(activeLayer(), 1));
+        });
+        addButton(layerButtons, L"Down", 54.0f, [this]() {
+            mutate(_document->model().moveLayer(activeLayer(), -1));
+        });
+        inspector->addWidget(layerButtons, 28.0f);
+        addButton(inspector, L"Show / hide active layer", 29.0f, [this]() {
+            const size_t layer = activeLayer();
+            const auto& layers = _document->model().document().layers();
+            if (layer < layers.size()) {
+                mutate(_document->model().setLayerVisible(
+                    layer, !layers[layer].visible));
+            }
+        });
+        _layerName = new ayt::ui::TextInput();
+        _layerName->setId("tilemap_workspace_layer_name");
+        _layerName->setPlaceholder(L"Active layer name");
+        inspector->addWidget(_layerName, 27.0f);
+        addButton(inspector, L"Rename active layer", 29.0f, [this]() {
+            mutate(_document->model().renameLayer(
+                activeLayer(), encodeUtf8(_layerName->getText())));
+        });
+        inspector->addWidget(makeLabel(L"Selected Tile Collision", 13), 23.0f);
+        _collisionFlags = new ayt::ui::TextInput();
+        _collisionFlags->setId("tilemap_workspace_collision_flags");
+        _collisionFlags->setPlaceholder(L"Flags: 0 or 0x...");
+        inspector->addWidget(_collisionFlags, 27.0f);
+        addButton(inspector, L"Apply collision flags", 29.0f, [this]() {
+            uint32_t flags = 0u;
+            if (!parseUint32(_collisionFlags->getText(), flags)) {
+                _host.setStatusText(
+                    L"Collision flags must be a 32-bit number.");
+                return;
+            }
+            mutate(_document->model().setCollisionFlags(
+                _document->model().selectedTileId(), flags));
+        });
+        auto* help = makeLabel(
+            L"Wheel: zoom\nMiddle drag or Space + left drag: pan\n"
+            L"Right click: pick visible tile", 11);
+        help->setWordWrap(true);
+        inspector->addWidget(help, 60.0f);
+        body->addWidget(inspector, 238.0f);
+
+        loadSavedAtlasImages();
         refresh();
     }
     ~TilemapWorkspaceView() override {
@@ -176,6 +669,89 @@ public:
         auto* result = _root; _root = nullptr; return result;
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
+    IEditorViewInputTarget* inputTarget() noexcept override { return this; }
+    void prepareForUiShutdown() override {
+        if (_importCancel != nullptr) _importCancel->setOnClicked({});
+        if (_importCommit != nullptr) _importCommit->setOnClicked({});
+        if (_skipEmpty != nullptr) _skipEmpty->setOnClicked({});
+        if (_importChoose != nullptr) _importChoose->setOnClicked({});
+        if (_importModeButton != nullptr) _importModeButton->setOnClicked({});
+        if (_importRegionUndo != nullptr) _importRegionUndo->setOnClicked({});
+        if (_importRegionClear != nullptr) _importRegionClear->setOnClicked({});
+        if (_stampSelect != nullptr) _stampSelect->setOnClicked({});
+        if (_stampDelete != nullptr) _stampDelete->setOnClicked({});
+        for (ayt::ui::TextInput* input : _importInputs) {
+            if (input != nullptr) input->setOnTextChanged({});
+        }
+        if (_importModal != nullptr && _importModal->isOpen()) {
+            _importModal->closeModal();
+        }
+        _importModal.reset();
+        if (_canvas != nullptr) {
+            _canvas->setOnEdited({});
+            _canvas->setOnTilePicked({});
+            _canvas->setOnViewChanged({});
+        }
+        if (_atlasPicker != nullptr) {
+            _atlasPicker->setOnTileSelected({});
+            _atlasPicker->setOnStatus({});
+            _atlasPicker->setOnRectangleSelected({});
+        }
+        if (_importPreview != nullptr) {
+            _importPreview->setOnRectangleSelected({});
+        }
+        if (_tileList != nullptr) _tileList->setOnSelectionChanged({});
+        if (_atlasSelector != nullptr) {
+            _atlasSelector->setOnSelectionChanged({});
+        }
+        if (_stampSelector != nullptr) {
+            _stampSelector->setOnSelectionChanged({});
+        }
+        if (_layerList != nullptr) _layerList->setOnSelectionChanged({});
+        for (ayt::ui::Button* button : _buttons) {
+            if (button != nullptr) button->setOnClicked({});
+        }
+        _canvas = nullptr;
+        _atlasPicker = nullptr;
+        _tileList = nullptr;
+        _layerList = nullptr;
+        _tileId = nullptr;
+        _layerName = nullptr;
+        _collisionFlags = nullptr;
+        _summary = nullptr;
+        _atlasSelector = nullptr;
+        _pencil = nullptr;
+        _eraser = nullptr;
+        _fill = nullptr;
+        _rectangle = nullptr;
+        _stamp = nullptr;
+        _grid = nullptr;
+        _collision = nullptr;
+        _importPreview = nullptr;
+        _importSourceLabel = nullptr;
+        _importInfo = nullptr;
+        _importTileWidth = nullptr;
+        _importTileHeight = nullptr;
+        _importMarginX = nullptr;
+        _importMarginY = nullptr;
+        _importSpacingX = nullptr;
+        _importSpacingY = nullptr;
+        _importFirstTileId = nullptr;
+        _importFolder = nullptr;
+        _importChoose = nullptr;
+        _importCancel = nullptr;
+        _importCommit = nullptr;
+        _skipEmpty = nullptr;
+        _importModeButton = nullptr;
+        _importRegionUndo = nullptr;
+        _importRegionClear = nullptr;
+        _stampSelector = nullptr;
+        _stampSelect = nullptr;
+        _stampDelete = nullptr;
+        _importGridInputs.clear();
+        _importInputs.clear();
+        _buttons.clear();
+    }
     bool handlesCommand(const std::string& id) const override {
         return id == "file.save" || id == "edit.undo" || id == "edit.redo";
     }
@@ -187,39 +763,906 @@ public:
     bool executeCommand(const std::string& id) override {
         if (!canExecuteCommand(id)) return false;
         bool changed = false;
-        if (id == "edit.undo") changed = _document->model().undo();
-        else if (id == "edit.redo") changed = _document->model().redo();
-        else {
+        if (id == "edit.undo") {
+            changed = _document->model().undo();
+            if (changed) _document->changed();
+        } else if (id == "edit.redo") {
+            changed = _document->model().redo();
+            if (changed) _document->changed();
+        } else {
             std::string error;
             changed = _document->save(&error);
-            if (!changed) _host.setStatusText(
-                L"Tilemap save failed: " + ayt::ui::decodeUtf8Text(error));
+            if (!changed) {
+                _host.setStatusText(
+                    L"Tilemap save failed: "
+                    + ayt::ui::decodeUtf8Text(error));
+            } else if (!_document->lastSaveNotice().empty()) {
+                _host.setStatusText(ayt::ui::decodeUtf8Text(
+                    _document->lastSaveNotice()));
+            } else {
+                _host.setStatusText(
+                    L"Tilemap source saved and runtime asset cooked.");
+            }
         }
         if (changed) {
-            _document->changed();
             refresh();
             _host.requestRepaint();
         }
         return changed;
     }
-private:
-    void refresh() {
-        const auto& model = _document->model().document();
-        _summary->setText(std::to_wstring(model.cols()) + L" × "
-            + std::to_wstring(model.rows()) + L" cells   "
-            + std::to_wstring(model.layerCount()) + L" layer(s)   "
-            + std::to_wstring(model.tileWidth()) + L" × "
-            + std::to_wstring(model.tileHeight()) + L" px tiles");
+
+    bool onPointerDown(float, float, int) override { return false; }
+    bool onPointerMove(float, float) override { return false; }
+    bool onPointerUp(float, float, int) override { return false; }
+    bool onWheel(float, float, float) override { return false; }
+    bool onKeyDown(int keyCode) override {
+        if (textInputFocused()) return false;
+        switch (keyCode) {
+        case ayt::ui::UIKey_P:
+            setTool(ayt::ay2d::editor::PaintTool::Pencil);
+            return true;
+        case ayt::ui::UIKey_E:
+            setTool(ayt::ay2d::editor::PaintTool::Eraser);
+            return true;
+        case ayt::ui::UIKey_F:
+            setTool(ayt::ay2d::editor::PaintTool::FloodFill);
+            return true;
+        case ayt::ui::UIKey_R:
+            setTool(ayt::ay2d::editor::PaintTool::Rectangle);
+            return true;
+        case ayt::ui::UIKey_S:
+            if (_document->model().selectedStampId() != 0u) {
+                setTool(ayt::ay2d::editor::PaintTool::Stamp);
+            } else {
+                _host.setStatusText(
+                    L"Choose a saved Stamp or create one from Source Sheet.");
+            }
+            return true;
+        case ayt::ui::UIKey_Space:
+            if (_canvas != nullptr) _canvas->setSpacePan(true);
+            return true;
+        case ayt::ui::UIKey_Home:
+            if (_canvas != nullptr) _canvas->frameDocument();
+            _host.requestRepaint();
+            return true;
+        default:
+            return false;
+        }
     }
+    void onKeyUp(int keyCode) override {
+        if (keyCode == ayt::ui::UIKey_Space && _canvas != nullptr) {
+            _canvas->setSpacePan(false);
+            _host.requestRepaint();
+        }
+    }
+    bool hasPointerCapture() const noexcept override {
+        return _canvas != nullptr && _canvas->editingGestureActive();
+    }
+    ayt::ui::UiCursorHint cursorHint(float x, float y) const override {
+        if (_canvas == nullptr
+            || !_canvas->getWorldBounds().contains({x, y})) {
+            return ayt::ui::UiCursorHint::Default;
+        }
+        return _canvas->getCursorHint();
+    }
+
+private:
+    static ayt::ui::TextLabel* makeLabel(const std::wstring& text,
+                                         int size)
+    {
+        auto* label = new ayt::ui::TextLabel();
+        label->setText(text);
+        label->setFontSize(size);
+        return label;
+    }
+
+    ayt::ui::Button* addButton(ayt::ui::HBox* parent,
+                               const std::wstring& text, float width,
+                               std::function<void()> clicked)
+    {
+        auto* button = new ayt::ui::Button();
+        button->setText(text);
+        button->setOnClicked(std::move(clicked));
+        parent->addWidget(button, width);
+        _buttons.push_back(button);
+        return button;
+    }
+
+    ayt::ui::Button* addButton(ayt::ui::VBox* parent,
+                               const std::wstring& text, float height,
+                               std::function<void()> clicked)
+    {
+        auto* button = new ayt::ui::Button();
+        button->setText(text);
+        button->setOnClicked(std::move(clicked));
+        parent->addWidget(button, height);
+        _buttons.push_back(button);
+        return button;
+    }
+
+    ayt::ui::TextInput* addImportField(
+        ayt::ui::VBox* parent, const std::wstring& labelText,
+        const char* id, bool gridField = true)
+    {
+        auto* row = new ayt::ui::HBox();
+        row->setSpacing(5.0f);
+        row->addWidget(makeLabel(labelText, 11), 88.0f);
+        auto* input = new ayt::ui::TextInput();
+        input->setId(id);
+        input->setOnTextChanged([this](const std::wstring&) {
+            if (!_syncingImport) refreshImportPlan();
+        });
+        row->addWidget(input, 0.0f);
+        parent->addWidget(row, 27.0f);
+        _importInputs.push_back(input);
+        if (gridField) _importGridInputs.push_back(input);
+        return input;
+    }
+
+    void buildAtlasImportDialog()
+    {
+        if (_importModal != nullptr) return;
+        _importModal = std::make_unique<ayt::ui::Modal>();
+        _importModal->setId("tilemap_atlas_import_dialog");
+        _importModal->setSize({930.0f, 650.0f});
+        _importModal->setDismissOnDimmerClick(false);
+
+        auto* root = new ayt::ui::VBox();
+        root->setPadding(14.0f, 12.0f, 14.0f, 12.0f);
+        root->setSpacing(8.0f);
+        root->addWidget(makeLabel(L"Import Tile Sheet", 17), 28.0f);
+        auto* sourceRow = new ayt::ui::HBox();
+        sourceRow->setSpacing(8.0f);
+        _importSourceLabel = makeLabel(L"No source image selected", 11);
+        sourceRow->addWidget(_importSourceLabel, 0.0f);
+        _importChoose = new ayt::ui::Button();
+        _importChoose->setText(L"Choose PNG…");
+        _importChoose->setOnClicked([this]() { chooseAtlasImage(); });
+        sourceRow->addWidget(_importChoose, 132.0f);
+        root->addWidget(sourceRow, 29.0f);
+
+        auto* middle = new ayt::ui::HBox();
+        middle->setSpacing(10.0f);
+        auto* previewPanel = new ayt::ui::Panel();
+        previewPanel->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        _importPreview = new EditorTileAtlasPicker();
+        _importPreview->setOnRectangleSelected(
+            [this](const EditorTileAtlasPicker::SourceRect& rectangle) {
+                if (_importMode != AtlasImportMode::FreeRegions) return;
+                _manualRegions.push_back({
+                    "Region " + std::to_string(_manualRegions.size() + 1u),
+                    rectangle.x, rectangle.y,
+                    rectangle.width, rectangle.height});
+                refreshImportPlan();
+            });
+        previewPanel->addChild(_importPreview);
+        middle->addWidget(previewPanel, 0.0f);
+
+        auto* settings = new ayt::ui::VBox();
+        settings->setSpacing(5.0f);
+        settings->addWidget(makeLabel(L"Slicing Mode", 13), 23.0f);
+        _importModeButton = new ayt::ui::Button();
+        _importModeButton->setId("tilemap_import_mode");
+        _importModeButton->setText(L"Mode: Grid");
+        _importModeButton->setOnClicked([this]() { cycleImportMode(); });
+        settings->addWidget(_importModeButton, 29.0f);
+        _importTileWidth = addImportField(settings, L"Tile width", "tilemap_import_tile_w");
+        _importTileHeight = addImportField(settings, L"Tile height", "tilemap_import_tile_h");
+        _importMarginX = addImportField(settings, L"Margin X", "tilemap_import_margin_x");
+        _importMarginY = addImportField(settings, L"Margin Y", "tilemap_import_margin_y");
+        _importSpacingX = addImportField(settings, L"Spacing X", "tilemap_import_spacing_x");
+        _importSpacingY = addImportField(settings, L"Spacing Y", "tilemap_import_spacing_y");
+        _importFirstTileId = addImportField(settings, L"First Tile ID", "tilemap_import_first_id", false);
+        _importFolder = addImportField(settings, L"Virtual folder", "tilemap_import_folder", false);
+        auto* regionButtons = new ayt::ui::HBox();
+        regionButtons->setSpacing(5.0f);
+        _importRegionUndo = new ayt::ui::Button();
+        _importRegionUndo->setId("tilemap_import_region_undo");
+        _importRegionUndo->setText(L"Undo Region");
+        _importRegionUndo->setOnClicked([this]() {
+            if (_manualRegions.empty()) return;
+            _manualRegions.pop_back();
+            if (_importPreview != nullptr) {
+                _importPreview->clearRectangleSelection();
+            }
+            refreshImportPlan();
+        });
+        regionButtons->addWidget(_importRegionUndo, 0.0f);
+        _importRegionClear = new ayt::ui::Button();
+        _importRegionClear->setText(L"Clear");
+        _importRegionClear->setOnClicked([this]() {
+            _manualRegions.clear();
+            if (_importPreview != nullptr) {
+                _importPreview->clearRectangleSelection();
+            }
+            refreshImportPlan();
+        });
+        regionButtons->addWidget(_importRegionClear, 70.0f);
+        settings->addWidget(regionButtons, 29.0f);
+        _skipEmpty = new ayt::ui::Button();
+        _skipEmpty->setOnClicked([this]() {
+            _skipTransparent = !_skipTransparent;
+            refreshImportPlan();
+        });
+        settings->addWidget(_skipEmpty, 29.0f);
+        _importInfo = makeLabel(L"Choose an image to preview its grid.", 11);
+        _importInfo->setWordWrap(true);
+        settings->addWidget(_importInfo, 0.0f);
+        middle->addWidget(settings, 260.0f);
+        root->addWidget(middle, 0.0f);
+
+        auto* footer = new ayt::ui::HBox();
+        footer->setSpacing(8.0f);
+        footer->addWidget(makeLabel(
+            L"Preview and commit use the same exact source pixels.", 11),
+            0.0f);
+        _importCancel = new ayt::ui::Button();
+        _importCancel->setText(L"Cancel");
+        _importCancel->setOnClicked([this]() {
+            if (_importModal != nullptr) _importModal->closeModal();
+        });
+        footer->addWidget(_importCancel, 96.0f);
+        _importCommit = new ayt::ui::Button();
+        _importCommit->setText(L"Import");
+        _importCommit->setEnabled(false);
+        _importCommit->setOnClicked([this]() { commitAtlasImport(); });
+        footer->addWidget(_importCommit, 132.0f);
+        root->addWidget(footer, 31.0f);
+        _importModal->setContentOwned(root);
+    }
+
+    void openAtlasImport()
+    {
+        if (_host.uiManager() == nullptr) {
+            _host.setStatusText(L"Tile-sheet import requires an AYUI host.");
+            return;
+        }
+        buildAtlasImportDialog();
+        if (_pendingAtlasPath.empty()) chooseAtlasImage();
+        _importModal->openModal();
+        _host.requestRepaint();
+    }
+
+    void setImportMode(AtlasImportMode mode)
+    {
+        if (mode == AtlasImportMode::Metadata && !_detectedMetadata) {
+            mode = AtlasImportMode::Grid;
+        }
+        _importMode = mode;
+        const bool editableGrid = mode == AtlasImportMode::Grid;
+        for (ayt::ui::TextInput* input : _importGridInputs) {
+            if (input != nullptr) input->setReadOnly(!editableGrid);
+        }
+        const bool freeRegions = mode == AtlasImportMode::FreeRegions;
+        if (_importRegionUndo != nullptr) {
+            _importRegionUndo->setEnabled(
+                freeRegions && !_manualRegions.empty());
+        }
+        if (_importRegionClear != nullptr) {
+            _importRegionClear->setEnabled(
+                freeRegions && !_manualRegions.empty());
+        }
+        if (_importPreview != nullptr) {
+            _importPreview->setRectangleSelectionEnabled(freeRegions, false);
+        }
+        if (_importModeButton != nullptr) {
+            if (mode == AtlasImportMode::Metadata) {
+                _importModeButton->setText(L"Mode: Metadata");
+            } else if (freeRegions) {
+                _importModeButton->setText(L"Mode: Free Regions");
+            } else {
+                _importModeButton->setText(L"Mode: Grid");
+            }
+        }
+        refreshImportPlan();
+    }
+
+    void cycleImportMode()
+    {
+        if (_importMode == AtlasImportMode::Grid) {
+            setImportMode(AtlasImportMode::FreeRegions);
+        } else if (_importMode == AtlasImportMode::FreeRegions
+                   && _detectedMetadata) {
+            setImportMode(AtlasImportMode::Metadata);
+        } else {
+            setImportMode(AtlasImportMode::Grid);
+        }
+    }
+
+    void chooseAtlasImage()
+    {
+        const std::string path = _host.chooseImageFile();
+        if (path.empty()) return;
+        std::string error;
+        EditorAuthoringImage image = _host.loadAuthoringImage(path, &error);
+        if (!image) {
+            _host.setStatusText(L"Tile-sheet load failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        _pendingAtlasPath = path;
+        _pendingAtlasImage = std::move(image);
+        _manualRegions.clear();
+        const uint32_t suggested =
+            ayt::ay2d::editor::suggestAtlasTileSize(
+                _pendingAtlasImage.width, _pendingAtlasImage.height,
+                _document->model().document().tileWidth());
+        uint32_t firstTileId = 1u;
+        const auto& assets = _document->model().document().tileAssets();
+        if (!assets.empty() && assets.rbegin()->first
+            != (std::numeric_limits<uint32_t>::max)()) {
+            firstTileId = assets.rbegin()->first + 1u;
+        }
+        const std::filesystem::path source = std::filesystem::u8path(path);
+        _pendingAtlasName = source.stem().string();
+        if (_pendingAtlasName.empty()) _pendingAtlasName = "Imported";
+        _detectedMetadata = discoverAtlasMetadata(
+            source, _pendingAtlasImage.width, _pendingAtlasImage.height);
+        const bool metadataGrid = _detectedMetadata
+            && _detectedMetadata.parsed.metadata.layout
+                == ayt::ay2d::editor::TileAtlasLayout::Grid;
+        _syncingImport = true;
+        _importTileWidth->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.tileWidth : suggested));
+        _importTileHeight->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.tileHeight : suggested));
+        _importMarginX->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.marginX : 0u));
+        _importMarginY->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.marginY : 0u));
+        _importSpacingX->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.spacingX : 0u));
+        _importSpacingY->setText(std::to_wstring(metadataGrid
+            ? _detectedMetadata.parsed.metadata.spacingY : 0u));
+        _importFirstTileId->setText(std::to_wstring(firstTileId));
+        _importFolder->setText(ayt::ui::decodeUtf8Text(
+            "Tiles/" + _pendingAtlasName));
+        _importSourceLabel->setText(
+            ayt::ui::decodeUtf8Text(source.filename().string()) + L"  ·  "
+            + std::to_wstring(_pendingAtlasImage.width) + L" × "
+            + std::to_wstring(_pendingAtlasImage.height) + L" px"
+            + (_detectedMetadata.parsed.recognized
+                ? L"  ·  " + ayt::ui::decodeUtf8Text(
+                    _detectedMetadata.path.filename().string())
+                : std::wstring{}));
+        _syncingImport = false;
+        setImportMode(_detectedMetadata
+            ? AtlasImportMode::Metadata : AtlasImportMode::Grid);
+        if (_detectedMetadata) {
+            _host.setStatusText(L"Recognized atlas metadata: "
+                + ayt::ui::decodeUtf8Text(
+                    _detectedMetadata.path.filename().string()));
+        } else if (_detectedMetadata.parsed.recognized) {
+            _host.setStatusText(L"Companion metadata is incompatible: "
+                + ayt::ui::decodeUtf8Text(
+                    _detectedMetadata.parsed.error));
+        } else {
+            _host.setStatusText(
+                L"No matching metadata found. Review the grid or use Free Regions.");
+        }
+    }
+
+    bool readImportUInt(ayt::ui::TextInput* input, uint32_t& value) const
+    {
+        return input != nullptr && parseUint32(input->getText(), value);
+    }
+
+    uint32_t nextAtlasId() const noexcept
+    {
+        const auto& atlases = _document->model().document().tileAtlases();
+        if (atlases.empty()) return 1u;
+        return atlases.rbegin()->first == (std::numeric_limits<uint32_t>::max)()
+            ? 0u : atlases.rbegin()->first + 1u;
+    }
+
+    void refreshImportPlan()
+    {
+        if (_importInfo == nullptr || _importCommit == nullptr
+            || _importPreview == nullptr || !_pendingAtlasImage) return;
+        ayt::ay2d::editor::TileAtlasImportRequest request;
+        request.atlasId = nextAtlasId();
+        request.name = _pendingAtlasName;
+        request.sourcePath = _pendingAtlasPath;
+        request.imageWidth = _pendingAtlasImage.width;
+        request.imageHeight = _pendingAtlasImage.height;
+        request.folder = encodeUtf8(_importFolder->getText());
+        request.skipTransparent = _skipTransparent;
+        const bool parsed = request.atlasId != 0u
+            && readImportUInt(_importFirstTileId, request.firstTileId)
+            && (_importMode != AtlasImportMode::Grid
+                || (readImportUInt(_importTileWidth, request.tileWidth)
+                    && readImportUInt(_importTileHeight, request.tileHeight)
+                    && readImportUInt(_importMarginX, request.marginX)
+                    && readImportUInt(_importMarginY, request.marginY)
+                    && readImportUInt(_importSpacingX, request.spacingX)
+                    && readImportUInt(_importSpacingY, request.spacingY)));
+        _skipEmpty->setText(_skipTransparent
+            ? L"Skip Empty: On" : L"Skip Empty: Off");
+        const bool freeRegions = _importMode == AtlasImportMode::FreeRegions;
+        if (_importRegionUndo != nullptr) {
+            _importRegionUndo->setEnabled(
+                freeRegions && !_manualRegions.empty());
+        }
+        if (_importRegionClear != nullptr) {
+            _importRegionClear->setEnabled(
+                freeRegions && !_manualRegions.empty());
+        }
+        if (!parsed) {
+            _pendingImportPlan = {};
+            _importCommit->setText(L"Import 0 Tiles");
+            _importCommit->setEnabled(false);
+            _importInfo->setText(L"Enter valid unsigned grid values.");
+            return;
+        }
+        if (_importMode == AtlasImportMode::Metadata) {
+            _pendingImportPlan =
+                ayt::ay2d::editor::planTileAtlasMetadataImport(
+                    request, _detectedMetadata.parsed.metadata,
+                    *_pendingAtlasImage.bgraPixels);
+        } else if (freeRegions) {
+            _pendingImportPlan =
+                ayt::ay2d::editor::planTileAtlasRegionImport(
+                    request, _manualRegions,
+                    *_pendingAtlasImage.bgraPixels);
+        } else {
+            _pendingImportPlan = ayt::ay2d::editor::planTileAtlasImport(
+                request, *_pendingAtlasImage.bgraPixels);
+        }
+        std::vector<EditorTileAtlasPicker::Cell> cells;
+        cells.reserve(_pendingImportPlan.tiles.size());
+        for (const auto& tile : _pendingImportPlan.tiles) {
+            cells.push_back({tile.tileId, tile.sourceX, tile.sourceY,
+                             tile.sourceWidth, tile.sourceHeight});
+        }
+        _importPreview->setAtlas(_pendingAtlasImage.texture,
+                                 _pendingImportPlan.source,
+                                 std::move(cells));
+        _importPreview->setRectangleSelectionEnabled(freeRegions, false);
+        const bool valid = static_cast<bool>(_pendingImportPlan);
+        _importCommit->setEnabled(valid);
+        _importCommit->setText(L"Import "
+            + std::to_wstring(_pendingImportPlan.tiles.size()) + L" Tiles");
+        if (!valid) {
+            _importInfo->setText(
+                ayt::ui::decodeUtf8Text(_pendingImportPlan.error));
+        } else {
+            if (_pendingImportPlan.source.layout
+                == ayt::ay2d::editor::TileAtlasLayout::Grid) {
+                _importInfo->setText(
+                    std::to_wstring(_pendingImportPlan.source.columns) + L" × "
+                    + std::to_wstring(_pendingImportPlan.source.rows)
+                    + L" grid  ·  "
+                    + std::to_wstring(_pendingImportPlan.tiles.size())
+                    + (_skipTransparent ? L" non-empty tiles" : L" tiles"));
+            } else {
+                _importInfo->setText(
+                    std::to_wstring(_pendingImportPlan.tiles.size())
+                    + L" exact source regions"
+                    + (freeRegions ? L"  ·  drag to add another" : L""));
+            }
+        }
+        _host.requestRepaint();
+    }
+
+    void commitAtlasImport()
+    {
+        refreshImportPlan();
+        if (!_pendingImportPlan) return;
+        const uint32_t atlasId = _pendingImportPlan.source.atlasId;
+        const uint32_t firstTileId = _pendingImportPlan.tiles.front().tileId;
+        const size_t count = _pendingImportPlan.tiles.size();
+        if (!_document->model().importTileAtlas(
+                _pendingImportPlan.source, _pendingImportPlan.folder,
+                _pendingImportPlan.tiles)) {
+            _host.setStatusText(
+                L"Import rejected: an atlas or Tile ID already exists.");
+            return;
+        }
+        _atlasImages[atlasId] = _pendingAtlasImage;
+        _atlasTextures[atlasId] = _pendingAtlasImage.texture;
+        _document->model().setSelectedTileId(firstTileId);
+        _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
+        _document->changed();
+        if (_importModal != nullptr) _importModal->closeModal();
+        refresh();
+        _host.requestRepaint();
+        _host.setStatusText(L"Imported " + std::to_wstring(count)
+            + L" tiles. Select directly from the Source Sheet.");
+    }
+
+    std::string resolvedAtlasPath(const std::string& sourcePath) const
+    {
+        std::filesystem::path path = std::filesystem::u8path(sourcePath);
+        if (path.is_relative() && !_document->path().empty()) {
+            path = std::filesystem::u8path(_document->path()).parent_path()
+                / path;
+        }
+        return std::filesystem::absolute(path).lexically_normal().string();
+    }
+
+    void loadSavedAtlasImages()
+    {
+        std::wstring failures;
+        for (const auto& [atlasId, source] :
+             _document->model().document().tileAtlases()) {
+            std::string error;
+            EditorAuthoringImage image = _host.loadAuthoringImage(
+                resolvedAtlasPath(source.sourcePath), &error);
+            if (!image) {
+                if (!failures.empty()) failures += L"; ";
+                failures += ayt::ui::decodeUtf8Text(source.name);
+                continue;
+            }
+            _atlasTextures[atlasId] = image.texture;
+            _atlasImages[atlasId] = std::move(image);
+        }
+        if (!failures.empty()) {
+            _host.setStatusText(L"Atlas source unavailable (using fallback): "
+                                + failures);
+        }
+    }
+
+    void selectTile(uint32_t tileId)
+    {
+        _selectingStamp = false;
+        if (_atlasPicker != nullptr) {
+            _atlasPicker->setRectangleSelectionEnabled(false);
+        }
+        _document->model().setSelectedTileId(tileId);
+        _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
+        refresh();
+        _host.requestRepaint();
+    }
+
+    uint32_t nextStampId() const noexcept
+    {
+        const auto& stamps = _document->model().document().tileStamps();
+        if (stamps.empty()) return 1u;
+        return stamps.rbegin()->first == (std::numeric_limits<uint32_t>::max)()
+            ? 0u : stamps.rbegin()->first + 1u;
+    }
+
+    void toggleStampSelection()
+    {
+        const auto* source = _document->model().document().tileAtlas(
+            _shownAtlasId);
+        if (source == nullptr || source->layout
+            != ayt::ay2d::editor::TileAtlasLayout::Grid) {
+            _host.setStatusText(
+                L"Stamp selection requires a regular-grid Source Sheet.");
+            return;
+        }
+        _selectingStamp = !_selectingStamp;
+        _atlasPicker->setRectangleSelectionEnabled(_selectingStamp, true);
+        _stampSelect->setText(_selectingStamp ? L"Cancel" : L"Select");
+        _host.setStatusText(_selectingStamp
+            ? L"Drag across Source Sheet cells to create a reusable Stamp."
+            : L"Stamp selection cancelled.");
+        _host.requestRepaint();
+    }
+
+    void createStampFromSourceRectangle(
+        const EditorTileAtlasPicker::SourceRect& rectangle)
+    {
+        if (!_selectingStamp) return;
+        const auto& document = _document->model().document();
+        const auto* source = document.tileAtlas(_shownAtlasId);
+        if (source == nullptr || source->layout
+            != ayt::ay2d::editor::TileAtlasLayout::Grid
+            || source->tileWidth == 0u || source->tileHeight == 0u) return;
+        const uint32_t pitchX = source->tileWidth + source->spacingX;
+        const uint32_t pitchY = source->tileHeight + source->spacingY;
+        const uint32_t originColumn = rectangle.x <= source->marginX ? 0u
+            : (rectangle.x - source->marginX) / pitchX;
+        const uint32_t originRow = rectangle.y <= source->marginY ? 0u
+            : (rectangle.y - source->marginY) / pitchY;
+        ayt::ay2d::editor::TileStampDefinition stamp;
+        stamp.stampId = nextStampId();
+        stamp.name = "Stamp " + std::to_string(stamp.stampId);
+        const uint64_t right = static_cast<uint64_t>(rectangle.x)
+            + rectangle.width;
+        const uint64_t bottom = static_cast<uint64_t>(rectangle.y)
+            + rectangle.height;
+        for (const auto& [tileId, asset] : document.tileAssets()) {
+            if (asset.atlasId != _shownAtlasId
+                || asset.sourceX < rectangle.x || asset.sourceY < rectangle.y
+                || static_cast<uint64_t>(asset.sourceX) + asset.sourceWidth
+                    > right
+                || static_cast<uint64_t>(asset.sourceY) + asset.sourceHeight
+                    > bottom) continue;
+            const uint32_t column = (asset.sourceX - source->marginX) / pitchX;
+            const uint32_t row = (asset.sourceY - source->marginY) / pitchY;
+            stamp.cells.push_back({
+                static_cast<int32_t>(column) - static_cast<int32_t>(originColumn),
+                static_cast<int32_t>(row) - static_cast<int32_t>(originRow),
+                tileId});
+        }
+        if (stamp.stampId == 0u || stamp.cells.size() < 2u) {
+            _host.setStatusText(
+                L"Select at least two imported cells; skipped cells may remain holes.");
+            return;
+        }
+        if (!_document->model().setTileStamp(std::move(stamp))) {
+            _host.setStatusText(L"The selected cells could not form a Stamp.");
+            return;
+        }
+        _document->model().setTool(ayt::ay2d::editor::PaintTool::Stamp);
+        _selectingStamp = false;
+        _atlasPicker->setRectangleSelectionEnabled(false);
+        _document->changed();
+        refresh();
+        _host.requestRepaint();
+        _host.setStatusText(L"Reusable Stamp created. Click the map to place it.");
+    }
+
+    void deleteSelectedStamp()
+    {
+        const uint32_t stampId = _document->model().selectedStampId();
+        if (stampId == 0u) return;
+        if (_document->model().removeTileStamp(stampId)) {
+            _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
+            _document->changed();
+            refresh();
+            _host.requestRepaint();
+            _host.setStatusText(L"Stamp removed. Undo restores it.");
+        }
+    }
+
+    void syncSourcePicker()
+    {
+        if (_atlasPicker == nullptr) return;
+        const auto& document = _document->model().document();
+        _atlasIds.clear();
+        std::vector<std::wstring> atlasLabels;
+        for (const auto& [candidateId, candidate] : document.tileAtlases()) {
+            _atlasIds.push_back(candidateId);
+            std::wstring layout;
+            if (candidate.layout == ayt::ay2d::editor::TileAtlasLayout::Grid) {
+                layout = std::to_wstring(candidate.columns) + L" × "
+                    + std::to_wstring(candidate.rows);
+            } else {
+                const size_t count = static_cast<size_t>(std::count_if(
+                    document.tileAssets().begin(), document.tileAssets().end(),
+                    [candidateId](const auto& pair) {
+                        return pair.second.atlasId == candidateId;
+                    }));
+                layout = std::to_wstring(count) + L" regions";
+            }
+            atlasLabels.push_back(ayt::ui::decodeUtf8Text(candidate.name)
+                + L"  ·  " + layout);
+        }
+        if (atlasLabels.empty()) atlasLabels.push_back(L"No tile sheet imported");
+        if (_atlasSelector != nullptr) _atlasSelector->setItems(atlasLabels);
+        uint32_t atlasId = 0u;
+        if (const auto* selected = document.tileAsset(
+                _document->model().selectedTileId())) {
+            atlasId = selected->atlasId;
+        }
+        if (atlasId == 0u && document.tileAtlases().contains(_shownAtlasId)) {
+            atlasId = _shownAtlasId;
+        }
+        if (atlasId == 0u && !document.tileAtlases().empty()) {
+            atlasId = document.tileAtlases().begin()->first;
+        }
+        const auto* source = document.tileAtlas(atlasId);
+        const auto texture = _atlasTextures.find(atlasId);
+        if (source == nullptr || texture == _atlasTextures.end()) {
+            _shownAtlasId = 0u;
+            _selectingStamp = false;
+            _atlasPicker->clearAtlas();
+            if (_atlasSelector != nullptr) {
+                _atlasSelector->setSelectedIndex(
+                    document.tileAtlases().empty() ? 0 : -1);
+            }
+            return;
+        }
+        std::vector<EditorTileAtlasPicker::Cell> cells;
+        for (const auto& [tileId, asset] : document.tileAssets()) {
+            if (asset.atlasId != atlasId) continue;
+            cells.push_back({tileId, asset.sourceX, asset.sourceY,
+                             asset.sourceWidth, asset.sourceHeight});
+        }
+        _shownAtlasId = atlasId;
+        const auto atlasIndex = std::find(
+            _atlasIds.begin(), _atlasIds.end(), atlasId);
+        if (_atlasSelector != nullptr) {
+            _atlasSelector->setSelectedIndex(atlasIndex == _atlasIds.end()
+                ? -1 : static_cast<int>(atlasIndex - _atlasIds.begin()));
+        }
+        _atlasPicker->setAtlas(texture->second, *source, std::move(cells));
+        _atlasPicker->setSelectedTileId(
+            _document->model().selectedTileId());
+    }
+
+    size_t activeLayer() const noexcept {
+        return _document->model().document().activeLayerIndex();
+    }
+
+    void mutate(bool changed) {
+        if (!changed) return;
+        _document->changed();
+        refresh();
+        _host.requestRepaint();
+    }
+
+    void setTool(ayt::ay2d::editor::PaintTool tool) {
+        if (_canvas != nullptr && _canvas->editingGestureActive()) return;
+        _document->model().setTool(tool);
+        refresh();
+        _host.requestRepaint();
+    }
+
+    bool textInputFocused() const noexcept {
+        const ayt::ui::UIManager* ui = _host.uiManager();
+        const ayt::ui::Widget* focused = ui != nullptr
+            ? ui->getFocusedWidget() : nullptr;
+        return focused != nullptr && focused->isTextEditingWidget();
+    }
+
+    void updateSummary() {
+        if (_summary == nullptr) return;
+        const auto& document = _document->model().document();
+        _summary->setText(std::to_wstring(document.cols()) + L" × "
+            + std::to_wstring(document.rows()) + L" cells  ·  "
+            + std::to_wstring(document.layerCount()) + L" layers  ·  "
+            + std::to_wstring(static_cast<int>(std::round(_zoomPercent)))
+            + L"%");
+    }
+
+    void refresh() {
+        if (_summary == nullptr) return;
+        _syncing = true;
+        const auto& model = _document->model();
+        const auto& document = model.document();
+        updateSummary();
+
+        const bool pencil = model.tool()
+            == ayt::ay2d::editor::PaintTool::Pencil;
+        const bool eraser = model.tool()
+            == ayt::ay2d::editor::PaintTool::Eraser;
+        const bool fill = model.tool()
+            == ayt::ay2d::editor::PaintTool::FloodFill;
+        const bool rectangle = model.tool()
+            == ayt::ay2d::editor::PaintTool::Rectangle;
+        const bool stamp = model.tool()
+            == ayt::ay2d::editor::PaintTool::Stamp;
+        _pencil->setText(pencil ? L"[Pencil  P]" : L"Pencil  P");
+        _eraser->setText(eraser ? L"[! ERASER !]" : L"Eraser  E");
+        _fill->setText(fill ? L"[Fill  F]" : L"Fill  F");
+        _rectangle->setText(
+            rectangle ? L"[Rectangle  R]" : L"Rectangle  R");
+        _stamp->setText(stamp ? L"[Stamp  S]" : L"Stamp  S");
+        _grid->setText(_canvas->showGrid() ? L"Grid: On" : L"Grid: Off");
+        _collision->setText(
+            _canvas->showCollision() ? L"Collision: On" : L"Collision: Off");
+
+        _tileIds.clear();
+        std::vector<std::wstring> tileLabels;
+        int selectedTileIndex = -1;
+        for (const auto& [tileId, asset] : document.tileAssets()) {
+            if (tileId == model.selectedTileId()) {
+                selectedTileIndex = static_cast<int>(_tileIds.size());
+            }
+            _tileIds.push_back(tileId);
+            tileLabels.push_back(std::to_wstring(tileId) + L"   "
+                + ayt::ui::decodeUtf8Text(asset.name));
+        }
+        _tileList->setItems(tileLabels);
+        _tileList->setSelectedIndex(selectedTileIndex);
+        _tileId->setText(std::to_wstring(model.selectedTileId()));
+        syncSourcePicker();
+
+        _stampIds.clear();
+        _stampIds.push_back(0u);
+        std::vector<std::wstring> stampLabels{L"Single tile"};
+        int selectedStampIndex = 0;
+        for (const auto& [stampId, definition] : document.tileStamps()) {
+            _stampIds.push_back(stampId);
+            stampLabels.push_back(ayt::ui::decodeUtf8Text(definition.name)
+                + L"  ·  " + std::to_wstring(definition.cells.size())
+                + L" cells");
+            if (stampId == model.selectedStampId()) {
+                selectedStampIndex = static_cast<int>(_stampIds.size() - 1u);
+            }
+        }
+        _stampSelector->setItems(stampLabels);
+        _stampSelector->setSelectedIndex(selectedStampIndex);
+        _stampDelete->setEnabled(model.selectedStampId() != 0u);
+        const auto* shownSource = document.tileAtlas(_shownAtlasId);
+        _stampSelect->setEnabled(shownSource != nullptr
+            && shownSource->layout
+                == ayt::ay2d::editor::TileAtlasLayout::Grid);
+        _stampSelect->setText(_selectingStamp ? L"Cancel" : L"Select");
+
+        std::vector<std::wstring> layerLabels;
+        for (size_t index = 0u; index < document.layerCount(); ++index) {
+            const auto& layer = document.layers()[index];
+            layerLabels.push_back(
+                (layer.visible ? L"[on]  " : L"[off] ")
+                + std::to_wstring(index + 1u) + L"   "
+                + ayt::ui::decodeUtf8Text(layer.name));
+        }
+        _layerList->setItems(layerLabels);
+        _layerList->setSelectedIndex(
+            static_cast<int>(document.activeLayerIndex()));
+        if (document.activeLayerIndex() < document.layers().size()) {
+            _layerName->setText(ayt::ui::decodeUtf8Text(
+                document.layers()[document.activeLayerIndex()].name));
+        }
+        _collisionFlags->setText(std::to_wstring(
+            document.collisionFlagsFor(model.selectedTileId())));
+        _syncing = false;
+    }
+
     std::shared_ptr<TilemapWorkspaceDocument> _document;
     IEditorHostServices& _host;
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _summary = nullptr;
+    ayt::ui::ComboBox* _atlasSelector = nullptr;
+    ayt::ui::ComboBox* _stampSelector = nullptr;
+    EditorTilemapCanvas* _canvas = nullptr;
+    EditorTileAtlasPicker* _atlasPicker = nullptr;
+    ayt::ui::ListView* _tileList = nullptr;
+    ayt::ui::ListView* _layerList = nullptr;
+    ayt::ui::TextInput* _tileId = nullptr;
+    ayt::ui::TextInput* _layerName = nullptr;
+    ayt::ui::TextInput* _collisionFlags = nullptr;
+    ayt::ui::Button* _pencil = nullptr;
+    ayt::ui::Button* _eraser = nullptr;
+    ayt::ui::Button* _fill = nullptr;
+    ayt::ui::Button* _rectangle = nullptr;
+    ayt::ui::Button* _stamp = nullptr;
+    ayt::ui::Button* _stampSelect = nullptr;
+    ayt::ui::Button* _stampDelete = nullptr;
+    ayt::ui::Button* _grid = nullptr;
+    ayt::ui::Button* _collision = nullptr;
+    std::unique_ptr<ayt::ui::Modal> _importModal;
+    EditorTileAtlasPicker* _importPreview = nullptr;
+    ayt::ui::TextLabel* _importSourceLabel = nullptr;
+    ayt::ui::TextLabel* _importInfo = nullptr;
+    ayt::ui::TextInput* _importTileWidth = nullptr;
+    ayt::ui::TextInput* _importTileHeight = nullptr;
+    ayt::ui::TextInput* _importMarginX = nullptr;
+    ayt::ui::TextInput* _importMarginY = nullptr;
+    ayt::ui::TextInput* _importSpacingX = nullptr;
+    ayt::ui::TextInput* _importSpacingY = nullptr;
+    ayt::ui::TextInput* _importFirstTileId = nullptr;
+    ayt::ui::TextInput* _importFolder = nullptr;
+    ayt::ui::Button* _importChoose = nullptr;
+    ayt::ui::Button* _importCancel = nullptr;
+    ayt::ui::Button* _importCommit = nullptr;
+    ayt::ui::Button* _skipEmpty = nullptr;
+    ayt::ui::Button* _importModeButton = nullptr;
+    ayt::ui::Button* _importRegionUndo = nullptr;
+    ayt::ui::Button* _importRegionClear = nullptr;
+    std::vector<ayt::ui::TextInput*> _importGridInputs;
+    std::vector<ayt::ui::TextInput*> _importInputs;
+    std::map<uint32_t, EditorAuthoringImage> _atlasImages;
+    std::map<uint32_t, ayt::ui::ImageTextureHandle> _atlasTextures;
+    EditorAuthoringImage _pendingAtlasImage;
+    ayt::ay2d::editor::TileAtlasImportPlan _pendingImportPlan;
+    std::string _pendingAtlasPath;
+    std::string _pendingAtlasName;
+    AtlasMetadataDiscovery _detectedMetadata;
+    std::vector<ayt::ay2d::editor::TileAtlasRegionRequest> _manualRegions;
+    AtlasImportMode _importMode = AtlasImportMode::Grid;
+    uint32_t _shownAtlasId = 0u;
+    std::vector<ayt::ui::Button*> _buttons;
+    std::vector<uint32_t> _tileIds;
+    std::vector<uint32_t> _atlasIds;
+    std::vector<uint32_t> _stampIds;
+    float _zoomPercent = 100.0f;
+    bool _syncing = false;
+    bool _syncingImport = false;
+    bool _skipTransparent = true;
+    bool _selectingStamp = false;
 };
 
 class TimedAssetDocument final
     : public IEditorDocument, public IEditorTimelineSource {
 public:
+    ~TimedAssetDocument() override { releaseAudio(); }
+
     bool initialize(const EditorOpenRequest& request, bool audio,
                     std::string& error)
     {
@@ -227,16 +1670,24 @@ public:
         _title = std::filesystem::path(_path).filename().string();
         _type = audio ? "ayeditor.timeline.audio.document"
                       : "ayeditor.timeline.animation.document";
+        _isAudio = audio;
+        _sidecarPath = _path + ".timeline.json";
         if (_path.empty() || !std::filesystem::is_regular_file(_path)) {
             error = "Timeline asset does not exist: " + _path;
             return false;
         }
         if (audio) {
-            ayt::resource::Audio resource;
-            if (resource.load(_path)) _duration = resource.getDuration();
+            _audioResource = std::make_unique<ayt::resource::Audio>();
+            if (_audioResource->load(_path)) {
+                _duration = _audioResource->getDuration();
+                buildWaveform();
+                attachAudio();
+            }
             if (_duration <= 0.0) _duration = wavDuration(_path);
             _tracks.push_back({"audio", _title,
                 EditorTimelineTrackKind::Audio, 0.0, _duration, true});
+            _clips.push_back({"clip.1", "audio", _path, 0.0, _duration,
+                0.0, 1.0f});
         } else {
             ayt::resource::Animation resource;
             if (!resource.load(_path)) {
@@ -251,9 +1702,17 @@ public:
                     name += " / ";
                     name += property;
                 }
-                _tracks.push_back({"animation." + std::to_string(index),
-                    std::move(name), EditorTimelineTrackKind::Animation,
-                    0.0, _duration, true});
+                const std::string trackId = "animation." + std::to_string(index);
+                _tracks.push_back({trackId, std::move(name),
+                    EditorTimelineTrackKind::Animation, 0.0, _duration, true});
+                const float* times = resource.getTrackTimes(index);
+                const float* values = resource.getTrackFloatValues(index);
+                for (std::uint32_t key = 0;
+                     key < resource.getTrackKeyframeCount(index); ++key) {
+                    _keyframes.push_back({"key." + std::to_string(++_nextItemId),
+                        trackId, times != nullptr ? times[key] : 0.0,
+                        values != nullptr ? values[key] : 0.0});
+                }
             }
             for (std::uint32_t index = 0; index < resource.getNotifyCount(); ++index) {
                 _tracks.push_back({"event." + std::to_string(index),
@@ -268,50 +1727,356 @@ public:
                       : EditorTimelineTrackKind::Animation,
                 0.0, _duration, true});
         }
+        if (std::filesystem::is_regular_file(_sidecarPath)
+            && !loadSidecar(error)) return false;
+        _dirty = false;
         return true;
     }
     const std::string& typeId() const noexcept override { return _type; }
     const std::string& path() const noexcept override { return _path; }
     const std::string& title() const noexcept override { return _title; }
-    bool isDirty() const noexcept override { return false; }
-    uint64_t revision() const noexcept override { return 1u; }
+    bool isDirty() const noexcept override { return _dirty; }
+    uint64_t revision() const noexcept override { return _revision; }
     bool save(std::string* error) override {
-        if (error != nullptr) *error = "Timeline assets are read-only here.";
-        return false;
+        if (!writeSequence(_sidecarPath, error)) return false;
+        _dirty = false;
+        return true;
     }
-    double timelineDurationSeconds() const noexcept override {
-        return _duration;
-    }
-    double timelinePositionSeconds() const noexcept override {
-        return _position;
-    }
+    double timelineDurationSeconds() const noexcept override { return _duration; }
+    double timelinePositionSeconds() const noexcept override { return _position; }
     bool setTimelinePositionSeconds(double seconds) override {
         const double clamped = std::clamp(seconds, 0.0, _duration);
         if (std::abs(clamped - _position) < 1.0e-9) return false;
         _position = clamped;
+        if (_playing && _isAudio) startAudioAtPlayhead();
         return true;
     }
     std::vector<EditorTimelineTrack> timelineTracks() const override {
         return _tracks;
     }
+    std::vector<EditorTimelineKeyframe> timelineKeyframes() const override {
+        return _keyframes;
+    }
+    std::vector<EditorTimelineClip> timelineClips() const override {
+        return _clips;
+    }
+    std::vector<float> timelineWaveformPeaks(
+        const std::string& trackId) const override {
+        return trackId == "audio" ? _waveform : std::vector<float>{};
+    }
     bool timelinePlaying() const noexcept override { return _playing; }
     void timelinePlay() override {
-        if (_duration > 0.0) {
-            if (_position >= _duration) _position = 0.0;
-            _playing = true;
-        }
+        if (_duration <= 0.0) return;
+        if (_position >= _duration) _position = 0.0;
+        _playing = true;
+        if (_isAudio) startAudioAtPlayhead();
     }
-    void timelinePause() override { _playing = false; }
-    void timelineStop() override { _playing = false; _position = 0.0; }
+    void timelinePause() override {
+        _playing = false;
+        stopAudioVoice();
+    }
+    void timelineStop() override {
+        _playing = false;
+        stopAudioVoice();
+        _position = 0.0;
+    }
     void timelineTick(double seconds) override {
         if (!_playing || seconds <= 0.0) return;
-        _position += seconds;
+        bool audioClock = false;
+        if (_audioEngine != nullptr && _audioVoice != ayt::audio::InvalidVoice) {
+            const ayt::audio::VoiceRuntime* voice =
+                _audioEngine->voiceAt(_audioVoice - 1u);
+            if (voice != nullptr && voice->playing && _audioSampleRate != 0u) {
+                _position = _playingClipStart
+                    + static_cast<double>(_audioEngine->voicePositionFrames(
+                        _audioVoice)) / static_cast<double>(_audioSampleRate)
+                    - _playingSourceOffset;
+                audioClock = true;
+            }
+        }
+        if (!audioClock) _position += seconds;
         if (_position >= _duration) {
             _position = _duration;
             _playing = false;
+            stopAudioVoice();
         }
     }
+    bool timelineAddKeyframe(const std::string& trackId, double time,
+                             double value) override {
+        if (!hasTrack(trackId)) return false;
+        beginEdit();
+        _keyframes.push_back({"key." + std::to_string(++_nextItemId), trackId,
+            std::clamp(time, 0.0, _duration), value});
+        sortItems();
+        return true;
+    }
+    bool timelineMoveKeyframe(const std::string& id, double time) override {
+        auto it = std::find_if(_keyframes.begin(), _keyframes.end(),
+            [&id](const auto& key) { return key.id == id; });
+        if (it == _keyframes.end()) return false;
+        beginEdit();
+        it->timeSeconds = std::clamp(time, 0.0, _duration);
+        sortItems();
+        return true;
+    }
+    bool timelineRemoveKeyframe(const std::string& id) override {
+        const auto it = std::find_if(_keyframes.begin(), _keyframes.end(),
+            [&id](const auto& key) { return key.id == id; });
+        if (it == _keyframes.end()) return false;
+        beginEdit();
+        _keyframes.erase(it);
+        return true;
+    }
+    bool timelineAddClip(const EditorTimelineClip& value) override {
+        if (!hasTrack(value.trackId) || value.durationSeconds <= 0.0) return false;
+        beginEdit();
+        EditorTimelineClip clip = value;
+        if (clip.id.empty()) clip.id = "clip." + std::to_string(++_nextItemId);
+        clip.startSeconds = std::max(0.0, clip.startSeconds);
+        clip.sourceOffsetSeconds = std::max(0.0, clip.sourceOffsetSeconds);
+        clip.gain = std::clamp(clip.gain, 0.0f, 8.0f);
+        _duration = std::max(_duration,
+            clip.startSeconds + clip.durationSeconds);
+        _clips.push_back(std::move(clip));
+        sortItems();
+        return true;
+    }
+    bool timelineMoveClip(const std::string& id, double start) override {
+        auto it = std::find_if(_clips.begin(), _clips.end(),
+            [&id](const auto& clip) { return clip.id == id; });
+        if (it == _clips.end()) return false;
+        beginEdit();
+        it->startSeconds = std::max(0.0, start);
+        _duration = std::max(_duration,
+            it->startSeconds + it->durationSeconds);
+        sortItems();
+        return true;
+    }
+    bool timelineRemoveClip(const std::string& id) override {
+        const auto it = std::find_if(_clips.begin(), _clips.end(),
+            [&id](const auto& clip) { return clip.id == id; });
+        if (it == _clips.end()) return false;
+        beginEdit();
+        _clips.erase(it);
+        return true;
+    }
+    bool timelineCanUndo() const noexcept override { return !_undo.empty(); }
+    bool timelineCanRedo() const noexcept override { return !_redo.empty(); }
+    bool timelineUndo() override {
+        if (_undo.empty()) return false;
+        _redo.push_back(snapshot());
+        restore(_undo.back());
+        _undo.pop_back();
+        markChanged();
+        return true;
+    }
+    bool timelineRedo() override {
+        if (_redo.empty()) return false;
+        _undo.push_back(snapshot());
+        restore(_redo.back());
+        _redo.pop_back();
+        markChanged();
+        return true;
+    }
 private:
+    struct State {
+        double duration = 0.0;
+        std::vector<EditorTimelineKeyframe> keyframes;
+        std::vector<EditorTimelineClip> clips;
+    };
+
+    bool hasTrack(const std::string& id) const {
+        return std::any_of(_tracks.begin(), _tracks.end(),
+            [&id](const auto& track) { return track.id == id; });
+    }
+    State snapshot() const { return {_duration, _keyframes, _clips}; }
+    void restore(const State& value) {
+        _duration = value.duration;
+        _keyframes = value.keyframes;
+        _clips = value.clips;
+        _position = std::min(_position, _duration);
+    }
+    void beginEdit() {
+        _undo.push_back(snapshot());
+        if (_undo.size() > 128u) _undo.erase(_undo.begin());
+        _redo.clear();
+        markChanged();
+    }
+    void markChanged() { _dirty = true; ++_revision; }
+    void sortItems() {
+        std::stable_sort(_keyframes.begin(), _keyframes.end(),
+            [](const auto& a, const auto& b) {
+                return a.timeSeconds < b.timeSeconds;
+            });
+        std::stable_sort(_clips.begin(), _clips.end(),
+            [](const auto& a, const auto& b) {
+                return a.startSeconds < b.startSeconds;
+            });
+    }
+    bool writeSequence(const std::string& path, std::string* error) const {
+        try {
+            nlohmann::json document = {
+                {"schemaVersion", 1}, {"source", _path},
+                {"durationSeconds", _duration},
+                {"keyframes", nlohmann::json::array()},
+                {"clips", nlohmann::json::array()}};
+            for (const auto& key : _keyframes) {
+                document["keyframes"].push_back({{"id", key.id},
+                    {"track", key.trackId}, {"time", key.timeSeconds},
+                    {"value", key.value}});
+            }
+            for (const auto& clip : _clips) {
+                document["clips"].push_back({{"id", clip.id},
+                    {"track", clip.trackId}, {"source", clip.sourcePath},
+                    {"start", clip.startSeconds},
+                    {"duration", clip.durationSeconds},
+                    {"sourceOffset", clip.sourceOffsetSeconds},
+                    {"gain", clip.gain}});
+            }
+            const std::filesystem::path destination(path);
+            if (!destination.parent_path().empty()) {
+                std::filesystem::create_directories(destination.parent_path());
+            }
+            std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+            if (!output) throw std::runtime_error("could not open output");
+            output << document.dump(2) << '\n';
+            if (!output) throw std::runtime_error("write failed");
+            if (error != nullptr) error->clear();
+            return true;
+        } catch (const std::exception& exception) {
+            if (error != nullptr) *error = exception.what();
+            return false;
+        }
+    }
+    bool loadSidecar(std::string& error) {
+        try {
+            std::ifstream input(_sidecarPath, std::ios::binary);
+            nlohmann::json document;
+            input >> document;
+            std::vector<EditorTimelineKeyframe> keys;
+            std::vector<EditorTimelineClip> clips;
+            for (const auto& key : document.value(
+                     "keyframes", nlohmann::json::array())) {
+                EditorTimelineKeyframe value;
+                value.id = key.value("id", "key." + std::to_string(++_nextItemId));
+                value.trackId = key.value("track", std::string{});
+                value.timeSeconds = key.value("time", 0.0);
+                value.value = key.value("value", 0.0);
+                if (hasTrack(value.trackId)) keys.push_back(std::move(value));
+            }
+            for (const auto& clip : document.value(
+                     "clips", nlohmann::json::array())) {
+                EditorTimelineClip value;
+                value.id = clip.value("id", "clip." + std::to_string(++_nextItemId));
+                value.trackId = clip.value("track", std::string{});
+                value.sourcePath = clip.value("source", std::string{});
+                value.startSeconds = clip.value("start", 0.0);
+                value.durationSeconds = clip.value("duration", 0.0);
+                value.sourceOffsetSeconds = clip.value("sourceOffset", 0.0);
+                value.gain = clip.value("gain", 1.0f);
+                if (hasTrack(value.trackId) && value.durationSeconds > 0.0)
+                    clips.push_back(std::move(value));
+            }
+            _duration = std::max(_duration,
+                document.value("durationSeconds", _duration));
+            _keyframes = std::move(keys);
+            _clips = std::move(clips);
+            sortItems();
+            return true;
+        } catch (const std::exception& exception) {
+            error = "Could not load timeline sidecar: ";
+            error += exception.what();
+            return false;
+        }
+    }
+    void buildWaveform() {
+        if (_audioResource == nullptr || _audioResource->getData() == nullptr
+            || _audioResource->getChannels() == 0u) return;
+        const std::uint32_t bits = _audioResource->getBitsPerSample();
+        const std::uint32_t channels = _audioResource->getChannels();
+        const std::size_t bytesPerSample = bits / 8u;
+        if ((bits != 16u && bits != 32u) || bytesPerSample == 0u) return;
+        const std::size_t frames = _audioResource->getDataSize()
+            / (bytesPerSample * channels);
+        if (frames == 0u) return;
+        constexpr std::size_t buckets = 96u;
+        _waveform.reserve(buckets * 2u);
+        const std::uint8_t* bytes = _audioResource->getData();
+        for (std::size_t bucket = 0; bucket < buckets; ++bucket) {
+            const std::size_t begin = bucket * frames / buckets;
+            const std::size_t end = std::max(begin + 1u,
+                (bucket + 1u) * frames / buckets);
+            float minimum = 1.0f;
+            float maximum = -1.0f;
+            for (std::size_t frame = begin; frame < std::min(end, frames); ++frame) {
+                float sample = 0.0f;
+                const std::uint8_t* source = bytes
+                    + frame * channels * bytesPerSample;
+                if (bits == 16u) {
+                    std::int16_t value = 0;
+                    std::memcpy(&value, source, sizeof(value));
+                    sample = static_cast<float>(value) / 32768.0f;
+                } else {
+                    std::memcpy(&sample, source, sizeof(sample));
+                }
+                minimum = std::min(minimum, sample);
+                maximum = std::max(maximum, sample);
+            }
+            _waveform.push_back(std::clamp(minimum, -1.0f, 1.0f));
+            _waveform.push_back(std::clamp(maximum, -1.0f, 1.0f));
+        }
+    }
+    void attachAudio() {
+        if (_audioResource == nullptr || _audioClip != ayt::audio::InvalidClipId)
+            return;
+        _audioSubsystem = ayt::audio::AudioSubSystem::findRegistered();
+        _audioEngine = _audioSubsystem != nullptr ? _audioSubsystem->engine() : nullptr;
+        if (_audioEngine == nullptr || !_audioEngine->isInitialized()) return;
+        _audioClip = _audioSubsystem->registerClipFromResource(_audioResource.get());
+        _audioSampleRate = _audioResource->getSampleRate();
+    }
+    void stopAudioVoice() {
+        if (_audioEngine != nullptr && _audioEngine->isInitialized()
+            && _audioVoice != ayt::audio::InvalidVoice) {
+            _audioEngine->stop(_audioVoice);
+        }
+        _audioVoice = ayt::audio::InvalidVoice;
+    }
+    void startAudioAtPlayhead() {
+        stopAudioVoice();
+        attachAudio();
+        if (_audioEngine == nullptr || _audioClip == ayt::audio::InvalidClipId)
+            return;
+        const auto clip = std::find_if(_clips.begin(), _clips.end(),
+            [this](const EditorTimelineClip& value) {
+                return value.trackId == "audio"
+                    && _position >= value.startSeconds
+                    && _position < value.startSeconds + value.durationSeconds;
+            });
+        if (clip == _clips.end()) return;
+        _audioVoice = _audioEngine->play(_audioClip, ayt::audio::AudioBus::Music,
+            {}, clip->gain, false);
+        if (_audioVoice == ayt::audio::InvalidVoice || _audioSampleRate == 0u)
+            return;
+        _playingClipStart = clip->startSeconds;
+        _playingSourceOffset = clip->sourceOffsetSeconds;
+        const double sourceSeconds = clip->sourceOffsetSeconds
+            + (_position - clip->startSeconds);
+        (void)_audioEngine->setVoicePositionFrames(_audioVoice,
+            static_cast<std::uint64_t>(sourceSeconds * _audioSampleRate));
+    }
+    void releaseAudio() {
+        stopAudioVoice();
+        if (_audioSubsystem != nullptr && _audioEngine != nullptr
+            && _audioSubsystem->engine() == _audioEngine
+            && _audioEngine->isInitialized()
+            && _audioClip != ayt::audio::InvalidClipId) {
+            _audioEngine->releaseClip(_audioClip);
+        }
+        _audioClip = ayt::audio::InvalidClipId;
+        _audioEngine = nullptr;
+        _audioSubsystem = nullptr;
+    }
     static double wavDuration(const std::string& path)
     {
         std::ifstream input(path, std::ios::binary);
@@ -351,13 +2116,31 @@ private:
     std::string _type;
     std::string _path;
     std::string _title;
+    std::string _sidecarPath;
     double _duration = 0.0;
     double _position = 0.0;
     bool _playing = false;
+    bool _isAudio = false;
+    bool _dirty = false;
+    std::uint64_t _revision = 1u;
+    std::uint64_t _nextItemId = 0u;
     std::vector<EditorTimelineTrack> _tracks;
+    std::vector<EditorTimelineKeyframe> _keyframes;
+    std::vector<EditorTimelineClip> _clips;
+    std::vector<float> _waveform;
+    std::vector<State> _undo;
+    std::vector<State> _redo;
+    std::unique_ptr<ayt::resource::Audio> _audioResource;
+    ayt::audio::AudioSubSystem* _audioSubsystem = nullptr;
+    ayt::audio::AudioEngine* _audioEngine = nullptr;
+    ayt::audio::AudioClipId _audioClip = ayt::audio::InvalidClipId;
+    ayt::audio::VoiceHandle _audioVoice = ayt::audio::InvalidVoice;
+    std::uint32_t _audioSampleRate = 0u;
+    double _playingClipStart = 0.0;
+    double _playingSourceOffset = 0.0;
 };
 
-class TimedAssetView final : public IEditorView {
+class TimedAssetView final : public IEditorView, public IEditorCommandTarget {
 public:
     explicit TimedAssetView(std::shared_ptr<TimedAssetDocument> document)
         : _document(std::move(document))
@@ -377,8 +2160,37 @@ public:
             + std::to_wstring(_document->timelineTracks().size()));
         root->addWidget(summary, 26.0f);
         auto* note = new ayt::ui::TextLabel();
-        note->setText(L"Use the Timeline panel to inspect tracks and scrub playback.");
+        note->setText(L"Open Timeline to edit clips, keyframes and waveform timing.");
         root->addWidget(note, 28.0f);
+        auto* actions = new ayt::ui::HBox();
+        actions->setSpacing(6.0f);
+        addButton(actions, L"Add Key", [this]() {
+            const auto tracks = _document->timelineTracks();
+            if (!tracks.empty()) (void)_document->timelineAddKeyframe(
+                tracks.front().id, _document->timelinePositionSeconds(), 0.0);
+        });
+        addButton(actions, L"Add Clip", [this]() {
+            const auto tracks = _document->timelineTracks();
+            if (tracks.empty()) return;
+            EditorTimelineClip clip;
+            clip.trackId = tracks.front().id;
+            clip.sourcePath = _document->path();
+            clip.startSeconds = _document->timelinePositionSeconds();
+            clip.durationSeconds = std::max(0.1,
+                _document->timelineDurationSeconds() * 0.25);
+            (void)_document->timelineAddClip(clip);
+        });
+        addButton(actions, L"Undo", [this]() {
+            (void)_document->timelineUndo();
+        });
+        addButton(actions, L"Redo", [this]() {
+            (void)_document->timelineRedo();
+        });
+        addButton(actions, L"Save", [this]() {
+            std::string error;
+            (void)_document->save(&error);
+        });
+        root->addWidget(actions, 28.0f);
     }
     ~TimedAssetView() override {
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
@@ -387,7 +2199,32 @@ public:
     ayt::ui::Widget* releaseRootWidget() noexcept override {
         auto* result = _root; _root = nullptr; return result;
     }
+    IEditorCommandTarget* commandTarget() noexcept override { return this; }
+    bool handlesCommand(const std::string& id) const override {
+        return id == "file.save" || id == "edit.undo" || id == "edit.redo";
+    }
+    bool canExecuteCommand(const std::string& id) const override {
+        if (id == "edit.undo") return _document->timelineCanUndo();
+        if (id == "edit.redo") return _document->timelineCanRedo();
+        return id == "file.save" && _document->isDirty();
+    }
+    bool executeCommand(const std::string& id) override {
+        if (id == "edit.undo") return _document->timelineUndo();
+        if (id == "edit.redo") return _document->timelineRedo();
+        if (id == "file.save") {
+            std::string error;
+            return _document->save(&error);
+        }
+        return false;
+    }
 private:
+    static void addButton(ayt::ui::HBox* row, const std::wstring& text,
+                          std::function<void()> callback) {
+        auto* button = new ayt::ui::Button();
+        button->setText(text);
+        button->setOnClicked(std::move(callback));
+        row->addWidget(button, 76.0f);
+    }
     std::shared_ptr<TimedAssetDocument> _document;
     ayt::ui::Widget* _root = nullptr;
 };
@@ -530,6 +2367,21 @@ public:
             if (auto* value = source()) value->timelineStop();
         });
         root->addWidget(transport, 28.0f);
+        auto* edit = new ayt::ui::HBox();
+        edit->setSpacing(4.0f);
+        addButton(edit, L"Key +", [this]() { addKeyframe(); }, 58.0f);
+        addButton(edit, L"Clip +", [this]() { addClip(); }, 58.0f);
+        addButton(edit, L"< 0.1", [this]() { nudgeSelection(-0.1); }, 58.0f);
+        addButton(edit, L"0.1 >", [this]() { nudgeSelection(0.1); }, 58.0f);
+        addButton(edit, L"Delete", [this]() { deleteSelection(); }, 62.0f);
+        addButton(edit, L"Undo", [this]() {
+            if (auto* value = source()) (void)value->timelineUndo();
+        }, 58.0f);
+        addButton(edit, L"Redo", [this]() {
+            if (auto* value = source()) (void)value->timelineRedo();
+        }, 58.0f);
+        addButton(edit, L"Save", [this]() { saveSource(); }, 58.0f);
+        root->addWidget(edit, 28.0f);
         _label = new ayt::ui::TextLabel();
         _label->setFontSize(12);
         root->addWidget(_label, 22.0f);
@@ -545,6 +2397,9 @@ public:
             }
         });
         root->addWidget(_playhead, 24.0f);
+        _waveform = new ayt::ui::TextLabel();
+        _waveform->setFontSize(11);
+        root->addWidget(_waveform, 20.0f);
         for (std::size_t index = 0; index < 8u; ++index) {
             auto* track = new ayt::ui::TextLabel();
             track->setFontSize(11);
@@ -599,6 +2454,34 @@ public:
         _updating = false;
         const std::vector<EditorTimelineTrack> tracks = timeline != nullptr
             ? timeline->timelineTracks() : std::vector<EditorTimelineTrack>{};
+        const std::vector<EditorTimelineKeyframe> keys = timeline != nullptr
+            ? timeline->timelineKeyframes()
+            : std::vector<EditorTimelineKeyframe>{};
+        const std::vector<EditorTimelineClip> clips = timeline != nullptr
+            ? timeline->timelineClips() : std::vector<EditorTimelineClip>{};
+        std::wstring waveformText;
+        if (timeline != nullptr) {
+            for (const EditorTimelineTrack& track : tracks) {
+                const std::vector<float> peaks =
+                    timeline->timelineWaveformPeaks(track.id);
+                if (peaks.empty()) continue;
+                static constexpr wchar_t levels[] = L"_▁▂▃▄▅▆▇█";
+                waveformText = L"Waveform  ";
+                const std::size_t pairs = peaks.size() / 2u;
+                const std::size_t shown = std::min<std::size_t>(64u, pairs);
+                for (std::size_t index = 0; index < shown; ++index) {
+                    const std::size_t sourceIndex = index * pairs / shown;
+                    const float amplitude = std::max(
+                        std::abs(peaks[sourceIndex * 2u]),
+                        std::abs(peaks[sourceIndex * 2u + 1u]));
+                    waveformText.push_back(levels[static_cast<std::size_t>(
+                        std::clamp(amplitude, 0.0f, 1.0f) * 8.0f)]);
+                }
+                break;
+            }
+        }
+        _waveform->setText(waveformText);
+        _waveform->setVisible(!waveformText.empty());
         for (std::size_t index = 0; index < _trackLabels.size(); ++index) {
             if (index >= tracks.size()) {
                 _trackLabels[index]->setText(L"");
@@ -612,7 +2495,15 @@ public:
             _trackLabels[index]->setText(std::wstring(marker) + L"  "
                 + ayt::ui::decodeUtf8Text(track.name) + L"   ["
                 + std::to_wstring(track.startSeconds) + L" – "
-                + std::to_wstring(track.endSeconds) + L"]");
+                + std::to_wstring(track.endSeconds) + L"]   keys "
+                + std::to_wstring(std::count_if(keys.begin(), keys.end(),
+                    [&track](const auto& key) {
+                        return key.trackId == track.id;
+                    })) + L"   clips "
+                + std::to_wstring(std::count_if(clips.begin(), clips.end(),
+                    [&track](const auto& clip) {
+                        return clip.trackId == track.id;
+                    })));
             _trackLabels[index]->setVisible(true);
         }
     }
@@ -627,19 +2518,90 @@ private:
         }
         return nullptr;
     }
+    void addKeyframe() {
+        IEditorTimelineSource* value = source();
+        if (value == nullptr) return;
+        const auto tracks = value->timelineTracks();
+        if (tracks.empty()) return;
+        if (value->timelineAddKeyframe(tracks.front().id,
+                value->timelinePositionSeconds(), 0.0)) {
+            const auto keys = value->timelineKeyframes();
+            if (!keys.empty()) _selectedItemId = keys.back().id;
+            _host.requestRepaint();
+        }
+    }
+    void addClip() {
+        IEditorTimelineSource* value = source();
+        if (value == nullptr) return;
+        const auto tracks = value->timelineTracks();
+        if (tracks.empty()) return;
+        EditorTimelineClip clip;
+        clip.trackId = tracks.front().id;
+        clip.startSeconds = value->timelinePositionSeconds();
+        clip.durationSeconds = std::max(0.1,
+            value->timelineDurationSeconds() * 0.25);
+        if (value->timelineAddClip(clip)) {
+            const auto clips = value->timelineClips();
+            if (!clips.empty()) _selectedItemId = clips.back().id;
+            _host.requestRepaint();
+        }
+    }
+    void nudgeSelection(double delta) {
+        IEditorTimelineSource* value = source();
+        if (value == nullptr || _selectedItemId.empty()) return;
+        const auto keys = value->timelineKeyframes();
+        const auto key = std::find_if(keys.begin(), keys.end(), [this](const auto& item) {
+            return item.id == _selectedItemId;
+        });
+        if (key != keys.end()) {
+            (void)value->timelineMoveKeyframe(key->id, key->timeSeconds + delta);
+            return;
+        }
+        const auto clips = value->timelineClips();
+        const auto clip = std::find_if(clips.begin(), clips.end(), [this](const auto& item) {
+            return item.id == _selectedItemId;
+        });
+        if (clip != clips.end())
+            (void)value->timelineMoveClip(clip->id, clip->startSeconds + delta);
+    }
+    void deleteSelection() {
+        IEditorTimelineSource* value = source();
+        if (value == nullptr || _selectedItemId.empty()) return;
+        if (!value->timelineRemoveKeyframe(_selectedItemId))
+            (void)value->timelineRemoveClip(_selectedItemId);
+        _selectedItemId.clear();
+    }
+    void saveSource() {
+        for (const EditorDocumentRecord& record :
+             _host.workspace().documents().records()) {
+            if (dynamic_cast<IEditorTimelineSource*>(record.document.get())
+                != source()) continue;
+            std::string error;
+            if (!record.document->save(&error)) {
+                _host.setStatusText(L"Timeline save failed: "
+                    + ayt::ui::decodeUtf8Text(error));
+            } else {
+                _host.setStatusText(L"Timeline sequence saved.");
+            }
+            break;
+        }
+    }
     static void addButton(ayt::ui::HBox* row, const std::wstring& text,
-                          std::function<void()> clicked) {
+                          std::function<void()> clicked,
+                          float width = 72.0f) {
         auto* button = new ayt::ui::Button();
         button->setText(text);
         button->setOnClicked(std::move(clicked));
-        row->addWidget(button, 72.0f);
+        row->addWidget(button, width);
     }
     IEditorHostServices& _host;
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _label = nullptr;
     ayt::ui::TextLabel* _ruler = nullptr;
     ayt::ui::Slider* _playhead = nullptr;
+    ayt::ui::TextLabel* _waveform = nullptr;
     std::vector<ayt::ui::TextLabel*> _trackLabels;
+    std::string _selectedItemId;
     bool _updating = false;
 };
 

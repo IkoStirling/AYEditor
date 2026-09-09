@@ -18,6 +18,7 @@
 #include <AYEditor/EditorPlayerController.h>
 #include <AYEditor/EditorSession.h>
 #include <AYEditor/EditorWorldContext.h>
+#include <AYEditor/EditorAssetImportQueue.h>
 #include <AYEditor/EditorAssetTilePresenter.h>
 #include <AYEditor/EditorAssetTrash.h>
 #include <AYEditor/EditorAssetOperations.h>

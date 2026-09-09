@@ -58,6 +58,8 @@ class MenuItem;
 class Button;
 class Image;
 class ModalDialog;
+class CheckBox;
+class ListView;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
@@ -70,6 +72,7 @@ class IEditorHostServices;
 class EditorUiLayoutController;
 class EditorUiLayoutDocument;
 class EditorAssetPreviewCache;
+class EditorAssetImportQueue;
 class EditorAssetTrash;
 class EditorAssetOperations;
 class EditorRecoveryStore;
@@ -211,6 +214,9 @@ public:
     EditorAssetDatabase& assetDatabase() noexcept { return _assetDatabase; }
     const EditorAssetDatabase& assetDatabase() const noexcept {
         return _assetDatabase;
+    }
+    EditorAssetImportQueue* assetImportQueue() noexcept {
+        return _assetImportQueue.get();
     }
     // Host/test command surfaces used by the Content Browser actions.
     bool rescanAssetsNow();
@@ -411,6 +417,10 @@ private:
     void showAssetOperationDialog(const std::wstring& title,
                                   const std::wstring& initialValue,
                                   bool rename, bool copy);
+    void showCrashRecoveryDialog();
+    bool restoreCrashRecovery(const std::vector<std::size_t>& indices);
+    void showAssetTrashDialog();
+    void showAssetHistoryDialog();
     void deleteSelectedAssetsConfirmed();
     void refreshAssetDeleteButton();
     void setAssetBrowserStatus(const std::wstring& text,
@@ -542,6 +552,8 @@ private:
     std::vector<EditorAssetId> _selectedAssetIds;
     EditorAssetId _pendingAssetOpenId = 0;
     std::unique_ptr<EditorAssetPreviewCache> _assetPreviewCache;
+    std::unique_ptr<EditorAssetImportQueue> _assetImportQueue;
+    int _assetImportProgressPercent = -1;
     std::unique_ptr<EditorAssetTrash> _assetTrash;
     std::unique_ptr<EditorAssetOperations> _assetOperations;
     std::unique_ptr<EditorRecoveryStore> _recoveryStore;
@@ -551,6 +563,12 @@ private:
     std::unique_ptr<ayt::ui::ModalDialog> _assetDeleteDialog;
     std::unique_ptr<ayt::ui::ModalDialog> _assetOperationDialog;
     ayt::ui::TextInput* _assetOperationInput = nullptr;
+    ayt::ui::ComboBox* _assetOperationFolderPicker = nullptr;
+    std::unique_ptr<ayt::ui::ModalDialog> _recoveryDialog;
+    std::vector<ayt::ui::CheckBox*> _recoveryChecks;
+    std::unique_ptr<ayt::ui::ModalDialog> _assetTrashDialog;
+    ayt::ui::ListView* _assetTrashList = nullptr;
+    std::unique_ptr<ayt::ui::ModalDialog> _assetHistoryDialog;
     struct AssetDragData {
         EditorAssetId id = 0;
         EditorAssetType type = EditorAssetType::Unknown;

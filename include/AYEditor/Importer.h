@@ -65,7 +65,8 @@ public:
     static Result importAssetFile(
         const std::string& sourcePath,
         const std::string& destinationDir,
-        const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {});
+        const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {},
+        bool force = false);
 
     // Lowercase the extension of `path` (.fbx / .FBX → "fbx"). Returns
     // empty string if no extension found.

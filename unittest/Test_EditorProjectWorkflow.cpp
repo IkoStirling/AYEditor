@@ -10,6 +10,13 @@
 #include "AYEditor/EditorRecoveryStore.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorSelectionContext.h"
+#include "AYEditor/EditorWorkspace.h"
+
+#include <AY2DEditor/TilemapEditorModel.h>
+#include <AYResource/assetsImpl/Audio.h>
+#include <AYUI/Button.h>
+#include <AYUI/UIKeyCode.h>
+#include <AYUI/Widget.h>
 
 #include <filesystem>
 #include <fstream>
@@ -62,13 +69,46 @@ private:
     std::string _title = "Recovery Test";
 };
 
+class TilemapTestHostServices final : public IEditorHostServices {
+public:
+    explicit TilemapTestHostServices(EditorWorkspace& workspace)
+        : _workspace(workspace) {}
+
+    EditorWorkspace& workspace() noexcept override { return _workspace; }
+    const std::string& projectRoot() const noexcept override {
+        return _projectRoot;
+    }
+    void requestRepaint() override { ++repaintRequests; }
+    void setStatusText(const std::wstring& text) override {
+        statusText = text;
+    }
+
+    int repaintRequests = 0;
+    std::wstring statusText;
+
+private:
+    EditorWorkspace& _workspace;
+    std::string _projectRoot;
+};
+
+ayt::ui::Widget* findWorkflowWidget(ayt::ui::Widget* root,
+                                    const std::string& id)
+{
+    if (root == nullptr) return nullptr;
+    if (root->getId() == id) return root;
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (auto* found = findWorkflowWidget(child, id)) return found;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 2u);
+    CHECK(kEditorSourceAbiVersion == 4u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -400,6 +440,164 @@ TEST_CASE(built_in_registry_classifies_tilemap_audio_and_timeline_surfaces)
     EditorOpenRequest request;
     request.preferredEditorId = kEditorTimelineToolExtensionId;
     CHECK(registry.resolve(request) == timeline);
+}
+
+TEST_CASE(audio_timeline_edits_waveform_clips_and_keyframes_with_undo_save)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("audio_timeline_edit")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto audioPath = cleanup.root / "Assets/audio/tone.ayaudio";
+    ayt::resource::Audio audio;
+    audio.createSineWave(440.0f, 1.0f);
+    std::vector<UInt8> bytes;
+    CHECK(audio.saveToBinary(bytes));
+    std::filesystem::create_directories(audioPath.parent_path());
+    std::ofstream output(audioPath, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.close();
+
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorAudioTimelineExtensionId);
+    CHECK(descriptor != nullptr);
+    EditorOpenRequest request;
+    request.resourcePath = audioPath.string();
+    auto document = descriptor != nullptr
+        ? descriptor->createDocument(request, error) : nullptr;
+    CHECK(document != nullptr);
+    auto* timeline = document != nullptr
+        ? dynamic_cast<IEditorTimelineSource*>(document.get()) : nullptr;
+    CHECK(timeline != nullptr);
+    if (timeline == nullptr) return;
+    const auto tracks = timeline->timelineTracks();
+    CHECK(!tracks.empty());
+    CHECK(!timeline->timelineWaveformPeaks("audio").empty());
+    CHECK(timeline->timelineAddKeyframe(tracks.front().id, 0.25, 0.8));
+    EditorTimelineClip clip;
+    clip.trackId = tracks.front().id;
+    clip.sourcePath = audioPath.string();
+    clip.startSeconds = 1.0;
+    clip.durationSeconds = 0.5;
+    CHECK(timeline->timelineAddClip(clip));
+    CHECK(document->isDirty());
+    CHECK(timeline->timelineCanUndo());
+    CHECK(timeline->timelineUndo());
+    CHECK(timeline->timelineClips().size() == 1u);
+    CHECK(timeline->timelineRedo());
+    CHECK(timeline->timelineClips().size() == 2u);
+    CHECK(document->save(&error));
+    CHECK(error.empty());
+    CHECK(!document->isDirty());
+    CHECK(std::filesystem::is_regular_file(
+        audioPath.string() + ".timeline.json"));
+
+    auto reloaded = descriptor->createDocument(request, error);
+    auto* reloadedTimeline = reloaded != nullptr
+        ? dynamic_cast<IEditorTimelineSource*>(reloaded.get()) : nullptr;
+    CHECK(reloadedTimeline != nullptr);
+    CHECK(reloadedTimeline != nullptr
+        && reloadedTimeline->timelineKeyframes().size() == 1u);
+    CHECK(reloadedTimeline != nullptr
+        && reloadedTimeline->timelineClips().size() == 2u);
+}
+
+TEST_CASE(tilemap_author_source_save_succeeds_when_runtime_v2_cannot_cook_it)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("rich_tilemap_save")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto source = cleanup.root
+        / "Assets/maps/rich.aytilemap.json";
+    std::filesystem::create_directories(source.parent_path());
+
+    ayt::ay2d::editor::TilemapEditorModel authored;
+    CHECK(authored.newDocument(4u, 3u, 16u, 16u, 0u));
+    CHECK(authored.addLayer("Decoration"));
+    ayt::ay2d::editor::TileAtlasSource atlas;
+    atlas.atlasId = 7u;
+    atlas.name = "sheet";
+    atlas.sourcePath = "sheet.png";
+    atlas.imageWidth = 32u;
+    atlas.imageHeight = 16u;
+    atlas.tileWidth = 16u;
+    atlas.tileHeight = 16u;
+    atlas.columns = 2u;
+    atlas.rows = 1u;
+    ayt::ay2d::editor::AtlasTileImport imported;
+    imported.tileId = 10u;
+    imported.name = "Grass";
+    imported.sourceWidth = 16u;
+    imported.sourceHeight = 16u;
+    CHECK(authored.importTileAtlas(atlas, "Tiles/Terrain", {imported}));
+    std::string error;
+    CHECK(authored.save(source.string(), &error));
+
+    EditorExtensionRegistry registry;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+    EditorOpenRequest request;
+    request.resourcePath = source.string();
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+    CHECK(document->save(&error));
+    CHECK(error.empty());
+    CHECK_FALSE(document->isDirty());
+    CHECK(std::filesystem::is_regular_file(source));
+    CHECK_FALSE(std::filesystem::exists(
+        cleanup.root / "Assets/tilemaps/rich.aytilemap"));
+}
+
+TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
+{
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+
+    EditorOpenRequest request;
+    request.displayPath = "Untitled Tilemap";
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+    EditorWorkspace workspace;
+    TilemapTestHostServices host(workspace);
+    auto view = descriptor->createView(document, host);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    CHECK(view->inputTarget() != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_canvas") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_tile_list") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_source_sheet") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_atlas_selector") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_import_sheet") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_stamp_selector") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_stamp_select") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_layer_list") != nullptr);
+
+    auto* eraser = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_eraser"));
+    CHECK(eraser != nullptr);
+    CHECK(view->inputTarget()->onKeyDown(ayt::ui::UIKey_E));
+    CHECK(eraser != nullptr && eraser->getText() == L"[! ERASER !]");
 }
 
 TEST_CASE(scene_selection_bridge_keeps_workspace_selection_authoritative)

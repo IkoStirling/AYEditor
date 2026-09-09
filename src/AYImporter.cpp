@@ -132,12 +132,13 @@ Importer::Result Importer::importAnimationFile(
 Importer::Result Importer::importAssetFile(
     const std::string& sourcePath,
     const std::string& destinationDir,
-    const ayt::resource::SourceCoordinatePolicy& sourceCoordinates)
+    const ayt::resource::SourceCoordinatePolicy& sourceCoordinates,
+    bool force)
 {
     ayt::resource::ImportOptions opts;
     opts.sourcePath = sourcePath;
     opts.outputDir = destinationDir;
-    opts.force = forceImportRequested();
+    opts.force = force || forceImportRequested();
     opts.requireCharacterAssets = false;
     opts.requireAnimationAssets = false;
     opts.loadOption = ayt::resource::IConverter::LoadOption::Full;

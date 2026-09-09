@@ -15,14 +15,17 @@
 
 #include "AYTest.h"
 #include "AYEditor/Importer.h"
+#include "AYEditor/EditorAssetImportQueue.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYIO/File.h"
 #include <AYIO/Path.h>
 
 #include <cstdio>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 using namespace ayt::editor;
 
@@ -41,6 +44,36 @@ bool writeStubFile(const std::string& path, const std::string& bytes) {
 } // namespace
 
 TEST_SUITE(AYEditor_Importer)
+
+TEST_CASE(EditorAssetImportQueueReportsFailureAndSupportsRetry)
+{
+    EditorAssetImportQueue queue;
+    const auto id = queue.enqueue(
+        "D:/no/such/path/missing.fbx", "D:/tmp/ayeditor-import-queue");
+    CHECK(id != 0u);
+    for (int attempt = 0; attempt < 200 && queue.busy(); ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        (void)queue.poll();
+    }
+    const EditorAssetImportJob* failed = queue.find(id);
+    CHECK(failed != nullptr);
+    CHECK(failed != nullptr && failed->state == EditorAssetImportJobState::Failed);
+    CHECK(failed != nullptr && !failed->message.empty());
+    CHECK_FLOAT_EQ(queue.overallProgress(), 1.0f, 1e-5f);
+
+    const auto retryId = queue.retry(id);
+    CHECK(retryId != 0u);
+    CHECK(retryId != id);
+    CHECK(queue.busy());
+    while (queue.busy()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        (void)queue.poll();
+    }
+    const EditorAssetImportJob* retried = queue.find(retryId);
+    CHECK(retried != nullptr);
+    CHECK(retried != nullptr && retried->force);
+    CHECK(retried != nullptr && retried->state == EditorAssetImportJobState::Failed);
+}
 
 TEST_CASE(extension_of_lowercases_and_strips_dot)
 {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorAssetDatabase.h"
+#include "AYEditor/EditorExtension.h"
 #include "AYUI/ImageTexture.h"
 
 #include <cstdint>
@@ -29,6 +30,8 @@ public:
     EditorAssetPreviewCache& operator=(const EditorAssetPreviewCache&) = delete;
 
     ayt::ui::ImageTextureHandle request(const EditorAssetRecord& record);
+    EditorAuthoringImage loadAuthoringImage(
+        const std::string& path, std::string* error = nullptr);
     static bool supports(const EditorAssetRecord& record);
     void setDiskCacheRoot(std::string rootPath);
     const std::string& diskCacheRoot() const noexcept { return _diskCacheRoot; }
@@ -54,6 +57,11 @@ private:
         bool pending = false;
         bool failed = false;
     };
+    struct AuthoringEntry {
+        std::uintmax_t fileSize = 0;
+        std::int64_t lastModified = 0;
+        EditorAuthoringImage image;
+    };
 
     static DecodedImage decode(const std::string& path);
     static DecodedImage renderResourcePreview(
@@ -66,12 +74,14 @@ private:
         std::int64_t sourceModified, const DecodedImage& image);
     std::string cachePathFor(const std::string& absolutePath) const;
     void release(Entry& entry);
+    void release(AuthoringEntry& entry);
 
     CreateTexture _createTexture;
     ReleaseTexture _releaseTexture;
     std::string _diskCacheRoot;
     std::size_t _diskCacheHits = 0;
     std::unordered_map<std::string, Entry> _entries;
+    std::unordered_map<std::string, AuthoringEntry> _authoringEntries;
 };
 
 } // namespace ayt::editor

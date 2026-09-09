@@ -172,6 +172,75 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     if (mesh != nullptr) CHECK(mesh->id == stableId);
 }
 
+TEST_CASE(editor_asset_database_restores_disk_index_before_rescan)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("index_restore")};
+    writeAssetBrowserFile(cleanup.root / "Assets/Textures/Hero.PNG", "texture");
+    writeAssetBrowserFile(
+        cleanup.root / ".ayeditor_cache/assets/meshes/Hero.aymesh", "mesh");
+    EditorAssetId textureId = 0;
+    {
+        EditorAssetDatabase database;
+        std::string error;
+        CHECK(database.open(cleanup.root.string(), &error));
+        CHECK_FALSE(database.loadedFromIndex());
+        CHECK(database.scanNow(&error));
+        const EditorAssetRecord* texture = database.findByLogicalPath(
+            "Assets/Textures/Hero.PNG");
+        CHECK(texture != nullptr);
+        if (texture != nullptr) textureId = texture->id;
+    }
+
+    EditorAssetDatabase reopened;
+    std::string error;
+    CHECK(reopened.open(cleanup.root.string(), &error));
+    CHECK(reopened.loadedFromIndex());
+    CHECK(reopened.records().size() == 2u);
+    const EditorAssetRecord* texture = reopened.findByLogicalPath(
+        "Assets/Textures/Hero.PNG");
+    CHECK(texture != nullptr);
+    if (texture != nullptr) {
+        CHECK(texture->id == textureId);
+        CHECK(texture->absolutePath == std::filesystem::absolute(
+            cleanup.root / "Assets/Textures/Hero.PNG").lexically_normal()
+                .generic_string());
+    }
+    CHECK(reopened.entries("Assets").size() == 1u);
+}
+
+TEST_CASE(editor_asset_database_applies_file_watcher_changes_incrementally)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("watcher")};
+    writeAssetBrowserFile(cleanup.root / "Assets/Existing.aymesh", "old");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    CHECK(database.records().size() == 1u);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const auto added = cleanup.root / "Assets/Added.png";
+    writeAssetBrowserFile(added, "image");
+    bool changed = false;
+    for (int attempt = 0; attempt < 200 && !changed; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        changed = database.pollFileChanges();
+    }
+    CHECK(changed);
+    CHECK(database.findByLogicalPath("Assets/Added.png") != nullptr);
+    CHECK_FALSE(database.scanPending());
+
+    std::filesystem::remove(added);
+    changed = false;
+    for (int attempt = 0; attempt < 200 && !changed; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        changed = database.pollFileChanges();
+    }
+    CHECK(changed);
+    CHECK(database.findByLogicalPath("Assets/Added.png") == nullptr);
+    CHECK(database.records().size() == 1u);
+}
+
 TEST_CASE(editor_asset_delete_analysis_reports_text_asset_references)
 {
     AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("delete_analysis")};
@@ -288,6 +357,50 @@ TEST_CASE(editor_asset_preview_cache_reuses_persisted_thumbnail_after_restart)
         CHECK(secondUploads == 1);
         CHECK(cache.diskCacheHitCount() == 1u);
     }
+}
+
+TEST_CASE(editor_asset_preview_cache_keeps_original_pixels_for_authoring)
+{
+    const std::filesystem::path source =
+        std::filesystem::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "../../AYRuntime/AYUI/demo/assets/visual_regression/checkerboard.png";
+    CHECK(std::filesystem::is_regular_file(source));
+    if (!std::filesystem::is_regular_file(source)) return;
+    int uploads = 0;
+    int releases = 0;
+    std::uint16_t uploadedWidth = 0u;
+    std::uint16_t uploadedHeight = 0u;
+    EditorAssetPreviewCache cache(
+        [&](std::uint16_t width, std::uint16_t height, const void* pixels) {
+            ++uploads;
+            uploadedWidth = width;
+            uploadedHeight = height;
+            CHECK(pixels != nullptr);
+            return reinterpret_cast<void*>(static_cast<std::uintptr_t>(0x7788));
+        },
+        [&](void* handle) {
+            CHECK(handle == reinterpret_cast<void*>(
+                static_cast<std::uintptr_t>(0x7788)));
+            ++releases;
+        });
+    std::string error;
+    const EditorAuthoringImage first = cache.loadAuthoringImage(
+        source.string(), &error);
+    CHECK(static_cast<bool>(first));
+    CHECK(error.empty());
+    CHECK(first.width == uploadedWidth);
+    CHECK(first.height == uploadedHeight);
+    CHECK(first.bgraPixels != nullptr);
+    CHECK(first.bgraPixels != nullptr
+        && first.bgraPixels->size()
+            == static_cast<size_t>(first.width) * first.height * 4u);
+    const EditorAuthoringImage second = cache.loadAuthoringImage(
+        source.string(), &error);
+    CHECK(second.texture.handle == first.texture.handle);
+    CHECK(second.bgraPixels == first.bgraPixels);
+    CHECK(uploads == 1);
+    cache.clear();
+    CHECK(releases == 1);
 }
 
 TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
@@ -466,7 +579,11 @@ TEST_CASE(editor_asset_browser_folder_navigation_resets_stale_list_scroll)
             session.onMouseMove(click.x, click.y);
             (void)session.onMouseButtonDown(click.x, click.y, 0);
             (void)session.onMouseButtonUp(click.x, click.y, 0);
-            if (count == 0) session.update(0.1f);
+            // Advance TileView's double-click clock without asking the whole
+            // shell to lay out again. This test intentionally constrains the
+            // list below its parent-assigned height to create a stale scroll
+            // offset; a full shell update would undo that test-only size.
+            if (count == 0) list->tick(0.1f);
         }
         session.update(0.0f);
     }

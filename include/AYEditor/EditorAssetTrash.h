@@ -14,6 +14,16 @@ struct EditorAssetTrashResult {
     explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct EditorAssetTrashEntry {
+    std::string originalPath;
+    std::string trashPath;
+};
+
+struct EditorAssetTrashTransaction {
+    std::string id;
+    std::vector<EditorAssetTrashEntry> entries;
+};
+
 // Project-scoped recoverable deletion. Files are moved below
 // .ayeditor/trash and can be restored as one transaction.
 class EditorAssetTrash final {
@@ -24,17 +34,19 @@ public:
     EditorAssetTrashResult moveToTrash(
         const std::vector<EditorAssetRecord>& records);
     EditorAssetTrashResult restoreLast();
-    bool canRestoreLast() const noexcept { return !_last.empty(); }
+    EditorAssetTrashResult restore(const std::string& transactionId);
+    EditorAssetTrashResult purge(const std::string& transactionId);
+    EditorAssetTrashResult purgeAll();
+    const std::vector<EditorAssetTrashTransaction>& transactions() const noexcept {
+        return _transactions;
+    }
+    bool canRestoreLast() const noexcept { return !_transactions.empty(); }
 
 private:
-    struct Entry {
-        std::string originalPath;
-        std::string trashPath;
-    };
+    void reload();
 
     std::string _projectRoot;
-    std::string _lastTransactionPath;
-    std::vector<Entry> _last;
+    std::vector<EditorAssetTrashTransaction> _transactions;
 };
 
 } // namespace ayt::editor

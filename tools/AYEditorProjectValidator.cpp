@@ -33,9 +33,25 @@ bool validate(const std::filesystem::path& projectRoot,
 
 int main(int argc, char** argv)
 {
-    if (argc != 2) {
-        std::cerr << "Usage: AYEditorProjectValidator <project-root>\n";
+    if (argc != 2 && argc != 4) {
+        std::cerr << "Usage: AYEditorProjectValidator <project-root> "
+                     "[--profile headless|full-client|all]\n";
         return 2;
+    }
+    std::string requestedProfile = "all";
+    if (argc == 4) {
+        if (std::string(argv[2]) != "--profile") {
+            std::cerr << "Expected --profile before the profile name.\n";
+            return 2;
+        }
+        requestedProfile = argv[3];
+        if (requestedProfile != "headless"
+            && requestedProfile != "full-client"
+            && requestedProfile != "all") {
+            std::cerr << "Unknown validation profile: "
+                      << requestedProfile << '\n';
+            return 2;
+        }
     }
 
     const std::filesystem::path projectRoot =
@@ -53,9 +69,9 @@ int main(int argc, char** argv)
               << "assets: " << descriptor.assetRoot << '\n'
               << "startup World: " << descriptor.startupWorld << '\n';
 
-    const bool headless = validate(projectRoot,
-        ayt::editor::EditorRuntimeValidationProfile::Headless);
-    const bool fullClient = validate(projectRoot,
-        ayt::editor::EditorRuntimeValidationProfile::FullClient);
+    const bool headless = requestedProfile == "full-client" || validate(
+        projectRoot, ayt::editor::EditorRuntimeValidationProfile::Headless);
+    const bool fullClient = requestedProfile == "headless" || validate(
+        projectRoot, ayt::editor::EditorRuntimeValidationProfile::FullClient);
     return headless && fullClient ? 0 : 1;
 }

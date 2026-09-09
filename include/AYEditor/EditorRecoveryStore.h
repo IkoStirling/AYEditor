@@ -14,6 +14,12 @@ struct EditorRecoveryResult {
     explicit operator bool() const noexcept { return error.empty(); }
 };
 
+struct EditorRecoveryDocument {
+    std::string originalPath;
+    std::string recoveryPath;
+    std::string title;
+};
+
 // Crash marker plus autosave copies. A stale session is rotated into a dated
 // recovery transaction before a new lock is created, so a later clean exit
 // cannot erase the files that the user may still choose to restore.
@@ -30,7 +36,11 @@ public:
     EditorRecoveryResult autosave(
         const std::vector<const IEditorDocument*>& documents);
     bool hasRecoverableSession() const noexcept { return !_previousRoot.empty(); }
+    std::vector<EditorRecoveryDocument> recoverableDocuments() const;
     EditorRecoveryResult restorePrevious();
+    EditorRecoveryResult restorePrevious(
+        const std::vector<std::size_t>& documentIndices);
+    bool discardPrevious(std::string* error = nullptr);
     void markCleanShutdown();
 
 private:
@@ -42,6 +52,7 @@ private:
 
     bool loadPreviousManifest();
     bool writeCurrentManifest(std::string* error);
+    bool writePreviousManifest(std::string* error);
 
     std::string _projectRoot;
     std::string _currentRoot;

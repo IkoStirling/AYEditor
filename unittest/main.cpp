@@ -22,6 +22,7 @@
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
 #include "Test_EditorFramework.cpp"             // unified editor workspace foundation
 #include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
+#include "Test_EditorRecoveryAndTrash.cpp"      // selective recovery + trash browser services
 
 int main(int argc, char* argv[]) {
     // This executable is the host for Editor/Entity integration tests.

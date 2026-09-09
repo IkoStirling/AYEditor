@@ -100,4 +100,26 @@ std::string ImportDialog::showOpenAssetFileDialog(void* ownerWindowHandle)
 #endif
 }
 
+std::string ImportDialog::showOpenImageFileDialog(void* ownerWindowHandle)
+{
+#if !defined(_WIN32)
+    (void)ownerWindowHandle;
+    return std::string{};
+#else
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = static_cast<HWND>(ownerWindowHandle);
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrFilter =
+        "PNG tile sheets (*.png)\0*.png\0"
+        "Images (*.png;*.jpg;*.jpeg;*.tga;*.bmp)\0*.png;*.jpg;*.jpeg;*.tga;*.bmp\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+#endif
+}
+
 } // namespace ayt::editor

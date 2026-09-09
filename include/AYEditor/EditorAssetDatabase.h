@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -88,7 +89,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path);
 // editor IDs; runtime decoding/loading remains AYResource's responsibility.
 class EditorAssetDatabase {
 public:
-    EditorAssetDatabase() = default;
+    EditorAssetDatabase();
     ~EditorAssetDatabase();
 
     EditorAssetDatabase(const EditorAssetDatabase&) = delete;
@@ -103,6 +104,10 @@ public:
     // snapshot was committed (successfully or with lastError populated).
     bool pollScan();
     bool scanPending() const noexcept { return _scanPending; }
+    // Drain filesystem notifications and update only the affected records.
+    // Returns true when the visible catalog changed.
+    bool pollFileChanges();
+    bool loadedFromIndex() const noexcept { return _loadedFromIndex; }
 
     const std::string& projectRoot() const noexcept { return _projectRoot; }
     const std::string& sourceRoot() const noexcept { return _sourceRoot; }
@@ -136,6 +141,7 @@ public:
         std::optional<EditorAssetType> type = std::nullopt) const;
 
 private:
+    struct WatchState;
     struct Snapshot {
         std::vector<EditorAssetRecord> records;
         std::vector<EditorAssetFolder> folders;
@@ -145,6 +151,8 @@ private:
     static Snapshot scanRoots(const std::filesystem::path& sourceRoot,
                               const std::filesystem::path& derivedRoot);
     void applySnapshot(Snapshot snapshot);
+    void rebuildLookupsAndPersist();
+    void refreshDirectoryWatches();
 
     std::string _projectRoot;
     std::string _sourceRoot;
@@ -156,7 +164,9 @@ private:
     std::unordered_map<EditorAssetId, std::size_t> _recordById;
     std::unordered_map<std::string, std::size_t> _recordByLogicalPath;
     std::future<Snapshot> _scanFuture;
+    std::unique_ptr<WatchState> _watchState;
     bool _scanPending = false;
+    bool _loadedFromIndex = false;
 };
 
 } // namespace ayt::editor

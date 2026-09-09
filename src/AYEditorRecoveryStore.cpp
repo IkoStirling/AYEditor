@@ -1,6 +1,7 @@
 #include "AYEditor/EditorRecoveryStore.h"
 
 #include "AYEditor/EditorExtension.h"
+#include "AYEditor/EditorAssetOperations.h"
 
 #include <algorithm>
 #include <chrono>
@@ -187,12 +188,49 @@ bool EditorRecoveryStore::loadPreviousManifest()
 
 EditorRecoveryResult EditorRecoveryStore::restorePrevious()
 {
+    std::vector<std::size_t> all;
+    all.reserve(_previousEntries.size());
+    for (std::size_t index = 0; index < _previousEntries.size(); ++index) {
+        all.push_back(index);
+    }
+    return restorePrevious(all);
+}
+
+std::vector<EditorRecoveryDocument>
+EditorRecoveryStore::recoverableDocuments() const
+{
+    std::vector<EditorRecoveryDocument> result;
+    result.reserve(_previousEntries.size());
+    for (const Entry& entry : _previousEntries) {
+        result.push_back(EditorRecoveryDocument{
+            entry.originalPath,
+            (fs::path(_previousRoot) / "documents" / entry.recoveryName).string(),
+            entry.title});
+    }
+    return result;
+}
+
+EditorRecoveryResult EditorRecoveryStore::restorePrevious(
+    const std::vector<std::size_t>& documentIndices)
+{
     EditorRecoveryResult result;
     if (_previousRoot.empty()) {
         result.error = "There is no crashed editor session to restore.";
         return result;
     }
-    for (const Entry& entry : _previousEntries) {
+    if (documentIndices.empty()) {
+        result.error = "No recovery documents were selected.";
+        return result;
+    }
+    std::vector<std::size_t> selected = documentIndices;
+    std::sort(selected.begin(), selected.end());
+    selected.erase(std::unique(selected.begin(), selected.end()), selected.end());
+    if (selected.back() >= _previousEntries.size()) {
+        result.error = "Recovery document selection is invalid.";
+        return result;
+    }
+    for (const std::size_t index : selected) {
+        const Entry& entry = _previousEntries[index];
         const fs::path recovery = fs::path(_previousRoot) / "documents"
             / entry.recoveryName;
         fs::path destination = entry.originalPath;
@@ -215,12 +253,73 @@ EditorRecoveryResult EditorRecoveryStore::restorePrevious()
             return result;
         }
         ++result.documents;
+        const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        (void)appendEditorAssetOperationHistory(_projectRoot,
+            EditorAssetOperationHistoryEntry{
+                timestamp, "Recovery", recovery.string(),
+                destination.string(), {}});
     }
-    std::error_code ignored;
-    fs::remove_all(_previousRoot, ignored);
+    for (auto it = selected.rbegin(); it != selected.rend(); ++it) {
+        std::error_code ignored;
+        fs::remove(fs::path(_previousRoot) / "documents"
+            / _previousEntries[*it].recoveryName, ignored);
+        _previousEntries.erase(_previousEntries.begin()
+            + static_cast<std::ptrdiff_t>(*it));
+    }
+    if (_previousEntries.empty()) {
+        std::error_code ignored;
+        fs::remove_all(_previousRoot, ignored);
+        _previousRoot.clear();
+    } else {
+        std::string manifestError;
+        if (!writePreviousManifest(&manifestError)) result.error = manifestError;
+    }
+    return result;
+}
+
+bool EditorRecoveryStore::writePreviousManifest(std::string* error)
+{
+    if (error != nullptr) error->clear();
+    if (_previousRoot.empty()) return false;
+    const fs::path path = fs::path(_previousRoot) / "manifest.tsv";
+    const fs::path temporary = path.string() + ".tmp";
+    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    output << "AYEDITOR_RECOVERY\t1\n";
+    for (const Entry& entry : _previousEntries) {
+        output << std::quoted(entry.originalPath) << '\t'
+               << std::quoted(entry.recoveryName) << '\t'
+               << std::quoted(entry.title) << '\n';
+    }
+    output.close();
+    if (!output) {
+        if (error != nullptr) *error = "Could not update recovery manifest.";
+        return false;
+    }
+    std::error_code ioError;
+    fs::rename(temporary, path, ioError);
+    if (ioError) {
+        fs::remove(path, ioError);
+        ioError.clear();
+        fs::rename(temporary, path, ioError);
+    }
+    if (ioError && error != nullptr) *error = ioError.message();
+    return !ioError;
+}
+
+bool EditorRecoveryStore::discardPrevious(std::string* error)
+{
+    if (error != nullptr) error->clear();
+    if (_previousRoot.empty()) return true;
+    std::error_code ioError;
+    fs::remove_all(_previousRoot, ioError);
+    if (ioError) {
+        if (error != nullptr) *error = ioError.message();
+        return false;
+    }
     _previousRoot.clear();
     _previousEntries.clear();
-    return result;
+    return true;
 }
 
 void EditorRecoveryStore::markCleanShutdown()
