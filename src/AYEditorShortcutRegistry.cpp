@@ -137,6 +137,12 @@ std::string EditorShortcutRegistry::commandFor(
             return binding.commandId;
         }
     }
+
+    const EditorShortcutBinding* redo = find("edit.redo");
+    if (redo != nullptr && redo->shortcut == redo->defaultShortcut
+        && keyCode == ayt::ui::UIKey_Z && modifiers == 0x03u) {
+        return "edit.redo";
+    }
     return {};
 }
 

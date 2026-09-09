@@ -270,6 +270,24 @@ void EditorDockViewHost::syncCommandTargetFromFocus()
             return;
         }
     }
+
+    // Canvas-style hosted views keep their own input lease without assigning
+    // AYUI focus to a child widget. Preserve that document's command target
+    // only when no regular widget has focus; an actual focused widget outside
+    // the hosted card must continue to own keyboard command routing.
+    if (focused == nullptr) {
+        EditorHostedView* hosted = inputFocusedHosted();
+        if (hosted != nullptr) {
+            if (_workspace.documents().activeDocumentId()
+                != hosted->documentId) {
+                (void)_workspace.documents().activate(hosted->documentId);
+            }
+            _workspace.commands().setActiveTarget(
+                hosted->view != nullptr
+                    ? hosted->view->commandTarget() : nullptr);
+            return;
+        }
+    }
     _workspace.commands().setActiveTarget(nullptr);
 }
 
@@ -319,8 +337,16 @@ bool EditorDockViewHost::routePointerDown(
     (void)_workspace.documents().activate(hosted->documentId);
     activateHosted(*hosted, false);
     _inputDocumentId = hosted->documentId;
-    return hosted->view->inputTarget()->onPointerDown(
+    // A pointer press anywhere in the hosted input surface transfers command
+    // ownership away from a stale text/list focus. If a focusable child is the
+    // real target, normal AYUI dispatch below will immediately focus it again.
+    if (_uiManager != nullptr
+        && _uiManager->getFocusedWidget() != nullptr) {
+        _uiManager->setFocus(nullptr);
+    }
+    const bool handled = hosted->view->inputTarget()->onPointerDown(
         point.x, point.y, button);
+    return handled;
 }
 
 bool EditorDockViewHost::routePointerMove(float physicalX, float physicalY)

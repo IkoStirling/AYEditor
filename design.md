@@ -1079,6 +1079,23 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   into immutable `EngineAssets/Icons/Tabler/outline`; production code never
   depends on the developer-only AssetRepo path.
 
+### 10.12 Hosted-canvas shortcut ownership
+
+- A hosted canvas can own keyboard input without assigning focus to a regular
+  AYUI widget. When AYUI focus is empty, the Dock host therefore preserves the
+  command target of its input-focused document; a real focused widget inside or
+  outside a hosted view still takes precedence. This keeps Tilemap history
+  commands attached to the canvas selected by pointer/tool input without
+  stealing commands from Inspector, Content Browser or text fields. A press in
+  the hosted input surface explicitly ends stale widget focus before acquiring
+  this lease; normal AYUI dispatch may immediately focus a child field when the
+  field itself was clicked.
+- Editor shortcuts with modifiers are resolved before view-local plain tool
+  keys. Tilemap P/E/F/R/S/H and navigation keys remain local commands, while
+  Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z are handled by the active document command
+  router. Ctrl+Shift+Z is a default redo alias only while Redo keeps its default
+  binding; a user-defined Redo binding replaces both default forms.
+
 ---
 
 ## 11. Decisions log

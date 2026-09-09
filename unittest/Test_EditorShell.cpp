@@ -256,6 +256,68 @@ TEST_CASE(tilemap_tool_launcher_opens_and_refocuses_one_untitled_workspace)
     session.shutdown();
 }
 
+TEST_CASE(tilemap_canvas_shortcuts_undo_and_redo_the_active_document)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK(session.openTilemapEditor());
+    session.update(0.016f);
+
+    Widget* canvas = findWidgetInTree(
+        session.ui().root(), "tilemap_workspace_canvas");
+    auto* layerName = dynamic_cast<TextInput*>(findWidgetInTree(
+        session.ui().root(), "tilemap_workspace_layer_name"));
+    const EditorDocumentRecord* active =
+        session.workspace().documents().active();
+    CHECK(canvas != nullptr);
+    CHECK(layerName != nullptr);
+    CHECK(active != nullptr);
+    if (canvas == nullptr || layerName == nullptr || active == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    const auto bounds = canvas->getWorldBounds();
+    CHECK(bounds.width() > 0.0f);
+    CHECK(bounds.height() > 0.0f);
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+
+    CHECK(session.onKeyDown(UIKey_H));
+    (void)session.onKeyUp(UIKey_H);
+    session.ui().setFocus(layerName);
+    CHECK(session.ui().getFocusedWidget() == layerName);
+    const uint64_t beforePaint = active->document->revision();
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.ui().getFocusedWidget() == nullptr);
+    CHECK(session.onMouseButtonUp(x, y, 0));
+    const uint64_t afterPaint = active->document->revision();
+    CHECK(afterPaint > beforePaint);
+
+    (void)session.onKeyDown(UIKey_Control);
+    CHECK(session.onKeyDown(UIKey_Z));
+    (void)session.onKeyUp(UIKey_Z);
+    (void)session.onKeyUp(UIKey_Control);
+    const uint64_t afterUndo = active->document->revision();
+    CHECK(afterUndo > afterPaint);
+
+    (void)session.onKeyDown(UIKey_Control);
+    (void)session.onKeyDown(UIKey_Shift);
+    CHECK(session.onKeyDown(UIKey_Z));
+    (void)session.onKeyUp(UIKey_Z);
+    (void)session.onKeyUp(UIKey_Shift);
+    (void)session.onKeyUp(UIKey_Control);
+    CHECK(active->document->revision() > afterUndo);
+
+    session.shutdown();
+}
+
 #if defined(_WIN32)
 TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     const std::string layoutPath = resolveEditorShellLayoutPath();

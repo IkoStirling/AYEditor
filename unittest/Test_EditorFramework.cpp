@@ -4,7 +4,9 @@
 #include "AYEditor/EditorDockViewHost.h"
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
+#include "AYUI/MockRenderer.h"
 #include "AYUI/Panel.h"
+#include "AYUI/UIManager.h"
 #include "AYUI/Widget.h"
 
 #include <memory>
@@ -172,6 +174,63 @@ public:
     int executeCount = 0;
 };
 
+struct FrameworkInputCommandProbe {
+    int undoCount = 0;
+    int pointerDownCount = 0;
+};
+
+class FrameworkInputCommandView final
+    : public IEditorView,
+      public IEditorCommandTarget,
+      public IEditorViewInputTarget {
+public:
+    explicit FrameworkInputCommandView(FrameworkInputCommandProbe& probe)
+        : _probe(probe), _root(new ayt::ui::Panel()) {}
+
+    ~FrameworkInputCommandView() override {
+        if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
+    }
+
+    ayt::ui::Widget* rootWidget() noexcept override { return _root; }
+    ayt::ui::Widget* releaseRootWidget() noexcept override {
+        ayt::ui::Widget* root = _root;
+        _root = nullptr;
+        return root;
+    }
+    IEditorCommandTarget* commandTarget() noexcept override { return this; }
+    IEditorViewInputTarget* inputTarget() noexcept override { return this; }
+
+    bool handlesCommand(const std::string& commandId) const override {
+        return commandId == "edit.undo";
+    }
+    bool canExecuteCommand(const std::string& commandId) const override {
+        return handlesCommand(commandId);
+    }
+    bool executeCommand(const std::string& commandId) override {
+        if (!canExecuteCommand(commandId)) return false;
+        ++_probe.undoCount;
+        return true;
+    }
+
+    bool onPointerDown(float, float, int) override {
+        ++_probe.pointerDownCount;
+        return true;
+    }
+    bool onPointerMove(float, float) override { return false; }
+    bool onPointerUp(float, float, int) override { return false; }
+    bool onWheel(float, float, float) override { return false; }
+    bool onKeyDown(int) override { return false; }
+    void onKeyUp(int) override {}
+    bool hasPointerCapture() const noexcept override { return false; }
+    ayt::ui::UiCursorHint cursorHint(float, float) const override {
+        return ayt::ui::UiCursorHint::Default;
+    }
+
+private:
+    FrameworkInputCommandProbe& _probe;
+    ayt::ui::Widget* _root = nullptr;
+};
+
 } // namespace
 
 TEST_SUITE(AYEditor_Framework)
@@ -312,6 +371,42 @@ TEST_CASE(editor_dock_view_host_owns_view_activation_and_dirty_close)
     CHECK(dock.findCard("card_hosted_test") == nullptr);
     CHECK(probe.deactivated == 1);
     CHECK(probe.destroyed == 1);
+}
+
+TEST_CASE(editor_dock_view_host_preserves_input_command_target_without_widget_focus)
+{
+    EditorWorkspace workspace;
+    FrameworkInputCommandProbe probe;
+    EditorDescriptor descriptor = makeFrameworkDescriptor(
+        "input-command-hosted", {".input-command"});
+    descriptor.createView =
+        [&probe](const std::shared_ptr<IEditorDocument>&,
+                 IEditorHostServices&) -> std::unique_ptr<IEditorView> {
+            return std::make_unique<FrameworkInputCommandView>(probe);
+        };
+    CHECK(workspace.registry().registerEditor(std::move(descriptor)));
+
+    ayt::ui::MockRenderer backend;
+    ayt::ui::UIManager ui;
+    ui.initialize(&backend);
+    ayt::ui::DockArea dock;
+    FrameworkHostServices services(workspace);
+    EditorDockViewHost host(workspace, dock, services, &ui);
+
+    const EditorDockOpenResult opened = host.open(
+        EditorOpenRequest{"Assets/Test.input-command"});
+    CHECK(opened);
+    CHECK(ui.getFocusedWidget() == nullptr);
+
+    // A canvas view owns an input lease but intentionally has no AYUI
+    // FocusableWidget. Synchronizing focus must not discard its command target.
+    host.syncCommandTargetFromFocus();
+    CHECK(workspace.commands().activeTarget() != nullptr);
+    CHECK(workspace.commands().execute("edit.undo"));
+    CHECK(probe.undoCount == 1);
+
+    host.shutdown();
+    ui.shutdown();
 }
 
 TEST_CASE(editor_command_history_merges_transactions_and_save_cursor)

@@ -1810,10 +1810,6 @@ bool EditorSession::onKeyDown(int keyCode)
     if (keyCode == ayt::ui::UIKey_Control) {
         _controlDown = true;
     }
-    if (_dockViewHost != nullptr
-        && _dockViewHost->routeKeyDown(keyCode)) {
-        return true;
-    }
     const ayt::ui::Widget* focused = _ui.getFocusedWidget();
     const bool textEditing = focused != nullptr && focused->isTextEditingWidget();
     if (_dockViewHost != nullptr) {
@@ -1871,6 +1867,10 @@ bool EditorSession::onKeyDown(int keyCode)
     }
     if (!textEditing && command == "play.stop") {
         stopPlay();
+        return true;
+    }
+    if (!textEditing && modifiers == 0u && _dockViewHost != nullptr
+        && _dockViewHost->routeKeyDown(keyCode)) {
         return true;
     }
     return _ui.onKeyDown(keyCode);

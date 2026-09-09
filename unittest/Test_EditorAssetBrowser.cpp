@@ -272,11 +272,19 @@ TEST_CASE(editor_shortcut_registry_loads_overrides_and_rejects_conflicts)
     EditorShortcutRegistry& shortcuts = EditorShortcutRegistry::instance();
     shortcuts.resetToDefaults();
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_F5, 0) == "play.toggle");
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_Z, 0x02u) == "edit.undo");
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_Y, 0x02u) == "edit.redo");
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_Z, 0x03u) == "edit.redo");
     std::string error;
     CHECK(shortcuts.setShortcut("play.toggle", L"Ctrl+P", &error));
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_P, 0x02u) == "play.toggle");
     CHECK_FALSE(shortcuts.setShortcut("play.pause", L"Ctrl+P", &error));
     CHECK(error.find("conflict") != std::string::npos);
+
+    CHECK(shortcuts.setShortcut("edit.redo", L"Alt+Y", &error));
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_Y, 0x04u) == "edit.redo");
+    CHECK(shortcuts.commandFor(ayt::ui::UIKey_Z, 0x03u).empty());
+    shortcuts.resetToDefaults();
 }
 
 TEST_CASE(editor_asset_preview_cache_builds_semantic_mesh_thumbnail_once)
