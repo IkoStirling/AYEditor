@@ -1063,7 +1063,7 @@ rendering primitives:
 | 2026-09-08 | Designer 工具箱扩展到 Image、集合/树、Tab、Grid/Scroll 和 Modal；加入原生图片选择、GDI 实图预览，以及可往返的 controller/event 交互契约。 |
 | 2026-09-08 | Designer 保存/重开验证升级为对象级结构检查；生产 Loader 对称重建 Tab/Modal/Dialog payload 与深层 ID，并修复未挂载 Tab page 的重复 ID。 |
 | 2026-09-09 | Tilemap 作者保存与运行时烘焙结果分离；共享 `AY2DEditorCore` 的 Tilemap 文档页由摘要占位升级为可绘制、可取样、可缩放平移、可管理图层和 Tile 属性的 AYEditor 工作区。 |
-| 2026-09-09 | Tilemap 主编辑器图集工作流统一走宿主 authoring-image cache；原图选砖、模态切片和画布纹理共享 AY2D 的切片规划，AYEditor Source ABI 升至 3。 |
+| 2026-09-09 | Tilemap 主编辑器图集工作流统一走宿主 authoring-image cache；原图选砖、模态切片和画布纹理共享 AY2D 的切片规划；随后 Timeline 公共编辑契约加入，AYEditor Source ABI 最终升至 4。 |
 
 ---
 
