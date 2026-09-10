@@ -1114,6 +1114,23 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   complete cell mask in one history gesture, the global RGBA shadow color is
   unchanged, and runtime dynamic lights remain a separate rendering feature.
 
+### 10.14 Tilemap spatial orientation and modal surfaces
+
+- Every blocking Tilemap dialog owns an explicitly styled opaque content
+  surface. The dimmer lowers the rest of the editor, while the dialog plate
+  itself must fully occlude the workspace below it; a layout-only transparent
+  `VBox` is not a valid modal root.
+- Atlas pixels and source rows use the conventional top-left origin with Y
+  increasing downward. Tilemap cells use world-space Y increasing upward.
+  Creating a Stamp from a source rectangle therefore negates its row delta:
+  the source rectangle's top-left cell remains the placement anchor and rows
+  below it remain below it after placement instead of being vertically
+  reordered.
+- `Frame Map` means fit the complete map bounds into the canvas and center the
+  camera; `Fit Sheet` performs the equivalent reset for the Source Sheet.
+  Tooltips and labels use those explicit terms instead of the ambiguous bare
+  `Frame` name.
+
 ---
 
 ## 11. Decisions log

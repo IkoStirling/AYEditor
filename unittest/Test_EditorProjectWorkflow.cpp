@@ -11,11 +11,13 @@
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorSelectionContext.h"
 #include "AYEditor/EditorWorkspace.h"
+#include "../src/AYEditorTileAtlasPicker.h"
 
 #include <AY2DEditor/TilemapEditorModel.h>
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
+#include <AYUI/Modal.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
@@ -91,10 +93,16 @@ public:
         statusText = text;
     }
     ayt::ui::UIManager* uiManager() noexcept override { return ui; }
+    EditorAuthoringImage loadAuthoringImage(
+        const std::string&, std::string* error = nullptr) override {
+        if (error != nullptr) error->clear();
+        return authoringImage;
+    }
 
     int repaintRequests = 0;
     std::wstring statusText;
     ayt::ui::UIManager* ui = nullptr;
+    EditorAuthoringImage authoringImage;
 
 private:
     EditorWorkspace& _workspace;
@@ -607,6 +615,8 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_import_sheet") != nullptr);
     CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_fit_sheet") != nullptr);
+    CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_stamp_selector") != nullptr);
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_stamp_select") != nullptr);
@@ -727,6 +737,11 @@ TEST_CASE(tilemap_import_modal_uses_owning_ui_and_centers_in_client)
     if (modal != nullptr) {
         auto activeScope = ayt::ui::UIManager::pushActive(&primary);
         primary.update(0.17f);
+        auto* importModal = dynamic_cast<ayt::ui::Modal*>(modal);
+        CHECK(importModal != nullptr);
+        CHECK(importModal != nullptr && importModal->getContent() != nullptr);
+        CHECK(importModal != nullptr && importModal->getContent() != nullptr
+              && importModal->getContent()->getStyleId() == "panel_default");
         CHECK(modal->getSize().x == 930.0f);
         CHECK(modal->getSize().y == 650.0f);
         CHECK(modal->getPosition().x == 135.0f);
@@ -791,6 +806,11 @@ TEST_CASE(tilemap_advanced_shadow_brush_is_spatial_and_centered)
     if (modal != nullptr) {
         auto activeScope = ayt::ui::UIManager::pushActive(&primary);
         primary.update(0.17f);
+        auto* shadowModal = dynamic_cast<ayt::ui::Modal*>(modal);
+        CHECK(shadowModal != nullptr);
+        CHECK(shadowModal != nullptr && shadowModal->getContent() != nullptr);
+        CHECK(shadowModal != nullptr && shadowModal->getContent() != nullptr
+              && shadowModal->getContent()->getStyleId() == "panel_default");
         CHECK(modal->getSize().x == 360.0f);
         CHECK(modal->getSize().y == 278.0f);
         CHECK(modal->getPosition().x == 420.0f);
@@ -839,6 +859,140 @@ TEST_CASE(tilemap_advanced_shadow_brush_is_spatial_and_centered)
     CHECK(full != nullptr);
     CHECK(full != nullptr && full->getAccessibilityLabel().find(L"active")
           != std::wstring::npos);
+
+    view->prepareForUiShutdown();
+    view.reset();
+    primary.shutdown();
+}
+
+TEST_CASE(tilemap_stamp_selection_preserves_top_to_bottom_source_order)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("stamp_orientation")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto sourcePath = cleanup.root
+        / "Assets/maps/stamp.aytilemap.json";
+    std::filesystem::create_directories(sourcePath.parent_path());
+
+    ayt::ay2d::editor::TilemapEditorModel authored;
+    CHECK(authored.newDocument(4u, 4u, 16u, 16u, 0u));
+    ayt::ay2d::editor::TileAtlasSource atlas;
+    atlas.atlasId = 1u;
+    atlas.name = "orientation";
+    atlas.sourcePath = "sheet.png";
+    atlas.imageWidth = 32u;
+    atlas.imageHeight = 32u;
+    atlas.tileWidth = 16u;
+    atlas.tileHeight = 16u;
+    atlas.columns = 2u;
+    atlas.rows = 2u;
+    CHECK(authored.importTileAtlas(atlas, "Tiles/Orientation", {
+        {2u, "TopLeft", 0u, 0u, 16u, 16u, 0u},
+        {3u, "TopRight", 16u, 0u, 16u, 16u, 0u},
+        {4u, "BottomLeft", 0u, 16u, 16u, 16u, 0u},
+        {5u, "BottomRight", 16u, 16u, 16u, 16u, 0u}}));
+    CHECK(authored.save(sourcePath.string()));
+
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+    EditorOpenRequest request;
+    request.resourcePath = sourcePath.string();
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+
+    ayt::ui::UIManager primary;
+    primary.initialize(nullptr);
+    primary.setClientSize(1200.0f, 800.0f);
+    EditorWorkspace workspace;
+    TilemapTestHostServices host(workspace);
+    host.ui = &primary;
+    host.authoringImage.texture.handle = reinterpret_cast<void*>(
+        static_cast<std::uintptr_t>(0x1234));
+    host.authoringImage.texture.width = 32;
+    host.authoringImage.texture.height = 32;
+    host.authoringImage.width = 32u;
+    host.authoringImage.height = 32u;
+    host.authoringImage.bgraPixels =
+        std::make_shared<const std::vector<uint8_t>>(32u * 32u * 4u, 0xffu);
+    auto view = descriptor->createView(document, host);
+    CHECK(view != nullptr);
+    if (view == nullptr) {
+        primary.shutdown();
+        return;
+    }
+    view->rootWidget()->setSize({1000.0f, 680.0f});
+    view->rootWidget()->performLayout();
+
+    auto* select = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_stamp_select"));
+    auto* picker = dynamic_cast<EditorTileAtlasPicker*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_source_sheet"));
+    CHECK(select != nullptr);
+    CHECK(picker != nullptr);
+    if (select != nullptr && picker != nullptr) {
+        const ayt::math::FRectangle selectBounds = select->getWorldBounds();
+        const ayt::math::FVector2 selectPoint(
+            (selectBounds.minX + selectBounds.maxX) * 0.5f,
+            (selectBounds.minY + selectBounds.maxY) * 0.5f);
+        const ayt::ui::UIMouseEvent selectEvent(selectPoint, 0);
+        select->onMouseMove(selectEvent);
+        select->onMouseButtonDown(selectEvent);
+        select->onMouseButtonUp(selectEvent);
+
+        const ayt::math::FRectangle bounds = picker->getWorldBounds();
+        const float side = std::min(bounds.width(), bounds.height()) - 12.0f;
+        const ayt::math::FVector2 center(
+            (bounds.minX + bounds.maxX) * 0.5f,
+            (bounds.minY + bounds.maxY) * 0.5f);
+        const ayt::math::FVector2 topLeft(
+            center.x - side * 0.5f + 1.0f,
+            center.y - side * 0.5f + 1.0f);
+        const ayt::math::FVector2 bottomRight(
+            center.x + side * 0.5f - 1.0f,
+            center.y + side * 0.5f - 1.0f);
+        CHECK(picker->onMouseButtonDown(
+            ayt::ui::UIMouseEvent(topLeft, 0)));
+        CHECK(picker->onMouseMove(
+            ayt::ui::UIMouseEvent(bottomRight, 0)));
+        CHECK(picker->onMouseButtonUp(
+            ayt::ui::UIMouseEvent(bottomRight, 0)));
+    }
+
+    CHECK(document->save(&error));
+    CHECK(error.empty());
+    ayt::ay2d::editor::TilemapDocument reloaded;
+    CHECK(reloaded.load(sourcePath.string(), &error));
+    const auto* stamp = reloaded.tileStamp(1u);
+    CHECK(stamp != nullptr);
+    if (stamp != nullptr) {
+        CHECK(stamp->cells.size() == 4u);
+        const auto findCell = [stamp](uint32_t tileId) {
+            return std::find_if(stamp->cells.begin(), stamp->cells.end(),
+                [tileId](const auto& cell) { return cell.tileId == tileId; });
+        };
+        const auto topLeft = findCell(2u);
+        const auto topRight = findCell(3u);
+        const auto bottomLeft = findCell(4u);
+        const auto bottomRight = findCell(5u);
+        CHECK(topLeft != stamp->cells.end());
+        CHECK(topRight != stamp->cells.end());
+        CHECK(bottomLeft != stamp->cells.end());
+        CHECK(bottomRight != stamp->cells.end());
+        CHECK(topLeft != stamp->cells.end() && topLeft->offsetCol == 0
+              && topLeft->offsetRow == 0);
+        CHECK(topRight != stamp->cells.end() && topRight->offsetCol == 1
+              && topRight->offsetRow == 0);
+        CHECK(bottomLeft != stamp->cells.end() && bottomLeft->offsetCol == 0
+              && bottomLeft->offsetRow == -1);
+        CHECK(bottomRight != stamp->cells.end() && bottomRight->offsetCol == 1
+              && bottomRight->offsetRow == -1);
+    }
 
     view->prepareForUiShutdown();
     view.reset();

@@ -492,7 +492,7 @@ public:
             });
         _frame = addIconButton(
             toolbar, "tilemap_tool_frame", "frame.svg", L"Home",
-            L"Frame map (Home)", [this]() {
+            L"Fit entire map in canvas (Home)", [this]() {
                 _canvas->frameDocument();
                 _host.requestRepaint();
             });
@@ -552,10 +552,10 @@ public:
         addButton(sourceButtons, L"Import Sheet…", 142.0f, [this]() {
             openAtlasImport();
         })->setId("tilemap_workspace_import_sheet");
-        addButton(sourceButtons, L"Frame", 70.0f, [this]() {
+        addButton(sourceButtons, L"Fit Sheet", 80.0f, [this]() {
             if (_atlasPicker != nullptr) _atlasPicker->frameAtlas();
             _host.requestRepaint();
-        });
+        })->setId("tilemap_workspace_fit_sheet");
         assets->addWidget(sourceButtons, 29.0f);
         auto* stampRow = new ayt::ui::HBox();
         stampRow->setSpacing(4.0f);
@@ -1118,6 +1118,7 @@ private:
         _shadowModal->setDismissOnDimmerClick(false);
 
         auto* root = new ayt::ui::VBox();
+        root->setStyleId("panel_default");
         root->setPadding(16.0f, 14.0f, 16.0f, 14.0f);
         root->setSpacing(8.0f);
         root->addWidget(makeLabel(L"Advanced Shadow Brush", 17), 28.0f);
@@ -1241,6 +1242,7 @@ private:
         _importModal->setDismissOnDimmerClick(false);
 
         auto* root = new ayt::ui::VBox();
+        root->setStyleId("panel_default");
         root->setPadding(14.0f, 12.0f, 14.0f, 12.0f);
         root->setSpacing(8.0f);
         root->addWidget(makeLabel(L"Import Tile Sheet", 17), 28.0f);
@@ -1731,7 +1733,10 @@ private:
             const uint32_t row = (asset.sourceY - source->marginY) / pitchY;
             stamp.cells.push_back({
                 static_cast<int32_t>(column) - static_cast<int32_t>(originColumn),
-                static_cast<int32_t>(row) - static_cast<int32_t>(originRow),
+                // Source-sheet Y grows downward while Tilemap world Y grows
+                // upward. Keep the selected top-left cell as the anchor and
+                // preserve the source block's visible row order.
+                static_cast<int32_t>(originRow) - static_cast<int32_t>(row),
                 tileId});
         }
         if (stamp.stampId == 0u || stamp.cells.size() < 2u) {
