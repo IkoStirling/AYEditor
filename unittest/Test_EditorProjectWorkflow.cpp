@@ -16,6 +16,7 @@
 
 #include <AY2DEditor/TilemapEditorModel.h>
 #include <AYResource/assetsImpl/Audio.h>
+#include <AYResource/assetsImpl/TilemapAsset.h>
 #include <AYScene.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
@@ -602,7 +603,7 @@ TEST_CASE(audio_timeline_edits_waveform_clips_and_keyframes_with_undo_save)
         && reloadedTimeline->timelineClips().size() == 2u);
 }
 
-TEST_CASE(tilemap_author_source_save_succeeds_when_runtime_v2_cannot_cook_it)
+TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
 {
     ProjectWorkflowCleanup cleanup{projectWorkflowRoot("rich_tilemap_save")};
     std::error_code ignored;
@@ -648,8 +649,21 @@ TEST_CASE(tilemap_author_source_save_succeeds_when_runtime_v2_cannot_cook_it)
     CHECK(error.empty());
     CHECK_FALSE(document->isDirty());
     CHECK(std::filesystem::is_regular_file(source));
-    CHECK_FALSE(std::filesystem::exists(
-        cleanup.root / "Assets/tilemaps/rich.aytilemap"));
+    const auto cookedPath = cleanup.root / "Assets/tilemaps/rich.aytilemap";
+    CHECK(std::filesystem::is_regular_file(cookedPath));
+    std::ifstream cookedFile(cookedPath, std::ios::binary | std::ios::ate);
+    CHECK(cookedFile.is_open());
+    const std::streamsize cookedSize = cookedFile.tellg();
+    cookedFile.seekg(0, std::ios::beg);
+    std::vector<ayt::math::UInt8> cookedBytes(
+        static_cast<size_t>(cookedSize));
+    CHECK(cookedFile.read(reinterpret_cast<char*>(cookedBytes.data()),
+                          cookedSize).good());
+    ayt::resource::TilemapAsset runtime;
+    CHECK(runtime.loadFromBinary(cookedBytes.data(), cookedBytes.size()));
+    CHECK(runtime.getLayerCount() == 2u);
+    CHECK(runtime.getAtlasCount() == 1u);
+    CHECK(runtime.getVisualCount() == 1u);
 }
 
 TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)

@@ -961,9 +961,9 @@ rendering primitives:
 ### 10.6 Tilemap workspace first integration
 
 - Tilemap 的作者文件保存与运行时烘焙是两个不同结果。只要
-  `.aytilemap.json` 已成功落盘，文档保存就成功并清除 dirty；运行时格式暂时无法表达的多图层、
-  图集切片或逐 Tile tint 只产生明确的“作者数据已保存、运行时资源未更新”状态，不能把已经
-  完成的作者保存误报为失败，也不能在关闭文档时阻止用户离开。
+  `.aytilemap.json` 已成功落盘，文档保存就成功并清除 dirty；位于项目 `Assets` 下时随后
+  自动烘焙 v3 `.aytilemap`。v3 完整承载多图层、精确图集切片、逐 Tile tint 与语义阴影；
+  cook 失败仍以独立 notice 报告，不能把已经完成的作者保存误报为失败，也不能阻止关闭。
 - `TilemapWorkspaceDocument` 继续唯一持有共享 `AY2DEditorCore::TilemapEditorModel`。AYEditor View
   只负责控件、输入和状态映射，不复制 paint/fill/terrain/history/serialization 规则。
 - 首次集成把原尺寸摘要页替换成可操作的三栏工作区：Tile 列表、中心正交画布、图层/Tile

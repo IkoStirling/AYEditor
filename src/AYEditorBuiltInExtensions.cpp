@@ -70,24 +70,6 @@ struct TilemapSaveResult {
     std::string notice;
 };
 
-bool runtimeV2CanRepresent(
-    const ayt::ay2d::editor::TilemapDocument& document) noexcept
-{
-    if (document.layerCount() != 1u || !document.tileAtlases().empty()
-        || document.shadowColor() != 0x00000080u
-        || std::any_of(document.shadowMasks().begin(),
-                       document.shadowMasks().end(),
-                       [](uint8_t mask) { return mask != 0u; })) {
-        return false;
-    }
-    return std::none_of(
-        document.tileAssets().begin(), document.tileAssets().end(),
-        [](const auto& pair) {
-            return pair.second.atlasId != 0u
-                || pair.second.tintRgba != 0xffffffffu;
-        });
-}
-
 std::wstring rgbaText(uint32_t rgba)
 {
     wchar_t buffer[11]{};
@@ -102,13 +84,6 @@ TilemapSaveResult saveTilemapSourceAndTryCook(
     TilemapSaveResult result;
     if (!model.save(path, error)) return result;
     result.sourceSaved = true;
-    if (!runtimeV2CanRepresent(model.document())) {
-        result.notice = "Authoring source saved. Runtime v2 was not updated "
-            "because it cannot represent layers, atlas regions, tile tint, "
-            "or semantic shadows.";
-        if (error != nullptr) error->clear();
-        return result;
-    }
     const std::filesystem::path source =
         std::filesystem::absolute(path).lexically_normal();
     std::filesystem::path assetRoot;
