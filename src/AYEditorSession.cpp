@@ -1018,6 +1018,7 @@ void EditorSession::shutdown() {
         _tilemapDockViewHost->releaseAfterUiShutdown();
         _tilemapDockViewHost.reset();
     }
+    _tilemapWindowFrame = nullptr;
     _tilemapWindowDock = nullptr;
     _tilemapWindowHandle = nullptr;
     _tilemapWindowUiPrepared = false;
@@ -4090,6 +4091,23 @@ bool EditorSession::ensureTilemapWindow()
     cfg.y = 82;
     cfg.width = 1280;
     cfg.height = 800;
+
+    // The dedicated tool owns editor-painted chrome just like a promoted
+    // DockCard, while its content remains a private DockArea. This separates
+    // window movement (outer frame title) from document movement (inner
+    // tabs), and gives future cross-tool-window tab merging a common DockArea
+    // boundary instead of tying the surface to native Win32 chrome.
+    auto windowFrame = std::make_unique<ayt::ui::DockCard>();
+    windowFrame->setId("tilemap_window_frame");
+    windowFrame->setTitle(L"2D Tilemap Editor");
+    windowFrame->setHeaderHeight(28.0f);
+    windowFrame->setClosable(true);
+    windowFrame->setFloatable(true);
+    auto* dock = new ayt::ui::DockArea();
+    dock->setId("tilemap_window_dock");
+    windowFrame->setContent(dock);
+    cfg.card = windowFrame.get();
+    cfg.redockable = false;
     cfg.beforeMouseButton = [this](
         ayt::ui::UIManager&, float x, float y,
         int button, bool pressed) {
@@ -4140,6 +4158,7 @@ bool EditorSession::ensureTilemapWindow()
             _tilemapDockViewHost->prepareForUiShutdown();
             _tilemapWindowUiPrepared = true;
         }
+        _tilemapWindowFrame = nullptr;
         _tilemapWindowDock = nullptr;
         _tilemapWindowHandle = nullptr;
     };
@@ -4150,6 +4169,8 @@ bool EditorSession::ensureTilemapWindow()
             L"2D Tilemap Editor window creation failed", true);
         return false;
     }
+    // The child UI root now owns the outer frame and its DockArea content.
+    windowFrame.release();
     ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
     if (childUi == nullptr || childUi->root() == nullptr) {
         _childWindows->closeChildWindow(handle);
@@ -4157,16 +4178,8 @@ bool EditorSession::ensureTilemapWindow()
         return false;
     }
 
-    auto* dock = new ayt::ui::DockArea();
-    dock->setId("tilemap_window_dock");
-    dock->setLayoutPositionManaged(false);
-    dock->setLayoutSizeManaged(false);
-    childUi->root()->addChild(dock);
-    ayt::ui::AnchorLayout fill;
-    fill.anchorMax = {1.0f, 1.0f};
-    dock->setAnchorLayout(fill);
-
     _tilemapWindowHandle = handle;
+    _tilemapWindowFrame = cfg.card;
     _tilemapWindowDock = dock;
     _tilemapWindowUiPrepared = false;
     _tilemapWindowClosePending = false;
@@ -4225,6 +4238,7 @@ void EditorSession::syncTilemapWindowLifetime()
         _tilemapDockViewHost->releaseAfterUiShutdown();
     }
     _tilemapDockViewHost.reset();
+    _tilemapWindowFrame = nullptr;
     _tilemapWindowDock = nullptr;
     _tilemapWindowHandle = nullptr;
     _tilemapWindowUiPrepared = false;
@@ -4330,6 +4344,10 @@ void EditorSession::refreshTilemapWindowTitle()
         }
     }
     if (title == _tilemapWindowTitle) return;
+    if (_tilemapWindowFrame != nullptr) {
+        _tilemapWindowFrame->setTitle(ayt::ui::decodeUtf8Text(title));
+        _tilemapWindowFrame->markDirty();
+    }
     if (_childWindows->setChildWindowTitle(_tilemapWindowHandle, title)) {
         _tilemapWindowTitle = std::move(title);
     }

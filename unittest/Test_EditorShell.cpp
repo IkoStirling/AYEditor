@@ -371,8 +371,21 @@ TEST_CASE(tilemap_editor_uses_one_resizable_owned_tool_window)
     CHECK(::GetWindow(static_cast<HWND>(handle), GW_OWNER)
           == static_cast<HWND>(windowManager.getWindowHandle()));
     if (childUi != nullptr) {
-        CHECK(dynamic_cast<DockArea*>(findWidgetInTree(
-            childUi->root(), "tilemap_window_dock")) != nullptr);
+        auto* windowFrame = children->entries().front().card;
+        CHECK(windowFrame != nullptr);
+        CHECK(windowFrame == nullptr
+              || windowFrame->getId() == "tilemap_window_frame");
+        CHECK(children->entries().front().card == windowFrame);
+        CHECK_FALSE(children->entries().front().redockable);
+        CHECK(windowFrame == nullptr || windowFrame->showMinimizeButton());
+        CHECK(windowFrame == nullptr || windowFrame->showMaximizeButton());
+        const LONG_PTR childStyle = ::GetWindowLongPtrW(
+            static_cast<HWND>(handle), GWL_STYLE);
+        CHECK((childStyle & WS_CAPTION) == 0);
+
+        auto* tilemapDock = dynamic_cast<DockArea*>(findWidgetInTree(
+            childUi->root(), "tilemap_window_dock"));
+        CHECK(tilemapDock != nullptr);
         CHECK(dynamic_cast<ToolBar*>(findWidgetInTree(
             childUi->root(), "tilemap_workspace_toolbar")) != nullptr);
         CHECK(dynamic_cast<ScrollView*>(findWidgetInTree(
@@ -386,9 +399,53 @@ TEST_CASE(tilemap_editor_uses_one_resizable_owned_tool_window)
         CHECK(findWidgetInTree(
             childUi->root(), "tilemap_workspace_canvas") != nullptr);
 
+        // The outer frame title is the only HWND movement handle. Pressing
+        // an inner document tab begins a DockCard drag but must not arm the
+        // child-window move path.
+        auto* documentCard = tilemapDock != nullptr
+            ? tilemapDock->findCard("card_tilemap_workspace") : nullptr;
+        auto* tabGroup = documentCard != nullptr
+            ? dynamic_cast<DockTabGroup*>(documentCard->getParent()) : nullptr;
+        CHECK(documentCard != nullptr);
+        CHECK(tabGroup != nullptr);
+        if (documentCard != nullptr && tabGroup != nullptr) {
+            const ayt::math::FRectangle tab = tabGroup->getTabRectWorld(0u);
+            const int tabX = static_cast<int>(tab.minX + 12.0f);
+            const int tabY = static_cast<int>((tab.minY + tab.maxY) * 0.5f);
+            RECT beforeDrag{};
+            RECT afterDrag{};
+            CHECK(::GetWindowRect(static_cast<HWND>(handle), &beforeDrag));
+            ::SendMessageW(static_cast<HWND>(handle), WM_LBUTTONDOWN,
+                           MK_LBUTTON, MAKELPARAM(tabX, tabY));
+            CHECK(childUi->isDragging());
+            CHECK(childUi->getDragSource() == documentCard);
+            CHECK_FALSE(children->entries().front().dragMoveActive);
+            ::SendMessageW(static_cast<HWND>(handle), WM_MOUSEMOVE,
+                           MK_LBUTTON, MAKELPARAM(tabX + 48, tabY));
+            CHECK(::GetWindowRect(static_cast<HWND>(handle), &afterDrag));
+            CHECK(beforeDrag.left == afterDrag.left);
+            CHECK(beforeDrag.top == afterDrag.top);
+            ::SendMessageW(static_cast<HWND>(handle), WM_LBUTTONUP, 0,
+                           MAKELPARAM(tabX + 48, tabY));
+        }
+
+        if (windowFrame != nullptr) {
+            ::SendMessageW(static_cast<HWND>(handle), WM_LBUTTONDOWN,
+                           MK_LBUTTON, MAKELPARAM(100, 14));
+            CHECK(childUi->isDragging());
+            CHECK(childUi->getDragSource() == windowFrame);
+            CHECK(children->entries().front().dragMoveActive);
+            ::SendMessageW(static_cast<HWND>(handle), WM_LBUTTONUP, 0,
+                           MAKELPARAM(100, 14));
+            CHECK_FALSE(children->entries().front().dragMoveActive);
+        }
+
         // A narrow resize may temporarily compress the requested sidebar
         // widths. Growing the tool window must restore those widths.
         childUi->setClientSize(760.0f, 500.0f);
+        if (windowFrame != nullptr) {
+            windowFrame->setSize({760.0f, 500.0f});
+        }
         childUi->layout();
         Widget* assetsScroll = findWidgetInTree(
             childUi->root(), "tilemap_workspace_assets_scroll");
@@ -398,6 +455,9 @@ TEST_CASE(tilemap_editor_uses_one_resizable_owned_tool_window)
         CHECK(narrowAssetsWidth < 300.0f);
 
         childUi->setClientSize(1280.0f, 800.0f);
+        if (windowFrame != nullptr) {
+            windowFrame->setSize({1280.0f, 800.0f});
+        }
         childUi->layout();
         CHECK(assetsScroll != nullptr
               && assetsScroll->getWidth() > narrowAssetsWidth + 20.0f);

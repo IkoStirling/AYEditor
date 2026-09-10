@@ -1156,6 +1156,17 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   clipping commands. Side-pane vertical scrolling and toolbar horizontal
   overflow are independent, so a small window never makes commands or lower
   Inspector fields permanently unreachable.
+- The dedicated Tilemap host is borderless and uses an outer AYUI `DockCard`
+  as editor-painted window chrome. Its title strip owns minimize,
+  maximize/restore and close; the private `DockArea` lives inside that frame.
+  Window movement is armed only when the drag source is this outer frame.
+  Dragging an inner Tilemap document tab therefore remains a Dock operation
+  and can never move the native window.
+- The outer-frame/private-`DockArea` split is also the compatibility boundary
+  for later tool-window joining: another independent editor window can expose
+  its DockArea as a cross-window drop target without confusing a document tab
+  with the OS-window movement handle. Cross-window transfer is deliberately a
+  later phase; this change establishes the host shape and fixes local input.
 
 ---
 
@@ -1196,6 +1207,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-09 | Tilemap 主编辑器图集工作流统一走宿主 authoring-image cache；原图选砖、模态切片和画布纹理共享 AY2D 的切片规划；随后 Timeline 公共编辑契约加入，AYEditor Source ABI 最终升至 4。 |
 | 2026-09-09 | Tilemap 从仅资源触发的文档扩展补齐为主壳层工具入口：Tools 菜单和第二行网格图标打开同一未命名 Center Dock 工作区，重复点击只聚焦现有页。 |
 | 2026-09-10 | Tilemap 改为 `EditorChildWindowManager` 管理的独立非模态工具窗；内部复用 `EditorDockViewHost` 文档页签，并以左右 Splitter、侧栏 ScrollView、工具栏横向溢出和可逆窄窗压缩保证缩放后布局恢复。 |
+| 2026-09-10 | Tilemap 独立窗改用无原生标题栏的 AYUI 自绘外框与最小化/最大化/关闭按钮；窗口移动只接受外框标题拖拽，内部文档标签继续由 Dock 系统处理，并以私有 DockArea 作为后续跨窗口合并边界。 |
 
 ---
 

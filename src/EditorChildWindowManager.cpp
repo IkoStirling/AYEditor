@@ -294,6 +294,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     e.handle     = h;
     e.ui         = std::make_shared<ayt::ui::UIManager>();
     e.layoutPath = cfg.layoutPath;
+    e.redockable = cfg.card != nullptr && cfg.redockable;
     e.beforeClose = cfg.beforeClose;
     e.beforeCloseRequested = cfg.beforeCloseRequested;
 #if defined(_WIN32)
@@ -386,7 +387,14 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         }
         if (pressed) {
             const bool handled = ui->onMouseButtonDown(x, y, button);
-            if (button == 0 && ui->isDragging()) {
+            // Only the outer host card is allowed to move its HWND. A
+            // dedicated tool can contain its own DockArea; dragging one of
+            // those document tabs is a different AYUI drag session and must
+            // stay entirely inside the dock system.
+            Entry* entry = this->findEntryByHandle(h);
+            if (button == 0 && entry != nullptr && entry->card != nullptr
+                && ui->isDragging()
+                && ui->getDragSource() == entry->card) {
                 this->beginDragMove(h, x, y);
             }
             return handled;
@@ -535,7 +543,11 @@ void EditorChildWindowManager::beginDragMove(Handle h, float clientX,
                                              float clientY) {
 #if defined(_WIN32)
     Entry* entry = findEntryByHandle(h);
-    if (entry == nullptr || entry->handle == nullptr) return;
+    if (entry == nullptr || entry->handle == nullptr || entry->ui == nullptr
+        || entry->card == nullptr || !entry->ui->isDragging()
+        || entry->ui->getDragSource() != entry->card) {
+        return;
+    }
     HWND child = static_cast<HWND>(entry->handle);
     POINT cursorPoint{static_cast<LONG>(std::lround(clientX)),
                       static_cast<LONG>(std::lround(clientY))};
@@ -567,7 +579,9 @@ void EditorChildWindowManager::updateDragMove(Handle h, float clientX,
         || entry->handle == nullptr) {
         return;
     }
-    if (entry->ui == nullptr || !entry->ui->isDragging()) {
+    if (entry->ui == nullptr || !entry->ui->isDragging()
+        || entry->card == nullptr
+        || entry->ui->getDragSource() != entry->card) {
         entry->dragMoveActive = false;
         return;
     }
@@ -602,7 +616,11 @@ void EditorChildWindowManager::endDragMove(Handle h) {
 void EditorChildWindowManager::updateRedockHover() {
     if (_dock == nullptr) return;
     for (const Entry& entry : _entries) {
-        if (entry.ui == nullptr || !entry.ui->isDragging()) continue;
+        if (!entry.redockable || entry.ui == nullptr || entry.card == nullptr
+            || !entry.ui->isDragging()
+            || entry.ui->getDragSource() != entry.card) {
+            continue;
+        }
         ayt::math::FVector2 world;
         if (screenPointOverPrimaryWindow(entry.dragLastScreenX,
                                          entry.dragLastScreenY)
@@ -627,11 +645,16 @@ bool EditorChildWindowManager::tryRedock(
         return false;
     }
     Entry* entry = findEntryByUi(ui.get());
-    if (entry == nullptr || entry->card == nullptr) {
+    if (entry == nullptr || !entry->redockable || entry->card == nullptr
+        || ui->getDragSource() != entry->card) {
         ayt::ui::dockTrace(
-            "[editor-child] redock skip entry=%d card=%d\n",
+            "[editor-child] redock skip entry=%d card=%d redockable=%d "
+            "sourceMatch=%d\n",
             entry != nullptr ? 1 : 0,
-            (entry != nullptr && entry->card != nullptr) ? 1 : 0);
+            (entry != nullptr && entry->card != nullptr) ? 1 : 0,
+            (entry != nullptr && entry->redockable) ? 1 : 0,
+            (entry != nullptr && entry->card != nullptr
+             && ui->getDragSource() == entry->card) ? 1 : 0);
         return false;
     }
 
@@ -764,7 +787,7 @@ void EditorChildWindowManager::teardownEntry(
             beforeClose(*entry.ui);
         }
         if (entry.card != nullptr) {
-            if (returnPromotedCard && _dock != nullptr) {
+            if (returnPromotedCard && entry.redockable && _dock != nullptr) {
                 entry.ui->cancelDrag();
                 entry.ui->root()->removeChild(entry.card);
                 resetPromotedCardChrome(entry.card);

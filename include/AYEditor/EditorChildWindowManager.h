@@ -38,10 +38,17 @@ struct ChildWindowConfig {
     int  y = 100;
     int  width  = 800;
     int  height = 600;
-    // PR-Dock-TearOff live-card migration: when non-null, the child
-    // window hosts the LIVE card (reparented into the child root) and
-    // layoutPath is ignored. null = classic config-file path.
+    // Self-painted top-level chrome. A promoted DockCard migrates here;
+    // dedicated tool windows may instead provide an owning frame card whose
+    // content is their private workspace. In both cases layoutPath is ignored.
+    // null keeps the classic config-file/native-caption path.
     ayt::ui::DockCard* card = nullptr;
+    // Promoted editor panels return to the primary DockArea when closed or
+    // dropped back over it. Dedicated tool-window frames also use a
+    // DockCard for self-painted chrome, but remain independent hosts; set
+    // this false so their inner document tabs never move the OS window or
+    // redock the whole tool into the Scene workspace.
+    bool redockable = true;
     // Optional hooks for UI Layout Editor.
     // before*: return true to consume (skip UIManager).
     std::function<bool(ayt::ui::UIManager& ui, float x, float y,
@@ -143,6 +150,7 @@ public:
         std::unique_ptr<ayt::ui::IRenderBackend> backend;
         // Live promoted card (null for config-file children).
         ayt::ui::DockCard*                card = nullptr;
+        bool                              redockable = false;
         std::function<void(ayt::ui::UIManager& ui)> beforeClose;
         std::function<bool(ayt::ui::UIManager& ui)> beforeCloseRequested;
         bool                              needsDraw = false;

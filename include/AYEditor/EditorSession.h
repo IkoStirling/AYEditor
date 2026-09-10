@@ -465,6 +465,7 @@ private:
     // inner Tilemap workspace owns its draggable source/canvas/inspector
     // splitters.
     std::unique_ptr<EditorDockViewHost> _tilemapDockViewHost;
+    ayt::ui::DockCard* _tilemapWindowFrame = nullptr;
     ayt::ui::DockArea* _tilemapWindowDock = nullptr;
     EditorChildWindowManager::Handle _tilemapWindowHandle = nullptr;
     bool _tilemapWindowUiPrepared = false;
