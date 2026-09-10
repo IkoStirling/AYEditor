@@ -37,6 +37,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <cwchar>
@@ -48,6 +49,17 @@
 #include <sstream>
 #include <stdexcept>
 #include <utility>
+
+#if defined(_WIN32)
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#  include <Windows.h>
+#  include <commdlg.h>
+#endif
 
 namespace ayt::editor {
 namespace {
@@ -129,6 +141,79 @@ TilemapSaveResult saveTilemapSourceAndTryCook(
     return result;
 }
 
+bool hasTilemapSourceExtension(const std::filesystem::path& path)
+{
+    std::string value = path.filename().string();
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char ch) {
+                       return static_cast<char>(std::tolower(ch));
+                   });
+    constexpr const char* sourceExtension = ".aytilemap.json";
+    constexpr const char* legacyExtension = ".aytilemap";
+    return (value.size() >= std::strlen(sourceExtension)
+            && value.compare(value.size() - std::strlen(sourceExtension),
+                             std::strlen(sourceExtension), sourceExtension)
+                == 0)
+        || (value.size() >= std::strlen(legacyExtension)
+            && value.compare(value.size() - std::strlen(legacyExtension),
+                             std::strlen(legacyExtension), legacyExtension)
+                == 0);
+}
+
+std::string showTilemapSaveDialog(const std::string& projectRoot,
+                                  const std::string& currentPath)
+{
+#if defined(_WIN32)
+    std::filesystem::path initialDirectory;
+    if (!currentPath.empty()) {
+        initialDirectory = std::filesystem::path(currentPath).parent_path();
+    } else if (!projectRoot.empty()) {
+        initialDirectory = std::filesystem::path(projectRoot)
+            / "Assets" / "tilemaps";
+        std::error_code error;
+        std::filesystem::create_directories(initialDirectory, error);
+        if (error) {
+            initialDirectory = std::filesystem::path(projectRoot) / "Assets";
+            error.clear();
+            std::filesystem::create_directories(initialDirectory, error);
+            if (error) initialDirectory = std::filesystem::path(projectRoot);
+        }
+    }
+
+    std::array<char, 4096> selected{};
+    const std::string suggested = currentPath.empty()
+        ? "NewTilemap.aytilemap.json"
+        : std::filesystem::path(currentPath).filename().string();
+    std::snprintf(selected.data(), selected.size(), "%s", suggested.c_str());
+    const std::string initial = initialDirectory.string();
+
+    OPENFILENAMEA dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = ::GetActiveWindow();
+    if (dialog.hwndOwner == nullptr) dialog.hwndOwner = ::GetForegroundWindow();
+    dialog.lpstrFile = selected.data();
+    dialog.nMaxFile = static_cast<DWORD>(selected.size());
+    dialog.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
+    dialog.lpstrFilter =
+        "AY Tilemap Source (*.aytilemap.json)\0*.aytilemap.json\0"
+        "Legacy AY Tilemap (*.aytilemap)\0*.aytilemap\0"
+        "All files (*.*)\0*.*\0";
+    dialog.nFilterIndex = 1;
+    dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT
+        | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    dialog.lpstrDefExt = "aytilemap.json";
+    if (!::GetSaveFileNameA(&dialog)) return {};
+
+    std::filesystem::path result(selected.data());
+    if (!hasTilemapSourceExtension(result)) result += ".aytilemap.json";
+    return result.lexically_normal().string();
+#else
+    (void)projectRoot;
+    (void)currentPath;
+    return {};
+#endif
+}
+
 class ToolDocument final : public IEditorDocument {
 public:
     ToolDocument(std::string type, std::string title)
@@ -150,6 +235,8 @@ private:
 
 class TilemapWorkspaceDocument final : public IEditorDocument {
 public:
+    using SavePathProvider = std::function<std::string(bool saveAs)>;
+
     bool initialize(const EditorOpenRequest& request, std::string& error)
     {
         _path = request.resourcePath;
@@ -173,8 +260,16 @@ public:
     uint64_t revision() const noexcept override { return _revision; }
     bool save(std::string* error) override {
         if (_path.empty()) {
-            if (error != nullptr) *error = "Tilemap has no file path.";
-            return false;
+            if (_savePathProvider == nullptr) {
+                if (error != nullptr) *error = "Tilemap has no file path.";
+                return false;
+            }
+            const std::string selected = _savePathProvider(false);
+            if (selected.empty()) {
+                if (error != nullptr) *error = "Tilemap save was canceled.";
+                return false;
+            }
+            return saveAs(selected, error);
         }
         const TilemapSaveResult result = saveTilemapSourceAndTryCook(
             _model, _path, error);
@@ -211,12 +306,19 @@ public:
     const std::string& lastSaveNotice() const noexcept {
         return _lastSaveNotice;
     }
+    void setSavePathProvider(SavePathProvider provider) {
+        _savePathProvider = std::move(provider);
+    }
+    bool hasSavePathProvider() const noexcept {
+        return _savePathProvider != nullptr;
+    }
     void changed() noexcept { ++_revision; }
 private:
     std::string _type = "ayeditor.tilemap.document";
     std::string _path;
     std::string _title = "Untitled Tilemap";
     std::string _lastSaveNotice;
+    SavePathProvider _savePathProvider;
     uint64_t _revision = 1u;
     ayt::ay2d::editor::TilemapEditorModel _model;
 };
@@ -429,6 +531,16 @@ public:
         commandRow->setSpacing(6.0f);
         auto* toolbar = new ayt::ui::ToolBar();
         toolbar->setId("tilemap_workspace_toolbar");
+        _save = addIconButton(
+            toolbar, "tilemap_file_save", "device-floppy.svg", L"Save",
+            L"Save Tilemap (Ctrl+S)", [this]() {
+                (void)saveDocument(false);
+            });
+        _saveAs = addIconButton(
+            toolbar, "tilemap_file_save_as", "file-export.svg", L"Save As",
+            L"Save Tilemap As…", [this]() {
+                (void)saveDocument(true);
+            });
         _pencil = addIconButton(
             toolbar, "tilemap_tool_pencil", "pencil.svg", L"P",
             L"Pencil (P)", [this]() {
@@ -510,6 +622,30 @@ public:
         summaryLimits.minWidth = 150.0f;
         commandRow->addWidget(_summary, 270.0f, summaryLimits);
         root->addWidget(commandRow, 36.0f);
+
+        _documentPath = new ayt::ui::TextLabel();
+        _documentPath->setId("tilemap_workspace_document_path");
+        _documentPath->setFontSize(11);
+        root->addWidget(_documentPath, 20.0f);
+        {
+            auto activeScope = ayt::ui::UIManager::pushActive(
+                _host.uiManager());
+            if (auto* tooltip = ayt::ui::Tooltip::attachTo(_documentPath)) {
+                _documentPathTooltip = tooltip;
+                _tooltips.push_back(tooltip);
+            }
+        }
+
+        _document->setSavePathProvider([this](bool saveAs) {
+            if (auto* provider = dynamic_cast<
+                    IEditorDocumentSavePathProvider*>(&_host)) {
+                const std::string selected =
+                    provider->chooseDocumentSavePath(*_document, saveAs);
+                if (!selected.empty()) return selected;
+            }
+            return showTilemapSaveDialog(
+                _host.projectRoot(), _document->path());
+        });
 
         auto* body = new ayt::ui::HBox();
         body->setId("tilemap_workspace_body");
@@ -809,6 +945,7 @@ public:
         refresh();
     }
     ~TilemapWorkspaceView() override {
+        _document->setSavePathProvider({});
         clearTooltips();
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
@@ -827,6 +964,7 @@ public:
     void prepareForUiShutdown() override {
         auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
         _importCommitPending = false;
+        _document->setSavePathProvider({});
         clearTooltips();
         if (_importCancel != nullptr) _importCancel->setOnClicked({});
         if (_importCommit != nullptr) _importCommit->setOnClicked({});
@@ -890,7 +1028,11 @@ public:
         _collisionFlags = nullptr;
         _shadowColor = nullptr;
         _summary = nullptr;
+        _documentPath = nullptr;
+        _documentPathTooltip = nullptr;
         _atlasSelector = nullptr;
+        _save = nullptr;
+        _saveAs = nullptr;
         _pencil = nullptr;
         _eraser = nullptr;
         _fill = nullptr;
@@ -934,12 +1076,14 @@ public:
         _buttons.clear();
     }
     bool handlesCommand(const std::string& id) const override {
-        return id == "file.save" || id == "edit.undo" || id == "edit.redo";
+        return id == "file.save" || id == "file.save_as"
+            || id == "edit.undo" || id == "edit.redo";
     }
     bool canExecuteCommand(const std::string& id) const override {
         if (id == "edit.undo") return _document->model().canUndo();
         if (id == "edit.redo") return _document->model().canRedo();
-        return id == "file.save" && !_document->path().empty();
+        return (id == "file.save" || id == "file.save_as")
+            && _document->hasSavePathProvider();
     }
     bool executeCommand(const std::string& id) override {
         if (!canExecuteCommand(id)) return false;
@@ -951,19 +1095,7 @@ public:
             changed = _document->model().redo();
             if (changed) _document->changed();
         } else {
-            std::string error;
-            changed = _document->save(&error);
-            if (!changed) {
-                _host.setStatusText(
-                    L"Tilemap save failed: "
-                    + ayt::ui::decodeUtf8Text(error));
-            } else if (!_document->lastSaveNotice().empty()) {
-                _host.setStatusText(ayt::ui::decodeUtf8Text(
-                    _document->lastSaveNotice()));
-            } else {
-                _host.setStatusText(
-                    L"Tilemap source saved and runtime asset cooked.");
-            }
+            return saveDocument(id == "file.save_as");
         }
         if (changed) {
             refresh();
@@ -1964,6 +2096,67 @@ private:
             + std::to_wstring(document.layerCount()) + L" layers  ·  "
             + std::to_wstring(static_cast<int>(std::round(_zoomPercent)))
             + L"%");
+        updateDocumentPath();
+    }
+
+    void updateDocumentPath() {
+        if (_documentPath == nullptr) return;
+        const bool unsaved = _document->path().empty();
+        const std::wstring text = unsaved
+            ? L"File: Not saved yet — Ctrl+S to choose a location"
+            : L"File: " + ayt::ui::decodeUtf8Text(_document->path());
+        _documentPath->setText(text);
+        if (_documentPathTooltip != nullptr) {
+            _documentPathTooltip->setText(unsaved
+                ? L"This tilemap has no file yet. Save chooses a location; "
+                  L"the default folder is Assets/tilemaps."
+                : text);
+        }
+    }
+
+    bool saveDocument(bool saveAs) {
+        std::string error;
+        bool saved = false;
+        if (saveAs) {
+            if (!_document->hasSavePathProvider()) return false;
+            const std::string selected = showSavePath(true);
+            if (selected.empty()) return false;
+            saved = _document->saveAs(selected, &error);
+        } else {
+            saved = _document->save(&error);
+        }
+        if (!saved) {
+            if (error != "Tilemap save was canceled.") {
+                _host.setStatusText(
+                    L"Tilemap save failed: "
+                    + ayt::ui::decodeUtf8Text(error));
+            }
+            return false;
+        }
+
+        std::wstring status = L"Tilemap saved to "
+            + ayt::ui::decodeUtf8Text(_document->path());
+        if (!_document->lastSaveNotice().empty()) {
+            status += L". ";
+            status += ayt::ui::decodeUtf8Text(
+                _document->lastSaveNotice());
+        } else {
+            status += L" and runtime asset cooked.";
+        }
+        _host.setStatusText(status);
+        refresh();
+        _host.requestRepaint();
+        return true;
+    }
+
+    std::string showSavePath(bool saveAs) {
+        if (auto* provider = dynamic_cast<
+                IEditorDocumentSavePathProvider*>(&_host)) {
+            const std::string selected =
+                provider->chooseDocumentSavePath(*_document, saveAs);
+            if (!selected.empty()) return selected;
+        }
+        return showTilemapSaveDialog(_host.projectRoot(), _document->path());
     }
 
     void refresh() {
@@ -2078,6 +2271,8 @@ private:
     std::filesystem::path _iconRoot;
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _summary = nullptr;
+    ayt::ui::TextLabel* _documentPath = nullptr;
+    ayt::ui::Tooltip* _documentPathTooltip = nullptr;
     ayt::ui::ComboBox* _atlasSelector = nullptr;
     ayt::ui::ComboBox* _stampSelector = nullptr;
     EditorTilemapCanvas* _canvas = nullptr;
@@ -2089,6 +2284,8 @@ private:
     ayt::ui::TextInput* _collisionFlags = nullptr;
     ayt::ui::TextInput* _shadowColor = nullptr;
     ayt::ui::Button* _pencil = nullptr;
+    ayt::ui::Button* _save = nullptr;
+    ayt::ui::Button* _saveAs = nullptr;
     ayt::ui::Button* _eraser = nullptr;
     ayt::ui::Button* _fill = nullptr;
     ayt::ui::Button* _rectangle = nullptr;

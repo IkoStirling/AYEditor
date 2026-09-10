@@ -108,6 +108,17 @@ public:
     virtual bool executeCommand(const std::string& commandId) = 0;
 };
 
+// Optional host capability for document editors that need to ask the user
+// where a new document should be written. Keeping this separate from
+// IEditorHostServices lets embedders opt in without changing that interface's
+// vtable; built-in desktop editors can still provide their native fallback.
+class IEditorDocumentSavePathProvider {
+public:
+    virtual ~IEditorDocumentSavePathProvider() = default;
+    virtual std::string chooseDocumentSavePath(
+        const IEditorDocument& document, bool saveAs) = 0;
+};
+
 // AYEditor-owned services exposed to a registered editor view. Module editor
 // cores remain independent from this interface; only their AYEditor adapter
 // consumes it.

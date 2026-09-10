@@ -81,7 +81,9 @@ private:
     std::string _title = "Recovery Test";
 };
 
-class TilemapTestHostServices final : public IEditorHostServices {
+class TilemapTestHostServices final
+    : public IEditorHostServices,
+      public IEditorDocumentSavePathProvider {
 public:
     explicit TilemapTestHostServices(EditorWorkspace& workspace)
         : _workspace(workspace) {}
@@ -100,8 +102,17 @@ public:
         if (error != nullptr) error->clear();
         return authoringImage;
     }
+    std::string chooseDocumentSavePath(
+        const IEditorDocument&, bool saveAs) override {
+        ++savePathRequests;
+        lastSaveAs = saveAs;
+        return savePath;
+    }
 
     int repaintRequests = 0;
+    int savePathRequests = 0;
+    bool lastSaveAs = false;
+    std::string savePath;
     std::wstring statusText;
     ayt::ui::UIManager* ui = nullptr;
     EditorAuthoringImage authoringImage;
@@ -723,6 +734,7 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_layer_rename") != nullptr);
     constexpr const char* iconButtonIds[]{
+        "tilemap_file_save", "tilemap_file_save_as",
         "tilemap_tool_pencil", "tilemap_tool_eraser",
         "tilemap_tool_fill", "tilemap_tool_rectangle",
         "tilemap_tool_stamp", "tilemap_tool_shadow",
@@ -739,6 +751,60 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
         CHECK(button != nullptr && button->getText().empty());
         CHECK(button != nullptr && button->getIconDocument() != nullptr);
     }
+    view->prepareForUiShutdown();
+    view.reset();
+}
+
+TEST_CASE(tilemap_first_save_chooses_and_exposes_source_path)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("tilemap_first_save")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+
+    EditorOpenRequest request;
+    request.displayPath = "Untitled Tilemap";
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+
+    EditorWorkspace workspace;
+    TilemapTestHostServices host(workspace);
+    host.savePath = (cleanup.root / "Assets" / "tilemaps"
+        / "FirstSave.aytilemap.json").string();
+    auto view = descriptor->createView(document, host);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+
+    IEditorCommandTarget* commands = view->commandTarget();
+    CHECK(commands != nullptr);
+    CHECK(commands != nullptr && commands->canExecuteCommand("file.save"));
+    CHECK(commands != nullptr && commands->executeCommand("file.save"));
+    CHECK(host.savePathRequests == 1);
+    CHECK_FALSE(host.lastSaveAs);
+    CHECK(document->path() == host.savePath);
+    CHECK(document->title() == "FirstSave.aytilemap.json");
+    CHECK(std::filesystem::is_regular_file(host.savePath));
+
+    auto* pathLabel = dynamic_cast<ayt::ui::TextLabel*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_document_path"));
+    CHECK(pathLabel != nullptr);
+    CHECK(pathLabel != nullptr
+        && pathLabel->getText().find(L"FirstSave.aytilemap.json")
+            != std::wstring::npos);
+    CHECK(host.statusText.find(L"Tilemap saved to") != std::wstring::npos);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_file_save") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_file_save_as") != nullptr);
+
     view->prepareForUiShutdown();
     view.reset();
 }
