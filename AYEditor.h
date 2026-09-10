@@ -27,6 +27,7 @@
 #include <AYEditor/EditorDslExtension.h>
 #include <AYEditor/EditorProjectAssetFactory.h>
 #include <AYEditor/EditorProjectDescriptor.h>
+#include <AYEditor/EditorProjectUiFlow.h>
 #include <AYEditor/EditorProjectRunner.h>
 #include <AYEditor/EditorProjectRuntimeValidator.h>
 #include <AYEditor/EditorRecoveryStore.h>

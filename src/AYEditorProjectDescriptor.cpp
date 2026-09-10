@@ -37,6 +37,20 @@ bool readRequiredString(const nlohmann::json& object, const char* key,
     return true;
 }
 
+bool readOptionalString(const nlohmann::json& object, const char* key,
+                        std::string& value, std::string& error)
+{
+    const auto found = object.find(key);
+    if (found == object.end()) return true;
+    if (!found->is_string()) {
+        error = std::string("Project descriptor '") + key
+            + "' must be a string.";
+        return false;
+    }
+    value = found->get<std::string>();
+    return true;
+}
+
 } // namespace
 
 EditorProjectDescriptor::operator bool() const noexcept
@@ -125,6 +139,31 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
             return {};
         }
 
+        if (const auto ui = json.find("ui"); ui != json.end()) {
+            if (!ui->is_object()) {
+                if (error != nullptr) {
+                    *error = "Project ui settings must be an object.";
+                }
+                return {};
+            }
+            if (!readOptionalString(*ui, "flow", result.ui.flow, parseError)
+                || !readOptionalString(*ui, "entry", result.ui.entry,
+                                       parseError)) {
+                if (error != nullptr) *error = parseError;
+                return {};
+            }
+            if ((!result.ui.flow.empty()
+                    && !isPortableRelativePath(result.ui.flow))
+                || (result.ui.flow.empty() && !result.ui.entry.empty())) {
+                if (error != nullptr) {
+                    *error = result.ui.flow.empty()
+                        ? "Project ui.entry requires ui.flow."
+                        : "Project ui.flow must stay inside the asset root.";
+                }
+                return {};
+            }
+        }
+
         result.startupWorld = json.value("startupWorld", std::string{});
         const nlohmann::json worlds = json.value(
             "worlds", nlohmann::json::array());
@@ -148,7 +187,12 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
                 if (error != nullptr) *error = "Duplicate project World id: " + world.id;
                 return {};
             }
-            world.ui = value.value("ui", std::string{});
+            if (!readOptionalString(value, "ui", world.ui, parseError)
+                || !readOptionalString(value, "uiContext", world.uiContext,
+                                       parseError)) {
+                if (error != nullptr) *error = parseError;
+                return {};
+            }
             if (!isPortableRelativePath(world.scene)
                 || (!world.ui.empty() && !isPortableRelativePath(world.ui))) {
                 if (error != nullptr) {

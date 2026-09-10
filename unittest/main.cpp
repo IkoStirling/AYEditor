@@ -22,6 +22,7 @@
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
 #include "Test_EditorFramework.cpp"             // unified editor workspace foundation
 #include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
+#include "Test_EditorUiFlowProjectDescriptor.cpp" // project Flow contract + legacy migration
 #include "Test_EditorRecoveryAndTrash.cpp"      // selective recovery + trash browser services
 
 int main(int argc, char* argv[]) {

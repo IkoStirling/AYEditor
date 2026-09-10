@@ -19,10 +19,21 @@ struct EditorProjectRunDescriptor {
     std::vector<std::string> arguments;
 };
 
+struct EditorProjectUiDescriptor {
+    // Portable path below the project asset root. Empty keeps legacy
+    // per-World `ui` compatibility active.
+    std::string flow;
+    // Optional named entry point. Empty selects the Flow document default.
+    std::string entry;
+};
+
 struct EditorProjectWorldDescriptor {
     std::string id;
     std::string scene;
+    // Legacy single-layout shorthand. New projects select a Context from the
+    // project-level UI Flow instead.
     std::string ui;
+    std::string uiContext;
     std::vector<std::string> tilemaps;
 };
 
@@ -40,6 +51,7 @@ struct EditorProjectDescriptor {
     // Optional authoring default: "2D", "3D", or "Auto". A per-scene
     // .ayeditor/workspace.json entry still has higher precedence.
     std::string defaultSceneView = "Auto";
+    EditorProjectUiDescriptor ui;
     std::string startupWorld;
     std::vector<EditorProjectWorldDescriptor> worlds;
     EditorProjectRunDescriptor run;

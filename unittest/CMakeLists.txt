@@ -26,6 +26,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
     Test_EditorProjectWorkflow.cpp
+    Test_EditorUiFlowProjectDescriptor.cpp
     Test_EditorRecoveryAndTrash.cpp
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
@@ -64,6 +65,19 @@ ay_add_test(${MODULE_NAME}
     NAME AYEditor_2DProjectBaseline
     SUITE AYEditor_ProjectWorkflow
     LABELS "2d-baseline;ayeditor")
+
+# Keep the project/Flow wire contract independently buildable. The broad
+# aggregation target intentionally includes integration suites and can be
+# blocked by an unrelated Scene API transition.
+add_executable(AYEditor_UIFlowContractTests UIFlowContractTestMain.cpp)
+target_link_libraries(AYEditor_UIFlowContractTests PRIVATE AYEditor AYUI AYTest)
+target_include_directories(AYEditor_UIFlowContractTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+if(MSVC)
+    target_link_options(AYEditor_UIFlowContractTests PRIVATE "/OPT:NOREF")
+endif()
+ay_add_test(AYEditor_UIFlowContractTests
+    LABELS "ui-flow;ayeditor")
 
 # Keep default Editor module assembly isolated from the broad UI/editor suite.
 # The process-wide ComponentRegistry is sealed as part of the startup contract.

@@ -101,11 +101,39 @@ session polls the launched process; clicking the rocket again while it is
 running focuses its existing top-level window instead of creating a duplicate.
 
 The canonical project descriptor also records `paths.assets`,
-`paths.gameAssembly`, `paths.gameCode`, `startupWorld`, and per-World Scene,
-UI, and Tilemap references. Validation rejects a malformed descriptor or a
-missing referenced content file. The runtime module graph remains in the C++
-`GameProject` composition root because callbacks cannot be represented by a
-data file.
+`paths.gameAssembly`, `paths.gameCode`, `startupWorld`, project-level UI Flow,
+and per-World Scene, UI Context, and Tilemap references. Validation rejects a
+malformed descriptor or a missing referenced content file. The runtime module
+graph and host-defined UI action executors remain in the C++ `GameProject`
+composition root.
+
+Application UI orchestration is additive to the existing project schema:
+
+```json
+{
+  "ui": {
+    "flow": "ui/game.uiflow.json",
+    "entry": "Boot"
+  },
+  "worlds": [
+    {
+      "id": "village",
+      "scene": "worlds/village.ayscene",
+      "uiContext": "Gameplay"
+    }
+  ]
+}
+```
+
+`ui.entry` is optional and otherwise comes from the Flow document. Per-World
+`uiContext` is also optional because Scene signals or parallel Flow regions may
+control presentation independently of World changes. Existing `worlds[].ui`
+layout paths remain readable: the editor resolves them into a validated,
+in-memory World-scoped Screen and Context. The compatibility form is not
+written back automatically. A project cannot mix top-level `ui.flow` with
+legacy `world.ui`, and `uiContext` without `ui.flow` is invalid. The full wire
+contract and staged runtime boundary are documented in
+[AYUI Flow Contract](../../AYUI/docs/UIFlow.md).
 
 When the editor opens a directory containing `project.ayproject.json`, it
 resolves `startupWorld` through the descriptor's `worlds` entry and opens that
@@ -130,8 +158,8 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 7. AYUI 1.1.0 publishes source ABI
-version 111. MSVC object files embed link mismatch records and the public
+AYEditor 0.2.0 publishes source ABI version 8. AYUI 1.1.0 publishes source ABI
+version 119. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.
 The editor extension registry remains an in-process compile-time registry; this

@@ -58,6 +58,7 @@ set(SRC_FILES
     src/AYEditorAssetOperations.cpp
     src/AYEditorProjectAssetFactory.cpp
     src/AYEditorProjectDescriptor.cpp
+    src/AYEditorProjectUiFlow.cpp
     src/AYEditorProjectRunner.cpp
     src/AYEditorProjectRuntimeValidator.cpp
     src/AYEditorRecoveryStore.cpp
@@ -122,6 +123,7 @@ set(HEAD_FILES
     include/AYEditor/EditorAssetOperations.h
     include/AYEditor/EditorProjectAssetFactory.h
     include/AYEditor/EditorProjectDescriptor.h
+    include/AYEditor/EditorProjectUiFlow.h
     include/AYEditor/EditorProjectRunner.h
     include/AYEditor/EditorVersion.h
     include/AYEditor/EditorProjectRuntimeValidator.h
@@ -153,7 +155,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=7)
+    AYEDITOR_SOURCE_ABI_VERSION=8)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)
