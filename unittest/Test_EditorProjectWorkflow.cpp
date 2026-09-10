@@ -186,6 +186,8 @@ TEST_CASE(project_startup_scene_resolution_opens_the_declared_world)
     CHECK(resolution.projectDescriptorPresent);
     CHECK(resolution);
     CHECK(resolution.error.empty());
+    CHECK(std::filesystem::path(resolution.assetRootPath).lexically_normal()
+          == (cleanup.root / "Assets").lexically_normal());
     CHECK(std::filesystem::path(resolution.scenePath).lexically_normal()
           == (cleanup.root / "Assets/worlds/main.ayscene").lexically_normal());
 

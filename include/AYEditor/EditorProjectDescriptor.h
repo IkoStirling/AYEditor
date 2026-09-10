@@ -57,6 +57,7 @@ struct EditorProjectDescriptor {
 // reference content after a project has been selected.
 struct EditorProjectStartupSceneResolution {
     bool projectDescriptorPresent = false;
+    std::string assetRootPath;
     std::string scenePath;
     std::string error;
 

@@ -708,6 +708,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _onPreferencesChanged = desc.onPreferencesChanged;
     _playRuntime.setHostWindow(_hostWindow);
     _playRuntime.setEngineAssetsRoot(_engineAssetsRoot);
+    _playRuntime.setProjectAssetRoot(projectStartup.assetRootPath);
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
     _playRuntime.setImportedCharacter(desc.importedCharacter);

@@ -232,6 +232,8 @@ EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
                 : std::move(descriptorError);
             return result;
         }
+        result.assetRootPath =
+            (root / fs::path(descriptor.assetRoot)).lexically_normal().string();
         if (descriptor.startupWorld.empty()) {
             return result;
         }

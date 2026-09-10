@@ -746,7 +746,11 @@ bool EditorPlayRuntime::ensureAssets() {
     _assetRoot = _cacheRoot + "assets\\";
     // So mesh→material / material→texture virtual deps resolve under
     // assets/, not under the referring file's directory (meshes/).
-    ayt::resource::setAssetRoot(_assetRoot);
+    if (_projectAssetRoot.empty()) {
+        ayt::resource::setAssetRoot(_assetRoot);
+    } else {
+        ayt::resource::setAssetRoots({_projectAssetRoot, _assetRoot});
+    }
     _meshPath             = _assetRoot + "cube.aymesh";
     _materialPath         = _assetRoot + "cube_shadow.aymat";
     _groundMeshPath       = _assetRoot + "cube.aymesh";

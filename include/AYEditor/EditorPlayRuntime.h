@@ -72,6 +72,10 @@ public:
     void setEngineAssetsRoot(std::string root) {
         _engineAssetsRoot = std::move(root);
     }
+    void setProjectAssetRoot(std::string root) {
+        _projectAssetRoot = std::move(root);
+        _assetsReady = false;
+    }
     void setClientSize(uint32_t width, uint32_t height);
     void setImportedCharacter(const ImportedCharacter& character);
     void setEditorTestSceneEnabled(bool enabled) noexcept {
@@ -248,6 +252,7 @@ private:
 
     std::string _cacheRoot;
     std::string _assetRoot;
+    std::string _projectAssetRoot;
     std::string _engineAssetsRoot;
     std::string _meshPath;
     std::string _materialPath;
