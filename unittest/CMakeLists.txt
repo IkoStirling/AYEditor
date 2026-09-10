@@ -65,6 +65,10 @@ ay_add_test(${MODULE_NAME}
     NAME AYEditor_2DProjectBaseline
     SUITE AYEditor_ProjectWorkflow
     LABELS "2d-baseline;ayeditor")
+ay_add_test(${MODULE_NAME}
+    NAME AYEditor_MixedSceneBaseline
+    SUITE Editor2DToolsTests
+    LABELS "2d-3d-mixed;ayeditor")
 
 # Keep the project/Flow wire contract independently buildable. The broad
 # aggregation target intentionally includes integration suites and can be

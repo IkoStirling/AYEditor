@@ -115,6 +115,24 @@ namespace {
 std::unordered_map<const EditorSession*, std::vector<ayt::ui::Tooltip*>>
     gEditorTooltips;
 
+// Read-only project HUD preview layered over the native Scene View. It clips
+// authored layouts to the viewport and deliberately yields pointer input to
+// Scene picking and gizmos.
+class PassiveSceneUiPreviewHost final : public ayt::ui::CompoundWidget {
+public:
+    ayt::ui::Widget* hitTest(
+        const ayt::math::FVector2& /*worldPos*/) override {
+        return nullptr;
+    }
+
+protected:
+    void renderChildren(ayt::ui::IRenderBackend& renderer) override {
+        renderer.pushClip(getWorldBounds());
+        ayt::ui::CompoundWidget::renderChildren(renderer);
+        renderer.popClip();
+    }
+};
+
 void attachEditorTooltip(const EditorSession* session, ayt::ui::Widget* target,
                          const std::wstring& text)
 {
@@ -1320,6 +1338,7 @@ void EditorSession::shutdown() {
         }
     }
 
+    clearSceneUiPreview();
     clearEditorTooltips(this);
     _ui.shutdown();
     if (_dockViewHost != nullptr) {
@@ -1536,9 +1555,14 @@ void EditorSession::pushSceneCameraToRenderer()
         if (_gameView.mode() != EditorMode::Edit) {
             sub->clearCameraOverride();
             sub->clearOverlayCamera2DOverride();
+            sub->clearSceneVisibilityFilter();
             sub->renderer().setEditorGrid2DState({});
             return;
         }
+        sub->setSceneVisibilityFilter({
+            _sceneVisibility.meshes,
+            _sceneVisibility.worldLit2D,
+            _sceneVisibility.cameraOverlay2D});
         const EditorSceneCameraFrame camera = _sceneCamera.frame();
         sub->setCameraMatrices(camera.view, camera.projection, camera.position);
         ayt::render::EditorGrid2DState grid;
@@ -2360,6 +2384,29 @@ void EditorSession::bindToolbar() {
                 !_viewportOrientationAxisVisible);
         });
     }
+    viewportOptions->addSeparator();
+    const auto addVisibilityItem = [this, viewportOptions](
+        const char* id, const wchar_t* label,
+        bool EditorSceneVisibility::*member) {
+        if (auto* item = viewportOptions->addItem(
+                std::wstring(L"[x] ") + label)) {
+            item->setId(id);
+            item->setOnActivate([this, member]() {
+                EditorSceneVisibility visibility = _sceneVisibility;
+                visibility.*member = !(visibility.*member);
+                setSceneVisibility(visibility);
+            });
+        }
+    };
+    addVisibilityItem("menu_view_meshes", L"Meshes",
+                      &EditorSceneVisibility::meshes);
+    addVisibilityItem("menu_view_world_lit_2d", L"World Lit 2D",
+                      &EditorSceneVisibility::worldLit2D);
+    addVisibilityItem("menu_view_camera_overlay_2d", L"Camera Overlay 2D",
+                      &EditorSceneVisibility::cameraOverlay2D);
+    addVisibilityItem("menu_view_ui", L"UI Preview",
+                      &EditorSceneVisibility::ui);
+    syncSceneVisibilityMenu();
     bindButton("btn_view_options", [this, viewportOptions]() {
         auto* anchor = _ui.findById("btn_view_options");
         if (anchor == nullptr) return;
@@ -5924,6 +5971,7 @@ void EditorSession::setSceneViewMode(SceneViewMode mode, bool persist)
         if (persist) rememberCurrentSceneView();
     }
     syncSceneViewToolbar();
+    syncSceneVisibilityMenu();
     pushSceneCameraToRenderer();
     syncTransformGizmoToRenderer();
     if (_hasLastMouse) {
@@ -5981,9 +6029,47 @@ void EditorSession::syncSceneViewToolbar()
     }
 }
 
+void EditorSession::setSceneVisibility(
+    const EditorSceneVisibility& visibility,
+    bool persist)
+{
+    _sceneVisibility = visibility;
+    if (persist) rememberCurrentSceneView();
+    syncSceneVisibilityMenu();
+    pushSceneCameraToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::syncSceneVisibilityMenu()
+{
+    const bool editMode = _gameView.mode() == EditorMode::Edit;
+    const auto sync = [this, editMode](const char* id, const wchar_t* label,
+                                      bool visible) {
+        if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(_ui.findById(id))) {
+            item->setText((visible ? L"[x] " : L"[ ] ")
+                          + std::wstring(label));
+            item->setEnabled(editMode);
+        }
+    };
+    sync("menu_view_meshes", L"Meshes", _sceneVisibility.meshes);
+    sync("menu_view_world_lit_2d", L"World Lit 2D",
+         _sceneVisibility.worldLit2D);
+    sync("menu_view_camera_overlay_2d", L"Camera Overlay 2D",
+         _sceneVisibility.cameraOverlay2D);
+    sync("menu_view_ui", L"UI Preview", _sceneVisibility.ui);
+    if (_sceneUiPreviewHost != nullptr) {
+        _sceneUiPreviewHost->setVisible(editMode && _sceneVisibility.ui);
+    }
+}
+
 void EditorSession::selectInitialSceneViewForDocument()
 {
     if (_document == nullptr) return;
+    _sceneVisibility = {};
+    if (const EditorSceneVisibility* savedVisibility =
+            _sceneViewWorkspace.findVisibility(_document->path())) {
+        _sceneVisibility = *savedVisibility;
+    }
     const EditorSceneCameraState* saved =
         _sceneViewWorkspace.find(_document->path());
     const char* source = "engine-profile";
@@ -6021,7 +6107,9 @@ void EditorSession::selectInitialSceneViewForDocument()
         _sceneCamera.isTwoD() ? "2D" : "3D", source,
         center.x, center.y, _sceneCamera.twoDViewHeight());
     syncSceneViewToolbar();
+    syncSceneVisibilityMenu();
     pushSceneCameraToRenderer();
+    refreshSceneUiPreview();
 }
 
 void EditorSession::fitTwoDViewToSceneCamera()
@@ -6045,6 +6133,8 @@ void EditorSession::rememberCurrentSceneView()
         return;
     }
     _sceneViewWorkspace.set(_document->path(), _sceneCamera.state());
+    _sceneViewWorkspace.setVisibility(
+        _document->path(), _sceneVisibility);
     _sceneViewWorkspaceDirty = true;
     _sceneViewWorkspaceSaveCountdown = 0.5f;
 }
@@ -6056,6 +6146,8 @@ void EditorSession::pollSceneViewWorkspace(float dtSeconds)
     if (_sceneViewWorkspaceSaveCountdown > 0.0f) return;
     if (_document != nullptr && !_document->path().empty()) {
         _sceneViewWorkspace.set(_document->path(), _sceneCamera.state());
+        _sceneViewWorkspace.setVisibility(
+            _document->path(), _sceneVisibility);
     }
     std::string error;
     if (!_sceneViewWorkspace.save(&error)) {
@@ -6065,6 +6157,89 @@ void EditorSession::pollSceneViewWorkspace(float dtSeconds)
         return;
     }
     _sceneViewWorkspaceDirty = false;
+}
+
+void EditorSession::clearSceneUiPreview()
+{
+    if (_sceneUiPreviewHost != nullptr) {
+        _sceneUiPreviewHost->detachFromParent();
+        ayt::ui::destroyWidgetTree(_sceneUiPreviewHost);
+        _sceneUiPreviewHost = nullptr;
+    }
+    // The preview has its own loader because the loader registry contains
+    // non-owning Widget pointers. Releasing it after the tree prevents a
+    // temporary project HUD from polluting the editor chrome registry.
+    _sceneUiPreviewLoader.reset();
+}
+
+void EditorSession::refreshSceneUiPreview()
+{
+    clearSceneUiPreview();
+    if (_document == nullptr || _document->path().empty()
+        || _projectRoot.empty()) {
+        return;
+    }
+
+    std::string error;
+    const EditorProjectDescriptor descriptor =
+        EditorProjectDescriptor::load(_projectRoot, &error);
+    if (!descriptor) return;
+
+    std::filesystem::path documentPath;
+    try {
+        documentPath = std::filesystem::absolute(_document->path())
+            .lexically_normal();
+    } catch (...) {
+        return;
+    }
+    const std::filesystem::path assetRoot =
+        (std::filesystem::path(_projectRoot) / descriptor.assetRoot)
+            .lexically_normal();
+    const EditorProjectWorldDescriptor* selectedWorld = nullptr;
+    for (const EditorProjectWorldDescriptor& world : descriptor.worlds) {
+        const std::filesystem::path candidate =
+            std::filesystem::absolute(assetRoot / world.scene)
+                .lexically_normal();
+        if (candidate == documentPath) {
+            selectedWorld = &world;
+            break;
+        }
+    }
+    if (selectedWorld == nullptr || selectedWorld->ui.empty()) return;
+
+    const std::filesystem::path uiPath = assetRoot / selectedWorld->ui;
+    _sceneUiPreviewLoader = std::make_unique<ayt::ui::UILayoutLoader>();
+    ayt::ui::Widget* hud =
+        _sceneUiPreviewLoader->loadFromFile(uiPath.string());
+    if (hud == nullptr) {
+        std::fprintf(stderr,
+            "[EditorSceneView] UI preview load failed: %s\n",
+            uiPath.string().c_str());
+        _sceneUiPreviewLoader.reset();
+        return;
+    }
+    auto* host = new PassiveSceneUiPreviewHost();
+    host->setId("scene_ui_preview_host");
+    host->addChild(hud);
+    _ui.getOverlayRoot()->addChild(host);
+    _sceneUiPreviewHost = host;
+    syncSceneUiPreviewBounds();
+    syncSceneVisibilityMenu();
+}
+
+void EditorSession::syncSceneUiPreviewBounds()
+{
+    if (_sceneUiPreviewHost == nullptr) return;
+    ayt::math::FRectangle bounds{};
+    if (!getViewportBounds(bounds)) return;
+    _sceneUiPreviewHost->setPosition({bounds.minX, bounds.minY});
+    _sceneUiPreviewHost->setSize({bounds.width(), bounds.height()});
+    if (!_sceneUiPreviewHost->getChildren().empty()) {
+        ayt::ui::Widget* hud = _sceneUiPreviewHost->getChildren().front();
+        hud->setPosition({0.0f, 0.0f});
+        hud->setSize({bounds.width(), bounds.height()});
+        hud->performLayout();
+    }
 }
 
 void EditorSession::updateViewportCoordinateFeedback(float x, float y)
@@ -8501,6 +8676,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
     const bool editCommandsEnabled = mode == EditorMode::Edit;
     if (_undoMenuItem != nullptr) _undoMenuItem->setEnabled(editCommandsEnabled);
     if (_redoMenuItem != nullptr) _redoMenuItem->setEnabled(editCommandsEnabled);
+    syncSceneVisibilityMenu();
 
     // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）。
     // 选择在上方按 World 生命期切换；这里只排队重建。延迟到 update() 消费
@@ -8544,6 +8720,7 @@ void EditorSession::syncViewportIfChanged() {
         static_cast<std::uint32_t>(std::max(1.0f, std::round(bounds.width()))),
         static_cast<std::uint32_t>(std::max(1.0f, std::round(bounds.height()))));
     _playRuntime.syncViewportRect(bounds);
+    syncSceneUiPreviewBounds();
     pushSceneCameraToRenderer();
 }
 

@@ -54,6 +54,7 @@ bool EditorSceneViewWorkspace::open(const std::string& projectRoot,
 {
     if (error != nullptr) error->clear();
     _states.clear();
+    _visibility.clear();
     _projectRoot.clear();
     _path.clear();
     if (projectRoot.empty()) return true;
@@ -112,6 +113,17 @@ bool EditorSceneViewWorkspace::open(const std::string& projectRoot,
             state.threeDMoveSpeed = finiteFloat(
                 entry, "threeDMoveSpeed", state.threeDMoveSpeed);
             _states.emplace(it.key(), state);
+
+            EditorSceneVisibility visibility;
+            if (const auto value = entry.find("visibility");
+                value != entry.end() && value->is_object()) {
+                visibility.meshes = value->value("meshes", true);
+                visibility.worldLit2D = value->value("worldLit2D", true);
+                visibility.cameraOverlay2D = value->value(
+                    "cameraOverlay2D", true);
+                visibility.ui = value->value("ui", true);
+            }
+            _visibility.emplace(it.key(), visibility);
         }
         return true;
     } catch (const std::exception& exception) {
@@ -119,6 +131,7 @@ bool EditorSceneViewWorkspace::open(const std::string& projectRoot,
             *error = std::string("Invalid editor workspace: ") + exception.what();
         }
         _states.clear();
+        _visibility.clear();
         return false;
     }
 }
@@ -146,6 +159,17 @@ bool EditorSceneViewWorkspace::save(std::string* error) const
             entry["threeDYawRadians"] = state.threeDYawRadians;
             entry["threeDPitchRadians"] = state.threeDPitchRadians;
             entry["threeDMoveSpeed"] = state.threeDMoveSpeed;
+            const EditorSceneVisibility visibility = [&]() {
+                const auto found = _visibility.find(key);
+                return found != _visibility.end()
+                    ? found->second : EditorSceneVisibility{};
+            }();
+            entry["visibility"] = {
+                {"meshes", visibility.meshes},
+                {"worldLit2D", visibility.worldLit2D},
+                {"cameraOverlay2D", visibility.cameraOverlay2D},
+                {"ui", visibility.ui},
+            };
             root["scenes"][key] = std::move(entry);
         }
         const fs::path path(_path);
@@ -189,6 +213,22 @@ void EditorSceneViewWorkspace::set(
 {
     const std::string key = keyForScene(scenePath);
     if (!key.empty()) _states[key] = state;
+}
+
+const EditorSceneVisibility* EditorSceneViewWorkspace::findVisibility(
+    const std::string& scenePath) const noexcept
+{
+    const std::string key = keyForScene(scenePath);
+    const auto found = _visibility.find(key);
+    return found != _visibility.end() ? &found->second : nullptr;
+}
+
+void EditorSceneViewWorkspace::setVisibility(
+    const std::string& scenePath,
+    const EditorSceneVisibility& visibility)
+{
+    const std::string key = keyForScene(scenePath);
+    if (!key.empty()) _visibility[key] = visibility;
 }
 
 std::string EditorSceneViewWorkspace::keyForScene(

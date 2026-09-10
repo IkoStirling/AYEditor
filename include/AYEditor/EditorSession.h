@@ -62,6 +62,7 @@ class Image;
 class ModalDialog;
 class CheckBox;
 class ListView;
+class UILayoutLoader;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
@@ -259,6 +260,11 @@ public:
     const EditorFreecam& freecam() const noexcept { return _sceneCamera.threeD(); }
     const EditorSceneCamera& sceneCamera() const noexcept { return _sceneCamera; }
     SceneViewMode sceneViewMode() const noexcept { return _sceneCamera.mode(); }
+    const EditorSceneVisibility& sceneVisibility() const noexcept {
+        return _sceneVisibility;
+    }
+    void setSceneVisibility(const EditorSceneVisibility& visibility,
+                            bool persist = true);
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
@@ -333,10 +339,14 @@ private:
     void pushSceneCameraToRenderer();
     bool freecamActive() const;
     void syncSceneViewToolbar();
+    void syncSceneVisibilityMenu();
     void selectInitialSceneViewForDocument();
     void fitTwoDViewToSceneCamera();
     void rememberCurrentSceneView();
     void pollSceneViewWorkspace(float dtSeconds);
+    void refreshSceneUiPreview();
+    void clearSceneUiPreview();
+    void syncSceneUiPreviewBounds();
     void updateViewportCoordinateFeedback(float x, float y);
     void requestHostClose();
     void requestHostMinimize();
@@ -546,6 +556,9 @@ private:
     // Play clears these overrides so Scene runtime cameras remain authoritative.
     EditorSceneCamera _sceneCamera;
     EditorSceneViewWorkspace _sceneViewWorkspace;
+    EditorSceneVisibility _sceneVisibility;
+    std::unique_ptr<ayt::ui::UILayoutLoader> _sceneUiPreviewLoader;
+    ayt::ui::Widget* _sceneUiPreviewHost = nullptr;
     bool _sceneViewWorkspaceDirty = false;
     float _sceneViewWorkspaceSaveCountdown = 0.0f;
     // Click-vs-drag: LMB down on viewport arms a pending click; if the

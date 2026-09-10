@@ -1,9 +1,12 @@
 #include <AYEditor/Editor2DViewportModel.h>
 #include <AYEditor/EditorSceneCamera.h>
 #include <AYEditor/EditorSceneViewWorkspace.h>
+#include <AYEditor/EditorProjectRuntimeValidator.h>
 #include <AYEditor/EditorTilemapDocument.h>
 #include <AYEditor/EditorSession.h>
 #include <AYEditor/EditorTransformGizmo.h>
+
+#include "EditorGameViewTestAccess.h"
 #include <AYEditor/EditorWorkspace.h>
 #include <AYEntity/components/OrthoCameraComponent.h>
 #include <AYEntity/components/SpriteComponent.h>
@@ -105,11 +108,18 @@ TEST_CASE(SceneViewWorkspaceRoundTripsBothCameraPoses)
     state.twoDCenter = {123.0f, 456.0f};
     state.twoDViewHeight = 321.0f;
     state.threeDEye = {9.0f, 8.0f, 7.0f};
+    EditorSceneVisibility visibility;
+    visibility.meshes = false;
+    visibility.worldLit2D = true;
+    visibility.cameraOverlay2D = false;
+    visibility.ui = true;
 
     EditorSceneViewWorkspace written;
     std::string error;
     CHECK_TRUE(written.open(root.string(), &error));
     written.set((root / "Assets/worlds/main.ayscene").string(), state);
+    written.setVisibility(
+        (root / "Assets/worlds/main.ayscene").string(), visibility);
     CHECK_TRUE(written.save(&error));
 
     EditorSceneViewWorkspace loaded;
@@ -125,7 +135,165 @@ TEST_CASE(SceneViewWorkspaceRoundTripsBothCameraPoses)
         CHECK_FLOAT_EQ(restored->twoDViewHeight, 321.0f, 1e-5f);
         CHECK_FLOAT_EQ(restored->threeDEye.z, 7.0f, 1e-5f);
     }
+    const EditorSceneVisibility* restoredVisibility = loaded.findVisibility(
+        (root / "Assets/worlds/main.ayscene").string());
+    CHECK(restoredVisibility != nullptr);
+    CHECK(restoredVisibility != nullptr && !restoredVisibility->meshes);
+    CHECK(restoredVisibility != nullptr && restoredVisibility->worldLit2D);
+    CHECK(restoredVisibility != nullptr
+          && !restoredVisibility->cameraOverlay2D);
+    CHECK(restoredVisibility != nullptr && restoredVisibility->ui);
     fs::remove_all(root, ignored);
+}
+
+TEST_CASE(StandardMixedProjectUsesOneSceneAcrossValidationProfiles)
+{
+    namespace fs = std::filesystem;
+    const fs::path projectRoot = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        .parent_path() / "Validation" / "Mixed2D3DProject";
+    const fs::path scenePath = projectRoot / "Assets" / "worlds"
+        / "mixed_room.ayscene";
+
+    const EditorRuntimeValidationResult headless =
+        EditorProjectRuntimeValidator::validate(
+            projectRoot.string(), EditorRuntimeValidationProfile::Headless);
+    const EditorRuntimeValidationResult client =
+        EditorProjectRuntimeValidator::validate(
+            projectRoot.string(), EditorRuntimeValidationProfile::FullClient);
+    CHECK_TRUE(static_cast<bool>(headless));
+    CHECK_TRUE(static_cast<bool>(client));
+    CHECK_INT_EQ(static_cast<uint32_t>(headless.scenes), 1u);
+    CHECK_INT_EQ(static_cast<uint32_t>(headless.uiLayouts), 1u);
+    CHECK_INT_EQ(static_cast<uint32_t>(client.scenes), 1u);
+    CHECK_INT_EQ(static_cast<uint32_t>(client.uiLayouts), 1u);
+
+    ayt::scene::Scene scene(ayt::scene::SceneMode::Edit, "mixed-room");
+    CHECK_TRUE(scene.load(scenePath.string()));
+    bool hasMesh = false;
+    bool hasWorldLit = false;
+    bool hasOverlay = false;
+    bool hasOverlayCamera = false;
+    for (ayt::entity::Entity* entity : scene.world().getAllEntities()) {
+        if (entity == nullptr) continue;
+        hasMesh |= entity->getComponent<ayt::entity::MeshComponent>() != nullptr;
+        if (const auto* sprite = entity->getComponent<
+                ayt::entity::SpriteComponent>()) {
+            hasWorldLit |= sprite->renderDomain == 1;
+            hasOverlay |= sprite->renderDomain == 0;
+        }
+        hasOverlayCamera |= entity->getComponent<
+            ayt::entity::OrthoCameraComponent>() != nullptr;
+    }
+    CHECK(hasMesh);
+    CHECK(hasWorldLit);
+    CHECK(hasOverlay);
+    CHECK(hasOverlayCamera);
+}
+
+TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
+{
+    namespace fs = std::filesystem;
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    if (layoutPath.empty()) return;
+    const fs::path sourceRoot = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        .parent_path() / "Validation" / "Mixed2D3DProject";
+    const fs::path projectRoot = fs::current_path()
+        / "editor_mixed_scene_visibility_test";
+    std::error_code ignored;
+    fs::remove_all(projectRoot, ignored);
+    fs::copy(sourceRoot, projectRoot, fs::copy_options::recursive);
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.projectRoot = projectRoot.string();
+    desc.engineAssetsRoot = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        .parent_path().string();
+    EditorSession session;
+    CHECK_TRUE(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    ayt::ui::Widget* preview = nullptr;
+    for (ayt::ui::Widget* child : session.ui().getOverlayRoot()->getChildren()) {
+        if (child != nullptr && child->getId() == "scene_ui_preview_host") {
+            preview = child;
+            break;
+        }
+    }
+    CHECK(preview != nullptr
+          && preview->getId() == "scene_ui_preview_host");
+    ayt::ui::Widget* hud = preview != nullptr
+        && !preview->getChildren().empty()
+        ? preview->getChildren().front() : nullptr;
+    CHECK(hud != nullptr && hud->getId() == "mixed_hud_root");
+    CHECK(session.ui().findById("mixed_hud_root") == nullptr);
+    CHECK(preview != nullptr && preview->hitTest({640.0f, 360.0f}) == nullptr);
+
+    const SceneViewMode modeBefore = session.sceneViewMode();
+    EditorSceneVisibility visibility;
+    visibility.meshes = false;
+    visibility.worldLit2D = true;
+    visibility.cameraOverlay2D = false;
+    visibility.ui = false;
+    session.setSceneVisibility(visibility);
+    CHECK(session.sceneViewMode() == modeBefore);
+    CHECK_FALSE(session.sceneVisibility().meshes);
+    CHECK(session.sceneVisibility().worldLit2D);
+    CHECK_FALSE(session.sceneVisibility().cameraOverlay2D);
+    CHECK_FALSE(session.sceneVisibility().ui);
+    CHECK(preview != nullptr && !preview->isVisible());
+
+    auto* meshItem = dynamic_cast<ayt::ui::MenuItem*>(
+        session.ui().findById("menu_view_meshes"));
+    auto* worldLitItem = dynamic_cast<ayt::ui::MenuItem*>(
+        session.ui().findById("menu_view_world_lit_2d"));
+    auto* overlayItem = dynamic_cast<ayt::ui::MenuItem*>(
+        session.ui().findById("menu_view_camera_overlay_2d"));
+    auto* uiItem = dynamic_cast<ayt::ui::MenuItem*>(
+        session.ui().findById("menu_view_ui"));
+    CHECK(meshItem != nullptr && meshItem->getText() == L"[ ] Meshes");
+    CHECK(worldLitItem != nullptr
+          && worldLitItem->getText() == L"[x] World Lit 2D");
+    CHECK(overlayItem != nullptr
+          && overlayItem->getText() == L"[ ] Camera Overlay 2D");
+    CHECK(uiItem != nullptr && uiItem->getText() == L"[ ] UI Preview");
+
+    EditorSceneDocument* editDocument = session.document();
+    const std::size_t editEntityCount = editDocument != nullptr
+        ? editDocument->scene().world().getAllEntities().size() : 0u;
+    visibility.ui = true;
+    session.setSceneVisibility(visibility, false);
+    CHECK(preview != nullptr && preview->isVisible());
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Play);
+    CHECK(session.gameView().mode() == EditorMode::Play);
+    CHECK(session.document() == editDocument);
+    CHECK(editDocument != nullptr
+          && editDocument->scene().world().getAllEntities().size()
+              == editEntityCount);
+    CHECK(preview != nullptr && !preview->isVisible());
+    EditorGameViewTestAccess::forceModeAndNotify(
+        session.gameView(), EditorMode::Edit);
+    CHECK(session.gameView().mode() == EditorMode::Edit);
+    CHECK(preview != nullptr && preview->isVisible());
+    visibility.ui = false;
+    session.setSceneVisibility(visibility);
+
+    session.shutdown();
+
+    EditorSceneViewWorkspace workspace;
+    std::string error;
+    CHECK_TRUE(workspace.open(projectRoot.string(), &error));
+    const EditorSceneVisibility* restored = workspace.findVisibility(
+        (projectRoot / "Assets" / "worlds" / "mixed_room.ayscene").string());
+    CHECK(restored != nullptr);
+    CHECK(restored != nullptr && !restored->meshes);
+    CHECK(restored != nullptr && restored->worldLit2D);
+    CHECK(restored != nullptr && !restored->cameraOverlay2D);
+    CHECK(restored != nullptr && !restored->ui);
+    fs::remove_all(projectRoot, ignored);
 }
 
 TEST_CASE(SceneSessionCenterRayKeepsLegacyThreeDPickingContract)

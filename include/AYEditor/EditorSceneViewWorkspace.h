@@ -7,6 +7,15 @@
 
 namespace ayt::editor {
 
+// Per-Scene authoring visibility. These flags are presentation state only:
+// they never mutate component visibility or the serialized .ayscene.
+struct EditorSceneVisibility {
+    bool meshes = true;
+    bool worldLit2D = true;
+    bool cameraOverlay2D = true;
+    bool ui = true;
+};
+
 // Project-local, user-owned Scene View state. The file lives at
 // .ayeditor/workspace.json and never enters .ayscene serialization.
 class EditorSceneViewWorkspace {
@@ -18,6 +27,10 @@ public:
         const std::string& scenePath) const noexcept;
     void set(const std::string& scenePath,
              const EditorSceneCameraState& state);
+    const EditorSceneVisibility* findVisibility(
+        const std::string& scenePath) const noexcept;
+    void setVisibility(const std::string& scenePath,
+                       const EditorSceneVisibility& visibility);
 
     const std::string& projectRoot() const noexcept { return _projectRoot; }
     const std::string& path() const noexcept { return _path; }
@@ -29,6 +42,7 @@ private:
     std::string _projectRoot;
     std::string _path;
     std::unordered_map<std::string, EditorSceneCameraState> _states;
+    std::unordered_map<std::string, EditorSceneVisibility> _visibility;
 };
 
 } // namespace ayt::editor
