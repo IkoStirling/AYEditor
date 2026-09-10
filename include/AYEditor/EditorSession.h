@@ -260,6 +260,13 @@ private:
     void openAudioEditorWindow();
     void validateProjectContent();
     void syncAudioEditorLifetime();
+    bool ensureTilemapWindow();
+    void syncTilemapWindowLifetime();
+    bool confirmTilemapWindowClose();
+    bool routeTilemapWindowKey(ayt::ui::UIManager& ui,
+                               ayt::device::KeyCode key,
+                               bool pressed);
+    void refreshTilemapWindowTitle();
     void syncUiDesignerLifetime();
     bool confirmUiDesignerClose();
     void releaseUiDesigner(bool closeDocument);
@@ -451,6 +458,18 @@ private:
     // UI is still alive (its render path can be called with active
     // pointer in primary, never nullptr).
     std::unique_ptr<EditorChildWindowManager> _childWindows;
+
+    // Tilemap documents share the regular EditorWorkspace/document and
+    // command infrastructure, but are presented in one dedicated modeless
+    // tool window. The private DockArea preserves document tabs while the
+    // inner Tilemap workspace owns its draggable source/canvas/inspector
+    // splitters.
+    std::unique_ptr<EditorDockViewHost> _tilemapDockViewHost;
+    ayt::ui::DockArea* _tilemapWindowDock = nullptr;
+    EditorChildWindowManager::Handle _tilemapWindowHandle = nullptr;
+    bool _tilemapWindowUiPrepared = false;
+    bool _tilemapWindowClosePending = false;
+    std::string _tilemapWindowTitle;
 
     // UI Designer is a dedicated AYDevice-owned modeless tool window. Its
     // document remains in EditorWorkspace; only presentation is outside the

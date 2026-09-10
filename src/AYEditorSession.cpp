@@ -1006,10 +1006,23 @@ void EditorSession::shutdown() {
     // avoids an UAF cleanup race against the primary.
     _audioEditor.reset();
     _audioEditorHandle = nullptr;
+    if (_tilemapDockViewHost != nullptr) {
+        _tilemapDockViewHost->prepareForUiShutdown();
+        _tilemapWindowUiPrepared = true;
+    }
     if (_dockViewHost != nullptr) {
         _dockViewHost->prepareForUiShutdown();
     }
     _childWindows.reset();
+    if (_tilemapDockViewHost != nullptr) {
+        _tilemapDockViewHost->releaseAfterUiShutdown();
+        _tilemapDockViewHost.reset();
+    }
+    _tilemapWindowDock = nullptr;
+    _tilemapWindowHandle = nullptr;
+    _tilemapWindowUiPrepared = false;
+    _tilemapWindowClosePending = false;
+    _tilemapWindowTitle.clear();
     _mainDock = nullptr;
     // Tear down Play/renderer borrow before UI widgets — avoids
     // Inspector path strings and GPU borrows racing UI teardown.
@@ -1123,6 +1136,18 @@ void EditorSession::update(float dt) {
 
 void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     const float dt = hostFrame.realWallDeltaTime;
+    syncTilemapWindowLifetime();
+    if (_tilemapWindowClosePending && _childWindows != nullptr
+        && _tilemapWindowHandle != nullptr) {
+        const EditorChildWindowManager::Handle handle = _tilemapWindowHandle;
+        _tilemapWindowClosePending = false;
+        _childWindows->closeChildWindow(handle);
+        syncTilemapWindowLifetime();
+    }
+    if (_tilemapDockViewHost != nullptr) {
+        _tilemapDockViewHost->tick(dt);
+        refreshTilemapWindowTitle();
+    }
     syncUiDesignerLifetime();
     if (_uiDesigner != nullptr) {
         _uiDesigner->pumpDeferred(dt);
@@ -1138,6 +1163,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     // tickAll renders into each HWND internally.
     if (_childWindows) {
         _childWindows->tickAll(dt);
+        syncTilemapWindowLifetime();
     }
     _ui.update(dt);
     pollProjectRunState(dt);
@@ -4045,10 +4071,286 @@ bool EditorSession::openAsset(EditorAssetId assetId)
     }
 }
 
+bool EditorSession::ensureTilemapWindow()
+{
+    syncTilemapWindowLifetime();
+    if (_tilemapDockViewHost != nullptr && _tilemapWindowHandle != nullptr) {
+        _tilemapWindowClosePending = false;
+        (void)_childWindows->activateChildWindow(_tilemapWindowHandle);
+        return true;
+    }
+    if (_childWindows == nullptr || _workspace == nullptr
+        || _editorHostServices == nullptr) {
+        return false;
+    }
+
+    ChildWindowConfig cfg;
+    cfg.title = "2D Tilemap Editor";
+    cfg.x = 112;
+    cfg.y = 82;
+    cfg.width = 1280;
+    cfg.height = 800;
+    cfg.beforeMouseButton = [this](
+        ayt::ui::UIManager&, float x, float y,
+        int button, bool pressed) {
+        if (_tilemapDockViewHost == nullptr) return false;
+        return pressed
+            ? _tilemapDockViewHost->routePointerDown(x, y, button)
+            : _tilemapDockViewHost->routePointerUp(x, y, button);
+    };
+    cfg.beforeMouseMove = [this](
+        ayt::ui::UIManager&, float x, float y) {
+        return _tilemapDockViewHost != nullptr
+            && _tilemapDockViewHost->routePointerMove(x, y);
+    };
+    cfg.beforeMouseWheel = [this](
+        ayt::ui::UIManager&, float x, float y, float deltaY) {
+        return _tilemapDockViewHost != nullptr
+            && _tilemapDockViewHost->routeWheel(x, y, deltaY);
+    };
+    cfg.beforeKey = [this](ayt::ui::UIManager& ui,
+                           ayt::device::KeyCode key, bool pressed) {
+        return routeTilemapWindowKey(ui, key, pressed);
+    };
+    cfg.onFocusChanged = [this](ayt::ui::UIManager&, bool focused) {
+        if (_tilemapDockViewHost == nullptr) return;
+        if (focused) {
+            if (const EditorHostedView* active =
+                    _tilemapDockViewHost->active()) {
+                (void)_tilemapDockViewHost->activate(active->documentId);
+            }
+        } else {
+            (void)_tilemapDockViewHost->routeKeyUp(ayt::ui::UIKey_Space);
+            _tilemapDockViewHost->releaseInputFocus();
+        }
+    };
+    cfg.resolveCursorHint = [this](
+        ayt::ui::UIManager&, float x, float y) {
+        ayt::ui::UiCursorHint hint = ayt::ui::UiCursorHint::Default;
+        if (_tilemapDockViewHost != nullptr) {
+            (void)_tilemapDockViewHost->resolveCursorHint(x, y, hint);
+        }
+        return hint;
+    };
+    cfg.beforeCloseRequested = [this](ayt::ui::UIManager&) {
+        return confirmTilemapWindowClose();
+    };
+    cfg.beforeClose = [this](ayt::ui::UIManager&) {
+        if (_tilemapDockViewHost != nullptr) {
+            _tilemapDockViewHost->prepareForUiShutdown();
+            _tilemapWindowUiPrepared = true;
+        }
+        _tilemapWindowDock = nullptr;
+        _tilemapWindowHandle = nullptr;
+    };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        setAssetBrowserStatus(
+            L"2D Tilemap Editor window creation failed", true);
+        return false;
+    }
+    ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
+    if (childUi == nullptr || childUi->root() == nullptr) {
+        _childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"2D Tilemap Editor UI host failed", true);
+        return false;
+    }
+
+    auto* dock = new ayt::ui::DockArea();
+    dock->setId("tilemap_window_dock");
+    dock->setLayoutPositionManaged(false);
+    dock->setLayoutSizeManaged(false);
+    childUi->root()->addChild(dock);
+    ayt::ui::AnchorLayout fill;
+    fill.anchorMax = {1.0f, 1.0f};
+    dock->setAnchorLayout(fill);
+
+    _tilemapWindowHandle = handle;
+    _tilemapWindowDock = dock;
+    _tilemapWindowUiPrepared = false;
+    _tilemapWindowClosePending = false;
+    _tilemapDockViewHost = std::make_unique<EditorDockViewHost>(
+        *_workspace, *dock, *_editorHostServices, childUi);
+    _tilemapDockViewHost->setCloseActionProvider(
+        [this](const EditorHostedView& hosted) {
+            if (hosted.document == nullptr || !hosted.document->isDirty()) {
+                return EditorDocumentCloseAction::Discard;
+            }
+            HWND owner = _tilemapWindowHandle != nullptr
+                ? static_cast<HWND>(_tilemapWindowHandle) : _hostWindow;
+            if (owner == nullptr) return EditorDocumentCloseAction::Discard;
+            const std::wstring prompt = ayt::ui::decodeUtf8Text(
+                hosted.document->title())
+                + L" has unsaved changes.\n\nSave before closing?";
+            const int choice = ::MessageBoxW(
+                owner, prompt.c_str(), L"2D Tilemap Editor",
+                MB_YESNOCANCEL | MB_ICONWARNING);
+            if (choice == IDYES) return EditorDocumentCloseAction::Save;
+            return choice == IDNO
+                ? EditorDocumentCloseAction::Discard
+                : EditorDocumentCloseAction::Cancel;
+        });
+    dock->setOnCardCloseRequested([this](ayt::ui::DockCard* card) {
+        if (_tilemapDockViewHost == nullptr || card == nullptr) return false;
+        const bool handled = _tilemapDockViewHost->requestClose(card);
+        if (handled && _tilemapDockViewHost->count() == 0u) {
+            _tilemapWindowClosePending = true;
+        }
+        return handled;
+    });
+    childUi->invalidateLayout();
+    childUi->layout();
+    return true;
+}
+
+void EditorSession::syncTilemapWindowLifetime()
+{
+    if (_tilemapDockViewHost == nullptr) return;
+    bool alive = false;
+    if (_childWindows != nullptr && _tilemapWindowHandle != nullptr) {
+        for (const auto& entry : _childWindows->entries()) {
+            if (entry.handle == _tilemapWindowHandle) {
+                alive = true;
+                break;
+            }
+        }
+    }
+    if (alive) return;
+
+    // beforeClose prepares view callbacks while the child UI tree is still
+    // alive. The manager has now destroyed that tree; only release the
+    // widget-free hosted records here.
+    if (_tilemapWindowUiPrepared) {
+        _tilemapDockViewHost->releaseAfterUiShutdown();
+    }
+    _tilemapDockViewHost.reset();
+    _tilemapWindowDock = nullptr;
+    _tilemapWindowHandle = nullptr;
+    _tilemapWindowUiPrepared = false;
+    _tilemapWindowClosePending = false;
+    _tilemapWindowTitle.clear();
+}
+
+bool EditorSession::confirmTilemapWindowClose()
+{
+    if (_tilemapDockViewHost == nullptr || _workspace == nullptr) return true;
+    struct PendingClose {
+        std::string documentId;
+        std::shared_ptr<IEditorDocument> document;
+        bool save = false;
+    };
+    std::vector<PendingClose> pending;
+    for (const EditorDocumentRecord& record :
+         _workspace->documents().records()) {
+        if (_tilemapDockViewHost->find(record.documentId) == nullptr) continue;
+        PendingClose close{record.documentId, record.document, false};
+        if (record.document != nullptr && record.document->isDirty()) {
+            HWND owner = _tilemapWindowHandle != nullptr
+                ? static_cast<HWND>(_tilemapWindowHandle) : _hostWindow;
+            if (owner != nullptr) {
+                const std::wstring prompt = ayt::ui::decodeUtf8Text(
+                    record.document->title())
+                    + L" has unsaved changes.\n\nSave before closing?";
+                const int choice = ::MessageBoxW(
+                    owner, prompt.c_str(), L"2D Tilemap Editor",
+                    MB_YESNOCANCEL | MB_ICONWARNING);
+                if (choice == IDCANCEL) return false;
+                close.save = choice == IDYES;
+            }
+        }
+        pending.push_back(std::move(close));
+    }
+
+    // Save every requested document before removing any tab. A failed save
+    // therefore keeps the window and all of its documents intact.
+    for (const PendingClose& close : pending) {
+        if (!close.save || close.document == nullptr) continue;
+        std::string error;
+        bool saved = false;
+        try {
+            saved = close.document->save(&error);
+        } catch (const std::exception& exception) {
+            error = exception.what();
+        } catch (...) {
+            error = "Document save raised an unknown exception.";
+        }
+        if (!saved) {
+            setAssetBrowserStatus(L"Tilemap save failed: "
+                + ayt::ui::decodeUtf8Text(error), true);
+            return false;
+        }
+    }
+    for (const PendingClose& close : pending) {
+        const EditorCloseResult result = _tilemapDockViewHost->close(
+            close.documentId, EditorDocumentCloseAction::Discard);
+        if (!result) return false;
+    }
+    return true;
+}
+
+bool EditorSession::routeTilemapWindowKey(
+    ayt::ui::UIManager& ui, ayt::device::KeyCode key, bool pressed)
+{
+    if (_tilemapDockViewHost == nullptr || _workspace == nullptr) return false;
+    const int uiKey = static_cast<int>(ayt::ui::fromDeviceKey(key));
+    if (!pressed) return _tilemapDockViewHost->routeKeyUp(uiKey);
+
+    if (const EditorHostedView* active = _tilemapDockViewHost->active()) {
+        (void)_tilemapDockViewHost->activate(active->documentId);
+    }
+    _tilemapDockViewHost->syncCommandTargetFromFocus();
+    const ayt::ui::Widget* focused = ui.getFocusedWidget();
+    const bool textEditing = focused != nullptr
+        && focused->isTextEditingWidget();
+    const std::uint8_t modifiers = static_cast<std::uint8_t>(
+        ui.getModifiers() & 0x07u);
+    const std::string command = EditorShortcutRegistry::instance()
+        .commandFor(uiKey, modifiers);
+    if ((!textEditing && (command == "edit.undo"
+                          || command == "edit.redo"))
+        || command == "file.save") {
+        return _workspace->commands().execute(command);
+    }
+    if (!textEditing && modifiers == 0u) {
+        return _tilemapDockViewHost->routeKeyDown(uiKey);
+    }
+    return false;
+}
+
+void EditorSession::refreshTilemapWindowTitle()
+{
+    if (_childWindows == nullptr || _tilemapWindowHandle == nullptr
+        || _tilemapDockViewHost == nullptr) return;
+    std::string title = "2D Tilemap Editor";
+    if (const EditorHostedView* active = _tilemapDockViewHost->active()) {
+        if (active->document != nullptr) {
+            title += " - " + active->document->title();
+            if (active->document->isDirty()) title += " *";
+        }
+    }
+    if (title == _tilemapWindowTitle) return;
+    if (_childWindows->setChildWindowTitle(_tilemapWindowHandle, title)) {
+        _tilemapWindowTitle = std::move(title);
+    }
+}
+
 bool EditorSession::openTilemapEditor(const std::string& path)
 {
-    if (_dockViewHost == nullptr || _workspace == nullptr) {
+    if (_workspace == nullptr) {
         setAssetBrowserStatus(L"2D Tilemap Editor is unavailable", true);
+        return false;
+    }
+
+    EditorDockViewHost* targetHost = _dockViewHost.get();
+    bool dedicatedWindow = false;
+    if (_childWindows != nullptr && _editorHostServices != nullptr
+        && ensureTilemapWindow()) {
+        targetHost = _tilemapDockViewHost.get();
+        dedicatedWindow = targetHost != nullptr;
+    }
+    if (targetHost == nullptr) {
+        setAssetBrowserStatus(L"2D Tilemap Editor host is unavailable", true);
         return false;
     }
 
@@ -4062,18 +4364,35 @@ bool EditorSession::openTilemapEditor(const std::string& path)
 
     EditorDockViewOptions options;
     if (path.empty()) options.cardId = "card_tilemap_workspace";
-    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+    const EditorDockOpenResult opened = targetHost->open(request, options);
     if (!opened) {
         setAssetBrowserStatus(L"2D Tilemap Editor open failed: "
             + ayt::ui::decodeUtf8Text(opened.error), true);
+        if (dedicatedWindow && targetHost->count() == 0u) {
+            _tilemapWindowClosePending = true;
+        }
         return false;
     }
-    wirePromoteCallback();
-    _ui.invalidateLayout();
+    if (dedicatedWindow) {
+        if (_tilemapWindowHandle != nullptr) {
+            (void)_childWindows->activateChildWindow(_tilemapWindowHandle);
+        }
+        if (ayt::ui::UIManager* childUi =
+                _childWindows->uiForHandle(_tilemapWindowHandle)) {
+            childUi->invalidateLayout();
+            childUi->layout();
+        }
+        refreshTilemapWindowTitle();
+    } else {
+        wirePromoteCallback();
+        _ui.invalidateLayout();
+    }
     setAssetBrowserStatus(opened.document.status
             == EditorOpenStatus::FocusedExisting
         ? L"2D Tilemap Editor focused"
-        : L"2D Tilemap Editor opened");
+        : dedicatedWindow
+            ? L"2D Tilemap Editor opened in a dedicated window"
+            : L"2D Tilemap Editor opened");
     if (_repaintCallback) _repaintCallback();
     return true;
 }

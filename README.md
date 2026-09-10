@@ -11,7 +11,9 @@ AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play �
 多格 Stamp 笔刷。Tilemap 也提供独立 Shadow 模式、16 种四象限遮罩、显隐和地图级
 RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
 主界面可通过 `Tools -> 2D Tilemap Editor...` 或第二行网格图标直接打开同一套
-Tilemap 工作区；不再要求先在 Content Browser 中找到并双击地图资产。
+独立非模态 Tilemap 工具窗口；窗口复用 AYEditor 的文档/命令体系，内部提供可拖动
+三栏、可滚动侧栏和可横向溢出的工具栏，不再要求先在 Content Browser 中找到并
+双击地图资产。
 
 ## 公开接口
 

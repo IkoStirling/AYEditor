@@ -19,10 +19,13 @@
 #include <AYUI/ListView.h>
 #include <AYUI/Modal.h>
 #include <AYUI/Panel.h>
+#include <AYUI/ScrollView.h>
 #include <AYUI/Slider.h>
+#include <AYUI/SplitterHandle.h>
 #include <AYUI/SvgIcon.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/TextInput.h>
+#include <AYUI/ToolBar.h>
 #include <AYUI/Tooltip.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
@@ -421,9 +424,11 @@ public:
         root->setSpacing(6.0f);
         root->setPadding(8.0f, 6.0f, 8.0f, 8.0f);
 
-        auto* toolbar = new ayt::ui::HBox();
+        auto* commandRow = new ayt::ui::HBox();
+        commandRow->setId("tilemap_workspace_command_row");
+        commandRow->setSpacing(6.0f);
+        auto* toolbar = new ayt::ui::ToolBar();
         toolbar->setId("tilemap_workspace_toolbar");
-        toolbar->setSpacing(4.0f);
         _pencil = addIconButton(
             toolbar, "tilemap_tool_pencil", "pencil.svg", L"P",
             L"Pencil (P)", [this]() {
@@ -498,15 +503,21 @@ public:
             });
         _summary = new ayt::ui::TextLabel();
         _summary->setFontSize(12);
-        toolbar->addWidget(_summary, 0.0f);
-        root->addWidget(toolbar, 32.0f);
+        ayt::ui::BoxSlotLimits toolbarLimits;
+        toolbarLimits.minWidth = 320.0f;
+        commandRow->addWidget(toolbar, 0.0f, toolbarLimits);
+        ayt::ui::BoxSlotLimits summaryLimits;
+        summaryLimits.minWidth = 150.0f;
+        commandRow->addWidget(_summary, 270.0f, summaryLimits);
+        root->addWidget(commandRow, 36.0f);
 
         auto* body = new ayt::ui::HBox();
         body->setId("tilemap_workspace_body");
-        body->setSpacing(7.0f);
+        body->setSpacing(0.0f);
         root->addWidget(body, 0.0f);
 
         auto* assets = new ayt::ui::VBox();
+        assets->setId("tilemap_workspace_assets");
         assets->setSpacing(5.0f);
         assets->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
         assets->addWidget(makeLabel(L"Source Sheet", 14), 24.0f);
@@ -629,7 +640,24 @@ public:
             refresh();
             _host.requestRepaint();
         });
-        body->addWidget(assets, 300.0f);
+        auto* assetsScroll = new ayt::ui::ScrollView();
+        assetsScroll->setId("tilemap_workspace_assets_scroll");
+        assetsScroll->setVerticalScrollBarVisibility(
+            ayt::ui::ScrollView::ScrollBarVisibility::Auto);
+        assetsScroll->setHorizontalScrollBarVisibility(
+            ayt::ui::ScrollView::ScrollBarVisibility::Hidden);
+        assetsScroll->setContentOwned(assets);
+        ayt::ui::BoxSlotLimits assetsLimits;
+        assetsLimits.minWidth = 248.0f;
+        assetsLimits.maxWidth = 520.0f;
+        body->addWidget(assetsScroll, 300.0f, assetsLimits);
+
+        auto* leftSplitter = new ayt::ui::SplitterHandle();
+        leftSplitter->setId("tilemap_workspace_left_splitter");
+        leftSplitter->setOrientation(
+            ayt::ui::SplitterHandle::Orientation::Horizontal);
+        body->addWidget(leftSplitter,
+                        ayt::ui::SplitterHandle::kDefaultWidth);
 
         auto* canvasPanel = new ayt::ui::Panel();
         canvasPanel->setId("tilemap_workspace_canvas_panel");
@@ -653,9 +681,19 @@ public:
             updateSummary();
         });
         canvasPanel->addChild(_canvas);
-        body->addWidget(canvasPanel, 0.0f);
+        ayt::ui::BoxSlotLimits canvasLimits;
+        canvasLimits.minWidth = 360.0f;
+        body->addWidget(canvasPanel, 0.0f, canvasLimits);
+
+        auto* rightSplitter = new ayt::ui::SplitterHandle();
+        rightSplitter->setId("tilemap_workspace_right_splitter");
+        rightSplitter->setOrientation(
+            ayt::ui::SplitterHandle::Orientation::Horizontal);
+        body->addWidget(rightSplitter,
+                        ayt::ui::SplitterHandle::kDefaultWidth);
 
         auto* inspector = new ayt::ui::VBox();
+        inspector->setId("tilemap_workspace_inspector");
         inspector->setSpacing(5.0f);
         inspector->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
         inspector->addWidget(makeLabel(L"Render Layers", 14), 24.0f);
@@ -755,7 +793,17 @@ public:
             L"Right click: pick visible tile", 11);
         help->setWordWrap(true);
         inspector->addWidget(help, 60.0f);
-        body->addWidget(inspector, 238.0f);
+        auto* inspectorScroll = new ayt::ui::ScrollView();
+        inspectorScroll->setId("tilemap_workspace_inspector_scroll");
+        inspectorScroll->setVerticalScrollBarVisibility(
+            ayt::ui::ScrollView::ScrollBarVisibility::Auto);
+        inspectorScroll->setHorizontalScrollBarVisibility(
+            ayt::ui::ScrollView::ScrollBarVisibility::Hidden);
+        inspectorScroll->setContentOwned(inspector);
+        ayt::ui::BoxSlotLimits inspectorLimits;
+        inspectorLimits.minWidth = 238.0f;
+        inspectorLimits.maxWidth = 440.0f;
+        body->addWidget(inspectorScroll, 280.0f, inspectorLimits);
 
         loadSavedAtlasImages();
         refresh();
@@ -1008,6 +1056,35 @@ private:
         button->setOnClicked(std::move(clicked));
         parent->addWidget(button, height);
         _buttons.push_back(button);
+        return button;
+    }
+
+    ayt::ui::Button* addIconButton(
+        ayt::ui::ToolBar* parent, const char* id,
+        const std::filesystem::path& iconName,
+        const std::wstring& fallbackText,
+        const std::wstring& accessibleLabel,
+        std::function<void()> clicked)
+    {
+        auto* button = parent->addButton(fallbackText, std::move(clicked));
+        button->setId(id);
+        button->setAccessibilityLabel(accessibleLabel);
+        button->setPadding(6.0f, 4.0f, 6.0f, 4.0f);
+        button->setSize({32.0f, 28.0f});
+        std::string error;
+        if (auto icon = ayt::ui::SvgDocument::loadFromFile(
+                _iconRoot / iconName, &error)) {
+            button->setText(L"");
+            button->setIconDocument(std::move(icon));
+            button->setIconSize(18.0f);
+            button->setIconColor(inactiveIconColor());
+        }
+        _buttons.push_back(button);
+        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        if (auto* tooltip = ayt::ui::Tooltip::attachTo(button)) {
+            tooltip->setText(accessibleLabel);
+            _tooltips.push_back(tooltip);
+        }
         return button;
     }
 

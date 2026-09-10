@@ -20,9 +20,11 @@
 #include "AYUI/MenuBar.h"
 #include "AYUI/Panel.h"
 #include "AYUI/ScrollView.h"
+#include "AYUI/SplitterHandle.h"
 #include "AYUI/Style.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
+#include "AYUI/ToolBar.h"
 #include "AYEntity.h"
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/HealthComponent.h>
@@ -321,6 +323,97 @@ TEST_CASE(tilemap_canvas_shortcuts_undo_and_redo_the_active_document)
 }
 
 #if defined(_WIN32)
+TEST_CASE(tilemap_editor_uses_one_resizable_owned_tool_window)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor Tilemap host test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = std::filesystem::path(
+        AY_EDITOR_TEST_SOURCE_DIR).parent_path().string();
+    desc.hostWindow = static_cast<HWND>(windowManager.getWindowHandle());
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    EditorChildWindowManager* children = session.childWindows();
+    CHECK(children != nullptr);
+    CHECK(session.openTilemapEditor());
+    session.update(0.0f);
+    CHECK(children != nullptr && children->count() == 1u);
+    CHECK(findWidgetInTree(
+        session.ui().root(), "tilemap_workspace_canvas") == nullptr);
+    if (children == nullptr || children->count() != 1u) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    const EditorChildWindowManager::Handle handle =
+        children->entries().front().handle;
+    ayt::ui::UIManager* childUi = children->uiForHandle(handle);
+    CHECK(handle != nullptr);
+    CHECK(childUi != nullptr);
+    CHECK(::GetWindow(static_cast<HWND>(handle), GW_OWNER)
+          == static_cast<HWND>(windowManager.getWindowHandle()));
+    if (childUi != nullptr) {
+        CHECK(dynamic_cast<DockArea*>(findWidgetInTree(
+            childUi->root(), "tilemap_window_dock")) != nullptr);
+        CHECK(dynamic_cast<ToolBar*>(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_toolbar")) != nullptr);
+        CHECK(dynamic_cast<ScrollView*>(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_assets_scroll")) != nullptr);
+        CHECK(dynamic_cast<ScrollView*>(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_inspector_scroll")) != nullptr);
+        CHECK(dynamic_cast<SplitterHandle*>(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_left_splitter")) != nullptr);
+        CHECK(dynamic_cast<SplitterHandle*>(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_right_splitter")) != nullptr);
+        CHECK(findWidgetInTree(
+            childUi->root(), "tilemap_workspace_canvas") != nullptr);
+
+        // A narrow resize may temporarily compress the requested sidebar
+        // widths. Growing the tool window must restore those widths.
+        childUi->setClientSize(760.0f, 500.0f);
+        childUi->layout();
+        Widget* assetsScroll = findWidgetInTree(
+            childUi->root(), "tilemap_workspace_assets_scroll");
+        const float narrowAssetsWidth = assetsScroll != nullptr
+            ? assetsScroll->getWidth() : 0.0f;
+        CHECK(assetsScroll != nullptr);
+        CHECK(narrowAssetsWidth < 300.0f);
+
+        childUi->setClientSize(1280.0f, 800.0f);
+        childUi->layout();
+        CHECK(assetsScroll != nullptr
+              && assetsScroll->getWidth() > narrowAssetsWidth + 20.0f);
+        CHECK(assetsScroll != nullptr
+              && assetsScroll->getWidth() >= 299.0f);
+    }
+
+    const size_t documentCount = session.workspace().documents().size();
+    CHECK(session.openTilemapEditor());
+    CHECK(children->count() == 1u);
+    CHECK(session.workspace().documents().size() == documentCount);
+
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+
 TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
