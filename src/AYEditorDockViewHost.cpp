@@ -6,6 +6,10 @@
 #include "AYUI/UnicodeText.h"
 #include "AYUI/Widget.h"
 
+#if defined(_WIN32)
+#  include "GdiRenderBackend.h"
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <exception>
@@ -251,6 +255,63 @@ size_t EditorDockViewHost::count(const std::string& editorId) const noexcept
         }));
 }
 
+EditorAuthoringImage EditorDockViewHost::loadAuthoringImage(
+    const std::string& path, std::string* error)
+{
+    EditorAuthoringImage image = _outerHost.loadAuthoringImage(path, error);
+#if defined(_WIN32)
+    if (!image || _uiManager == nullptr) return image;
+    auto* backend = dynamic_cast<GdiRenderBackend*>(_uiManager->backend());
+    if (backend == nullptr || backend->ownsUiTexture(image.texture.handle)) {
+        return image;
+    }
+
+    const void* sourcePixels = image.bgraPixels != nullptr
+        && !image.bgraPixels->empty() ? image.bgraPixels->data() : nullptr;
+    if (sourcePixels == nullptr) {
+        if (error != nullptr) {
+            *error = "The child window cannot copy image pixels.";
+        }
+        return {};
+    }
+
+    auto found = _authoringTextureCopies.find(path);
+    if (found != _authoringTextureCopies.end()
+        && found->second.sourceHandle == image.texture.handle
+        && found->second.sourcePixels == sourcePixels
+        && backend->ownsUiTexture(found->second.texture.handle)) {
+        image.texture = found->second.texture;
+        return image;
+    }
+    if (found != _authoringTextureCopies.end()) {
+        backend->releaseUiTexture(found->second.texture.handle);
+        _authoringTextureCopies.erase(found);
+    }
+
+    void* localHandle = backend->createUiTexture(
+        static_cast<int>(image.width), static_cast<int>(image.height),
+        sourcePixels);
+    if (localHandle == nullptr) {
+        if (error != nullptr) {
+            *error = "The child window could not upload the image texture.";
+        }
+        return {};
+    }
+    AuthoringTextureCopy copy;
+    copy.sourceHandle = image.texture.handle;
+    copy.sourcePixels = sourcePixels;
+    copy.texture.handle = localHandle;
+    copy.texture.width = static_cast<int>(image.width);
+    copy.texture.height = static_cast<int>(image.height);
+    copy.texture.format = ayt::ui::TextureFormat::RGBA8;
+    image.texture = copy.texture;
+    _authoringTextureCopies.emplace(path, std::move(copy));
+#else
+    (void)path;
+#endif
+    return image;
+}
+
 void EditorDockViewHost::syncCommandTargetFromFocus()
 {
     if (_uiManager == nullptr) return;
@@ -440,6 +501,7 @@ void EditorDockViewHost::releaseInputFocus()
 void EditorDockViewHost::shutdown()
 {
     if (_releasedAfterUiShutdown) return;
+    releaseAuthoringTextureCopies();
     _workspace.commands().setActiveTarget(nullptr);
     closeDocumentsForShutdown();
     while (!_hosted.empty()) {
@@ -453,6 +515,7 @@ void EditorDockViewHost::prepareForUiShutdown()
 {
     if (_preparedForUiShutdown || _releasedAfterUiShutdown) return;
     _preparedForUiShutdown = true;
+    releaseAuthoringTextureCopies();
     _workspace.commands().setActiveTarget(nullptr);
     if (EditorHostedView* hosted = find(_activeDocumentId)) {
         if (hosted->view != nullptr) hosted->view->onDeactivated();
@@ -463,6 +526,21 @@ void EditorDockViewHost::prepareForUiShutdown()
         prepareHostedUiShutdown(hosted);
     }
     closeDocumentsForShutdown();
+}
+
+void EditorDockViewHost::releaseAuthoringTextureCopies()
+{
+#if defined(_WIN32)
+    auto* backend = _uiManager != nullptr
+        ? dynamic_cast<GdiRenderBackend*>(_uiManager->backend()) : nullptr;
+    if (backend != nullptr) {
+        for (const auto& [path, copy] : _authoringTextureCopies) {
+            (void)path;
+            backend->releaseUiTexture(copy.texture.handle);
+        }
+    }
+#endif
+    _authoringTextureCopies.clear();
 }
 
 void EditorDockViewHost::releaseAfterUiShutdown()

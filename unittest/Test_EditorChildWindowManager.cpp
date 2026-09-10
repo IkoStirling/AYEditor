@@ -16,6 +16,8 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorChildWindowManager.h"
+#include "AYEditor/EditorDockViewHost.h"
+#include "AYEditor/EditorWorkspace.h"
 #include "AYUI/UIManager.h"
 #include "AYDevice/WindowManager.h"
 #include "AYDevice/WindowTypes.h"
@@ -24,10 +26,14 @@
 #include "AYUI/DockOverlay.h"
 #include "AYUI/DockTabGroup.h"
 #include "AYUI/MockRenderer.h"
+#include "demo/GdiRenderBackend.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <memory>
 #include <string>
+#include <vector>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -70,6 +76,30 @@ struct TempFile {
     ~TempFile() {
         if (!path.empty()) std::remove(path.c_str());
     }
+};
+
+class ChildTextureHostServices final : public IEditorHostServices {
+public:
+    explicit ChildTextureHostServices(EditorWorkspace& workspace)
+        : _workspace(workspace) {}
+
+    EditorWorkspace& workspace() noexcept override { return _workspace; }
+    const std::string& projectRoot() const noexcept override {
+        return _projectRoot;
+    }
+    EditorAuthoringImage loadAuthoringImage(
+        const std::string&, std::string* error = nullptr) override {
+        if (error != nullptr) error->clear();
+        return image;
+    }
+    void requestRepaint() override {}
+    void setStatusText(const std::wstring&) override {}
+
+    EditorAuthoringImage image;
+
+private:
+    EditorWorkspace& _workspace;
+    std::string _projectRoot;
 };
 
 } // namespace
@@ -218,6 +248,76 @@ TEST_CASE(test_owned_tool_window_can_veto_close_and_update_title) {
     CHECK_FALSE(::IsWindow(childHwnd));
     CHECK(::IsWindow(primaryHwnd));
 
+    primary.shutdown();
+    wm.destroyWindow();
+}
+
+TEST_CASE(test_child_dock_host_copies_authoring_texture_to_local_backend) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "Authoring texture primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+
+    MockRenderer primaryBackend;
+    UIManager primary;
+    primary.initialize(&primaryBackend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    EditorChildWindowManager manager(wm, primary);
+    ChildWindowConfig config;
+    config.title = "Texture child";
+    config.width = 320;
+    config.height = 240;
+    EditorChildWindowManager::Handle handle = nullptr;
+    CHECK(manager.openChildWindow(config, handle));
+
+    UIManager* childUi = manager.uiForHandle(handle);
+    auto* childBackend = childUi != nullptr
+        ? dynamic_cast<GdiRenderBackend*>(childUi->backend()) : nullptr;
+    CHECK(childUi != nullptr);
+    CHECK(childBackend != nullptr);
+
+    EditorWorkspace workspace;
+    ChildTextureHostServices outerHost(workspace);
+    outerHost.image.texture.handle = reinterpret_cast<void*>(
+        static_cast<std::uintptr_t>(0x1234u));
+    outerHost.image.texture.width = 2;
+    outerHost.image.texture.height = 2;
+    outerHost.image.texture.format = TextureFormat::RGBA8;
+    outerHost.image.width = 2u;
+    outerHost.image.height = 2u;
+    outerHost.image.bgraPixels =
+        std::make_shared<const std::vector<std::uint8_t>>(
+            std::vector<std::uint8_t>{
+                0u, 0u, 255u, 255u, 0u, 255u, 0u, 255u,
+                255u, 0u, 0u, 255u, 255u, 255u, 255u, 255u});
+
+    DockArea dock;
+    void* localHandle = nullptr;
+    {
+        EditorDockViewHost host(workspace, dock, outerHost, childUi);
+        std::string error;
+        const EditorAuthoringImage first =
+            host.loadAuthoringImage("sheet.png", &error);
+        CHECK(error.empty());
+        CHECK(static_cast<bool>(first));
+        CHECK(first.texture.handle != outerHost.image.texture.handle);
+        CHECK(childBackend != nullptr
+              && childBackend->ownsUiTexture(first.texture.handle));
+        localHandle = first.texture.handle;
+
+        const EditorAuthoringImage second =
+            host.loadAuthoringImage("sheet.png", &error);
+        CHECK(second.texture.handle == localHandle);
+        host.shutdown();
+        CHECK(childBackend != nullptr
+              && !childBackend->ownsUiTexture(localHandle));
+    }
+
+    manager.closeChildWindow(handle);
     primary.shutdown();
     wm.destroyWindow();
 }

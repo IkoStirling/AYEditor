@@ -54,6 +54,9 @@ public:
     // backend and stay valid until releaseUiTexture or backend destruction.
     void* createUiTexture(int width, int height, const void* bgraPixels);
     void releaseUiTexture(void* textureHandle);
+    [[nodiscard]] bool ownsUiTexture(void* textureHandle) const noexcept {
+        return _textures.find(textureHandle) != _textures.end();
+    }
 
     PathHandle createPath() override;
     void releasePath(PathHandle path) override;

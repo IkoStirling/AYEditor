@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ayt::ui {
@@ -112,9 +113,8 @@ public:
         return _outerHost.chooseImageFile();
     }
     EditorAuthoringImage loadAuthoringImage(
-        const std::string& path, std::string* error = nullptr) override {
-        return _outerHost.loadAuthoringImage(path, error);
-    }
+        const std::string& path,
+        std::string* error = nullptr) override;
     void requestRepaint() override;
     void setStatusText(const std::wstring& text) override {
         _outerHost.setStatusText(text);
@@ -126,6 +126,7 @@ private:
     void removeHostedView(const std::string& documentId,
                           bool destroyCard);
     void closeDocumentsForShutdown();
+    void releaseAuthoringTextureCopies();
     void prepareHostedUiShutdown(EditorHostedView& hosted);
     EditorHostedView* inputHostedAt(float logicalX, float logicalY) noexcept;
     EditorHostedView* inputFocusedHosted() noexcept;
@@ -141,6 +142,16 @@ private:
     CloseActionProvider _closeActionProvider;
     EditorDocumentManager::ListenerId _documentListener = 0;
     std::string _closingDocumentId;
+    struct AuthoringTextureCopy {
+        void* sourceHandle = nullptr;
+        const void* sourcePixels = nullptr;
+        ayt::ui::ImageTextureHandle texture;
+    };
+    // Texture handles are backend-local. A document hosted in a native child
+    // window therefore keeps a GDI copy keyed by source path instead of
+    // forwarding the primary renderer's opaque handle.
+    std::unordered_map<std::string, AuthoringTextureCopy>
+        _authoringTextureCopies;
     bool _preparedForUiShutdown = false;
     bool _releasedAfterUiShutdown = false;
 };
