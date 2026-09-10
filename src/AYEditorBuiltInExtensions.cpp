@@ -818,8 +818,15 @@ public:
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     IEditorViewInputTarget* inputTarget() noexcept override { return this; }
+    void tick(float) override {
+        if (!_importCommitPending) return;
+        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        _importCommitPending = false;
+        commitAtlasImport();
+    }
     void prepareForUiShutdown() override {
         auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
+        _importCommitPending = false;
         clearTooltips();
         if (_importCancel != nullptr) _importCancel->setOnClicked({});
         if (_importCommit != nullptr) _importCommit->setOnClicked({});
@@ -1421,10 +1428,17 @@ private:
         });
         footer->addWidget(_importCancel, 96.0f);
         _importCommit = new ayt::ui::Button();
+        _importCommit->setId("tilemap_import_commit");
         _importCommit->setText(L"Import");
         _importCommit->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _importCommit->setEnabled(false);
-        _importCommit->setOnClicked([this]() { commitAtlasImport(); });
+        _importCommit->setOnClicked([this]() {
+            if (_importCommitPending) return;
+            _importCommitPending = true;
+            _importCommit->setEnabled(false);
+            _importCommit->setText(L"Importing…");
+            _host.requestRepaint();
+        });
         footer->addWidget(_importCommit, 132.0f);
         root->addWidget(footer, 31.0f);
         _importModal->setContentOwned(root);
@@ -2134,6 +2148,7 @@ private:
     float _zoomPercent = 100.0f;
     bool _syncing = false;
     bool _syncingImport = false;
+    bool _importCommitPending = false;
     bool _skipTransparent = true;
     bool _selectingStamp = false;
 };

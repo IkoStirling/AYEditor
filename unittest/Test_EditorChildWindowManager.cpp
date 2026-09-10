@@ -16,6 +16,7 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorChildWindowManager.h"
+#include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorDockViewHost.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYUI/UIManager.h"
@@ -25,6 +26,7 @@
 #include "AYUI/DockCard.h"
 #include "AYUI/DockOverlay.h"
 #include "AYUI/DockTabGroup.h"
+#include "AYUI/Modal.h"
 #include "AYUI/MockRenderer.h"
 #include "demo/GdiRenderBackend.h"
 
@@ -92,15 +94,39 @@ public:
         if (error != nullptr) error->clear();
         return image;
     }
+    std::string chooseImageFile() override { return imagePath; }
     void requestRepaint() override {}
     void setStatusText(const std::wstring&) override {}
 
     EditorAuthoringImage image;
+    std::string imagePath;
 
 private:
     EditorWorkspace& _workspace;
     std::string _projectRoot;
 };
+
+ayt::ui::Widget* findChildTextureWidget(ayt::ui::Widget* root,
+                                        const std::string& id) {
+    if (root == nullptr) return nullptr;
+    if (root->getId() == id) return root;
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (auto* found = findChildTextureWidget(child, id)) return found;
+    }
+    return nullptr;
+}
+
+void clickChildTextureButton(ayt::ui::UIManager& ui,
+                             ayt::ui::Button* button) {
+    if (button == nullptr) return;
+    const ayt::math::FRectangle bounds = button->getWorldBounds();
+    const ayt::ui::UIMouseEvent pointer(
+        ayt::math::FVector2((bounds.minX + bounds.maxX) * 0.5f,
+                            (bounds.minY + bounds.maxY) * 0.5f), 0);
+    ui.onMouseMove(pointer.mousePos.x, pointer.mousePos.y);
+    ui.onMouseButtonDown(pointer.mousePos.x, pointer.mousePos.y, 0);
+    ui.onMouseButtonUp(pointer.mousePos.x, pointer.mousePos.y, 0);
+}
 
 } // namespace
 
@@ -315,6 +341,123 @@ TEST_CASE(test_child_dock_host_copies_authoring_texture_to_local_backend) {
         host.shutdown();
         CHECK(childBackend != nullptr
               && !childBackend->ownsUiTexture(localHandle));
+    }
+
+    manager.closeChildWindow(handle);
+    primary.shutdown();
+    wm.destroyWindow();
+}
+
+TEST_CASE(test_child_tilemap_commits_import_with_local_texture) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "Tilemap import primary";
+    info.width = 800;
+    info.height = 600;
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+
+    MockRenderer primaryBackend;
+    UIManager primary;
+    primary.initialize(&primaryBackend);
+    primary.setClientSize(800.0f, 600.0f);
+
+    EditorChildWindowManager manager(wm, primary);
+    ChildWindowConfig config;
+    config.title = "Tilemap import child";
+    config.width = 960;
+    config.height = 720;
+    EditorChildWindowManager::Handle handle = nullptr;
+    CHECK(manager.openChildWindow(config, handle));
+
+    UIManager* childUi = manager.uiForHandle(handle);
+    CHECK(childUi != nullptr);
+    if (childUi == nullptr) {
+        primary.shutdown();
+        wm.destroyWindow();
+        return;
+    }
+
+    EditorWorkspace workspace;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(workspace.registry(), {}, &error));
+    ChildTextureHostServices outerHost(workspace);
+    outerHost.imagePath = "sheet.png";
+    outerHost.image.texture.handle = reinterpret_cast<void*>(
+        static_cast<std::uintptr_t>(0x1234u));
+    outerHost.image.texture.width = 2;
+    outerHost.image.texture.height = 2;
+    outerHost.image.texture.format = TextureFormat::RGBA8;
+    outerHost.image.width = 2u;
+    outerHost.image.height = 2u;
+    outerHost.image.bgraPixels =
+        std::make_shared<const std::vector<std::uint8_t>>(
+            std::vector<std::uint8_t>{
+                0u, 0u, 255u, 255u, 0u, 255u, 0u, 255u,
+                255u, 0u, 0u, 255u, 255u, 255u, 255u, 255u});
+
+    auto* dock = new DockArea();
+    dock->setSize({960.0f, 720.0f});
+    childUi->root()->addChild(dock);
+    childUi->layout();
+    {
+        EditorDockViewHost host(workspace, *dock, outerHost, childUi);
+        EditorOpenRequest request;
+        request.resourceKey = "workspace:tilemap:import-test";
+        request.displayPath = "Import Test";
+        request.assetType = "Tilemap";
+        request.preferredEditorId = kEditorTilemapExtensionId;
+        const EditorDockOpenResult opened = host.open(request, {});
+        CHECK(static_cast<bool>(opened));
+        childUi->invalidateLayout();
+        childUi->layout();
+
+        auto* openImport = dynamic_cast<ayt::ui::Button*>(
+            findChildTextureWidget(opened.card,
+                                   "tilemap_workspace_import_sheet"));
+        CHECK(openImport != nullptr);
+        if (openImport != nullptr) {
+            const ayt::math::FRectangle bounds = openImport->getWorldBounds();
+            const ayt::ui::UIMouseEvent pointer(
+                ayt::math::FVector2(
+                    (bounds.minX + bounds.maxX) * 0.5f,
+                    (bounds.minY + bounds.maxY) * 0.5f), 0);
+            openImport->onMouseMove(pointer);
+            openImport->onMouseButtonDown(pointer);
+            openImport->onMouseButtonUp(pointer);
+        }
+
+        auto* commitImport = dynamic_cast<ayt::ui::Button*>(
+            findChildTextureWidget(childUi->getOverlayRoot(),
+                                   "tilemap_import_commit"));
+        CHECK(commitImport != nullptr);
+        CHECK(commitImport != nullptr && commitImport->isEnabled());
+        clickChildTextureButton(*childUi, commitImport);
+        CHECK(findChildTextureWidget(childUi->getOverlayRoot(),
+                                     "tilemap_atlas_import_dialog")
+              != nullptr);
+        CHECK(commitImport != nullptr && !commitImport->isEnabled());
+        CHECK(commitImport != nullptr
+              && commitImport->getText() == L"Importing…");
+
+        // The model/list/modal mutation is deliberately deferred until the
+        // input dispatch stack has unwound. This is the production crash
+        // regression: closing the modal from its own mouse-up callback left
+        // the child UI traversing a tree that had just been reconfigured.
+        host.tick(0.016f);
+        auto* closingModal = dynamic_cast<ayt::ui::Modal*>(
+            findChildTextureWidget(childUi->getOverlayRoot(),
+                                   "tilemap_atlas_import_dialog"));
+        CHECK(closingModal != nullptr);
+        CHECK(closingModal != nullptr && !closingModal->isOpen());
+
+        // Let the close animation complete, then render the rebuilt tile
+        // workspace once through the native child window's GDI backend.
+        manager.tickAll(0.2f);
+        CHECK(findChildTextureWidget(childUi->getOverlayRoot(),
+                                     "tilemap_atlas_import_dialog")
+              == nullptr);
+        host.shutdown();
     }
 
     manager.closeChildWindow(handle);
