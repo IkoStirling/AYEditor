@@ -82,6 +82,13 @@ missing referenced content file. The runtime module graph remains in the C++
 `GameProject` composition root because callbacks cannot be represented by a
 data file.
 
+When the editor opens a directory containing `project.ayproject.json`, it
+resolves `startupWorld` through the descriptor's `worlds` entry and opens that
+Scene as the initial Edit document. Project sessions never seed the
+`AYEditorShell_Demo` Character/Ground/Cube/Glass fixture. A missing or malformed
+descriptor target keeps an empty Scene document and reports the failure in the
+editor Console; it does not replace project content with validation objects.
+
 ## Validation profiles
 
 `AYProjectContentValidationCore` is an application-layer tool library kept out

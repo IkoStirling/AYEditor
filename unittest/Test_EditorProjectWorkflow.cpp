@@ -8,6 +8,7 @@
 #include "AYEditor/EditorProjectRunner.h"
 #include "AYEditor/EditorProjectRuntimeValidator.h"
 #include "AYEditor/EditorRecoveryStore.h"
+#include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorSelectionContext.h"
 #include "AYEditor/EditorWorkspace.h"
@@ -15,6 +16,7 @@
 
 #include <AY2DEditor/TilemapEditorModel.h>
 #include <AYResource/assetsImpl/Audio.h>
+#include <AYScene.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Modal.h>
@@ -157,6 +159,58 @@ TEST_CASE(project_descriptor_exposes_authoring_world_and_run_contract)
     CHECK(descriptor.findWorld("main") != nullptr);
     CHECK(descriptor.findWorld("main")->ui == "ui/main.ui.json");
     CHECK(descriptor.run.executable == "out/Sample.exe");
+}
+
+TEST_CASE(project_startup_scene_resolution_opens_the_declared_world)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("startup_scene")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    writeWorkflowFile(cleanup.root / "project.ayproject.json",
+        "{\n"
+        "  \"schemaVersion\": 1,\n"
+        "  \"id\": \"sample\",\n"
+        "  \"paths\": {\"assets\": \"Assets\"},\n"
+        "  \"startupWorld\": \"main\",\n"
+        "  \"worlds\": [{\"id\": \"main\", \"scene\": \"worlds/main.ayscene\"}]\n"
+        "}\n");
+    writeWorkflowFile(cleanup.root / "Assets/worlds/main.ayscene",
+        "{\n"
+        "  \"__schemaVersion\": 2,\n"
+        "  \"__coordConvention\": \"ay-coordinates-lh-yup-zfwd-ccw-uvtop-m-v1\",\n"
+        "  \"entities\": [{\"id\": 1, \"name\": \"Startup Entity\", \"components\": []}]\n"
+        "}\n");
+
+    const EditorProjectStartupSceneResolution resolution =
+        resolveEditorProjectStartupScene(cleanup.root.string());
+    CHECK(resolution.projectDescriptorPresent);
+    CHECK(resolution);
+    CHECK(resolution.error.empty());
+    CHECK(std::filesystem::path(resolution.scenePath).lexically_normal()
+          == (cleanup.root / "Assets/worlds/main.ayscene").lexically_normal());
+
+    EditorSceneDocument document;
+    std::string error;
+    CHECK(document.open(resolution.scenePath, &error));
+    CHECK(error.empty());
+    CHECK(document.title() == "main");
+    CHECK(document.scene().world().findEntity("Startup Entity") != nullptr);
+    CHECK_FALSE(document.isDirty());
+}
+
+TEST_CASE(project_startup_scene_failure_still_marks_project_mode)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("startup_invalid")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    writeWorkflowFile(cleanup.root / "project.ayproject.json", "{}\n");
+
+    const EditorProjectStartupSceneResolution resolution =
+        resolveEditorProjectStartupScene(cleanup.root.string());
+    CHECK(resolution.projectDescriptorPresent);
+    CHECK_FALSE(static_cast<bool>(resolution));
+    CHECK_FALSE(resolution.error.empty());
+    CHECK(resolution.scenePath.empty());
 }
 
 TEST_CASE(project_asset_factory_creates_valid_assets_in_conventional_folders)

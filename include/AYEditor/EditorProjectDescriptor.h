@@ -51,4 +51,22 @@ struct EditorProjectDescriptor {
         std::string* error = nullptr);
 };
 
+// Resolves the project startup World into one absolute Scene path without
+// mutating editor state. `projectDescriptorPresent` deliberately remains true
+// for malformed descriptors so product sessions never fall back to demo-only
+// reference content after a project has been selected.
+struct EditorProjectStartupSceneResolution {
+    bool projectDescriptorPresent = false;
+    std::string scenePath;
+    std::string error;
+
+    explicit operator bool() const noexcept {
+        return projectDescriptorPresent && error.empty()
+            && !scenePath.empty();
+    }
+};
+
+EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
+    const std::string& projectRoot);
+
 } // namespace ayt::editor

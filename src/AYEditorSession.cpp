@@ -9,6 +9,7 @@
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
+#include "AYEditor/EditorProjectDescriptor.h"
 #include "AYEditor/EditorProjectRunner.h"
 #include "AYEditor/EditorRecoveryStore.h"
 #include "AYEditor/EditorProjectRuntimeValidator.h"
@@ -660,6 +661,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _assetTrash = std::make_unique<EditorAssetTrash>(desc.projectRoot);
     _assetOperations = std::make_unique<EditorAssetOperations>(desc.projectRoot);
     _assetImportQueue = std::make_unique<EditorAssetImportQueue>();
+    const EditorProjectStartupSceneResolution projectStartup =
+        resolveEditorProjectStartupScene(desc.projectRoot);
     _assetImportProgressPercent = -1;
     _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
     std::string recoveryError;
@@ -708,7 +711,9 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // ED-02: forward the imported character (if any) to the
     // Play-runtime. Empty / invalid = cube fallback at startPlay.
     _playRuntime.setImportedCharacter(desc.importedCharacter);
-    _playRuntime.setEditorTestSceneEnabled(desc.editorTestSceneEnabled);
+    _playRuntime.setEditorTestSceneEnabled(
+        desc.editorTestSceneEnabled
+        && !projectStartup.projectDescriptorPresent);
     _playRuntime.setNetPlayRole(
         desc.netClientMode ? NetPlayRole::Client : NetPlayRole::Server);
     _playRuntime.setNetConnectHost(desc.netConnectHost);
@@ -887,6 +892,28 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     //         mode 有 Scene 关联；applyMode 仍走 EditorPlayRuntime 私有通路
     // 决策 4a: 不接 hook 拦 beginPlay；UX 弹窗由 caller 决定
     _document = std::make_unique<EditorSceneDocument>();
+    std::string projectStartupError = projectStartup.error;
+    if (projectStartup) {
+        reportStartup(0.86f, L"Opening project startup Scene...");
+        if (!_document->open(projectStartup.scenePath, &projectStartupError)) {
+            std::fprintf(stderr,
+                "[EditorSession] project startup Scene load failed: %s\n",
+                projectStartupError.c_str());
+        } else {
+            std::fprintf(stderr,
+                "[EditorSession] opened project startup Scene: %s\n",
+                projectStartup.scenePath.c_str());
+        }
+    } else if (projectStartup.projectDescriptorPresent
+               && projectStartupError.empty()) {
+        std::fprintf(stderr,
+            "[EditorSession] project has no startupWorld; "
+            "opened an empty Scene document\n");
+    } else if (!projectStartupError.empty()) {
+        std::fprintf(stderr,
+            "[EditorSession] project startup Scene unavailable: %s\n",
+            projectStartupError.c_str());
+    }
     EditorSelectionContext& sceneSelection =
         _workspace->selections().contextFor("scene.main");
     _selection.bind(&sceneSelection);
@@ -911,6 +938,12 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     refreshOutliner();
     refreshTransformInspector();
     refreshUnsavedIndicator();
+    if (!projectStartupError.empty()) {
+        setAssetBrowserStatus(
+            L"Project startup Scene unavailable: "
+                + ayt::ui::decodeUtf8Text(projectStartupError),
+            true);
+    }
     reportStartup(0.94f, L"Finalizing editor workspace...");
 
     // D5+.5: optional child-window manager for DockCard promotion.

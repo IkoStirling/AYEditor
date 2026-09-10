@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <unordered_set>
+#include <utility>
 
 namespace ayt::editor {
 namespace {
@@ -193,6 +194,71 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
             *error = std::string("Invalid project descriptor: ") + exception.what();
         }
         return {};
+    }
+}
+
+EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
+    const std::string& projectRoot)
+{
+    EditorProjectStartupSceneResolution result;
+    try {
+        const fs::path root = fs::absolute(projectRoot.empty()
+            ? fs::current_path() : fs::path(projectRoot)).lexically_normal();
+        const fs::path descriptorPath = root / kEditorProjectDescriptorFile;
+        std::error_code fileError;
+        const bool descriptorExists = fs::exists(descriptorPath, fileError);
+        if (fileError) {
+            result.projectDescriptorPresent = true;
+            result.error = "Unable to inspect project descriptor: "
+                + descriptorPath.string() + " (" + fileError.message() + ")";
+            return result;
+        }
+        if (!descriptorExists) {
+            return result;
+        }
+
+        result.projectDescriptorPresent = true;
+        if (!fs::is_regular_file(descriptorPath, fileError) || fileError) {
+            result.error = "Project descriptor is not a regular file: "
+                + descriptorPath.string();
+            return result;
+        }
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(root.string(), &descriptorError);
+        if (!descriptor) {
+            result.error = descriptorError.empty()
+                ? std::string("Project descriptor is invalid.")
+                : std::move(descriptorError);
+            return result;
+        }
+        if (descriptor.startupWorld.empty()) {
+            return result;
+        }
+
+        const EditorProjectWorldDescriptor* startup =
+            descriptor.findWorld(descriptor.startupWorld);
+        if (startup == nullptr) {
+            result.error = "startupWorld is not present in worlds: "
+                + descriptor.startupWorld;
+            return result;
+        }
+
+        const fs::path scenePath =
+            (root / fs::path(descriptor.assetRoot) / fs::path(startup->scene))
+                .lexically_normal();
+        fileError.clear();
+        if (!fs::is_regular_file(scenePath, fileError)) {
+            result.error = "Project startup Scene was not found: "
+                + scenePath.string();
+            return result;
+        }
+        result.scenePath = scenePath.string();
+        return result;
+    } catch (const std::exception& exception) {
+        result.error = std::string("Unable to resolve project startup Scene: ")
+            + exception.what();
+        return result;
     }
 }
 
