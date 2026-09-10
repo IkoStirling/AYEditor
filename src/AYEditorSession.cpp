@@ -16,6 +16,8 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorComponentPolicy.h"
 #include "AYEditor/EditorShortcutRegistry.h"
+#include "AYEditor/EditorSceneCamera.h"
+#include "AYEditor/EditorSceneViewWorkspace.h"
 #include "AYEditor/EditorDslDocument.h"
 #include "AYEditor/EditorDslExtension.h"
 #include "AYEditor/EditorDockViewHost.h"
@@ -69,8 +71,12 @@
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/ComponentRegistry.h>
 #include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/components/OrthoCameraComponent.h>
+#include <AYEntity/components/SpriteComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
+#include <AYEntity/components/TilemapComponent.h>
 #include <AYEntity/components/TransformComponent.h>
+#include <AYEntity/OrthoCameraSelection.h>
 #include <AYMath/MathTransform.h>
 #include <AYResource/ResourceManager.h>
 #include <AYResource/AssetPath.h>
@@ -658,11 +664,26 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _hostFocused = _devices != nullptr && _devices->window().isFocused();
     _layoutPath = desc.layoutPath;
     _engineAssetsRoot = desc.engineAssetsRoot;
+    _projectRoot = desc.projectRoot;
     _assetTrash = std::make_unique<EditorAssetTrash>(desc.projectRoot);
     _assetOperations = std::make_unique<EditorAssetOperations>(desc.projectRoot);
     _assetImportQueue = std::make_unique<EditorAssetImportQueue>();
     const EditorProjectStartupSceneResolution projectStartup =
         resolveEditorProjectStartupScene(desc.projectRoot);
+    std::string sceneViewWorkspaceError;
+    if (!_sceneViewWorkspace.open(desc.projectRoot, &sceneViewWorkspaceError)) {
+        std::fprintf(stderr, "[EditorSceneView] workspace ignored: %s\n",
+                     sceneViewWorkspaceError.c_str());
+    }
+    if (projectStartup.projectDescriptorPresent) {
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(desc.projectRoot, &descriptorError);
+        if (descriptor) {
+            _projectDefaultSceneView = descriptor.defaultSceneView;
+            _projectEngineProfile = descriptor.engineProfile;
+        }
+    }
     _assetImportProgressPercent = -1;
     _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
     std::string recoveryError;
@@ -915,6 +936,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             "[EditorSession] project startup Scene unavailable: %s\n",
             projectStartupError.c_str());
     }
+    selectInitialSceneViewForDocument();
     EditorSelectionContext& sceneSelection =
         _workspace->selections().contextFor("scene.main");
     _selection.bind(&sceneSelection);
@@ -994,6 +1016,15 @@ void EditorSession::shutdown() {
     _shutdown = true;
 
     finishTransformGizmoDrag(false);
+    rememberCurrentSceneView();
+    if (_sceneViewWorkspaceDirty) {
+        std::string workspaceError;
+        if (!_sceneViewWorkspace.save(&workspaceError)) {
+            std::fprintf(stderr, "[EditorSceneView] workspace save failed: %s\n",
+                         workspaceError.c_str());
+        }
+        _sceneViewWorkspaceDirty = false;
+    }
     savePreferencesNow();
     if (_recoveryStore != nullptr) _recoveryStore->markCleanShutdown();
 
@@ -1069,6 +1100,7 @@ void EditorSession::shutdown() {
     _restoreDeletedMenuItem = nullptr;
     _restoreRecoveryMenuItem = nullptr;
     _viewportOrientationAxisMenuItem = nullptr;
+    _sceneViewModeMenuItem = nullptr;
     _onViewportOrientationAxisVisibilityChanged = {};
     _onPreferencesChanged = {};
     _outlinerEntityIds.clear();
@@ -1105,6 +1137,9 @@ void EditorSession::shutdown() {
     _editorHostServices.reset();
     _layoutPath.clear();
     _engineAssetsRoot.clear();
+    _projectRoot.clear();
+    _projectDefaultSceneView = "Auto";
+    _projectEngineProfile.clear();
     _hostWindow = nullptr;
     _devices = nullptr;
     _hostFocused = false;
@@ -1258,15 +1293,17 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     if (freecamActive()) {
         // Keyboard flight is intentionally gated by the RMB look gesture.
         // Outside that gesture editor shortcuts and text input own the keys.
-        if (_freecam.isLooking() && viewportAcceptsGameInput()) {
+        if (!_sceneCamera.isTwoD()
+            && _sceneCamera.threeD().isLooking()
+            && viewportAcceptsGameInput()) {
             if (_devices != nullptr) {
                 if (const ayt::device::KeyboardDevice* keyboard =
                         _devices->keyboard()) {
-                    _freecam.updateMovement(dt, *keyboard);
+                    _sceneCamera.threeD().updateMovement(dt, *keyboard);
                 }
             }
         }
-        pushFreecamToRenderer();
+        pushSceneCameraToRenderer();
     }
 
     if (_gameView.mode() == EditorMode::Play) {
@@ -1293,23 +1330,37 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     // in sync every frame so render composite tracks panel resize.
     syncViewportIfChanged();
     pollPreferences(dt);
+    pollSceneViewWorkspace(dt);
 }
 
 bool EditorSession::freecamActive() const
 {
-    const EditorMode mode = _gameView.mode();
-    return mode == EditorMode::Edit || mode == EditorMode::Play
-        || mode == EditorMode::Paused;
+    return _gameView.mode() == EditorMode::Edit;
 }
 
-void EditorSession::pushFreecamToRenderer()
+void EditorSession::pushSceneCameraToRenderer()
 {
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
-        sub->setCameraLookAt(
-            _freecam.eye(),
-            _freecam.at(),
-            _freecam.up(),
-            _freecam.fovYDegrees());
+        if (_gameView.mode() != EditorMode::Edit) {
+            sub->clearCameraOverride();
+            sub->clearOverlayCamera2DOverride();
+            sub->renderer().setEditorGrid2DState({});
+            return;
+        }
+        const EditorSceneCameraFrame camera = _sceneCamera.frame();
+        sub->setCameraMatrices(camera.view, camera.projection, camera.position);
+        ayt::render::EditorGrid2DState grid;
+        if (_sceneCamera.isTwoD()) {
+            sub->setOverlayCamera2DOverride(camera.view, camera.projection);
+            grid.visible = true;
+            grid.center = _sceneCamera.twoDCenter();
+            grid.verticalWorldSize = _sceneCamera.twoDViewHeight();
+            grid.minorSpacing = _sceneCamera.adaptiveGridSpacing();
+            grid.majorEvery = 10u;
+        } else {
+            sub->clearOverlayCamera2DOverride();
+        }
+        sub->renderer().setEditorGrid2DState(grid);
     }
 }
 
@@ -1404,7 +1455,7 @@ bool EditorSession::ensurePresentationReady() {
     // a zero-effect renderer, and so a pipeline recreation restores the
     // current panel values.
     applyRenderSettingsFromPanel();
-    pushFreecamToRenderer();
+    pushSceneCameraToRenderer();
     return true;
 }
 
@@ -1551,8 +1602,10 @@ bool EditorSession::isChromePoint(float x, float y) const {
     return _ui.isCapturing() || !isViewportSurfacePoint(x, y);
 }
 
-bool EditorSession::viewportRayDirection(
-    float x, float y, ayt::math::FVector3& outDirection) const
+bool EditorSession::viewportRay(
+    float x, float y,
+    ayt::math::FVector3& outOrigin,
+    ayt::math::FVector3& outDirection) const
 {
     ayt::math::FRectangle viewport{};
     if (!getViewportBounds(viewport)
@@ -1563,22 +1616,9 @@ bool EditorSession::viewportRayDirection(
 
     const ayt::math::FVector2 logical =
         _ui.physicalToLogical(ayt::math::FVector2(x, y));
-    const float ndcX =
-        2.0f * ((logical.x - viewport.minX) / viewport.width()) - 1.0f;
-    const float ndcY =
-        1.0f - 2.0f * ((logical.y - viewport.minY) / viewport.height());
-    constexpr float degreesToRadians = 0.017453292519943295f;
-    const float tanHalfFov = std::tan(
-        _freecam.fovYDegrees() * degreesToRadians * 0.5f);
-    const float aspect = viewport.width() / viewport.height();
-    outDirection = _freecam.forward()
-        + _freecam.right() * (ndcX * aspect * tanHalfFov)
-        + _freecam.up() * (ndcY * tanHalfFov);
-    if (outDirection.lengthSq() < 1.0e-8f) {
-        return false;
-    }
-    outDirection = outDirection.normalize();
-    return true;
+    return _sceneCamera.ray(
+        {logical.x - viewport.minX, logical.y - viewport.minY},
+        outOrigin, outDirection);
 }
 
 bool EditorSession::viewportAcceptsGameInput() const {
@@ -1590,7 +1630,7 @@ bool EditorSession::viewportAcceptsGameInput() const {
         return false;
     }
     // RMB fly navigation already started inside the viewport — keep movement.
-    if (_freecam.isLooking()) {
+    if (_sceneCamera.threeD().isLooking() || _sceneCamera.isTwoDPanning()) {
         return true;
     }
     if (!_hasLastMouse) {
@@ -1615,6 +1655,24 @@ bool EditorSession::onMouseMove(float x, float y) {
         return true;
     }
 
+    updateViewportCoordinateFeedback(x, y);
+
+    if (_sceneCamera.isTwoDPanning()) {
+        ayt::math::FRectangle viewport{};
+        const ayt::math::FVector2 logical =
+            _ui.physicalToLogical({x, y});
+        if (getViewportBounds(viewport)
+            && _sceneCamera.updateTwoDPan(
+                {logical.x - viewport.minX, logical.y - viewport.minY})) {
+            _sceneViewWorkspaceDirty = true;
+            _sceneViewWorkspaceSaveCountdown = 0.5f;
+            pushSceneCameraToRenderer();
+            updateViewportCoordinateFeedback(x, y);
+            if (_repaintCallback) _repaintCallback();
+        }
+        return true;
+    }
+
     if (_transformGizmo.active()) {
         return updateTransformGizmoDrag(x, y);
     }
@@ -1622,7 +1680,7 @@ bool EditorSession::onMouseMove(float x, float y) {
     // Armed viewport LMB: object surfaces only select. A drag past slop is
     // consumed (reserved for future marquee selection) but never rotates the
     // camera; transforms begin exclusively from a gizmo handle.
-    if (_viewportLmbPending && !_viewportLmbDragged && !_freecam.isLooking()) {
+    if (_viewportLmbPending && !_viewportLmbDragged && !_sceneCamera.threeD().isLooking()) {
         const float dx = x - _viewportLmbX;
         const float dy = y - _viewportLmbY;
         if ((dx * dx + dy * dy)
@@ -1632,9 +1690,11 @@ bool EditorSession::onMouseMove(float x, float y) {
         }
     }
 
-    if (_freecam.isLooking()) {
-        _freecam.updateLook(x, y);
-        pushFreecamToRenderer();
+    if (_sceneCamera.threeD().isLooking()) {
+        _sceneCamera.threeD().updateLook(x, y);
+        _sceneViewWorkspaceDirty = true;
+        _sceneViewWorkspaceSaveCountdown = 0.5f;
+        pushSceneCameraToRenderer();
         return true;
     }
 
@@ -1725,9 +1785,10 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
         }
         _viewportLmbPending = false;
         _viewportLmbDragged = false;
-        if (_freecam.isLooking()) {
-            _freecam.endLook();
+        if (_sceneCamera.threeD().isLooking()) {
+            _sceneCamera.threeD().endLook();
         }
+        _sceneCamera.endTwoDPan();
     }
 
     if (_dockViewHost != nullptr
@@ -1756,11 +1817,22 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
             }
             _viewportLmbPending = false;
             _viewportLmbDragged = false;
-            _freecam.beginLook(x, y);
+            if (_sceneCamera.isTwoD()) {
+                ayt::math::FRectangle viewport{};
+                const ayt::math::FVector2 logical =
+                    _ui.physicalToLogical({x, y});
+                if (getViewportBounds(viewport)) {
+                    _sceneCamera.beginTwoDPan(
+                        {logical.x - viewport.minX,
+                         logical.y - viewport.minY});
+                }
+            } else {
+                _sceneCamera.threeD().beginLook(x, y);
+            }
             return true;
         }
 
-        if (button == 0 && freecamActive()) {
+        if (button == 0) {
             if (_gameView.mode() == EditorMode::Edit) {
                 const EditorGizmoHandle handle = hitTestTransformGizmo(x, y);
                 if (handle != EditorGizmoHandle::None
@@ -1799,8 +1871,16 @@ bool EditorSession::onMouseButtonUp(float x, float y, int button) {
         return true;
     }
 
-    if (_freecam.isLooking() && button == 1) {
-        _freecam.endLook();
+    if (_sceneCamera.threeD().isLooking() && button == 1) {
+        _sceneCamera.threeD().endLook();
+        _sceneViewWorkspaceDirty = true;
+        _sceneViewWorkspaceSaveCountdown = 0.5f;
+        return true;
+    }
+    if (_sceneCamera.isTwoDPanning() && button == 1) {
+        _sceneCamera.endTwoDPan();
+        _sceneViewWorkspaceDirty = true;
+        _sceneViewWorkspaceSaveCountdown = 0.5f;
         return true;
     }
 
@@ -1834,19 +1914,36 @@ bool EditorSession::onMouseWheel(float x, float y, float deltaY) {
     if (_ui.isCapturing() || isChromePoint(x, y)) {
         return _ui.onMouseWheel(x, y, deltaY);
     }
-    if (!freecamActive() || !std::isfinite(deltaY) || deltaY == 0.0f) {
+    if (!std::isfinite(deltaY) || deltaY == 0.0f) {
         return false;
     }
-    ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) {
-        return false;
-    }
+    // The native input bridge has already published Play/Paused wheel input
+    // to AYDevice. Consume it as a game-surface gesture without moving the
+    // editor camera; runtime camera components stay authoritative.
+    if (!freecamActive()) return true;
     // DeviceInputBridge's UI convention is opposite to native wheel notches
     // (+pixels reveals lower content). Convert back before navigating, then
     // dolly along the pointer ray instead of the screen-center forward vector.
     const float wheelNotches = -deltaY / kWheelLogicalPixelsPerNotch;
-    _freecam.zoomToward(wheelNotches, direction);
-    pushFreecamToRenderer();
+    if (_sceneCamera.isTwoD()
+        || _sceneCamera.projection() == ProjectionMode::Orthographic) {
+        ayt::math::FRectangle viewport{};
+        if (!getViewportBounds(viewport)) return false;
+        const ayt::math::FVector2 logical =
+            _ui.physicalToLogical({x, y});
+        _sceneCamera.zoomAt(
+            std::pow(1.1f, wheelNotches),
+            {logical.x - viewport.minX, logical.y - viewport.minY});
+    } else {
+        ayt::math::FVector3 origin{};
+        ayt::math::FVector3 direction{};
+        if (!viewportRay(x, y, origin, direction)) return false;
+        _sceneCamera.threeD().zoomToward(wheelNotches, direction);
+    }
+    _sceneViewWorkspaceDirty = true;
+    _sceneViewWorkspaceSaveCountdown = 0.5f;
+    pushSceneCameraToRenderer();
+    updateViewportCoordinateFeedback(x, y);
     if (_repaintCallback) {
         _repaintCallback();
     }
@@ -1855,15 +1952,20 @@ bool EditorSession::onMouseWheel(float x, float y, float deltaY) {
 
 void EditorSession::onMouseLeave() {
     _hasLastMouse = false;
-    if (_freecam.isLooking()) {
-        _freecam.endLook();
+    if (_sceneCamera.threeD().isLooking()) {
+        _sceneCamera.threeD().endLook();
     }
+    _sceneCamera.endTwoDPan();
     if (_transformGizmo.active()) {
         finishTransformGizmoDrag(false);
     }
     _gizmoHoverHandle = EditorGizmoHandle::None;
     syncTransformGizmoToRenderer();
     _ui.onMouseLeave();
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_viewport_coordinates"))) {
+        label->setText(L"");
+    }
     clearSplitterHovers();
 }
 
@@ -1971,8 +2073,8 @@ void EditorSession::onWindowFocusChanged(bool focused)
     if (_ui.getFocusedWidget() != nullptr) {
         _ui.setFocus(nullptr);
     }
-    if (_freecam.isLooking()) {
-        _freecam.endLook();
+    if (_sceneCamera.threeD().isLooking()) {
+        _sceneCamera.threeD().endLook();
     }
     _viewportLmbPending = false;
     _viewportLmbDragged = false;
@@ -2038,12 +2140,18 @@ void EditorSession::bindToolbar() {
     bindButton("btn_tool_space", [this]() {
         setLocalTransformSpace(!_localTransformSpace);
     });
+    bindButton("btn_view_mode", [this]() { toggleSceneViewMode(); });
     bindButton("btn_view_camera", [this]() { toggleViewportProjection(); });
     bindButton("btn_view_shading", [this]() { toggleViewportShading(); });
 
     auto* viewportOptions = new ayt::ui::Menu();
     viewportOptions->setId("viewport_options_menu");
     if (ayt::ui::Widget* root = _ui.root()) root->addChild(viewportOptions);
+    if (auto* item = viewportOptions->addItem(L"[ ] 2D Scene View")) {
+        item->setId("menu_scene_view_2d");
+        item->setOnActivate([this]() { toggleSceneViewMode(); });
+        _sceneViewModeMenuItem = item;
+    }
     if (auto* item = viewportOptions->addItem(L"Perspective Projection")) {
         item->setId("menu_view_projection");
         item->setOnActivate([this]() { toggleViewportProjection(); });
@@ -2093,7 +2201,7 @@ void EditorSession::bindToolbar() {
         "color.text.muted", ayt::math::FVector4(0.68f, 0.71f, 0.76f, 1.0f));
     const char* accentButtons[] = {
         "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
-        "btn_view_camera", "btn_view_shading", "btn_view_options",
+        "btn_view_mode", "btn_view_camera", "btn_view_shading", "btn_view_options",
         "btn_tool_ui_layout", "btn_tool_2d", "btn_tool_audio",
         "btn_run_project"
     };
@@ -2119,6 +2227,7 @@ void EditorSession::bindToolbar() {
     styleLabel("lbl_document_title", muted, false);
     styleLabel("lbl_active_tool", muted, true);
     styleLabel("lbl_viewport_scene", muted, false);
+    styleLabel("lbl_viewport_coordinates", muted, false);
     styleLabel("lbl_status_scene", muted, false);
     styleLabel("lbl_status_project", muted, false);
     styleLabel("lbl_status_network", muted, false);
@@ -2148,6 +2257,8 @@ void EditorSession::bindToolbar() {
 
     attachEditorTooltip(this, _ui.findById("btn_view_camera"),
         L"Toggle Perspective / Orthographic projection");
+    attachEditorTooltip(this, _ui.findById("btn_view_mode"),
+        L"Switch between 2D and 3D Scene View");
     attachEditorTooltip(this, _ui.findById("btn_view_shading"),
         L"Toggle Shaded / Wireframe rendering");
 }
@@ -2182,6 +2293,7 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_tool_audio",  "outline/music-cog.svg",         L"Open Audio Editor",     20.0f, 7.0f, 7.0f},
         {"btn_run_project", "outline/rocket.svg",            L"Run current project",   20.0f, 7.0f, 7.0f},
         {"btn_tool_space",  "outline/world.svg",             L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
+        {"btn_view_mode",   "outline/box.svg",               L"3D Scene View",        16.0f, 6.0f, 4.0f},
         {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
         {"btn_assets_add",   "outline/file-import.svg",      L"Import asset",          15.0f, 5.0f, 4.0f},
         {"btn_assets_up",    "outline/folder-up.svg",        L"Go to parent folder",   15.0f, 5.0f, 4.0f},
@@ -4488,13 +4600,17 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     }
     ayt::entity::World* world = hierarchyWorldMutable();
     if (world == nullptr) return false;
-    ayt::math::FVector3 direction;
-    if (!viewportRayDirection(physicalX, physicalY, direction)) return false;
+    ayt::math::FVector3 origin{};
+    ayt::math::FVector3 direction{};
+    if (!viewportRay(physicalX, physicalY, origin, direction)) return false;
 
-    ayt::math::FVector3 position = _freecam.eye() + direction * 5.0f;
-    if (std::fabs(direction.y) > 1.0e-5f) {
-        const float distance = -_freecam.eye().y / direction.y;
-        if (distance > 0.0f) position = _freecam.eye() + direction * distance;
+    ayt::math::FVector3 position = origin + direction * 5.0f;
+    const float planeDirection = _sceneCamera.isTwoD()
+        ? direction.z : direction.y;
+    const float planeOrigin = _sceneCamera.isTwoD() ? origin.z : origin.y;
+    if (std::fabs(planeDirection) > 1.0e-5f) {
+        const float distance = -planeOrigin / planeDirection;
+        if (distance >= 0.0f) position = origin + direction * distance;
     }
 
     std::shared_ptr<ayt::resource::IMesh> meshResource;
@@ -5236,36 +5352,29 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
                 : L"[ ] Viewport Orientation Axis");
     }
     if (preferences.cameraPoseValid) {
-        _freecam.setPose(preferences.cameraEye,
+        _sceneCamera.threeD().setPose(preferences.cameraEye,
                          preferences.cameraYawRadians,
                          preferences.cameraPitchRadians);
     }
     if (std::isfinite(preferences.cameraMoveSpeed)
         && preferences.cameraMoveSpeed > 0.01f) {
-        _freecam.setMoveSpeed(preferences.cameraMoveSpeed);
+        _sceneCamera.threeD().setMoveSpeed(preferences.cameraMoveSpeed);
     }
     setActiveTool(preferences.activeTool);
     setLocalTransformSpace(preferences.localTransformSpace);
-    _orthographicView = preferences.orthographicView;
+    _sceneCamera.setThreeDProjection(preferences.orthographicView
+        ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
     _wireframeView = preferences.wireframeView;
-    if (auto* button = dynamic_cast<ayt::ui::Button*>(
-            _ui.findById("btn_view_camera"))) {
-        button->setText(_orthographicView ? L"Orthographic" : L"Perspective");
-    }
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_shading"))) {
         button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
-    }
-    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
-            _ui.findById("menu_view_projection"))) {
-        item->setText((_orthographicView ? L"[x] " : L"[ ] ")
-                      + std::wstring(L"Orthographic Projection"));
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
         item->setText((_wireframeView ? L"[x] " : L"[ ] ")
                       + std::wstring(L"Wireframe Rendering"));
     }
+    syncSceneViewToolbar();
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
         item->setText(_viewportOrientationAxisVisible
@@ -5355,7 +5464,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _ui.layout();
     syncViewport();
     applyRenderSettingsFromPanel();
-    pushFreecamToRenderer();
+    pushSceneCameraToRenderer();
     _applyingPreferences = false;
 }
 
@@ -5375,13 +5484,14 @@ EditorPreferences EditorSession::capturePreferences() const
         out.dockTree = _mainDock->serializeDockTree();
     }
     out.cameraPoseValid = true;
-    out.cameraEye = _freecam.eye();
-    out.cameraYawRadians = _freecam.yawRadians();
-    out.cameraPitchRadians = _freecam.pitchRadians();
-    out.cameraMoveSpeed = _freecam.moveSpeed();
+    out.cameraEye = _sceneCamera.threeD().eye();
+    out.cameraYawRadians = _sceneCamera.threeD().yawRadians();
+    out.cameraPitchRadians = _sceneCamera.threeD().pitchRadians();
+    out.cameraMoveSpeed = _sceneCamera.threeD().moveSpeed();
     out.activeTool = _activeTool;
     out.localTransformSpace = _localTransformSpace;
-    out.orthographicView = _orthographicView;
+    out.orthographicView =
+        _sceneCamera.threeDProjection() == ProjectionMode::Orthographic;
     out.wireframeView = _wireframeView;
 
     auto sliderValue = [this](const char* id, float fallback) {
@@ -5549,21 +5659,195 @@ void EditorSession::setLocalTransformSpace(bool local)
     if (_repaintCallback) _repaintCallback();
 }
 
-void EditorSession::toggleViewportProjection()
+void EditorSession::toggleSceneViewMode()
 {
-    _orthographicView = !_orthographicView;
-    const std::wstring label = _orthographicView
-        ? L"Orthographic" : L"Perspective";
+    setSceneViewMode(_sceneCamera.isTwoD()
+        ? SceneViewMode::ThreeD : SceneViewMode::TwoD);
+}
+
+void EditorSession::setSceneViewMode(SceneViewMode mode, bool persist)
+{
+    if (_sceneCamera.mode() != mode) {
+        if (_transformGizmo.active()) finishTransformGizmoDrag(false);
+        _sceneCamera.threeD().endLook();
+        _sceneCamera.endTwoDPan();
+        _gizmoHoverHandle = EditorGizmoHandle::None;
+        _sceneCamera.setMode(mode);
+        if (persist) rememberCurrentSceneView();
+    }
+    syncSceneViewToolbar();
+    pushSceneCameraToRenderer();
+    syncTransformGizmoToRenderer();
+    if (_hasLastMouse) {
+        updateViewportCoordinateFeedback(_lastMouseX, _lastMouseY);
+    }
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::syncSceneViewToolbar()
+{
+    const bool twoD = _sceneCamera.isTwoD();
+    const bool orthographic =
+        _sceneCamera.threeDProjection() == ProjectionMode::Orthographic;
+
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_mode"))) {
+        const std::wstring label = twoD ? L"2D Scene View" : L"3D Scene View";
+        button->setAccessibilityLabel(label);
+        if (button->getIconDocument() != nullptr && !_engineAssetsRoot.empty()) {
+            const std::filesystem::path iconPath =
+                std::filesystem::path(_engineAssetsRoot) / "Icons" / "Tabler"
+                / "outline" / (twoD ? "rectangle.svg" : "box.svg");
+            std::string error;
+            auto icon = ayt::ui::SvgDocument::loadFromFile(iconPath, &error);
+            if (icon != nullptr) {
+                button->setText(L"");
+                button->setIconDocument(std::move(icon));
+            } else {
+                button->setIconDocument({});
+                button->setText(twoD ? L"2D" : L"3D");
+            }
+        } else {
+            button->setText(twoD ? L"2D" : L"3D");
+        }
+    }
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_camera"))) {
+        const std::wstring label = orthographic
+            ? L"Orthographic" : L"Perspective";
         button->setText(label);
-        button->setAccessibilityLabel(label + L" projection");
+        button->setAccessibilityLabel(twoD
+            ? L"2D Scene View always uses orthographic projection"
+            : label + L" projection");
+        button->setEnabled(!twoD);
+    }
+    if (_sceneViewModeMenuItem != nullptr) {
+        _sceneViewModeMenuItem->setText(
+            twoD ? L"[x] 2D Scene View" : L"[ ] 2D Scene View");
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_projection"))) {
-        item->setText((_orthographicView ? L"[x] " : L"[ ] ")
+        item->setText((orthographic ? L"[x] " : L"[ ] ")
                       + std::wstring(L"Orthographic Projection"));
+        item->setEnabled(!twoD);
     }
+}
+
+void EditorSession::selectInitialSceneViewForDocument()
+{
+    if (_document == nullptr) return;
+    const EditorSceneCameraState* saved =
+        _sceneViewWorkspace.find(_document->path());
+    const char* source = "engine-profile";
+    if (saved != nullptr) {
+        _sceneCamera.restoreState(*saved);
+        source = "workspace";
+    } else {
+        EditorSceneContentProfile content;
+        ayt::entity::World& world = _document->scene().world();
+        for (ayt::entity::Entity* entity : world.getAllEntities()) {
+            if (entity == nullptr) continue;
+            content.hasOrthographicCamera |=
+                entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr;
+            content.hasTwoDContent |=
+                entity->getComponent<ayt::entity::SpriteComponent>() != nullptr
+                || entity->getComponent<ayt::entity::TilemapComponent>() != nullptr;
+            content.hasThreeDContent |=
+                entity->getComponent<ayt::entity::MeshComponent>() != nullptr;
+        }
+        const SceneViewMode mode = chooseInitialSceneViewMode(
+            _projectDefaultSceneView, content, _projectEngineProfile);
+        if (_projectDefaultSceneView == "2D"
+            || _projectDefaultSceneView == "3D") {
+            source = "project";
+        } else if (content.hasOrthographicCamera || content.hasTwoDContent
+                   || content.hasThreeDContent) {
+            source = "content";
+        }
+        _sceneCamera.setMode(mode);
+        if (mode == SceneViewMode::TwoD) fitTwoDViewToSceneCamera();
+    }
+    const ayt::math::FVector2 center = _sceneCamera.twoDCenter();
+    std::fprintf(stderr,
+        "[EditorSceneView] mode=%s source=%s center=(%.3f,%.3f) viewHeight=%.3f\n",
+        _sceneCamera.isTwoD() ? "2D" : "3D", source,
+        center.x, center.y, _sceneCamera.twoDViewHeight());
+    syncSceneViewToolbar();
+    pushSceneCameraToRenderer();
+}
+
+void EditorSession::fitTwoDViewToSceneCamera()
+{
+    if (_document == nullptr) return;
+    ayt::entity::World& world = _document->scene().world();
+    const ayt::entity::SelectedOrthoCamera2D selected =
+        ayt::entity::selectOrthoCamera2D(world);
+    if (!selected) return;
+    const float viewHeight = selected.camera->effectiveViewSize(
+        _sceneCamera.viewportAspect()) / std::fabs(selected.camera->safeZoom());
+    _sceneCamera.setTwoDPose(
+        {selected.transform->position.x, selected.transform->position.y},
+        viewHeight);
+}
+
+void EditorSession::rememberCurrentSceneView()
+{
+    if (_document == nullptr || _document->path().empty()
+        || !_sceneViewWorkspace.enabled()) {
+        return;
+    }
+    _sceneViewWorkspace.set(_document->path(), _sceneCamera.state());
+    _sceneViewWorkspaceDirty = true;
+    _sceneViewWorkspaceSaveCountdown = 0.5f;
+}
+
+void EditorSession::pollSceneViewWorkspace(float dtSeconds)
+{
+    if (!_sceneViewWorkspaceDirty) return;
+    _sceneViewWorkspaceSaveCountdown -= std::max(0.0f, dtSeconds);
+    if (_sceneViewWorkspaceSaveCountdown > 0.0f) return;
+    if (_document != nullptr && !_document->path().empty()) {
+        _sceneViewWorkspace.set(_document->path(), _sceneCamera.state());
+    }
+    std::string error;
+    if (!_sceneViewWorkspace.save(&error)) {
+        std::fprintf(stderr, "[EditorSceneView] workspace save failed: %s\n",
+                     error.c_str());
+        _sceneViewWorkspaceSaveCountdown = 2.0f;
+        return;
+    }
+    _sceneViewWorkspaceDirty = false;
+}
+
+void EditorSession::updateViewportCoordinateFeedback(float x, float y)
+{
+    auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+        _ui.findById("lbl_viewport_coordinates"));
+    if (label == nullptr) return;
+    if (!_sceneCamera.isTwoD() || !isViewportSurfacePoint(x, y)) {
+        label->setText(L"");
+        return;
+    }
+    ayt::math::FRectangle viewport{};
+    if (!getViewportBounds(viewport)) return;
+    const ayt::math::FVector2 logical = _ui.physicalToLogical({x, y});
+    const ayt::math::FVector2 world = _sceneCamera.twoDWorldAt(
+        {logical.x - viewport.minX, logical.y - viewport.minY});
+    wchar_t text[128]{};
+    std::swprintf(text, std::size(text), L"XY  X %.1f  Y %.1f  Grid %.3g",
+                  world.x, world.y, _sceneCamera.adaptiveGridSpacing());
+    label->setText(text);
+}
+
+void EditorSession::toggleViewportProjection()
+{
+    if (_sceneCamera.isTwoD()) return;
+    _sceneCamera.setThreeDProjection(
+        _sceneCamera.threeDProjection() == ProjectionMode::Perspective
+            ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
+    rememberCurrentSceneView();
+    syncSceneViewToolbar();
+    pushSceneCameraToRenderer();
     if (_repaintCallback) _repaintCallback();
 }
 
@@ -5619,6 +5903,7 @@ void EditorSession::newSceneDocument()
             L"AYEditor", MB_YESNO | MB_ICONWARNING);
         if (choice != IDYES) return;
     }
+    rememberCurrentSceneView();
     _document->newScene();
     afterDocumentReload();
 }
@@ -5638,6 +5923,7 @@ void EditorSession::openSceneDocument()
             / "Assets" / "worlds").string());
     if (path.empty()) return;
 
+    rememberCurrentSceneView();
     std::string error;
     if (!_document->open(path, &error)) {
         const std::wstring message(error.begin(), error.end());
@@ -5681,6 +5967,7 @@ void EditorSession::saveSceneDocumentAs()
     }
     refreshOutliner();
     refreshUnsavedIndicator();
+    rememberCurrentSceneView();
 }
 
 void EditorSession::afterDocumentReload()
@@ -5692,6 +5979,7 @@ void EditorSession::afterDocumentReload()
     refreshInspectorLabels();
     refreshTransformInspector();
     refreshUnsavedIndicator();
+    selectInitialSceneViewForDocument();
     if (_repaintCallback) _repaintCallback();
 }
 
@@ -7327,11 +7615,11 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         return nullptr;
     }
 
+    ayt::math::FVector3 origin{};
     ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) {
+    if (!viewportRay(x, y, origin, direction)) {
         return nullptr;
     }
-    const ayt::math::FVector3 origin = _freecam.eye();
 
     ayt::entity::Entity* bestEntity = nullptr;
     float bestDistance = 1.0e30f;
@@ -7410,7 +7698,7 @@ void EditorSession::applyViewportSelection(ayt::entity::World* world,
 
 EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
 {
-    if (_gameView.mode() != EditorMode::Edit) {
+    if (_gameView.mode() != EditorMode::Edit || _sceneCamera.isTwoD()) {
         return EditorGizmoHandle::None;
     }
     ayt::entity::World* world = hierarchyWorldMutable();
@@ -7420,24 +7708,25 @@ EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
     if (world == nullptr || world != _selectionWorld || transform == nullptr) {
         return EditorGizmoHandle::None;
     }
+    ayt::math::FVector3 origin{};
     ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) {
+    if (!viewportRay(x, y, origin, direction)) {
         return EditorGizmoHandle::None;
     }
     const EditorTransformState state{
         transform->position, transform->rotation, transform->scale};
     _gizmoDisabledHandleMask = EditorTransformGizmo::disabledHandleMask(
-        state, _localTransformSpace, _freecam.eye(),
+        state, _localTransformSpace, origin,
         _gizmoDisabledHandleMask);
     return _transformGizmo.hitTestUniversal(
-        state, _localTransformSpace, _freecam.eye(), direction,
+        state, _localTransformSpace, origin, direction,
         _gizmoDisabledHandleMask);
 }
 
 bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
                                             float x, float y)
 {
-    if (_gameView.mode() != EditorMode::Edit
+    if (_gameView.mode() != EditorMode::Edit || _sceneCamera.isTwoD()
         || handle == EditorGizmoHandle::None) {
         return false;
     }
@@ -7448,14 +7737,15 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
     if (world == nullptr || world != _selectionWorld || transform == nullptr) {
         return false;
     }
+    ayt::math::FVector3 origin{};
     ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) return false;
+    if (!viewportRay(x, y, origin, direction)) return false;
 
     const EditorTransformState state{
         transform->position, transform->rotation, transform->scale};
     if (!_transformGizmo.beginUniversal(
             handle, state, _localTransformSpace,
-            _freecam.eye(), direction, y,
+            origin, direction, y,
             _gizmoDisabledHandleMask)) {
         return false;
     }
@@ -7480,12 +7770,13 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
         finishTransformGizmoDrag(false);
         return false;
     }
+    ayt::math::FVector3 origin{};
     ayt::math::FVector3 direction{};
-    if (!viewportRayDirection(x, y, direction)) return true;
+    if (!viewportRay(x, y, origin, direction)) return true;
 
     EditorTransformState updated;
     if (_transformGizmo.update(
-            _freecam.eye(), direction, x, y, updated)) {
+            origin, direction, x, y, updated)) {
         transform->setPosition(updated.position.x,
                                updated.position.y,
                                updated.position.z);
@@ -7557,7 +7848,7 @@ void EditorSession::syncTransformGizmoToRenderer()
     if (subsystem == nullptr) return;
 
     ayt::render::EditorTransformGizmoState state;
-    if (_gameView.mode() == EditorMode::Edit) {
+    if (_gameView.mode() == EditorMode::Edit && !_sceneCamera.isTwoD()) {
         ayt::entity::World* world = hierarchyWorldMutable();
         ayt::entity::Entity* entity = _selection.resolve(world);
         auto* transform = entity != nullptr
@@ -7568,7 +7859,7 @@ void EditorSession::syncTransformGizmoToRenderer()
                 transform->position, transform->rotation, transform->scale};
             _gizmoDisabledHandleMask =
                 EditorTransformGizmo::disabledHandleMask(
-                    transformState, _localTransformSpace, _freecam.eye(),
+                    transformState, _localTransformSpace, _sceneCamera.threeD().eye(),
                     _gizmoDisabledHandleMask);
             state.visible = true;
             state.position = transform->position;
@@ -7696,8 +7987,8 @@ void EditorSession::onModeChanged(EditorMode mode) {
     _ui.cancelCapture();
     finishTransformGizmoDrag(false);
     _gizmoHoverHandle = EditorGizmoHandle::None;
-    if (_freecam.isLooking()) {
-        _freecam.endLook();
+    if (_sceneCamera.threeD().isLooking()) {
+        _sceneCamera.threeD().endLook();
     }
 
     ayt::entity::World* activeWorld = hierarchyWorldMutable();
@@ -7714,13 +8005,13 @@ void EditorSession::onModeChanged(EditorMode mode) {
     case EditorMode::Edit:
         setModeLabel(L"EDIT");
         setInspectorHint(L"No entity selected");
-        pushFreecamToRenderer();
+        pushSceneCameraToRenderer();
         break;
     case EditorMode::Play:
         setModeLabel(_netClientAutoPlay ? L"PLAY (NET CLIENT)" : L"PLAY");
         setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
-        pushFreecamToRenderer();
+        pushSceneCameraToRenderer();
         // Auto-select the initial runtime subject, but preserve a viewport
         // selection when resuming Play from Paused.
         if (_selection.empty()) selectCharacter();
@@ -7729,7 +8020,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
         setModeLabel(L"PAUSED");
         setInspectorHint(L"Locked during Play.");
         applyRenderSettingsFromPanel();
-        pushFreecamToRenderer();
+        pushSceneCameraToRenderer();
         break;
     }
 
@@ -7750,6 +8041,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
     _ui.invalidateLayout();
     _ui.layout();
     syncViewport();
+    pushSceneCameraToRenderer();
     syncTransformGizmoToRenderer();
 
     if (_repaintCallback) {
@@ -7758,10 +8050,6 @@ void EditorSession::onModeChanged(EditorMode mode) {
 }
 
 void EditorSession::syncViewportIfChanged() {
-    if (_hostWindow == nullptr) {
-        return;
-    }
-
     ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
     if (viewport == nullptr) {
         return;
@@ -7778,7 +8066,11 @@ void EditorSession::syncViewportIfChanged() {
 
     _cachedViewportBounds = bounds;
     _viewportBoundsCached = true;
+    _sceneCamera.setViewport(
+        static_cast<std::uint32_t>(std::max(1.0f, std::round(bounds.width()))),
+        static_cast<std::uint32_t>(std::max(1.0f, std::round(bounds.height()))));
     _playRuntime.syncViewportRect(bounds);
+    pushSceneCameraToRenderer();
 }
 
 void EditorSession::syncViewport() {

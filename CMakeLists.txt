@@ -75,6 +75,8 @@ set(SRC_FILES
     src/AYEditorStartupSplash.cpp
     src/AYEditorProductPaths.cpp
     src/AYEditor2DViewportModel.cpp
+    src/AYEditorSceneCamera.cpp
+    src/AYEditorSceneViewWorkspace.cpp
     src/AYEditorTilemapDocument.cpp
     src/AYImporter.cpp
     src/AYImportDialog.cpp
@@ -135,6 +137,8 @@ set(HEAD_FILES
     include/AYEditor/EditorStartupSplash.h
     include/AYEditor/EditorProductPaths.h
     include/AYEditor/Editor2DViewportModel.h
+    include/AYEditor/EditorSceneCamera.h
+    include/AYEditor/EditorSceneViewWorkspace.h
     include/AYEditor/EditorTilemapDocument.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
@@ -149,7 +153,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=5)
+    AYEDITOR_SOURCE_ABI_VERSION=6)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

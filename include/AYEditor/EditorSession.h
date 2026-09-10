@@ -3,7 +3,8 @@
 #include "AYEditor/EditorGameView.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorWorldContext.h"
-#include "AYEditor/EditorFreecam.h"
+#include "AYEditor/EditorSceneCamera.h"
+#include "AYEditor/EditorSceneViewWorkspace.h"
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorCommandStack.h"
@@ -242,7 +243,9 @@ public:
     bool copySelectedAssets(const std::string& destinationLogicalFolder);
     EditorWorkspace& workspace() noexcept;
     const EditorWorkspace& workspace() const noexcept;
-    const EditorFreecam& freecam() const noexcept { return _freecam; }
+    const EditorFreecam& freecam() const noexcept { return _sceneCamera.threeD(); }
+    const EditorSceneCamera& sceneCamera() const noexcept { return _sceneCamera; }
+    SceneViewMode sceneViewMode() const noexcept { return _sceneCamera.mode(); }
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
@@ -305,6 +308,8 @@ private:
     void resetWorkspacePreferences();
     void setActiveTool(EditorTool tool);
     void setLocalTransformSpace(bool local);
+    void toggleSceneViewMode();
+    void setSceneViewMode(SceneViewMode mode, bool persist = true);
     void toggleViewportProjection();
     void toggleViewportShading();
     void beginOrResumePlay();
@@ -313,8 +318,14 @@ private:
     void setViewportOrientationAxisVisible(bool visible);
     void setDockCardVisible(const char* cardId, bool visible);
     void toggleDockCard(const char* cardId, bool& visibleFlag);
-    void pushFreecamToRenderer();
+    void pushSceneCameraToRenderer();
     bool freecamActive() const;
+    void syncSceneViewToolbar();
+    void selectInitialSceneViewForDocument();
+    void fitTwoDViewToSceneCamera();
+    void rememberCurrentSceneView();
+    void pollSceneViewWorkspace(float dtSeconds);
+    void updateViewportCoordinateFeedback(float x, float y);
     void requestHostClose();
     void requestHostMinimize();
     void requestHostMaximizeToggle();
@@ -397,8 +408,9 @@ private:
     bool isViewportSurfacePoint(float x, float y) const;
     bool isChromePoint(float x, float y) const;
     bool isSplitHandlePoint(float x, float y) const;
-    bool viewportRayDirection(float x, float y,
-                              ayt::math::FVector3& outDirection) const;
+    bool viewportRay(float x, float y,
+                     ayt::math::FVector3& outOrigin,
+                     ayt::math::FVector3& outDirection) const;
     // Freecam reads AYDevice keyboard state. Gate on typed window focus +
     // viewport hover (or active LMB look).
     bool viewportAcceptsGameInput() const;
@@ -489,6 +501,9 @@ private:
     bool _hostFocused = false;
     std::string _layoutPath;
     std::string _engineAssetsRoot;
+    std::string _projectRoot;
+    std::string _projectDefaultSceneView = "Auto";
+    std::string _projectEngineProfile;
     RepaintCallback _repaintCallback;
 
     // AI-1: holds the viewport panel pointer across populateFrame +
@@ -515,8 +530,12 @@ private:
     float _lastMouseY = 0.0f;
     bool _hasLastMouse = false;
 
-    // Play/Paused freecam (LMB drag look + WASD/QE). Edit mode inactive.
-    EditorFreecam _freecam;
+    // Non-serialized Scene View camera. Its 2D and 3D poses are independent;
+    // Play clears these overrides so Scene runtime cameras remain authoritative.
+    EditorSceneCamera _sceneCamera;
+    EditorSceneViewWorkspace _sceneViewWorkspace;
+    bool _sceneViewWorkspaceDirty = false;
+    float _sceneViewWorkspaceSaveCountdown = 0.0f;
     // Click-vs-drag: LMB down on viewport arms a pending click; if the
     // cursor moves past slop we start freecam look instead of select.
     bool  _viewportLmbPending = false;
@@ -526,7 +545,6 @@ private:
 
     EditorTool _activeTool = EditorTool::Select;
     bool _localTransformSpace = false;
-    bool _orthographicView = false;
     bool _wireframeView = false;
 
     EditorTransformGizmo _transformGizmo;
@@ -626,6 +644,7 @@ private:
     ayt::ui::MenuItem* _restoreDeletedMenuItem = nullptr;
     ayt::ui::MenuItem* _restoreRecoveryMenuItem = nullptr;
     ayt::ui::MenuItem* _viewportOrientationAxisMenuItem = nullptr;
+    ayt::ui::MenuItem* _sceneViewModeMenuItem = nullptr;
     // Session-persistent editor preference. Renderer itself defaults off so
     // non-editor hosts never receive the widget accidentally.
     bool _viewportOrientationAxisVisible = true;

@@ -128,7 +128,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 5u);
+    CHECK(kEditorSourceAbiVersion == 6u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -143,6 +143,7 @@ TEST_CASE(project_descriptor_exposes_authoring_world_and_run_contract)
         "  \"id\": \"sample\",\n"
         "  \"displayName\": \"Sample\",\n"
         "  \"engineProfile\": \"CLIENT_2D\",\n"
+        "  \"editor\": {\"defaultSceneView\": \"2D\"},\n"
         "  \"paths\": {\"assets\": \"Assets\", \"gameAssembly\": \"game/Sample.cpp\", \"gameCode\": \"src\"},\n"
         "  \"startupWorld\": \"main\",\n"
         "  \"worlds\": [{\"id\": \"main\", \"scene\": \"worlds/main.ayscene\", \"ui\": \"ui/main.ui.json\", \"tilemaps\": [\"tilemaps/main.aytilemap.json\"]}],\n"
@@ -156,6 +157,7 @@ TEST_CASE(project_descriptor_exposes_authoring_world_and_run_contract)
     CHECK(descriptor.assetRoot == "Assets");
     CHECK(descriptor.gameAssembly == "game/Sample.cpp");
     CHECK(descriptor.gameCodeRoot == "src");
+    CHECK(descriptor.defaultSceneView == "2D");
     CHECK(descriptor.findWorld("main") != nullptr);
     CHECK(descriptor.findWorld("main")->ui == "ui/main.ui.json");
     CHECK(descriptor.run.executable == "out/Sample.exe");

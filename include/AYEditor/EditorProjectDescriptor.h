@@ -37,6 +37,9 @@ struct EditorProjectDescriptor {
     std::string assetRoot = "Assets";
     std::string gameAssembly;
     std::string gameCodeRoot;
+    // Optional authoring default: "2D", "3D", or "Auto". A per-scene
+    // .ayeditor/workspace.json entry still has higher precedence.
+    std::string defaultSceneView = "Auto";
     std::string startupWorld;
     std::vector<EditorProjectWorldDescriptor> worlds;
     EditorProjectRunDescriptor run;

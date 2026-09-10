@@ -108,6 +108,23 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
             return {};
         }
 
+        const nlohmann::json editor = json.value(
+            "editor", nlohmann::json::object());
+        if (!editor.is_object()) {
+            if (error != nullptr) *error = "Project editor settings must be an object.";
+            return {};
+        }
+        result.defaultSceneView = editor.value(
+            "defaultSceneView", std::string("Auto"));
+        if (result.defaultSceneView != "Auto"
+            && result.defaultSceneView != "2D"
+            && result.defaultSceneView != "3D") {
+            if (error != nullptr) {
+                *error = "editor.defaultSceneView must be Auto, 2D, or 3D.";
+            }
+            return {};
+        }
+
         result.startupWorld = json.value("startupWorld", std::string{});
         const nlohmann::json worlds = json.value(
             "worlds", nlohmann::json::array());
