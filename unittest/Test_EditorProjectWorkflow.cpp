@@ -17,6 +17,7 @@
 #include <AY2DEditor/TilemapEditorModel.h>
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYResource/assetsImpl/TilemapAsset.h>
+#include <AYResource/assetsImpl/Texture.h>
 #include <AYScene.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
@@ -26,6 +27,7 @@
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 
@@ -58,6 +60,28 @@ void writeWorkflowFile(const std::filesystem::path& path,
     std::filesystem::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output << contents;
+}
+
+constexpr std::array<unsigned char, 136> kWorkflowRedPng{
+    0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,
+    0x49,0x48,0x44,0x52,0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x04,
+    0x08,0x06,0x00,0x00,0x00,0xa9,0xf1,0x9e,0x7e,0x00,0x00,0x00,
+    0x4f,0x49,0x44,0x41,0x54,0x78,0x01,0x01,0x44,0x00,0xbb,0xff,
+    0x00,0xff,0x00,0x00,0xff,0xff,0x00,0x00,0xff,0xff,0x00,0x00,
+    0xff,0xff,0x00,0x00,0xff,0x00,0xff,0x00,0x00,0xff,0xff,0x00,
+    0x00,0xff,0xff,0x00,0x00,0xff,0xff,0x00,0x00,0xff,0x00,0xff,
+    0x00,0x00,0xff,0xff,0x00,0x00,0xff,0xff,0x00,0x00,0xff,0xff,
+    0x00,0x00,0xff,0x00,0xff,0x00,0x00,0xff,0xff,0x00,0x00,0xff,
+    0xff,0x00,0x00,0xff,0xff,0x00,0x00,0xff,0x3c,0x40,0x1f,0xe1,
+    0x52,0xed,0xff,0xa2,0x00,0x00,0x00,0x00,0x49,0x45,0x4e,0x44,
+    0xae,0x42,0x60,0x82};
+
+void writeWorkflowPng(const std::filesystem::path& path)
+{
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(kWorkflowRedPng.data()),
+                 static_cast<std::streamsize>(kWorkflowRedPng.size()));
 }
 
 class RecoveryDocument final : public IEditorDocument {
@@ -611,6 +635,8 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     const auto source = cleanup.root
         / "Assets/maps/rich.aytilemap.json";
     std::filesystem::create_directories(source.parent_path());
+    const auto externalAtlas = cleanup.root / "External/sheet.png";
+    writeWorkflowPng(externalAtlas);
 
     ayt::ay2d::editor::TilemapEditorModel authored;
     CHECK(authored.newDocument(4u, 3u, 16u, 16u, 0u));
@@ -618,18 +644,18 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     ayt::ay2d::editor::TileAtlasSource atlas;
     atlas.atlasId = 7u;
     atlas.name = "sheet";
-    atlas.sourcePath = "sheet.png";
-    atlas.imageWidth = 32u;
-    atlas.imageHeight = 16u;
-    atlas.tileWidth = 16u;
-    atlas.tileHeight = 16u;
-    atlas.columns = 2u;
+    atlas.sourcePath = externalAtlas.string();
+    atlas.imageWidth = 4u;
+    atlas.imageHeight = 4u;
+    atlas.tileWidth = 4u;
+    atlas.tileHeight = 4u;
+    atlas.columns = 1u;
     atlas.rows = 1u;
     ayt::ay2d::editor::AtlasTileImport imported;
     imported.tileId = 10u;
     imported.name = "Grass";
-    imported.sourceWidth = 16u;
-    imported.sourceHeight = 16u;
+    imported.sourceWidth = 4u;
+    imported.sourceHeight = 4u;
     CHECK(authored.importTileAtlas(atlas, "Tiles/Terrain", {imported}));
     std::string error;
     CHECK(authored.save(source.string(), &error));
@@ -664,6 +690,37 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     CHECK(runtime.getLayerCount() == 2u);
     CHECK(runtime.getAtlasCount() == 1u);
     CHECK(runtime.getVisualCount() == 1u);
+    const std::string runtimeTexturePath =
+        runtime.getAtlasEntries()[0].sourcePath;
+    CHECK(runtimeTexturePath.starts_with("textures/"));
+    CHECK(runtimeTexturePath.ends_with("_tilemap.aytex"));
+    const auto cookedTexturePath = cleanup.root / "Assets"
+        / std::filesystem::u8path(runtimeTexturePath);
+    CHECK(std::filesystem::is_regular_file(cookedTexturePath));
+    std::ifstream textureFile(
+        cookedTexturePath, std::ios::binary | std::ios::ate);
+    CHECK(textureFile.is_open());
+    const std::streamsize textureSize = textureFile.tellg();
+    textureFile.seekg(0, std::ios::beg);
+    std::vector<ayt::math::UInt8> textureBytes(
+        static_cast<size_t>(textureSize));
+    CHECK(textureFile.read(reinterpret_cast<char*>(textureBytes.data()),
+                           textureSize).good());
+    ayt::resource::Texture texture;
+    CHECK(texture.loadFromBinary(textureBytes.data(), textureBytes.size()));
+    CHECK(texture.getFormat() == ayt::resource::TextureFormat::RGBA8);
+    CHECK(texture.getMipmapCount() == 1u);
+
+    ayt::ay2d::editor::TilemapDocument portableSource;
+    CHECK(portableSource.load(source.string(), &error));
+    const auto* portableAtlas = portableSource.tileAtlas(7u);
+    CHECK(portableAtlas != nullptr);
+    CHECK(portableAtlas != nullptr
+        && portableAtlas->sourcePath.starts_with("Imported/Tilemaps/"));
+    CHECK(portableAtlas != nullptr
+        && std::filesystem::is_regular_file(
+            cleanup.root / "Assets"
+            / std::filesystem::u8path(portableAtlas->sourcePath)));
 }
 
 TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)

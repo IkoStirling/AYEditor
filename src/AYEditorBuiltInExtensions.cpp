@@ -43,9 +43,11 @@
 #include <cwchar>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <limits>
 #include <memory>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -77,25 +79,175 @@ std::wstring rgbaText(uint32_t rgba)
     return buffer;
 }
 
+std::filesystem::path tilemapAssetRoot(
+    const std::filesystem::path& source)
+{
+    for (std::filesystem::path cursor = source.parent_path();
+         !cursor.empty(); cursor = cursor.parent_path()) {
+        if (cursor.filename() == "Assets") return cursor;
+        const std::filesystem::path parent = cursor.parent_path();
+        if (parent == cursor) break;
+    }
+    return {};
+}
+
+std::optional<std::filesystem::path> existingAtlasSource(
+    const std::string& authoredPath,
+    const std::filesystem::path& assetRoot,
+    const std::filesystem::path& currentDocument,
+    const std::filesystem::path& targetDocument)
+{
+    const std::filesystem::path authored =
+        std::filesystem::u8path(authoredPath);
+    std::vector<std::filesystem::path> candidates;
+    if (authored.is_absolute()) {
+        candidates.push_back(authored);
+    } else {
+        if (!assetRoot.empty()) candidates.push_back(assetRoot / authored);
+        if (!currentDocument.empty()) {
+            candidates.push_back(currentDocument.parent_path() / authored);
+        }
+        candidates.push_back(targetDocument.parent_path() / authored);
+    }
+    for (const std::filesystem::path& candidate : candidates) {
+        std::error_code error;
+        if (!std::filesystem::is_regular_file(candidate, error) || error) {
+            continue;
+        }
+        const std::filesystem::path absolute =
+            std::filesystem::absolute(candidate, error);
+        return (error ? candidate : absolute).lexically_normal();
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string> atlasFileHash(
+    const std::filesystem::path& path)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input) return std::nullopt;
+    uint64_t hash = 14695981039346656037ull;
+    std::array<char, 64u * 1024u> buffer{};
+    while (input) {
+        input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize count = input.gcount();
+        for (std::streamsize index = 0; index < count; ++index) {
+            hash ^= static_cast<unsigned char>(buffer[static_cast<size_t>(index)]);
+            hash *= 1099511628211ull;
+        }
+    }
+    if (input.bad()) return std::nullopt;
+    std::ostringstream text;
+    text << std::hex << std::setfill('0') << std::setw(16) << hash;
+    return text.str();
+}
+
+std::string portableAtlasStem(std::string value)
+{
+    for (char& ch : value) {
+        const unsigned char byte = static_cast<unsigned char>(ch);
+        if (!std::isalnum(byte) && ch != '_' && ch != '-') ch = '_';
+    }
+    while (!value.empty() && value.back() == '_') value.pop_back();
+    return value.empty() ? "tile_atlas" : value;
+}
+
+bool pathInside(const std::filesystem::path& child,
+                const std::filesystem::path& parent,
+                std::filesystem::path& relative)
+{
+    std::error_code error;
+    const std::filesystem::path normalizedChild =
+        std::filesystem::weakly_canonical(child, error);
+    if (error) return false;
+    const std::filesystem::path normalizedParent =
+        std::filesystem::weakly_canonical(parent, error);
+    if (error) return false;
+    relative = normalizedChild.lexically_relative(normalizedParent);
+    return !relative.empty() && !relative.is_absolute()
+        && relative.begin() != relative.end()
+        && *relative.begin() != "..";
+}
+
+std::string makeAtlasSourcesPortable(
+    ayt::ay2d::editor::TilemapEditorModel& model,
+    const std::filesystem::path& targetDocument,
+    const std::filesystem::path& assetRoot)
+{
+    std::map<uint32_t, std::string> replacements;
+    std::string notice;
+    const std::filesystem::path currentDocument =
+        std::filesystem::u8path(model.document().path());
+    for (const auto& [atlasId, atlas] : model.document().tileAtlases()) {
+        const auto source = existingAtlasSource(
+            atlas.sourcePath, assetRoot, currentDocument, targetDocument);
+        if (!source) {
+            if (!notice.empty()) notice += " ";
+            notice += "Atlas '" + atlas.name
+                + "' could not be found and was not made portable.";
+            continue;
+        }
+        std::filesystem::path relative;
+        if (!pathInside(*source, assetRoot, relative)) {
+            const auto hash = atlasFileHash(*source);
+            if (!hash) {
+                if (!notice.empty()) notice += " ";
+                notice += "Atlas '" + atlas.name
+                    + "' could not be read and was not made portable.";
+                continue;
+            }
+            std::string extension = source->extension().string();
+            std::transform(extension.begin(), extension.end(),
+                           extension.begin(), [](unsigned char ch) {
+                               return static_cast<char>(std::tolower(ch));
+                           });
+            const std::filesystem::path destination = assetRoot
+                / "Imported" / "Tilemaps"
+                / (portableAtlasStem(source->stem().string()) + "_"
+                   + *hash + extension);
+            std::error_code error;
+            std::filesystem::create_directories(
+                destination.parent_path(), error);
+            if (!error && !std::filesystem::exists(destination, error)) {
+                error.clear();
+                std::filesystem::copy_file(
+                    *source, destination,
+                    std::filesystem::copy_options::none, error);
+            }
+            if (error || !std::filesystem::is_regular_file(destination)) {
+                if (!notice.empty()) notice += " ";
+                notice += "Atlas '" + atlas.name
+                    + "' could not be copied into project Assets.";
+                continue;
+            }
+            relative = destination.lexically_relative(assetRoot);
+        }
+        const std::string portablePath = relative.generic_string();
+        if (portablePath != atlas.sourcePath) {
+            replacements.emplace(atlasId, portablePath);
+        }
+    }
+    if (!replacements.empty()
+        && !model.relinkTileAtlasSources(replacements)) {
+        if (!notice.empty()) notice += " ";
+        notice += "Atlas references could not be updated.";
+    }
+    return notice;
+}
+
 TilemapSaveResult saveTilemapSourceAndTryCook(
     ayt::ay2d::editor::TilemapEditorModel& model,
     const std::string& path, std::string* error)
 {
     TilemapSaveResult result;
-    if (!model.save(path, error)) return result;
-    result.sourceSaved = true;
     const std::filesystem::path source =
         std::filesystem::absolute(path).lexically_normal();
-    std::filesystem::path assetRoot;
-    for (std::filesystem::path cursor = source.parent_path();
-         !cursor.empty(); cursor = cursor.parent_path()) {
-        if (cursor.filename() == "Assets") {
-            assetRoot = cursor;
-            break;
-        }
-        const std::filesystem::path parent = cursor.parent_path();
-        if (parent == cursor) break;
+    const std::filesystem::path assetRoot = tilemapAssetRoot(source);
+    if (!assetRoot.empty()) {
+        result.notice = makeAtlasSourcesPortable(model, source, assetRoot);
     }
+    if (!model.save(path, error)) return result;
+    result.sourceSaved = true;
     if (assetRoot.empty()) {
         result.notice = "Authoring source saved. Runtime cooking was skipped "
             "because the file is outside the project Assets folder.";
@@ -105,9 +257,14 @@ TilemapSaveResult saveTilemapSourceAndTryCook(
     ayt::resource::TilemapConverter converter(source.string());
     converter.setOutputDir(assetRoot.string());
     const ayt::resource::ConversionResult cooked = converter.convert();
-    if (cooked.resources.size() != 1u) {
-        result.notice =
-            "Authoring source saved, but runtime cooking failed.";
+    const size_t tilemapCount = static_cast<size_t>(std::count_if(
+        cooked.resources.begin(), cooked.resources.end(),
+        [](const ayt::resource::ConversionResult::ConvertedResource& resource) {
+            return resource.type == "Tilemap";
+        }));
+    if (tilemapCount != 1u) {
+        if (!result.notice.empty()) result.notice += " ";
+        result.notice += "Authoring source saved, but runtime cooking failed.";
         if (error != nullptr) error->clear();
         return result;
     }
@@ -1831,8 +1988,19 @@ private:
     {
         std::filesystem::path path = std::filesystem::u8path(sourcePath);
         if (path.is_relative() && !_document->path().empty()) {
-            path = std::filesystem::u8path(_document->path()).parent_path()
-                / path;
+            const std::filesystem::path documentPath =
+                std::filesystem::u8path(_document->path());
+            const std::filesystem::path assetRoot =
+                tilemapAssetRoot(documentPath);
+            std::error_code error;
+            const std::filesystem::path assetRelative = assetRoot / path;
+            if (!assetRoot.empty()
+                && std::filesystem::is_regular_file(assetRelative, error)
+                && !error) {
+                path = assetRelative;
+            } else {
+                path = documentPath.parent_path() / path;
+            }
         }
         return std::filesystem::absolute(path).lexically_normal().string();
     }
