@@ -56,6 +56,14 @@ if(MSVC)
 endif()
 
 ay_add_test(${MODULE_NAME})
+ay_add_test(${MODULE_NAME}
+    NAME AYEditor_2DToolsBaseline
+    SUITE Editor2DToolsTests
+    LABELS "2d-baseline;ayeditor")
+ay_add_test(${MODULE_NAME}
+    NAME AYEditor_2DProjectBaseline
+    SUITE AYEditor_ProjectWorkflow
+    LABELS "2d-baseline;ayeditor")
 
 # Keep default Editor module assembly isolated from the broad UI/editor suite.
 # The process-wide ComponentRegistry is sealed as part of the startup contract.

@@ -150,6 +150,14 @@ Repository verification remains split by assembly:
 Every preset inherits `windows-base` and uses the single
 `out/build/vcpkg_installed` directory.
 
+The editor-enabled `windows-debug` profile also exposes six focused CTest gates
+under the `2d-baseline` label. Run `ctest --test-dir
+out/build/windows-debug-vs2026-insider -L 2d-baseline --output-on-failure` to
+check the Entity 2D component/Scene roundtrip suite, the Renderer orthographic,
+Overlay, and viewport suites, and the Editor tool/project workflow suites. Each
+gate invokes only its named AYTest suite and uses a separate temporary directory,
+so the six checks can run in parallel without sharing authored test content.
+
 ## Autosave and crash recovery
 
 The editor writes dirty in-memory Scene, UI Layout, Tilemap, Phoskia, and Logia
