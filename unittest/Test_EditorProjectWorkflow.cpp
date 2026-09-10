@@ -24,6 +24,11 @@
 #include <filesystem>
 #include <fstream>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
+
 using namespace ayt::editor;
 
 namespace {
@@ -113,7 +118,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 4u);
+    CHECK(kEditorSourceAbiVersion == 5u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -348,6 +353,16 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
     CHECK(config.arguments[0] == "--smoke");
     CHECK(std::filesystem::path(config.source).filename()
         == "project.ayproject.json");
+}
+
+TEST_CASE(project_runner_reports_process_liveness)
+{
+    CHECK(EditorProjectRunner::processState(0)
+          == EditorProjectProcessState::Unavailable);
+#if defined(_WIN32)
+    CHECK(EditorProjectRunner::processState(GetCurrentProcessId())
+          == EditorProjectProcessState::Running);
+#endif
 }
 
 TEST_CASE(project_recovery_rotates_unclean_session_and_restores_autosave)

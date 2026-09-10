@@ -1107,6 +1107,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         _childWindows->tickAll(dt);
     }
     _ui.update(dt);
+    pollProjectRunState(dt);
     if (_dockViewHost != nullptr) {
         _dockViewHost->tick(dt);
     }
@@ -2058,6 +2059,7 @@ void EditorSession::bindToolbar() {
     styleLabel("lbl_active_tool", muted, true);
     styleLabel("lbl_viewport_scene", muted, false);
     styleLabel("lbl_status_scene", muted, false);
+    styleLabel("lbl_status_project", muted, false);
     styleLabel("lbl_status_network", muted, false);
     styleLabel("lbl_status_renderer", muted, false);
     styleLabel("lbl_status_fps", muted, false);
@@ -3126,6 +3128,40 @@ void EditorSession::setAssetBrowserStatus(const std::wstring& text,
     if (_repaintCallback) _repaintCallback();
 }
 
+void EditorSession::setProjectRunStatus(const std::wstring& summary,
+                                        const std::wstring& detail,
+                                        bool mirrorToConsole)
+{
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById("lbl_status_project"))) {
+        label->setText(summary);
+    }
+    if (!detail.empty()) {
+        setAssetBrowserStatus(detail, mirrorToConsole);
+    } else if (_repaintCallback) {
+        _repaintCallback();
+    }
+}
+
+void EditorSession::pollProjectRunState(float dtSeconds)
+{
+    if (_projectProcessId == 0) return;
+    _projectProcessPollCountdown -= std::max(0.0f, dtSeconds);
+    if (_projectProcessPollCountdown > 0.0f) return;
+    _projectProcessPollCountdown = 0.5f;
+    if (EditorProjectRunner::processState(_projectProcessId)
+        == EditorProjectProcessState::Running) {
+        return;
+    }
+    const std::wstring executable = ayt::ui::decodeUtf8Text(
+        _projectExecutableName.empty() ? std::string("Project")
+                                       : _projectExecutableName);
+    setProjectRunStatus(L"Project: Exited",
+        executable + L" exited.", true);
+    _projectProcessId = 0;
+    _projectExecutableName.clear();
+}
+
 bool EditorSession::rescanAssetsNow()
 {
     std::string error;
@@ -3546,22 +3582,57 @@ bool EditorSession::restoreLastDeletedAssets()
 
 bool EditorSession::runCurrentProject()
 {
+    if (_projectProcessId != 0) {
+        const EditorProjectProcessState state =
+            EditorProjectRunner::processState(_projectProcessId);
+        if (state == EditorProjectProcessState::Running) {
+            const bool focused = EditorProjectRunner::focusProcessWindow(
+                _projectProcessId);
+            const std::wstring executable = ayt::ui::decodeUtf8Text(
+                _projectExecutableName.empty() ? std::string("Project")
+                                               : _projectExecutableName);
+            setProjectRunStatus(L"Project: Running",
+                executable + L" is already running (process "
+                + std::to_wstring(_projectProcessId) + L")."
+                + (focused ? L" Focused its window."
+                           : L" Its window is not ready yet."), true);
+            return true;
+        }
+        _projectProcessId = 0;
+        _projectExecutableName.clear();
+    }
+
     std::string error;
     const EditorProjectRunConfig config = EditorProjectRunner::resolve(
         _assetDatabase.projectRoot(), &error);
     if (!config) {
-        setAssetBrowserStatus(L"Run project: "
-            + ayt::ui::decodeUtf8Text(error), true);
+        const std::wstring message = L"Run project: "
+            + ayt::ui::decodeUtf8Text(error);
+        setProjectRunStatus(L"Project: Not runnable", message, true);
+        ::MessageBoxW(_hostWindow, message.c_str(), L"Run Project Failed",
+                      MB_OK | MB_ICONERROR);
         return false;
     }
+    const std::string executableName =
+        std::filesystem::path(config.executable).filename().string();
+    setProjectRunStatus(L"Project: Starting",
+        L"Starting " + ayt::ui::decodeUtf8Text(config.executable) + L"...",
+        true);
     const EditorProjectLaunchResult launched =
         EditorProjectRunner::launch(config);
     if (!launched) {
-        setAssetBrowserStatus(L"Run project failed: "
-            + ayt::ui::decodeUtf8Text(launched.error), true);
+        const std::wstring message = L"Run project failed: "
+            + ayt::ui::decodeUtf8Text(launched.error);
+        setProjectRunStatus(L"Project: Failed", message, true);
+        ::MessageBoxW(_hostWindow, message.c_str(), L"Run Project Failed",
+                      MB_OK | MB_ICONERROR);
         return false;
     }
-    setAssetBrowserStatus(L"Project started (process "
+    _projectProcessId = launched.processId;
+    _projectExecutableName = executableName;
+    _projectProcessPollCountdown = 0.5f;
+    setProjectRunStatus(L"Project: Running",
+        ayt::ui::decodeUtf8Text(executableName) + L" started (process "
         + std::to_wstring(launched.processId) + L").", true);
     return true;
 }

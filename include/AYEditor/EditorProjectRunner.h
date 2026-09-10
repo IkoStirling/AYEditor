@@ -24,6 +24,12 @@ struct EditorProjectLaunchResult {
     }
 };
 
+enum class EditorProjectProcessState : std::uint8_t {
+    Unavailable,
+    Running,
+    Exited,
+};
+
 // Resolves an app executable from a project-local run manifest or conventional
 // CMake output folders, then launches it without coupling app code to editor
 // startup. The same service works for BSimmer and future projects.
@@ -33,6 +39,9 @@ public:
         const std::string& projectRoot, std::string* error = nullptr);
     static EditorProjectLaunchResult launch(
         const EditorProjectRunConfig& config);
+    static EditorProjectProcessState processState(
+        std::uint64_t processId) noexcept;
+    static bool focusProcessWindow(std::uint64_t processId) noexcept;
 };
 
 } // namespace ayt::editor

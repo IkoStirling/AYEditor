@@ -23,6 +23,7 @@
 #include "AYMath/MathTypes.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -426,6 +427,10 @@ private:
     void refreshAssetDeleteButton();
     void setAssetBrowserStatus(const std::wstring& text,
                                bool mirrorToConsole = false);
+    void setProjectRunStatus(const std::wstring& summary,
+                             const std::wstring& detail = {},
+                             bool mirrorToConsole = false);
+    void pollProjectRunState(float dtSeconds);
 
     // Declared before the runtime because EditorPlayRuntime borrows it.
     EditorWorldContext _worldContext;
@@ -577,6 +582,9 @@ private:
     } _assetDragData;
     bool _assetBrowserRefreshPending = false;
     bool _updatingAssetSelection = false;
+    std::uint64_t _projectProcessId = 0;
+    std::string _projectExecutableName;
+    float _projectProcessPollCountdown = 0.0f;
     // New document/command/selection service root. Existing Scene and panel
     // paths remain outside it until their individual migration phases.
     std::unique_ptr<EditorWorkspace> _workspace;

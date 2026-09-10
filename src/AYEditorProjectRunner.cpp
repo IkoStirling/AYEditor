@@ -131,6 +131,25 @@ std::wstring quote(std::wstring value)
     output.push_back(L'\"');
     return output;
 }
+
+struct ProcessWindowSearch {
+    DWORD processId = 0;
+    HWND window = nullptr;
+};
+
+BOOL CALLBACK findProcessWindow(HWND window, LPARAM parameter)
+{
+    auto* search = reinterpret_cast<ProcessWindowSearch*>(parameter);
+    if (search == nullptr || !IsWindowVisible(window)
+        || GetWindow(window, GW_OWNER) != nullptr) {
+        return TRUE;
+    }
+    DWORD processId = 0;
+    GetWindowThreadProcessId(window, &processId);
+    if (processId != search->processId) return TRUE;
+    search->window = window;
+    return FALSE;
+}
 #endif
 
 } // namespace
@@ -229,6 +248,43 @@ EditorProjectLaunchResult EditorProjectRunner::launch(
     result.error = "Project launching is not implemented on this platform.";
 #endif
     return result;
+}
+
+EditorProjectProcessState EditorProjectRunner::processState(
+    std::uint64_t processId) noexcept
+{
+    if (processId == 0) return EditorProjectProcessState::Unavailable;
+#if defined(_WIN32)
+    const HANDLE process = OpenProcess(
+        SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+        static_cast<DWORD>(processId));
+    if (process == nullptr) return EditorProjectProcessState::Exited;
+    const DWORD wait = WaitForSingleObject(process, 0);
+    CloseHandle(process);
+    if (wait == WAIT_TIMEOUT) return EditorProjectProcessState::Running;
+    return wait == WAIT_OBJECT_0
+        ? EditorProjectProcessState::Exited
+        : EditorProjectProcessState::Unavailable;
+#else
+    (void)processId;
+    return EditorProjectProcessState::Unavailable;
+#endif
+}
+
+bool EditorProjectRunner::focusProcessWindow(std::uint64_t processId) noexcept
+{
+#if defined(_WIN32)
+    if (processId == 0) return false;
+    ProcessWindowSearch search{static_cast<DWORD>(processId), nullptr};
+    EnumWindows(findProcessWindow, reinterpret_cast<LPARAM>(&search));
+    if (search.window == nullptr) return false;
+    if (IsIconic(search.window)) ShowWindow(search.window, SW_RESTORE);
+    BringWindowToTop(search.window);
+    return SetForegroundWindow(search.window) != FALSE;
+#else
+    (void)processId;
+    return false;
+#endif
 }
 
 } // namespace ayt::editor

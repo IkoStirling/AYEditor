@@ -171,6 +171,8 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(session.ui().findById("card_assets") != nullptr);
     CHECK(session.ui().findById("card_console") != nullptr);
     CHECK(session.ui().findById("editor_status_bar") != nullptr);
+    CHECK(dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_status_project")) != nullptr);
     CHECK(dynamic_cast<Button*>(
         session.ui().findById("btn_tool_2d")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom")) != nullptr);

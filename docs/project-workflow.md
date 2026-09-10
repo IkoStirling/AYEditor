@@ -69,6 +69,12 @@ unless absolute paths are explicitly supplied.
 If both files are absent, the editor searches conventional build output
 folders for an executable named after the project directory.
 
+The status bar reports `Project: Starting`, `Running`, `Exited`, or the
+preflight failure. Missing or invalid executables also open an error dialog so
+the result is visible when the Assets and Console panels are hidden. The
+session polls the launched process; clicking the rocket again while it is
+running focuses its existing top-level window instead of creating a duplicate.
+
 The canonical project descriptor also records `paths.assets`,
 `paths.gameAssembly`, `paths.gameCode`, `startupWorld`, and per-World Scene,
 UI, and Tilemap references. Validation rejects a malformed descriptor or a
@@ -92,7 +98,7 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 4. AYUI 1.1.0 publishes source ABI
+AYEditor 0.2.0 publishes source ABI version 5. AYUI 1.1.0 publishes source ABI
 version 111. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.
