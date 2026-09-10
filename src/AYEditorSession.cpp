@@ -80,7 +80,10 @@
 #include <AYMath/MathTransform.h>
 #include <AYResource/ResourceManager.h>
 #include <AYResource/AssetPath.h>
+#include <AYResource/VirtualAssetPath.h>
 #include <AYResource/assetsDefs/IMesh.h>
+#include <AYResource/assetsDefs/ITexture.h>
+#include <AYResource/assetsDefs/ITilemap.h>
 
 #include <algorithm>
 #include <cctype>
@@ -190,6 +193,14 @@ private:
 // eight-notch safety clamp and produced the touchpad sensitivity spike.
 constexpr float kWheelLogicalPixelsPerNotch = 40.0f;
 constexpr float kViewportLookDragSlopPixels = 8.0f;
+constexpr float kTwoDGizmoSizePixels = 72.0f;
+constexpr uint16_t kTwoDGizmoDisabledHandleMask =
+    EditorTransformGizmo::handleBit(EditorGizmoHandle::AxisZ)
+  | EditorTransformGizmo::handleBit(EditorGizmoHandle::PlaneYZ)
+  | EditorTransformGizmo::handleBit(EditorGizmoHandle::PlaneZX)
+  | EditorTransformGizmo::handleBit(EditorGizmoHandle::RingX)
+  | EditorTransformGizmo::handleBit(EditorGizmoHandle::RingY)
+  | EditorTransformGizmo::handleBit(EditorGizmoHandle::ScaleZ);
 static_assert(EditorTransformGizmo::kWorldScalePerCameraDistance
               == ayt::render::kEditorTransformGizmoScalePerDistance,
               "editor hit geometry and renderer gizmo scale must match");
@@ -236,6 +247,187 @@ bool intersectRayAabb(const ayt::math::FVector3& origin,
     }
     outDistance = nearDistance;
     return farDistance >= 0.0f;
+}
+
+bool endsWithInsensitive(const std::string& value, const char* suffix)
+{
+    const std::size_t suffixLength = std::strlen(suffix);
+    if (value.size() < suffixLength) return false;
+    const std::size_t offset = value.size() - suffixLength;
+    for (std::size_t index = 0; index < suffixLength; ++index) {
+        const unsigned char lhs = static_cast<unsigned char>(value[offset + index]);
+        const unsigned char rhs = static_cast<unsigned char>(suffix[index]);
+        if (std::tolower(lhs) != std::tolower(rhs)) return false;
+    }
+    return true;
+}
+
+std::string tilemapRuntimeReference(const EditorAssetDatabase& database,
+                                    const EditorAssetRecord& record)
+{
+    if (!endsWithInsensitive(record.name, ".aytilemap.json")) {
+        return database.portableAssetPath(record);
+    }
+    std::filesystem::path stem(record.name);
+    stem = stem.stem().stem();
+    return ayt::resource::makeTilemapVirtualPath(stem.string());
+}
+
+std::string editorRuntimeAssetPath(const EditorAssetDatabase& database,
+                                   const std::string& reference)
+{
+    if (reference.empty()) return {};
+    std::filesystem::path path(reference);
+    if (path.is_absolute()) return path.lexically_normal().string();
+    for (const std::string* root : {&database.sourceRoot(),
+                                    &database.derivedRoot()}) {
+        std::filesystem::path candidate =
+            std::filesystem::path(*root) / path;
+        std::error_code error;
+        if (std::filesystem::exists(candidate, error) && !error) {
+            return candidate.lexically_normal().string();
+        }
+    }
+    return (std::filesystem::path(database.sourceRoot()) / path)
+        .lexically_normal().string();
+}
+
+struct Editor2DSelectionShape {
+    ayt::math::FVector2 localMin{};
+    ayt::math::FVector2 localMax{};
+    bool ignoreTransformScale = false;
+    bool cameraFrame = false;
+    int priority = 0;
+    int layer = 0;
+    int sortingKey = 0;
+};
+
+bool editor2DSelectionShape(ayt::entity::Entity& entity,
+                            const EditorAssetDatabase& database,
+                            float viewportAspect,
+                            Editor2DSelectionShape& out)
+{
+    if (auto* sprite = entity.getComponent<ayt::entity::SpriteComponent>()) {
+        if (!sprite->visible) return false;
+        out.localMin = {-0.5f, -0.5f};
+        out.localMax = {0.5f, 0.5f};
+        out.priority = 2;
+        out.layer = sprite->layer;
+        out.sortingKey = sprite->sortingKey;
+        return true;
+    }
+    if (auto* tilemap = entity.getComponent<ayt::entity::TilemapComponent>()) {
+        if (!tilemap->visible) return false;
+        float width = 32.0f;
+        float height = 32.0f;
+        if (!tilemap->tilemapPath.empty()) {
+            try {
+                const auto resource = ayt::resource::ResourceManager::instance()
+                    .load<ayt::resource::ITilemap>(editorRuntimeAssetPath(
+                        database, tilemap->tilemapPath));
+                if (resource != nullptr) {
+                    width = static_cast<float>(resource->getCols())
+                          * static_cast<float>(resource->getTileWidth());
+                    height = static_cast<float>(resource->getRows())
+                           * static_cast<float>(resource->getTileHeight());
+                }
+            } catch (...) {
+            }
+        }
+        out.localMin = {0.0f, 0.0f};
+        out.localMax = {std::max(width, 1.0f), std::max(height, 1.0f)};
+        out.priority = 2;
+        out.layer = tilemap->layer;
+        out.sortingKey = tilemap->sortingKey;
+        return true;
+    }
+    if (auto* camera = entity.getComponent<ayt::entity::OrthoCameraComponent>()) {
+        const ayt::math::FVector2 half = camera->visibleHalfExtents(viewportAspect);
+        out.localMin = {-half.x, -half.y};
+        out.localMax = { half.x,  half.y};
+        out.ignoreTransformScale = true;
+        out.cameraFrame = true;
+        out.priority = 1;
+        return true;
+    }
+    return false;
+}
+
+ayt::math::Float4x4 editor2DShapeMatrix(
+    const ayt::entity::Transform& transform,
+    const Editor2DSelectionShape& shape)
+{
+    const ayt::math::FVector3 scale = shape.ignoreTransformScale
+        ? ayt::math::FVector3(1.0f, 1.0f, 1.0f) : transform.scale;
+    return ayt::math::Transform::getMatrix(
+        transform.position, transform.rotation, scale);
+}
+
+bool pointHitsEditor2DShape(const Editor2DSelectionShape& shape,
+                            const ayt::math::FVector3& localPoint,
+                            float worldTolerance)
+{
+    if (!shape.cameraFrame) {
+        return localPoint.x >= shape.localMin.x
+            && localPoint.x <= shape.localMax.x
+            && localPoint.y >= shape.localMin.y
+            && localPoint.y <= shape.localMax.y;
+    }
+    const bool withinX = localPoint.x >= shape.localMin.x - worldTolerance
+        && localPoint.x <= shape.localMax.x + worldTolerance;
+    const bool withinY = localPoint.y >= shape.localMin.y - worldTolerance
+        && localPoint.y <= shape.localMax.y + worldTolerance;
+    if (!withinX || !withinY) return false;
+    const float edgeDistance = std::min({
+        std::fabs(localPoint.x - shape.localMin.x),
+        std::fabs(localPoint.x - shape.localMax.x),
+        std::fabs(localPoint.y - shape.localMin.y),
+        std::fabs(localPoint.y - shape.localMax.y)});
+    const bool nearCenter = std::fabs(localPoint.x) <= worldTolerance
+        && std::fabs(localPoint.y) <= worldTolerance;
+    return edgeDistance <= worldTolerance || nearCenter;
+}
+
+bool isEditor2DResourceField(const std::string& componentType,
+                             const std::string& fieldName)
+{
+    if (componentType == "SpriteComponent") {
+        return fieldName == "texturePath"
+            || fieldName == "normalTexturePath"
+            || fieldName == "roughnessTexturePath"
+            || fieldName == "emissiveTexturePath";
+    }
+    if (componentType == "TilemapComponent") {
+        return fieldName == "tilemapPath"
+            || fieldName == "atlasTexturePath"
+            || fieldName == "normalTexturePath"
+            || fieldName == "roughnessTexturePath"
+            || fieldName == "emissiveTexturePath"
+            || fieldName == "atlasPath";
+    }
+    return false;
+}
+
+std::vector<std::wstring> editor2DEnumItems(
+    const std::string& componentType, const std::string& fieldName)
+{
+    if ((componentType == "SpriteComponent"
+         || componentType == "TilemapComponent")
+        && fieldName == "renderDomain") {
+        return {L"Camera Overlay", L"World Lit"};
+    }
+    if (componentType == "SpriteComponent" && fieldName == "flip") {
+        return {L"None", L"Horizontal", L"Vertical", L"Both"};
+    }
+    if (componentType == "TilemapComponent"
+        && fieldName == "samplingQuality") {
+        return {L"Nearest", L"Linear", L"4-tap", L"9-tap"};
+    }
+    if (componentType == "OrthoCameraComponent"
+        && fieldName == "aspectPolicy") {
+        return {L"Expand", L"Fit", L"Fill"};
+    }
+    return {};
 }
 
 std::string resolveLayoutEditorChromePath(
@@ -355,7 +547,7 @@ std::string showAssetReferenceDialog(HWND owner, const std::string& projectRoot)
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter =
-        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
+        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.aytex;*.aytilemap;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
         "All files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
@@ -2794,7 +2986,10 @@ void EditorSession::bindAssetBrowser()
                 const EditorAssetEntry& entry = _assetEntries[index];
                 const EditorAssetRecord* record = entry.folder
                     ? nullptr : _assetDatabase.find(entry.assetId);
-                if (record == nullptr || record->type != EditorAssetType::Mesh) {
+                if (record == nullptr
+                    || (record->type != EditorAssetType::Mesh
+                        && record->type != EditorAssetType::Texture
+                        && record->type != EditorAssetType::Tilemap)) {
                     return {};
                 }
                 _assetDragData.id = record->id;
@@ -2853,7 +3048,10 @@ void EditorSession::bindAssetBrowser()
         target->setOnDrop([this](const ayt::ui::DragPayload& payload) {
             if (payload.kind != "EditorAsset" || payload.data == nullptr) return;
             const auto* drag = static_cast<const AssetDragData*>(payload.data);
-            if (drag != &_assetDragData || drag->type != EditorAssetType::Mesh) {
+            if (drag != &_assetDragData
+                || (drag->type != EditorAssetType::Mesh
+                    && drag->type != EditorAssetType::Texture
+                    && drag->type != EditorAssetType::Tilemap)) {
                 return;
             }
             const ayt::math::FVector2 physical = _ui.logicalToPhysical(
@@ -4594,8 +4792,15 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
                                          float physicalX, float physicalY)
 {
     const EditorAssetRecord* record = _assetDatabase.find(assetId);
-    if (record == nullptr || record->type != EditorAssetType::Mesh
-        || _document == nullptr || _gameView.mode() != EditorMode::Edit) {
+    if (record == nullptr || _document == nullptr
+        || _gameView.mode() != EditorMode::Edit) {
+        return false;
+    }
+    const bool isMesh = record->type == EditorAssetType::Mesh;
+    const bool isTexture = record->type == EditorAssetType::Texture;
+    const bool isTilemap = record->type == EditorAssetType::Tilemap;
+    if ((!isMesh && !isTexture && !isTilemap)
+        || ((isTexture || isTilemap) && !_sceneCamera.isTwoD())) {
         return false;
     }
     ayt::entity::World* world = hierarchyWorldMutable();
@@ -4613,41 +4818,84 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
         if (distance >= 0.0f) position = origin + direction * distance;
     }
 
-    std::shared_ptr<ayt::resource::IMesh> meshResource;
-    try {
-        meshResource = ayt::resource::ResourceManager::instance()
-            .load<ayt::resource::IMesh>(record->runtimePath);
-    } catch (...) {
-        // The entity still preserves the asset reference. Inspector/load state
-        // exposes a decoder failure and Reload can retry after hot replacement.
-    }
     std::string materialPath;
-    if (meshResource != nullptr) {
-        if (meshResource->hasBounds()) {
-            position.y -= meshResource->getBounds().getMin().y;
+    ayt::math::FVector3 initialScale{1.0f, 1.0f, 1.0f};
+    std::string componentAssetPath;
+    if (isMesh) {
+        std::shared_ptr<ayt::resource::IMesh> meshResource;
+        try {
+            meshResource = ayt::resource::ResourceManager::instance()
+                .load<ayt::resource::IMesh>(record->runtimePath);
+        } catch (...) {
+            // Preserve the reference so Reload can retry after replacement.
         }
-        if (meshResource->getMaterialSlotCount() > 0) {
-            const char* slot = meshResource->getMaterialSlot(0);
-            if (slot != nullptr && slot[0] != '\0') {
-                materialPath = ayt::resource::resolveAssetPath(
-                    record->runtimePath, slot);
+        if (meshResource != nullptr) {
+            if (meshResource->hasBounds()) {
+                position.y -= meshResource->getBounds().getMin().y;
             }
+            if (meshResource->getMaterialSlotCount() > 0) {
+                const char* slot = meshResource->getMaterialSlot(0);
+                if (slot != nullptr && slot[0] != '\0') {
+                    materialPath = ayt::resource::resolveAssetPath(
+                        record->runtimePath, slot);
+                }
+            }
+        }
+        componentAssetPath = _assetDatabase.portableAssetPath(*record);
+    } else if (isTexture) {
+        componentAssetPath = _assetDatabase.portableAssetPath(*record);
+        initialScale = {100.0f, 100.0f, 1.0f};
+        try {
+            const auto texture = ayt::resource::ResourceManager::instance()
+                .load<ayt::resource::ITexture>(record->runtimePath);
+            if (texture != nullptr && texture->getWidth() > 0u
+                && texture->getHeight() > 0u) {
+                initialScale.x = static_cast<float>(texture->getWidth());
+                initialScale.y = static_cast<float>(texture->getHeight());
+            }
+        } catch (...) {
+        }
+    } else {
+        componentAssetPath = tilemapRuntimeReference(_assetDatabase, *record);
+        try {
+            const auto tilemap = ayt::resource::ResourceManager::instance()
+                .load<ayt::resource::ITilemap>(editorRuntimeAssetPath(
+                    _assetDatabase, componentAssetPath));
+            if (tilemap != nullptr) {
+                position.x -= static_cast<float>(tilemap->getCols())
+                    * static_cast<float>(tilemap->getTileWidth()) * 0.5f;
+                position.y -= static_cast<float>(tilemap->getRows())
+                    * static_cast<float>(tilemap->getTileHeight()) * 0.5f;
+            }
+        } catch (...) {
         }
     }
 
     ayt::entity::Entity* entity = world->createEntity();
     if (entity == nullptr) return false;
     const std::string stem = std::filesystem::path(record->name).stem().string();
-    const std::string name = (stem.empty() ? std::string("Mesh") : stem)
+    const char* fallbackName = isMesh ? "Mesh" : (isTexture ? "Sprite" : "Tilemap");
+    const std::string name = (stem.empty() ? std::string(fallbackName) : stem)
         + " " + std::to_string(static_cast<unsigned>(entity->getId()));
     entity->setName(name.c_str());
     auto* transform = entity->addComponent<ayt::entity::Transform>();
     transform->setPosition(position.x, position.y, position.z);
-    auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
-    mesh->meshPath = _assetDatabase.portableAssetPath(*record);
-    mesh->materialPath = _assetDatabase.portableAssetPath(materialPath);
+    transform->setScale(initialScale.x, initialScale.y, initialScale.z);
+    if (isMesh) {
+        auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
+        mesh->meshPath = componentAssetPath;
+        mesh->materialPath = _assetDatabase.portableAssetPath(materialPath);
+    } else if (isTexture) {
+        auto* sprite = entity->addComponent<ayt::entity::SpriteComponent>();
+        sprite->texturePath = componentAssetPath;
+    } else {
+        auto* tilemap = entity->addComponent<ayt::entity::TilemapComponent>();
+        tilemap->tilemapPath = componentAssetPath;
+    }
 
     setSelectedEntity(world, entity);
+    _inspectedComponentTypeName = isMesh ? "MeshComponent"
+        : (isTexture ? "SpriteComponent" : "TilemapComponent");
     _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
@@ -5893,19 +6141,29 @@ void EditorSession::setViewportOrientationAxisVisible(bool visible)
     }
 }
 
-void EditorSession::newSceneDocument()
+bool EditorSession::newSceneFromTemplate(EditorSceneTemplate sceneTemplate)
 {
-    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) {
+        return false;
+    }
     if (_document->isDirty()) {
         const int choice = ::MessageBoxW(
             _hostWindow,
             L"The current scene has unsaved changes.\n\nDiscard them and create a new scene?",
             L"AYEditor", MB_YESNO | MB_ICONWARNING);
-        if (choice != IDYES) return;
+        if (choice != IDYES) return false;
     }
     rememberCurrentSceneView();
     _document->newScene();
     afterDocumentReload();
+    if (sceneTemplate == EditorSceneTemplate::TwoD) {
+        _sceneCamera.setTwoDPose({0.0f, 0.0f}, 600.0f);
+        setSceneViewMode(SceneViewMode::TwoD);
+        (void)createTwoDEntity(Editor2DEntityKind::Camera);
+    } else {
+        setSceneViewMode(SceneViewMode::ThreeD);
+    }
+    return true;
 }
 
 void EditorSession::openSceneDocument()
@@ -6004,6 +6262,55 @@ void EditorSession::createEmptyEntity()
     if (_repaintCallback) _repaintCallback();
 }
 
+uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
+{
+    if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return 0u;
+    ayt::entity::World* world = hierarchyWorldMutable();
+    if (world == nullptr) return 0u;
+    if (!_sceneCamera.isTwoD()) setSceneViewMode(SceneViewMode::TwoD);
+
+    ayt::entity::Entity* entity = world->createEntity();
+    if (entity == nullptr) return 0u;
+    const uint32_t entityId = entity->getId();
+    const ayt::math::FVector2 center = _sceneCamera.twoDCenter();
+    auto* transform = entity->addComponent<ayt::entity::Transform>();
+    transform->setPosition(center.x, center.y, 0.0f);
+
+    const char* typeName = "Sprite";
+    if (kind == Editor2DEntityKind::Sprite) {
+        entity->addComponent<ayt::entity::SpriteComponent>();
+        transform->setScale(100.0f, 100.0f, 1.0f);
+        _inspectedComponentTypeName = "SpriteComponent";
+    } else if (kind == Editor2DEntityKind::Tilemap) {
+        entity->addComponent<ayt::entity::TilemapComponent>();
+        transform->setPosition(center.x - 16.0f, center.y - 16.0f, 0.0f);
+        typeName = "Tilemap";
+        _inspectedComponentTypeName = "TilemapComponent";
+    } else {
+        auto* camera = entity->addComponent<ayt::entity::OrthoCameraComponent>();
+        camera->viewSize = std::max(_sceneCamera.twoDViewHeight(), 1.0f);
+        camera->zoom = 1.0f;
+        camera->designWidth = camera->viewSize * 1.6f;
+        camera->designHeight = camera->viewSize;
+        camera->viewportAspect = 1.6f;
+        camera->active = true;
+        typeName = "2D Camera";
+        _inspectedComponentTypeName = "OrthoCameraComponent";
+    }
+    entity->setName((std::string(typeName) + " "
+        + std::to_string(static_cast<unsigned>(entityId))).c_str());
+
+    setSelectedEntity(world, entity);
+    _commands.clear();
+    _document->markDirty();
+    _outlinerRefreshPending = true;
+    refreshInspectorLabels();
+    refreshTransformInspector();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+    return entityId;
+}
+
 void EditorSession::deleteSelectedEntity()
 {
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
@@ -6038,9 +6345,14 @@ void EditorSession::bindMenuBar() {
 
     ayt::ui::Menu* fileMenu = menuBar->addMenu(L"File");
     if (fileMenu != nullptr) {
-        if (auto* item = fileMenu->addItem(L"New Scene")) {
+        if (auto* item = fileMenu->addItem(L"New Empty Scene")) {
             item->setOnActivate([this]() {
-                (void)createProjectAsset(EditorAssetType::Scene);
+                (void)newSceneFromTemplate(EditorSceneTemplate::Empty);
+            });
+        }
+        if (auto* item = fileMenu->addItem(L"New 2D Scene")) {
+            item->setOnActivate([this]() {
+                (void)newSceneFromTemplate(EditorSceneTemplate::TwoD);
             });
         }
         if (auto* item = fileMenu->addItem(L"New UI Layout")) {
@@ -6125,6 +6437,21 @@ void EditorSession::bindMenuBar() {
         editMenu->addSeparator();
         if (auto* item = editMenu->addItem(L"Create Empty Entity")) {
             item->setOnActivate([this]() { createEmptyEntity(); });
+        }
+        if (auto* item = editMenu->addItem(L"Create Sprite")) {
+            item->setOnActivate([this]() {
+                (void)createTwoDEntity(Editor2DEntityKind::Sprite);
+            });
+        }
+        if (auto* item = editMenu->addItem(L"Create Tilemap")) {
+            item->setOnActivate([this]() {
+                (void)createTwoDEntity(Editor2DEntityKind::Tilemap);
+            });
+        }
+        if (auto* item = editMenu->addItem(L"Create 2D Camera")) {
+            item->setOnActivate([this]() {
+                (void)createTwoDEntity(Editor2DEntityKind::Camera);
+            });
         }
         if (auto* item = editMenu->addItem(L"Delete Selected")) {
             item->setShortcut(
@@ -7282,6 +7609,29 @@ void EditorSession::rebuildComponentPropertyEditor()
             editableText = false;
         }
 
+        const std::vector<std::wstring> enumItems =
+            editor2DEnumItems(componentTypeName, fieldName);
+        if (numericScalar && !enumItems.empty()) {
+            auto* combo = new ayt::ui::ComboBox();
+            combo->setId("inspector_field_" + fieldName);
+            combo->setItems(enumItems);
+            const int selected = static_cast<int>(std::llround(scalarValue));
+            combo->setSelectedIndex(selected >= 0
+                    && selected < static_cast<int>(enumItems.size())
+                ? selected : -1);
+            combo->setEnabled(!readOnly);
+            combo->setSize({240.0f, 26.0f});
+            if (!tooltip.empty()) combo->setAccessibilityDescription(tooltip);
+            combo->setOnSelectionChanged(
+                [this, componentTypeName, fieldName](int index) {
+                    if (index < 0) return;
+                    commitInspectorTextField(componentTypeName, fieldName, -1,
+                                             std::to_wstring(index));
+                });
+            _componentPropertyBody->addWidget(combo, 26.0f);
+            continue;
+        }
+
         if (numericScalar
             && field->hasAttribute(ayt::reflect::FieldAttribute::Slider)
             && std::isfinite(field->getMinValue())
@@ -7316,7 +7666,8 @@ void EditorSession::rebuildComponentPropertyEditor()
         }
 
         if (isReflectedType<std::string>(fieldType)
-            && field->hasAttribute(ayt::reflect::FieldAttribute::Asset)) {
+            && (field->hasAttribute(ayt::reflect::FieldAttribute::Asset)
+                || isEditor2DResourceField(componentTypeName, fieldName))) {
             auto* row = new ayt::ui::HBox();
             row->setId("inspector_field_" + fieldName);
             row->setSpacing(4.0f);
@@ -7336,8 +7687,18 @@ void EditorSession::rebuildComponentPropertyEditor()
                     const std::string selected = showAssetReferenceDialog(
                         _hostWindow, _assetDatabase.projectRoot());
                     if (selected.empty()) return;
-                    const std::wstring portable = ayt::ui::decodeUtf8Text(
-                        _assetDatabase.portableAssetPath(selected));
+                    std::string reference =
+                        _assetDatabase.portableAssetPath(selected);
+                    if (componentTypeName == "TilemapComponent"
+                        && fieldName == "tilemapPath"
+                        && endsWithInsensitive(selected, ".aytilemap.json")) {
+                        std::filesystem::path stem(selected);
+                        stem = stem.stem().stem();
+                        reference = ayt::resource::makeTilemapVirtualPath(
+                            stem.string());
+                    }
+                    const std::wstring portable =
+                        ayt::ui::decodeUtf8Text(reference);
                     input->setText(portable);
                     commitInspectorTextField(
                         componentTypeName, fieldName, -1, portable);
@@ -7424,6 +7785,18 @@ void EditorSession::commitInspectorTextField(
     const bool stringField = isReflectedType<std::string>(fieldType);
     double parsed = 0.0;
     if (!stringField && !parseDouble(text, parsed)) return;
+    if ((componentType == "SpriteComponent"
+         || componentType == "TilemapComponent")
+        && fieldName == "layer") {
+        parsed = std::clamp(parsed, 0.0, 31.0);
+    } else if ((componentType == "SpriteComponent"
+                || componentType == "TilemapComponent")
+               && fieldName == "sortingKey") {
+        parsed = std::clamp(parsed, 0.0, 16777215.0);
+    } else if (componentType == "OrthoCameraComponent"
+               && (fieldName == "zoom" || fieldName == "viewSize")) {
+        parsed = std::max(parsed, 0.0001);
+    }
 
     if (componentType == "Transform") {
         auto* transform = entity->getComponent<ayt::entity::Transform>();
@@ -7621,6 +7994,56 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         return nullptr;
     }
 
+    if (_sceneCamera.isTwoD()) {
+        if (std::fabs(direction.z) <= 1.0e-7f) return nullptr;
+        const float planeDistance = -origin.z / direction.z;
+        const ayt::math::FVector3 worldPoint =
+            origin + direction * planeDistance;
+        const float unitsPerPixel = _sceneCamera.twoDViewHeight()
+            / std::max(viewport.height(), 1.0f);
+        const float cameraTolerance = unitsPerPixel * 6.0f;
+        const float viewportAspect = viewport.width()
+            / std::max(viewport.height(), 1.0f);
+
+        ayt::entity::Entity* best = nullptr;
+        Editor2DSelectionShape bestShape{};
+        for (ayt::entity::Entity* entity : world->getAllEntities()) {
+            auto* transform = entity != nullptr
+                ? entity->getComponent<ayt::entity::Transform>() : nullptr;
+            if (transform == nullptr) continue;
+            Editor2DSelectionShape shape;
+            if (!editor2DSelectionShape(*entity, _assetDatabase,
+                                        viewportAspect, shape)) {
+                continue;
+            }
+            if (!shape.ignoreTransformScale
+                && (std::fabs(transform->scale.x) <= 1.0e-7f
+                    || std::fabs(transform->scale.y) <= 1.0e-7f)) {
+                continue;
+            }
+            const ayt::math::Float4x4 inverse =
+                editor2DShapeMatrix(*transform, shape).inverse_fast();
+            const ayt::math::FVector3 localPoint =
+                inverse.transformPoint(worldPoint);
+            if (!pointHitsEditor2DShape(shape, localPoint, cameraTolerance)) {
+                continue;
+            }
+            const bool better = best == nullptr
+                || shape.priority > bestShape.priority
+                || (shape.priority == bestShape.priority
+                    && (shape.layer > bestShape.layer
+                        || (shape.layer == bestShape.layer
+                            && (shape.sortingKey > bestShape.sortingKey
+                                || (shape.sortingKey == bestShape.sortingKey
+                                    && entity->getId() > best->getId())))));
+            if (better) {
+                best = entity;
+                bestShape = shape;
+            }
+        }
+        return best;
+    }
+
     ayt::entity::Entity* bestEntity = nullptr;
     float bestDistance = 1.0e30f;
     for (ayt::entity::Entity* entity : world->getAllEntities()) {
@@ -7698,7 +8121,7 @@ void EditorSession::applyViewportSelection(ayt::entity::World* world,
 
 EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
 {
-    if (_gameView.mode() != EditorMode::Edit || _sceneCamera.isTwoD()) {
+    if (_gameView.mode() != EditorMode::Edit) {
         return EditorGizmoHandle::None;
     }
     ayt::entity::World* world = hierarchyWorldMutable();
@@ -7715,18 +8138,25 @@ EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
     }
     const EditorTransformState state{
         transform->position, transform->rotation, transform->scale};
-    _gizmoDisabledHandleMask = EditorTransformGizmo::disabledHandleMask(
-        state, _localTransformSpace, origin,
-        _gizmoDisabledHandleMask);
+    const float worldScaleOverride = _sceneCamera.isTwoD()
+        ? _sceneCamera.twoDViewHeight()
+            / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
+            * kTwoDGizmoSizePixels
+        : 0.0f;
+    _gizmoDisabledHandleMask = _sceneCamera.isTwoD()
+        ? kTwoDGizmoDisabledHandleMask
+        : EditorTransformGizmo::disabledHandleMask(
+              state, _localTransformSpace, origin,
+              _gizmoDisabledHandleMask);
     return _transformGizmo.hitTestUniversal(
         state, _localTransformSpace, origin, direction,
-        _gizmoDisabledHandleMask);
+        _gizmoDisabledHandleMask, worldScaleOverride);
 }
 
 bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
                                             float x, float y)
 {
-    if (_gameView.mode() != EditorMode::Edit || _sceneCamera.isTwoD()
+    if (_gameView.mode() != EditorMode::Edit
         || handle == EditorGizmoHandle::None) {
         return false;
     }
@@ -7743,10 +8173,15 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
 
     const EditorTransformState state{
         transform->position, transform->rotation, transform->scale};
+    const float worldScaleOverride = _sceneCamera.isTwoD()
+        ? _sceneCamera.twoDViewHeight()
+            / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
+            * kTwoDGizmoSizePixels
+        : 0.0f;
     if (!_transformGizmo.beginUniversal(
             handle, state, _localTransformSpace,
             origin, direction, y,
-            _gizmoDisabledHandleMask)) {
+            _gizmoDisabledHandleMask, worldScaleOverride)) {
         return false;
     }
     _gizmoDragWorld = world;
@@ -7848,7 +8283,8 @@ void EditorSession::syncTransformGizmoToRenderer()
     if (subsystem == nullptr) return;
 
     ayt::render::EditorTransformGizmoState state;
-    if (_gameView.mode() == EditorMode::Edit && !_sceneCamera.isTwoD()) {
+    ayt::render::EditorSelectionOutline2DState outline;
+    if (_gameView.mode() == EditorMode::Edit) {
         ayt::entity::World* world = hierarchyWorldMutable();
         ayt::entity::Entity* entity = _selection.resolve(world);
         auto* transform = entity != nullptr
@@ -7857,10 +8293,19 @@ void EditorSession::syncTransformGizmoToRenderer()
             && transform != nullptr) {
             const EditorTransformState transformState{
                 transform->position, transform->rotation, transform->scale};
-            _gizmoDisabledHandleMask =
-                EditorTransformGizmo::disabledHandleMask(
-                    transformState, _localTransformSpace, _sceneCamera.threeD().eye(),
-                    _gizmoDisabledHandleMask);
+            if (_sceneCamera.isTwoD()) {
+                _gizmoDisabledHandleMask = kTwoDGizmoDisabledHandleMask;
+                state.worldScaleOverride = _sceneCamera.twoDViewHeight()
+                    / static_cast<float>(std::max(
+                        1u, _sceneCamera.viewportHeight()))
+                    * kTwoDGizmoSizePixels;
+            } else {
+                _gizmoDisabledHandleMask =
+                    EditorTransformGizmo::disabledHandleMask(
+                        transformState, _localTransformSpace,
+                        _sceneCamera.threeD().eye(),
+                        _gizmoDisabledHandleMask);
+            }
             state.visible = true;
             state.position = transform->position;
             state.rotation = transform->rotation;
@@ -7877,10 +8322,39 @@ void EditorSession::syncTransformGizmoToRenderer()
                 ~EditorTransformGizmo::handleBit(
                     _transformGizmo.activeHandle()));
             state.mode = ayt::render::EditorTransformGizmoMode::Universal;
+
+            if (_sceneCamera.isTwoD()) {
+                Editor2DSelectionShape shape;
+                const float aspect = static_cast<float>(
+                    std::max(1u, _sceneCamera.viewportWidth()))
+                    / static_cast<float>(
+                        std::max(1u, _sceneCamera.viewportHeight()));
+                if (editor2DSelectionShape(*entity, _assetDatabase,
+                                           aspect, shape)) {
+                    const ayt::math::Float4x4 matrix =
+                        editor2DShapeMatrix(*transform, shape);
+                    const ayt::math::FVector2 localCorners[4] = {
+                        {shape.localMin.x, shape.localMin.y},
+                        {shape.localMax.x, shape.localMin.y},
+                        {shape.localMax.x, shape.localMax.y},
+                        {shape.localMin.x, shape.localMax.y},
+                    };
+                    for (int index = 0; index < 4; ++index) {
+                        outline.corners[index] = matrix.transformPoint({
+                            localCorners[index].x,
+                            localCorners[index].y, 0.0f});
+                    }
+                    outline.visible = true;
+                    outline.lineWidthWorld = _sceneCamera.twoDViewHeight()
+                        / static_cast<float>(std::max(
+                            1u, _sceneCamera.viewportHeight())) * 2.0f;
+                }
+            }
         }
     }
     if (!state.visible) _gizmoDisabledHandleMask = 0u;
     subsystem->renderer().setEditorTransformGizmoState(state);
+    subsystem->renderer().setEditorSelectionOutline2DState(outline);
 }
 
 // Select the live character for inspection and fall back to the procedural

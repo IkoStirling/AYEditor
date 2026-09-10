@@ -376,7 +376,8 @@ EditorGizmoHandle EditorTransformGizmo::hitTestUniversal(
     bool localSpace,
     const ayt::math::FVector3& cameraEye,
     const ayt::math::FVector3& rayDirection,
-    uint16_t disabledHandles) const noexcept
+    uint16_t disabledHandles,
+    float worldScaleOverride) const noexcept
 {
     if (!finiteVector(transform.position)) {
         return EditorGizmoHandle::None;
@@ -388,7 +389,10 @@ EditorGizmoHandle EditorTransformGizmo::hitTestUniversal(
             transform, localSpace, cameraEye);
     }
 
-    const float scale = worldScale(transform.position, cameraEye);
+    const float scale = std::isfinite(worldScaleOverride)
+            && worldScaleOverride > 0.0f
+        ? std::clamp(worldScaleOverride, 0.12f, 1000.0f)
+        : worldScale(transform.position, cameraEye);
     ayt::math::FVector3 transformAxes[3] = {
         basisAxis(EditorTool::Move, transform, localSpace, 0),
         basisAxis(EditorTool::Move, transform, localSpace, 1),
@@ -523,7 +527,8 @@ bool EditorTransformGizmo::begin(
     bool localSpace,
     const ayt::math::FVector3& cameraEye,
     const ayt::math::FVector3& rayDirection,
-    float mouseY) noexcept
+    float mouseY,
+    float worldScaleOverride) noexcept
 {
     reset();
     if (handle == EditorGizmoHandle::None || tool == EditorTool::Select) {
@@ -536,7 +541,10 @@ bool EditorTransformGizmo::begin(
     _handle = handle;
     _before = transform;
     _pivot = transform.position;
-    _worldScale = worldScale(_pivot, cameraEye);
+    _worldScale = std::isfinite(worldScaleOverride)
+            && worldScaleOverride > 0.0f
+        ? std::clamp(worldScaleOverride, 0.12f, 1000.0f)
+        : worldScale(_pivot, cameraEye);
     _startMouseY = mouseY;
     for (int axis = 0; axis < 3; ++axis) {
         _axes[axis] = basisAxis(tool, transform, localSpace, axis);
@@ -607,7 +615,8 @@ bool EditorTransformGizmo::beginUniversal(
     const ayt::math::FVector3& cameraEye,
     const ayt::math::FVector3& rayDirection,
     float mouseY,
-    uint16_t disabledHandles) noexcept
+    uint16_t disabledHandles,
+    float worldScaleOverride) noexcept
 {
     const EditorTool tool = toolForHandle(handle);
     if (tool == EditorTool::Select) return false;
@@ -617,7 +626,7 @@ bool EditorTransformGizmo::beginUniversal(
     }
     if (handleDisabled(disabledHandles, handle)) return false;
     return begin(tool, handle, transform, localSpace,
-                 cameraEye, rayDirection, mouseY);
+                 cameraEye, rayDirection, mouseY, worldScaleOverride);
 }
 
 bool EditorTransformGizmo::update(

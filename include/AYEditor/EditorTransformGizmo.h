@@ -80,7 +80,8 @@ public:
         bool localSpace,
         const ayt::math::FVector3& cameraEye,
         const ayt::math::FVector3& rayDirection,
-        uint16_t disabledHandles = kAutoDisabledHandleMask) const noexcept;
+        uint16_t disabledHandles = kAutoDisabledHandleMask,
+        float worldScaleOverride = 0.0f) const noexcept;
 
     bool begin(EditorTool tool,
                EditorGizmoHandle handle,
@@ -88,7 +89,8 @@ public:
                bool localSpace,
                const ayt::math::FVector3& cameraEye,
                const ayt::math::FVector3& rayDirection,
-               float mouseY) noexcept;
+               float mouseY,
+               float worldScaleOverride = 0.0f) noexcept;
 
     bool beginUniversal(EditorGizmoHandle handle,
                         const EditorTransformState& transform,
@@ -97,7 +99,8 @@ public:
                         const ayt::math::FVector3& rayDirection,
                         float mouseY,
                         uint16_t disabledHandles =
-                            kAutoDisabledHandleMask) noexcept;
+                            kAutoDisabledHandleMask,
+                        float worldScaleOverride = 0.0f) noexcept;
 
     bool update(const ayt::math::FVector3& cameraEye,
                 const ayt::math::FVector3& rayDirection,

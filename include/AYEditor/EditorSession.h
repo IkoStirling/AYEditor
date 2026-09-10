@@ -137,6 +137,17 @@ struct EditorSessionDesc {
     std::function<void(void*)> releaseAssetPreviewTexture;
 };
 
+enum class EditorSceneTemplate : std::uint8_t {
+    Empty = 0,
+    TwoD,
+};
+
+enum class Editor2DEntityKind : std::uint8_t {
+    Sprite = 0,
+    Tilemap,
+    Camera,
+};
+
 class EditorSession {
 public:
     EditorSession();
@@ -224,6 +235,8 @@ public:
     bool rescanAssetsNow();
     bool placeAssetInViewport(EditorAssetId assetId,
                               float physicalX, float physicalY);
+    bool newSceneFromTemplate(EditorSceneTemplate sceneTemplate);
+    uint32_t createTwoDEntity(Editor2DEntityKind kind);
     // Opens or focuses the source-backed Phoskia/Logia DockCard for an asset.
     // Returns false for non-DSL records or when the source cannot be read.
     bool openDslAsset(EditorAssetId assetId);
@@ -294,7 +307,6 @@ private:
                                    const std::string& fieldName,
                                    const ayt::math::FVector4& value);
     void refreshTransformInspector();
-    void newSceneDocument();
     void openSceneDocument();
     void saveSceneDocument();
     void saveSceneDocumentAs();

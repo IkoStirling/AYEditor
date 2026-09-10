@@ -1214,6 +1214,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-10 | Tilemap 改为 `EditorChildWindowManager` 管理的独立非模态工具窗；内部复用 `EditorDockViewHost` 文档页签，并以左右 Splitter、侧栏 ScrollView、工具栏横向溢出和可逆窄窗压缩保证缩放后布局恢复。 |
 | 2026-09-10 | Tilemap 独立窗改用无原生标题栏的 AYUI 自绘外框与最小化/最大化/关闭按钮；窗口移动只接受外框标题拖拽，内部文档标签继续由 Dock 系统处理，并以私有 DockArea 作为后续跨窗口合并边界。 |
 | 2026-09-10 | Tilemap 子窗口不再直接复用主渲染器的 authoring texture 句柄；`EditorDockViewHost` 依据共享 BGRA 原图为子窗口 GDI 后端创建并缓存本地副本，统一修复导入预览、原图选砖和画布 Tile 空白。 |
+| 2026-09-10 | 2D 制作闭环继续使用通用 Scene/World：模板和创建命令只装配 Sprite、Tilemap、OrthoCamera 与 Transform；Scene View 以组件平面边界进行拾取并向 Renderer 提交世界空间选择轮廓，2D Universal Gizmo 固定屏幕尺寸且复用统一 Undo/Redo 命令栈；AYEditor Source ABI 升至 7。 |
 
 ---
 

@@ -37,6 +37,31 @@ All serialized references remain slash-normalized project paths. Absolute
 paths may be used transiently for loading and previews but are not written to
 authored Scene data.
 
+## Creating a 2D Scene
+
+Use **File -> New 2D Scene** to create an ordinary Scene with a default active
+orthographic camera and switch the editor viewport to its 2D XY view. **File ->
+New Empty Scene** creates the same general Scene/World document without the 2D
+camera. These are templates over one Scene model; they do not create mutually
+exclusive 2D and 3D World types.
+
+Use **Edit -> Create Sprite**, **Create Tilemap**, or **Create 2D Camera** to add
+empty 2D entities. A Texture or `.aytilemap.json` authoring asset can also be
+dragged from the Content Browser into the 2D Scene View. The drop position is
+converted through the editor's orthographic camera, the new entity is selected,
+and its resource component is opened in the Inspector. Tilemap source documents
+are mapped to their cooked `tilemaps/<name>.aytilemap` runtime reference.
+
+The Inspector exposes resource pickers, Render Domain and component enum
+choices, layer/sorting order, and orthographic camera zoom/view size. Selection
+uses each 2D component's plane bounds. The 2D Universal Gizmo provides XY
+translation, Z rotation, and XY/uniform scale at a stable screen size; these
+edits use the shared command stack and therefore support Undo/Redo.
+
+Save the resulting document as an `.ayscene` through the normal Scene workflow.
+Sprite and Tilemap references remain portable project paths, and reopening the
+Scene restores the same components without requiring hand-edited JSON.
+
 ## Audio and Timeline
 
 Tools -> Audio opens an embedded mixer panel with master and bus gain controls.
@@ -105,7 +130,7 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 5. AYUI 1.1.0 publishes source ABI
+AYEditor 0.2.0 publishes source ABI version 7. AYUI 1.1.0 publishes source ABI
 version 111. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.

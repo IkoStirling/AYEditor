@@ -2,6 +2,20 @@
 #include <AYEditor/EditorSceneCamera.h>
 #include <AYEditor/EditorSceneViewWorkspace.h>
 #include <AYEditor/EditorTilemapDocument.h>
+#include <AYEditor/EditorSession.h>
+#include <AYEditor/EditorTransformGizmo.h>
+#include <AYEditor/EditorWorkspace.h>
+#include <AYEntity/components/OrthoCameraComponent.h>
+#include <AYEntity/components/SpriteComponent.h>
+#include <AYEntity/components/TilemapComponent.h>
+#include <AYEntity/components/TransformComponent.h>
+#include <AYUI/ComboBox.h>
+#include <AYUI/Menu.h>
+#include <AYUI/MenuBar.h>
+#include <AYUI/MenuItem.h>
+#include <AYUI/TextInput.h>
+#include <AYUI/UIKeyCode.h>
+#include <AYScene.h>
 #include <AYTest.h>
 
 #include <cstdio>
@@ -162,6 +176,316 @@ TEST_CASE(SceneSessionCenterRayKeepsLegacyThreeDPickingContract)
     CHECK_TRUE(session.onMouseButtonUp(x, y, 0));
     CHECK(session.selectedEntityId() == entity->getId());
     session.shutdown();
+}
+
+TEST_CASE(TwoDSceneTemplateAndCreateCommandsBuildEditableEntities)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK_FALSE(layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK_TRUE(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+    auto* menuBar = dynamic_cast<ayt::ui::MenuBar*>(
+        session.ui().findById("menubar"));
+    bool hasEmptyTemplate = false;
+    bool hasTwoDTemplate = false;
+    bool hasCreateSprite = false;
+    bool hasCreateTilemap = false;
+    bool hasCreateCamera = false;
+    if (menuBar != nullptr) {
+        for (std::size_t menuIndex = 0;
+             menuIndex < menuBar->getMenuCount(); ++menuIndex) {
+            ayt::ui::Menu* menu = menuBar->getMenu(menuIndex);
+            if (menu == nullptr) continue;
+            for (std::size_t itemIndex = 0;
+                 itemIndex < menu->getItemCount(); ++itemIndex) {
+                ayt::ui::MenuItem* item = menu->getItem(
+                    static_cast<int>(itemIndex));
+                if (item == nullptr) continue;
+                hasEmptyTemplate |= item->getText() == L"New Empty Scene";
+                hasTwoDTemplate |= item->getText() == L"New 2D Scene";
+                hasCreateSprite |= item->getText() == L"Create Sprite";
+                hasCreateTilemap |= item->getText() == L"Create Tilemap";
+                hasCreateCamera |= item->getText() == L"Create 2D Camera";
+            }
+        }
+    }
+    CHECK(menuBar != nullptr);
+    CHECK(hasEmptyTemplate);
+    CHECK(hasTwoDTemplate);
+    CHECK(hasCreateSprite);
+    CHECK(hasCreateTilemap);
+    CHECK(hasCreateCamera);
+    CHECK_TRUE(session.newSceneFromTemplate(EditorSceneTemplate::TwoD));
+    CHECK(session.sceneViewMode() == SceneViewMode::TwoD);
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    CHECK(world != nullptr);
+    if (world == nullptr) {
+        session.shutdown();
+        return;
+    }
+    CHECK_INT_EQ(static_cast<uint32_t>(world->getAllEntities().size()), 1u);
+    ayt::entity::Entity* cameraEntity = world->getAllEntities().front();
+    CHECK(cameraEntity->getComponent<ayt::entity::Transform>() != nullptr);
+    auto* camera = cameraEntity->getComponent<
+        ayt::entity::OrthoCameraComponent>();
+    CHECK(camera != nullptr);
+    CHECK(camera != nullptr && camera->viewSize == 600.0f);
+
+    const uint32_t spriteId =
+        session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    const uint32_t tilemapId =
+        session.createTwoDEntity(Editor2DEntityKind::Tilemap);
+    CHECK(spriteId != 0u);
+    CHECK(tilemapId != 0u);
+    CHECK(world->findEntity(spriteId)->getComponent<
+        ayt::entity::SpriteComponent>() != nullptr);
+    CHECK(world->findEntity(tilemapId)->getComponent<
+        ayt::entity::TilemapComponent>() != nullptr);
+    CHECK(session.document()->isDirty());
+    session.shutdown();
+}
+
+TEST_CASE(TwoDInspectorUsesResourceAndEnumControls)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    if (layoutPath.empty()) return;
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK_TRUE(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    (void)session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    auto* textureRow = session.ui().findById("inspector_field_texturePath");
+    auto* flip = dynamic_cast<ayt::ui::ComboBox*>(
+        session.ui().findById("inspector_field_flip"));
+    auto* domain = dynamic_cast<ayt::ui::ComboBox*>(
+        session.ui().findById("inspector_field_renderDomain"));
+    auto* layer = dynamic_cast<ayt::ui::TextInput*>(
+        session.ui().findById("inspector_field_layer"));
+    CHECK(textureRow != nullptr);
+    CHECK(flip != nullptr);
+    CHECK(domain != nullptr);
+    CHECK(layer != nullptr);
+    CHECK(flip != nullptr && flip->getItemCount() == 4u);
+    CHECK(domain != nullptr && domain->getItemCount() == 2u);
+
+    (void)session.createTwoDEntity(Editor2DEntityKind::Camera);
+    auto* aspectPolicy = dynamic_cast<ayt::ui::ComboBox*>(
+        session.ui().findById("inspector_field_aspectPolicy"));
+    auto* zoom = dynamic_cast<ayt::ui::TextInput*>(
+        session.ui().findById("inspector_field_zoom"));
+    auto* viewSize = dynamic_cast<ayt::ui::TextInput*>(
+        session.ui().findById("inspector_field_viewSize"));
+    CHECK(aspectPolicy != nullptr);
+    CHECK(aspectPolicy != nullptr && aspectPolicy->getItemCount() == 3u);
+    CHECK(zoom != nullptr);
+    CHECK(viewSize != nullptr);
+    session.shutdown();
+}
+
+TEST_CASE(TwoDPickingUsesDrawableLayerOrder)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    if (layoutPath.empty()) return;
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK_TRUE(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK_TRUE(session.newSceneFromTemplate(EditorSceneTemplate::TwoD));
+
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    const uint32_t lowerId =
+        session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    const uint32_t upperId =
+        session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    auto* lower = world->findEntity(lowerId)->getComponent<
+        ayt::entity::SpriteComponent>();
+    auto* upper = world->findEntity(upperId)->getComponent<
+        ayt::entity::SpriteComponent>();
+    lower->layer = 1;
+    upper->layer = 3;
+
+    ayt::math::FRectangle bounds{};
+    CHECK_TRUE(session.getViewportBounds(bounds));
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerY = (bounds.minY + bounds.maxY) * 0.5f;
+    // Clear the current selection away from every drawable, then pick the
+    // overlapping sprites. This avoids the current gizmo consuming its own
+    // center handle before the selection test runs.
+    CHECK_TRUE(session.onMouseButtonDown(centerX + 200.0f, centerY, 0));
+    CHECK_TRUE(session.onMouseButtonUp(centerX + 200.0f, centerY, 0));
+    CHECK_TRUE(session.onMouseButtonDown(centerX + 10.0f, centerY, 0));
+    CHECK_TRUE(session.onMouseButtonUp(centerX + 10.0f, centerY, 0));
+    CHECK_INT_EQ(session.selectedEntityId(), upperId);
+    session.shutdown();
+}
+
+TEST_CASE(TwoDGizmoUsesExplicitScreenStableScale)
+{
+    EditorTransformGizmo gizmo;
+    const EditorTransformState transform{
+        {0.0f, 0.0f, 0.0f}, ayt::math::FQuaternion::identity(),
+        {1.0f, 1.0f, 1.0f}};
+    constexpr float scale = 72.0f;
+    const uint16_t disabled =
+        EditorTransformGizmo::handleBit(EditorGizmoHandle::AxisZ)
+      | EditorTransformGizmo::handleBit(EditorGizmoHandle::PlaneYZ)
+      | EditorTransformGizmo::handleBit(EditorGizmoHandle::PlaneZX)
+      | EditorTransformGizmo::handleBit(EditorGizmoHandle::RingX)
+      | EditorTransformGizmo::handleBit(EditorGizmoHandle::RingY)
+      | EditorTransformGizmo::handleBit(EditorGizmoHandle::ScaleZ);
+    const ayt::math::FVector3 rayOrigin{scale * 0.75f, 0.0f, 1.0f};
+    const ayt::math::FVector3 rayDirection{0.0f, 0.0f, -1.0f};
+    CHECK(gizmo.hitTestUniversal(transform, false, rayOrigin, rayDirection,
+                                 disabled, scale)
+          == EditorGizmoHandle::AxisX);
+    CHECK_TRUE(gizmo.beginUniversal(EditorGizmoHandle::AxisX, transform,
+                                    false, rayOrigin, rayDirection, 0.0f,
+                                    disabled, scale));
+    EditorTransformState moved;
+    CHECK_TRUE(gizmo.update({rayOrigin.x + 10.0f, rayOrigin.y, rayOrigin.z},
+                            rayDirection, 0.0f, 0.0f, moved));
+    CHECK_FLOAT_EQ(moved.position.x, 10.0f, 1e-4f);
+}
+
+TEST_CASE(TwoDGizmoTransformCommitsThroughUndoRedo)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    if (layoutPath.empty()) return;
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK_TRUE(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK_TRUE(session.newSceneFromTemplate(EditorSceneTemplate::TwoD));
+    const uint32_t spriteId =
+        session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* transform = world->findEntity(spriteId)->getComponent<
+        ayt::entity::Transform>();
+    ayt::math::FRectangle bounds{};
+    CHECK_TRUE(session.getViewportBounds(bounds));
+    const float centerX = (bounds.minX + bounds.maxX) * 0.5f;
+    const float centerY = (bounds.minY + bounds.maxY) * 0.5f;
+    const float handleX = centerX + 72.0f * 0.75f;
+    CHECK_TRUE(session.onMouseButtonDown(handleX, centerY, 0));
+    CHECK_TRUE(session.onMouseButtonUp(handleX + 16.0f, centerY, 0));
+    CHECK(transform->position.x > 1.0f);
+    const float movedX = transform->position.x;
+
+    session.workspace().commands().setActiveTarget(nullptr);
+    // The scene command stack is registered as the active target by normal
+    // editor input. Undo/redo shortcuts use the same command router path.
+    session.onKeyDown(ayt::ui::UIKey_Control);
+    CHECK_TRUE(session.onKeyDown(ayt::ui::UIKey_Z));
+    session.onKeyUp(ayt::ui::UIKey_Control);
+    CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1e-4f);
+    session.onKeyDown(ayt::ui::UIKey_Control);
+    CHECK_TRUE(session.onKeyDown(ayt::ui::UIKey_Y));
+    session.onKeyUp(ayt::ui::UIKey_Control);
+    CHECK_FLOAT_EQ(transform->position.x, movedX, 1e-4f);
+    session.shutdown();
+}
+
+TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::current_path() / "editor_2d_asset_drop_test";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root / "Assets" / "textures", ignored);
+    fs::create_directories(root / "Assets" / "tilemaps", ignored);
+    std::FILE* image = std::fopen(
+        (root / "Assets" / "textures" / "marker.png").string().c_str(), "wb");
+    CHECK(image != nullptr);
+    if (image != nullptr) std::fclose(image);
+    EditorTilemapDocument tilemap;
+    CHECK_TRUE(tilemap.create(4u, 2u, 16u, 8u, 0u));
+    std::string error;
+    CHECK_TRUE(tilemap.save(
+        (root / "Assets" / "tilemaps" / "ground.aytilemap.json").string(),
+        &error));
+
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.projectRoot = root.string();
+    EditorSession session;
+    CHECK_TRUE(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK_TRUE(session.newSceneFromTemplate(EditorSceneTemplate::TwoD));
+    CHECK_TRUE(session.assetDatabase().scanNow(&error));
+    const EditorAssetRecord* texture = session.assetDatabase().findByLogicalPath(
+        "Assets/textures/marker.png");
+    const EditorAssetRecord* sourceTilemap =
+        session.assetDatabase().findByLogicalPath(
+            "Assets/tilemaps/ground.aytilemap.json");
+    CHECK(texture != nullptr);
+    CHECK(sourceTilemap != nullptr);
+
+    ayt::math::FRectangle bounds{};
+    CHECK_TRUE(session.getViewportBounds(bounds));
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(texture != nullptr
+          && session.placeAssetInViewport(texture->id, x, y));
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* spriteEntity = world->findEntity(session.selectedEntityId());
+    auto* sprite = spriteEntity != nullptr
+        ? spriteEntity->getComponent<ayt::entity::SpriteComponent>() : nullptr;
+    CHECK(sprite != nullptr);
+    CHECK(sprite != nullptr
+          && sprite->texturePath == "textures/marker.png");
+
+    CHECK(sourceTilemap != nullptr
+          && session.placeAssetInViewport(sourceTilemap->id, x, y));
+    auto* tilemapEntity = world->findEntity(session.selectedEntityId());
+    auto* tilemapComponent = tilemapEntity != nullptr
+        ? tilemapEntity->getComponent<ayt::entity::TilemapComponent>() : nullptr;
+    CHECK(tilemapComponent != nullptr);
+    CHECK(tilemapComponent != nullptr
+          && tilemapComponent->tilemapPath == "tilemaps/ground.aytilemap");
+
+    fs::create_directories(root / "Assets" / "worlds", ignored);
+    const fs::path scenePath = root / "Assets" / "worlds" / "stage4.ayscene";
+    CHECK_TRUE(session.document()->saveAs(scenePath.string(), &error));
+    EditorSceneDocument reopened;
+    CHECK_TRUE(reopened.open(scenePath.string(), &error));
+    uint32_t reopenedSprites = 0u;
+    uint32_t reopenedTilemaps = 0u;
+    uint32_t reopenedCameras = 0u;
+    for (ayt::entity::Entity* entity :
+         reopened.scene().world().getAllEntities()) {
+        if (entity->getComponent<ayt::entity::SpriteComponent>() != nullptr) {
+            ++reopenedSprites;
+        }
+        if (entity->getComponent<ayt::entity::TilemapComponent>() != nullptr) {
+            ++reopenedTilemaps;
+        }
+        if (entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr) {
+            ++reopenedCameras;
+        }
+    }
+    CHECK_INT_EQ(reopenedSprites, 1u);
+    CHECK_INT_EQ(reopenedTilemaps, 1u);
+    CHECK_INT_EQ(reopenedCameras, 1u);
+    session.shutdown();
+    fs::remove_all(root, ignored);
 }
 
 TEST_CASE(TilemapDocumentPaintFillMetadataAndRoundTrip)
