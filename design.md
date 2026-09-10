@@ -1096,6 +1096,24 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   router. Ctrl+Shift+Z is a default redo alias only while Redo keeps its default
   binding; a user-defined Redo binding replaces both default forms.
 
+### 10.13 Progressive Tilemap shadow controls
+
+- The persisted shadow plane remains one 4-bit quarter-cell mask per map cell.
+  Keeping the complete mask space preserves RPG-style imported data and future
+  automatic shadow generation without making all sixteen combinations primary
+  authoring modes.
+- The normal toolbar exposes only `Full Shadow` and `Clear Shadow`; choosing
+  either also activates the Shadow tool, and `H` always restores the predictable
+  full-cell brush. The canvas badge states `FULL`, `CLEAR`, or `CUSTOM` instead
+  of exposing the mask's implementation number.
+- Arbitrary masks move into a compact blocking dialog containing a spatial 2 x 2
+  quadrant editor. Each quadrant is toggled where it appears in the cell, and
+  `Use Brush` applies that composed mask and activates Shadow. The editor does
+  not list sixteen textual permutations such as diagonals or `Except` variants.
+- This is an interaction simplification only. Painting still replaces the
+  complete cell mask in one history gesture, the global RGBA shadow color is
+  unchanged, and runtime dynamic lights remain a separate rendering feature.
+
 ---
 
 ## 11. Decisions log

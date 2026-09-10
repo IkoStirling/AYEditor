@@ -476,10 +476,15 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
                 + std::to_wstring(_model.selectedStampId());
             break;
         case PaintTool::Shadow:
-            label = _model.selectedShadowMask() == 0u
-                ? L"SHADOW  ·  CLEAR"
-                : L"SHADOW  ·  Mask "
-                    + std::to_wstring(_model.selectedShadowMask());
+            if (_model.selectedShadowMask()
+                == ayt::ay2d::editor::ShadowMask_None) {
+                label = L"SHADOW  ·  CLEAR";
+            } else if (_model.selectedShadowMask()
+                       == ayt::ay2d::editor::ShadowMask_All) {
+                label = L"SHADOW  ·  FULL";
+            } else {
+                label = L"SHADOW  ·  CUSTOM";
+            }
             accent = {0.70f, 0.48f, 0.94f, 1.0f};
             break;
         }

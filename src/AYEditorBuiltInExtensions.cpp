@@ -73,41 +73,6 @@ bool runtimeV2CanRepresent(
         });
 }
 
-constexpr std::array<uint8_t, 16> kShadowBrushMasks{
-    ayt::ay2d::editor::ShadowMask_All,
-    ayt::ay2d::editor::ShadowMask_TopLeft
-        | ayt::ay2d::editor::ShadowMask_TopRight,
-    ayt::ay2d::editor::ShadowMask_BottomLeft
-        | ayt::ay2d::editor::ShadowMask_BottomRight,
-    ayt::ay2d::editor::ShadowMask_TopLeft
-        | ayt::ay2d::editor::ShadowMask_BottomLeft,
-    ayt::ay2d::editor::ShadowMask_TopRight
-        | ayt::ay2d::editor::ShadowMask_BottomRight,
-    ayt::ay2d::editor::ShadowMask_TopLeft,
-    ayt::ay2d::editor::ShadowMask_TopRight,
-    ayt::ay2d::editor::ShadowMask_BottomLeft,
-    ayt::ay2d::editor::ShadowMask_BottomRight,
-    ayt::ay2d::editor::ShadowMask_TopLeft
-        | ayt::ay2d::editor::ShadowMask_BottomRight,
-    ayt::ay2d::editor::ShadowMask_TopRight
-        | ayt::ay2d::editor::ShadowMask_BottomLeft,
-    0x07u, 0x0bu, 0x0du, 0x0eu,
-    ayt::ay2d::editor::ShadowMask_None,
-};
-
-const std::vector<std::wstring>& shadowBrushLabels()
-{
-    static const std::vector<std::wstring> labels{
-        L"Shadow: Full", L"Shadow: Top", L"Shadow: Bottom",
-        L"Shadow: Left", L"Shadow: Right", L"Shadow: Top-left",
-        L"Shadow: Top-right", L"Shadow: Bottom-left",
-        L"Shadow: Bottom-right", L"Shadow: Diagonal \\ ",
-        L"Shadow: Diagonal /", L"Shadow: Except BR",
-        L"Shadow: Except BL", L"Shadow: Except TR",
-        L"Shadow: Except TL", L"Shadow: Clear"};
-    return labels;
-}
-
 std::wstring rgbaText(uint32_t rgba)
 {
     wchar_t buffer[11]{};
@@ -491,24 +456,19 @@ public:
             });
         _shadow = addIconButton(
             toolbar, "tilemap_tool_shadow", "shadow.svg", L"H",
-            L"Shadow mask (H)", [this]() {
-                setTool(ayt::ay2d::editor::PaintTool::Shadow);
+            L"Full shadow (H)", [this]() {
+                setShadowBrush(ayt::ay2d::editor::ShadowMask_All);
             });
-        _shadowMaskSelector = new ayt::ui::ComboBox();
-        _shadowMaskSelector->setId("tilemap_workspace_shadow_mask");
-        _shadowMaskSelector->setItems(shadowBrushLabels());
-        _shadowMaskSelector->setSelectedIndex(0);
-        _shadowMaskSelector->setOnSelectionChanged([this](int index) {
-            if (_syncing || index < 0
-                || index >= static_cast<int>(kShadowBrushMasks.size())) {
-                return;
-            }
-            if (_document->model().setSelectedShadowMask(
-                    kShadowBrushMasks[static_cast<size_t>(index)])) {
-                setTool(ayt::ay2d::editor::PaintTool::Shadow);
-            }
-        });
-        toolbar->addWidget(_shadowMaskSelector, 142.0f);
+        _shadowClear = addIconButton(
+            toolbar, "tilemap_tool_shadow_clear", "shadow-off.svg", L"0",
+            L"Clear shadow", [this]() {
+                setShadowBrush(ayt::ay2d::editor::ShadowMask_None);
+            });
+        _shadowAdvanced = addIconButton(
+            toolbar, "tilemap_tool_shadow_advanced", "layout-grid.svg", L"4",
+            L"Advanced shadow quadrants…", [this]() {
+                openShadowBrushDialog();
+            });
         _grid = addIconButton(
             toolbar, "tilemap_tool_grid", "grid.svg", L"G",
             L"Show or hide grid", [this]() {
@@ -832,6 +792,19 @@ public:
             _importModal->closeModal();
         }
         _importModal.reset();
+        for (ayt::ui::Button* button : _shadowQuadrantButtons) {
+            if (button != nullptr) button->setOnClicked({});
+        }
+        if (_shadowDialogCancel != nullptr) {
+            _shadowDialogCancel->setOnClicked({});
+        }
+        if (_shadowDialogApply != nullptr) {
+            _shadowDialogApply->setOnClicked({});
+        }
+        if (_shadowModal != nullptr && _shadowModal->isOpen()) {
+            _shadowModal->closeModal();
+        }
+        _shadowModal.reset();
         if (_canvas != nullptr) {
             _canvas->setOnEdited({});
             _canvas->setOnTilePicked({});
@@ -848,9 +821,6 @@ public:
         }
         if (_stampSelector != nullptr) {
             _stampSelector->setOnSelectionChanged({});
-        }
-        if (_shadowMaskSelector != nullptr) {
-            _shadowMaskSelector->setOnSelectionChanged({});
         }
         if (_layerList != nullptr) _layerList->setOnSelectionChanged({});
         for (ayt::ui::Button* button : _buttons) {
@@ -872,7 +842,12 @@ public:
         _rectangle = nullptr;
         _stamp = nullptr;
         _shadow = nullptr;
-        _shadowMaskSelector = nullptr;
+        _shadowClear = nullptr;
+        _shadowAdvanced = nullptr;
+        _shadowQuadrantButtons.fill(nullptr);
+        _shadowDialogStatus = nullptr;
+        _shadowDialogCancel = nullptr;
+        _shadowDialogApply = nullptr;
         _grid = nullptr;
         _collision = nullptr;
         _shadowVisibility = nullptr;
@@ -970,7 +945,7 @@ public:
             }
             return true;
         case ayt::ui::UIKey_H:
-            setTool(ayt::ay2d::editor::PaintTool::Shadow);
+            setShadowBrush(ayt::ay2d::editor::ShadowMask_All);
             return true;
         case ayt::ui::UIKey_Space:
             if (_canvas != nullptr) _canvas->setSpacePan(true);
@@ -1094,6 +1069,148 @@ private:
             ayt::ui::destroyWidgetTree(tooltip);
         }
         _tooltips.clear();
+    }
+
+    void setShadowBrush(uint8_t mask)
+    {
+        _document->model().setSelectedShadowMask(mask);
+        setTool(ayt::ay2d::editor::PaintTool::Shadow);
+    }
+
+    void refreshShadowBrushDialog()
+    {
+        static constexpr std::array<const wchar_t*, 4> quadrantNames{
+            L"Top-left", L"Top-right", L"Bottom-left", L"Bottom-right"};
+        static constexpr std::array<uint8_t, 4> quadrantBits{
+            ayt::ay2d::editor::ShadowMask_TopLeft,
+            ayt::ay2d::editor::ShadowMask_TopRight,
+            ayt::ay2d::editor::ShadowMask_BottomLeft,
+            ayt::ay2d::editor::ShadowMask_BottomRight};
+        for (size_t index = 0u; index < quadrantBits.size(); ++index) {
+            ayt::ui::Button* button = _shadowQuadrantButtons[index];
+            if (button == nullptr) continue;
+            const bool included = (_pendingShadowMask
+                                   & quadrantBits[index]) != 0u;
+            button->setText(included ? L"ON" : L"OFF");
+            button->setAccessibilityLabel(
+                std::wstring(quadrantNames[index]) + L" quadrant, "
+                + (included ? L"included" : L"excluded"));
+        }
+        if (_shadowDialogStatus != nullptr) {
+            if (_pendingShadowMask == ayt::ay2d::editor::ShadowMask_All) {
+                _shadowDialogStatus->setText(L"Brush: full-cell shadow");
+            } else if (_pendingShadowMask
+                       == ayt::ay2d::editor::ShadowMask_None) {
+                _shadowDialogStatus->setText(L"Brush: clear shadow");
+            } else {
+                _shadowDialogStatus->setText(L"Brush: custom quadrants");
+            }
+        }
+        _host.requestRepaint();
+    }
+
+    void buildShadowBrushDialog()
+    {
+        if (_shadowModal != nullptr) return;
+        _shadowModal = std::make_unique<ayt::ui::Modal>();
+        _shadowModal->setId("tilemap_shadow_brush_dialog");
+        _shadowModal->setSize({360.0f, 278.0f});
+        _shadowModal->setDismissOnDimmerClick(false);
+
+        auto* root = new ayt::ui::VBox();
+        root->setPadding(16.0f, 14.0f, 16.0f, 14.0f);
+        root->setSpacing(8.0f);
+        root->addWidget(makeLabel(L"Advanced Shadow Brush", 17), 28.0f);
+        auto* note = makeLabel(
+            L"Click a quadrant to include or exclude that part of the cell.",
+            11);
+        note->setWordWrap(true);
+        root->addWidget(note, 36.0f);
+
+        static constexpr std::array<const char*, 4> quadrantIds{
+            "tilemap_shadow_quadrant_tl", "tilemap_shadow_quadrant_tr",
+            "tilemap_shadow_quadrant_bl", "tilemap_shadow_quadrant_br"};
+        static constexpr std::array<uint8_t, 4> quadrantBits{
+            ayt::ay2d::editor::ShadowMask_TopLeft,
+            ayt::ay2d::editor::ShadowMask_TopRight,
+            ayt::ay2d::editor::ShadowMask_BottomLeft,
+            ayt::ay2d::editor::ShadowMask_BottomRight};
+        for (size_t rowIndex = 0u; rowIndex < 2u; ++rowIndex) {
+            auto* row = new ayt::ui::HBox();
+            row->setSpacing(6.0f);
+            for (size_t columnIndex = 0u; columnIndex < 2u;
+                 ++columnIndex) {
+                const size_t index = rowIndex * 2u + columnIndex;
+                auto* button = new ayt::ui::Button();
+                button->setId(quadrantIds[index]);
+                button->setPadding(8.0f, 6.0f, 8.0f, 6.0f);
+                button->setOnClicked([this, bit = quadrantBits[index]]() {
+                    _pendingShadowMask ^= bit;
+                    refreshShadowBrushDialog();
+                });
+                row->addWidget(button, 0.0f);
+                _shadowQuadrantButtons[index] = button;
+            }
+            root->addWidget(row, 48.0f);
+        }
+
+        _shadowDialogStatus = makeLabel(L"Brush: full-cell shadow", 11);
+        _shadowDialogStatus->setId("tilemap_shadow_brush_status");
+        root->addWidget(_shadowDialogStatus, 22.0f);
+
+        auto* footer = new ayt::ui::HBox();
+        footer->setSpacing(8.0f);
+        footer->addWidget(makeLabel(L"", 11), 0.0f);
+        _shadowDialogCancel = new ayt::ui::Button();
+        _shadowDialogCancel->setId("tilemap_shadow_brush_cancel");
+        _shadowDialogCancel->setText(L"Cancel");
+        _shadowDialogCancel->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
+        _shadowDialogCancel->setOnClicked([this]() {
+            if (_shadowModal != nullptr) _shadowModal->closeModal();
+        });
+        footer->addWidget(_shadowDialogCancel, 86.0f);
+        _shadowDialogApply = new ayt::ui::Button();
+        _shadowDialogApply->setId("tilemap_shadow_brush_apply");
+        _shadowDialogApply->setText(L"Use Brush");
+        _shadowDialogApply->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
+        _shadowDialogApply->setOnClicked([this]() {
+            setShadowBrush(_pendingShadowMask);
+            if (_shadowModal != nullptr) _shadowModal->closeModal();
+        });
+        footer->addWidget(_shadowDialogApply, 104.0f);
+        root->addWidget(footer, 31.0f);
+        _shadowModal->setContentOwned(root);
+    }
+
+    void openShadowBrushDialog()
+    {
+        ayt::ui::UIManager* ui = _host.uiManager();
+        if (ui == nullptr) {
+            _host.setStatusText(
+                L"Advanced shadow editing requires an AYUI host.");
+            return;
+        }
+        auto activeScope = ayt::ui::UIManager::pushActive(ui);
+        buildShadowBrushDialog();
+        _pendingShadowMask = _document->model().selectedShadowMask();
+        refreshShadowBrushDialog();
+        const ayt::math::FVector2 client = ui->getClientSize();
+        ayt::math::FVector2 dialogSize{360.0f, 278.0f};
+        constexpr float kOuterMargin = 24.0f;
+        if (client.x > 0.0f) {
+            dialogSize.x = std::min(
+                dialogSize.x, std::max(1.0f, client.x - kOuterMargin * 2.0f));
+        }
+        if (client.y > 0.0f) {
+            dialogSize.y = std::min(
+                dialogSize.y, std::max(1.0f, client.y - kOuterMargin * 2.0f));
+        }
+        _shadowModal->setSize(dialogSize);
+        _shadowModal->setPosition({
+            std::round(std::max(0.0f, (client.x - dialogSize.x) * 0.5f)),
+            std::round(std::max(0.0f, (client.y - dialogSize.y) * 0.5f))});
+        _shadowModal->openModal();
+        _host.requestRepaint();
     }
 
     ayt::ui::TextInput* addImportField(
@@ -1777,14 +1894,20 @@ private:
         setIconState(_fill, fill, L"Flood Fill (F)");
         setIconState(_rectangle, rectangle, L"Rectangle (R)");
         setIconState(_stamp, stamp, L"Stamp (S)");
-        setIconState(_shadow, shadow, L"Shadow mask (H)");
-        const auto selectedShadow = std::find(
-            kShadowBrushMasks.begin(), kShadowBrushMasks.end(),
-            model.selectedShadowMask());
-        _shadowMaskSelector->setSelectedIndex(
-            selectedShadow == kShadowBrushMasks.end() ? 0
-                : static_cast<int>(selectedShadow
-                    - kShadowBrushMasks.begin()));
+        const uint8_t shadowMask = model.selectedShadowMask();
+        setIconState(
+            _shadow,
+            shadow && shadowMask == ayt::ay2d::editor::ShadowMask_All,
+            L"Full shadow (H)");
+        setIconState(
+            _shadowClear,
+            shadow && shadowMask == ayt::ay2d::editor::ShadowMask_None,
+            L"Clear shadow");
+        setIconState(
+            _shadowAdvanced,
+            shadow && shadowMask != ayt::ay2d::editor::ShadowMask_All
+                && shadowMask != ayt::ay2d::editor::ShadowMask_None,
+            L"Advanced shadow quadrants");
         setIconState(_grid, _canvas->showGrid(), L"Grid overlay");
         setIconState(_collision, _canvas->showCollision(),
                      L"Collision overlay");
@@ -1875,7 +1998,8 @@ private:
     ayt::ui::Button* _rectangle = nullptr;
     ayt::ui::Button* _stamp = nullptr;
     ayt::ui::Button* _shadow = nullptr;
-    ayt::ui::ComboBox* _shadowMaskSelector = nullptr;
+    ayt::ui::Button* _shadowClear = nullptr;
+    ayt::ui::Button* _shadowAdvanced = nullptr;
     ayt::ui::Button* _stampSelect = nullptr;
     ayt::ui::Button* _stampDelete = nullptr;
     ayt::ui::Button* _grid = nullptr;
@@ -1883,6 +2007,12 @@ private:
     ayt::ui::Button* _shadowVisibility = nullptr;
     ayt::ui::Button* _frame = nullptr;
     ayt::ui::Button* _layerVisibility = nullptr;
+    std::unique_ptr<ayt::ui::Modal> _shadowModal;
+    std::array<ayt::ui::Button*, 4> _shadowQuadrantButtons{};
+    ayt::ui::TextLabel* _shadowDialogStatus = nullptr;
+    ayt::ui::Button* _shadowDialogCancel = nullptr;
+    ayt::ui::Button* _shadowDialogApply = nullptr;
+    uint8_t _pendingShadowMask = ayt::ay2d::editor::ShadowMask_All;
     std::unique_ptr<ayt::ui::Modal> _importModal;
     EditorTileAtlasPicker* _importPreview = nullptr;
     ayt::ui::TextLabel* _importSourceLabel = nullptr;

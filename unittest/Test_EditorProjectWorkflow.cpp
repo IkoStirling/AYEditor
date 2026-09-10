@@ -16,6 +16,7 @@
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
+#include <AYUI/TextLabel.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
@@ -594,10 +595,12 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
         view->rootWidget(), "tilemap_workspace_stamp_selector") != nullptr);
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_stamp_select") != nullptr);
-    auto* shadowMask = dynamic_cast<ayt::ui::ComboBox*>(findWorkflowWidget(
-        view->rootWidget(), "tilemap_workspace_shadow_mask"));
-    CHECK(shadowMask != nullptr);
-    CHECK(shadowMask != nullptr && shadowMask->getItemCount() == 16u);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_shadow_mask") == nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_clear") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_advanced") != nullptr);
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_shadow_color") != nullptr);
     CHECK(findWorkflowWidget(
@@ -640,6 +643,7 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
         "tilemap_tool_pencil", "tilemap_tool_eraser",
         "tilemap_tool_fill", "tilemap_tool_rectangle",
         "tilemap_tool_stamp", "tilemap_tool_shadow",
+        "tilemap_tool_shadow_clear", "tilemap_tool_shadow_advanced",
         "tilemap_tool_grid", "tilemap_tool_collision",
         "tilemap_tool_shadow_visibility", "tilemap_tool_frame",
         "tilemap_layer_add", "tilemap_layer_remove",
@@ -717,6 +721,112 @@ TEST_CASE(tilemap_import_modal_uses_owning_ui_and_centers_in_client)
     view->prepareForUiShutdown();
     view.reset();
     secondary.shutdown();
+    primary.shutdown();
+}
+
+TEST_CASE(tilemap_advanced_shadow_brush_is_spatial_and_centered)
+{
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+
+    EditorOpenRequest request;
+    request.displayPath = "Untitled Tilemap";
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+
+    ayt::ui::UIManager primary;
+    primary.initialize(nullptr);
+    primary.setClientSize(1200.0f, 800.0f);
+    EditorWorkspace workspace;
+    TilemapTestHostServices host(workspace);
+    host.ui = &primary;
+    auto view = descriptor->createView(document, host);
+    CHECK(view != nullptr);
+    if (view == nullptr) {
+        primary.shutdown();
+        return;
+    }
+
+    const auto click = [](ayt::ui::Button* button) {
+        if (button == nullptr) return;
+        const ayt::math::FRectangle bounds = button->getWorldBounds();
+        const ayt::math::FVector2 center(
+            (bounds.minX + bounds.maxX) * 0.5f,
+            (bounds.minY + bounds.maxY) * 0.5f);
+        const ayt::ui::UIMouseEvent pointer(center, 0);
+        button->onMouseMove(pointer);
+        button->onMouseButtonDown(pointer);
+        button->onMouseButtonUp(pointer);
+    };
+
+    auto* advanced = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_advanced"));
+    CHECK(advanced != nullptr);
+    click(advanced);
+
+    ayt::ui::Widget* modal = findWorkflowWidget(
+        primary.getOverlayRoot(), "tilemap_shadow_brush_dialog");
+    CHECK(modal != nullptr);
+    if (modal != nullptr) {
+        auto activeScope = ayt::ui::UIManager::pushActive(&primary);
+        primary.update(0.17f);
+        CHECK(modal->getSize().x == 360.0f);
+        CHECK(modal->getSize().y == 278.0f);
+        CHECK(modal->getPosition().x == 420.0f);
+        CHECK(modal->getPosition().y == 261.0f);
+    }
+
+    auto* topLeft = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        modal, "tilemap_shadow_quadrant_tl"));
+    auto* topRight = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        modal, "tilemap_shadow_quadrant_tr"));
+    auto* bottomLeft = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        modal, "tilemap_shadow_quadrant_bl"));
+    auto* bottomRight = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        modal, "tilemap_shadow_quadrant_br"));
+    CHECK(topLeft != nullptr);
+    CHECK(topRight != nullptr);
+    CHECK(bottomLeft != nullptr);
+    CHECK(bottomRight != nullptr);
+    CHECK(topLeft != nullptr && topLeft->getText() == L"ON");
+    CHECK(topRight != nullptr && topRight->getText() == L"ON");
+    CHECK(bottomLeft != nullptr && bottomLeft->getText() == L"ON");
+    CHECK(bottomRight != nullptr && bottomRight->getText() == L"ON");
+
+    click(topLeft);
+    auto* status = dynamic_cast<ayt::ui::TextLabel*>(findWorkflowWidget(
+        modal, "tilemap_shadow_brush_status"));
+    CHECK(topLeft != nullptr && topLeft->getText() == L"OFF");
+    CHECK(status != nullptr && status->getText() == L"Brush: custom quadrants");
+
+    auto* apply = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        modal, "tilemap_shadow_brush_apply"));
+    CHECK(apply != nullptr);
+    click(apply);
+    {
+        auto activeScope = ayt::ui::UIManager::pushActive(&primary);
+        primary.update(0.17f);
+    }
+    CHECK(findWorkflowWidget(
+        primary.getOverlayRoot(), "tilemap_shadow_brush_dialog") == nullptr);
+    CHECK(advanced->getAccessibilityLabel().find(L"active")
+          != std::wstring::npos);
+
+    CHECK(view->inputTarget()->onKeyDown(ayt::ui::UIKey_H));
+    auto* full = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow"));
+    CHECK(full != nullptr);
+    CHECK(full != nullptr && full->getAccessibilityLabel().find(L"active")
+          != std::wstring::npos);
+
+    view->prepareForUiShutdown();
+    view.reset();
     primary.shutdown();
 }
 
