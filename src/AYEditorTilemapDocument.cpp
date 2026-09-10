@@ -2,6 +2,7 @@
 
 #include <AYResource/Converter/TilemapConverter.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <utility>
 
@@ -44,7 +45,13 @@ bool EditorTilemapDocument::save(const std::string& path, std::string* error)
     }
     ayt::resource::TilemapConverter converter(source.string());
     converter.setOutputDir(assetRoot.string());
-    if (converter.convert().resources.size() != 1u) {
+    const ayt::resource::ConversionResult cooked = converter.convert();
+    const size_t tilemapCount = static_cast<size_t>(std::count_if(
+        cooked.resources.begin(), cooked.resources.end(),
+        [](const ayt::resource::ConversionResult::ConvertedResource& resource) {
+            return resource.type == "Tilemap";
+        }));
+    if (tilemapCount != 1u) {
         if (error != nullptr) {
             *error = "Tilemap source was saved, but runtime cooking failed.";
         }
