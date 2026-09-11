@@ -13,6 +13,7 @@
 #include <AYEntity/components/TilemapComponent.h>
 #include <AYEntity/components/TransformComponent.h>
 #include <AYUI/ComboBox.h>
+#include <AYUI/Button.h>
 #include <AYUI/Menu.h>
 #include <AYUI/MenuBar.h>
 #include <AYUI/MenuItem.h>
@@ -211,6 +212,8 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     desc.projectRoot = projectRoot.string();
     desc.engineAssetsRoot = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
         .parent_path().string();
+    desc.iconRootPath = (fs::path(desc.engineAssetsRoot)
+        / "Icons" / "Tabler").string();
     EditorSession session;
     CHECK_TRUE(session.initialize(desc));
     session.setClientSize(1280.0f, 720.0f);
@@ -245,20 +248,65 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     CHECK_FALSE(session.sceneVisibility().ui);
     CHECK(preview != nullptr && !preview->isVisible());
 
-    auto* meshItem = dynamic_cast<ayt::ui::MenuItem*>(
-        session.ui().findById("menu_view_meshes"));
-    auto* worldLitItem = dynamic_cast<ayt::ui::MenuItem*>(
-        session.ui().findById("menu_view_world_lit_2d"));
-    auto* overlayItem = dynamic_cast<ayt::ui::MenuItem*>(
-        session.ui().findById("menu_view_camera_overlay_2d"));
-    auto* uiItem = dynamic_cast<ayt::ui::MenuItem*>(
-        session.ui().findById("menu_view_ui"));
-    CHECK(meshItem != nullptr && meshItem->getText() == L"[ ] Meshes");
-    CHECK(worldLitItem != nullptr
-          && worldLitItem->getText() == L"[x] World Lit 2D");
-    CHECK(overlayItem != nullptr
-          && overlayItem->getText() == L"[ ] Camera Overlay 2D");
-    CHECK(uiItem != nullptr && uiItem->getText() == L"[ ] UI Preview");
+    auto* meshButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_view_meshes"));
+    auto* worldLitButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_view_world_lit_2d"));
+    auto* overlayButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_view_camera_overlay_2d"));
+    auto* uiButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_view_ui"));
+    CHECK(meshButton != nullptr && meshButton->getIconDocument() != nullptr);
+    CHECK(worldLitButton != nullptr
+          && worldLitButton->getIconDocument() != nullptr);
+    CHECK(overlayButton != nullptr
+          && overlayButton->getIconDocument() != nullptr);
+    CHECK(uiButton != nullptr && uiButton->getIconDocument() != nullptr);
+    CHECK(meshButton != nullptr
+          && meshButton->getAccessibilityLabel() == L"3D meshes: hidden");
+    CHECK(worldLitButton != nullptr
+          && worldLitButton->getAccessibilityLabel()
+              == L"World-lit 2D content: visible");
+
+    if (meshButton != nullptr) {
+        const auto bounds = meshButton->getWorldBounds();
+        const float buttonX = (bounds.minX + bounds.maxX) * 0.5f;
+        const float buttonY = (bounds.minY + bounds.maxY) * 0.5f;
+        CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
+        CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+        CHECK(session.sceneVisibility().meshes);
+        CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
+        CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+        CHECK_FALSE(session.sceneVisibility().meshes);
+    }
+
+    // The passive UI preview occupies the complete Scene View rectangle. Its
+    // overlay bounds must not classify the native viewport as editor chrome;
+    // exercise the real RMB pan route instead of only checking host::hitTest.
+    if (session.sceneViewMode() != SceneViewMode::TwoD) {
+        auto* modeButton = dynamic_cast<ayt::ui::Button*>(
+            session.ui().findById("btn_view_mode"));
+        CHECK(modeButton != nullptr);
+        if (modeButton != nullptr) {
+            const auto bounds = modeButton->getWorldBounds();
+            const float buttonX = (bounds.minX + bounds.maxX) * 0.5f;
+            const float buttonY = (bounds.minY + bounds.maxY) * 0.5f;
+            CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
+            CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+        }
+    }
+    CHECK(session.sceneViewMode() == SceneViewMode::TwoD);
+    ayt::math::FRectangle viewportBounds{};
+    CHECK_TRUE(session.getViewportBounds(viewportBounds));
+    const float dragX = (viewportBounds.minX + viewportBounds.maxX) * 0.5f;
+    const float dragY = (viewportBounds.minY + viewportBounds.maxY) * 0.5f;
+    const ayt::math::FVector2 centerBeforeDrag = session.sceneCamera().twoDCenter();
+    CHECK_TRUE(session.onMouseButtonDown(dragX, dragY, 1));
+    CHECK_TRUE(session.onMouseMove(dragX + 24.0f, dragY + 12.0f));
+    CHECK_TRUE(session.onMouseButtonUp(dragX + 24.0f, dragY + 12.0f, 1));
+    const ayt::math::FVector2 centerAfterDrag = session.sceneCamera().twoDCenter();
+    CHECK(centerAfterDrag.x != centerBeforeDrag.x
+          || centerAfterDrag.y != centerBeforeDrag.y);
 
     EditorSceneDocument* editDocument = session.document();
     const std::size_t editEntityCount = editDocument != nullptr

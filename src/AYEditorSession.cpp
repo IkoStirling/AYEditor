@@ -1888,14 +1888,16 @@ bool EditorSession::isViewportSurfacePoint(float x, float y) const {
         _ui.physicalToLogical(ayt::math::FVector2(x, y));
 
     // Open menus / combo popups live on the overlay and often extend into
-    // panel_viewport. In Play/Paused those points must still reach UIManager
-    // or dropdown items over the cube receive no hits.
+    // panel_viewport. Test their actual pointer hit instead of treating every
+    // overlay rectangle as interactive: the authored UI preview deliberately
+    // returns nullptr from hitTest() so Scene picking and camera drag pass
+    // through it.
     if (ayt::ui::Widget* overlay = _ui.getOverlayRoot()) {
         for (ayt::ui::Widget* child : overlay->getChildren()) {
             if (child == nullptr || !child->isVisible()) {
                 continue;
             }
-            if (child->getWorldBounds().contains(pos)) {
+            if (child->hitTest(pos) != nullptr) {
                 return false;
             }
         }
@@ -2455,6 +2457,20 @@ void EditorSession::bindToolbar() {
     bindButton("btn_view_mode", [this]() { toggleSceneViewMode(); });
     bindButton("btn_view_camera", [this]() { toggleViewportProjection(); });
     bindButton("btn_view_shading", [this]() { toggleViewportShading(); });
+    const auto bindVisibilityButton = [this, &bindButton](
+        const char* id, bool EditorSceneVisibility::*member) {
+        bindButton(id, [this, member]() {
+            EditorSceneVisibility visibility = _sceneVisibility;
+            visibility.*member = !(visibility.*member);
+            setSceneVisibility(visibility);
+        });
+    };
+    bindVisibilityButton("btn_view_meshes", &EditorSceneVisibility::meshes);
+    bindVisibilityButton("btn_view_world_lit_2d",
+                         &EditorSceneVisibility::worldLit2D);
+    bindVisibilityButton("btn_view_camera_overlay_2d",
+                         &EditorSceneVisibility::cameraOverlay2D);
+    bindVisibilityButton("btn_view_ui", &EditorSceneVisibility::ui);
 
     auto* viewportOptions = new ayt::ui::Menu();
     viewportOptions->setId("viewport_options_menu");
@@ -2480,28 +2496,6 @@ void EditorSession::bindToolbar() {
                 !_viewportOrientationAxisVisible);
         });
     }
-    viewportOptions->addSeparator();
-    const auto addVisibilityItem = [this, viewportOptions](
-        const char* id, const wchar_t* label,
-        bool EditorSceneVisibility::*member) {
-        if (auto* item = viewportOptions->addItem(
-                std::wstring(L"[x] ") + label)) {
-            item->setId(id);
-            item->setOnActivate([this, member]() {
-                EditorSceneVisibility visibility = _sceneVisibility;
-                visibility.*member = !(visibility.*member);
-                setSceneVisibility(visibility);
-            });
-        }
-    };
-    addVisibilityItem("menu_view_meshes", L"Meshes",
-                      &EditorSceneVisibility::meshes);
-    addVisibilityItem("menu_view_world_lit_2d", L"World Lit 2D",
-                      &EditorSceneVisibility::worldLit2D);
-    addVisibilityItem("menu_view_camera_overlay_2d", L"Camera Overlay 2D",
-                      &EditorSceneVisibility::cameraOverlay2D);
-    addVisibilityItem("menu_view_ui", L"UI Preview",
-                      &EditorSceneVisibility::ui);
     syncSceneVisibilityMenu();
     bindButton("btn_view_options", [this, viewportOptions]() {
         auto* anchor = _ui.findById("btn_view_options");
@@ -2537,6 +2531,8 @@ void EditorSession::bindToolbar() {
     const char* accentButtons[] = {
         "btn_tool_space", "btn_play", "btn_pause", "btn_step", "btn_stop",
         "btn_view_mode", "btn_view_camera", "btn_view_shading", "btn_view_options",
+        "btn_view_meshes", "btn_view_world_lit_2d",
+        "btn_view_camera_overlay_2d", "btn_view_ui",
         "btn_tool_ui_layout", "btn_tool_2d", "btn_tool_audio",
         "btn_run_project"
     };
@@ -2596,6 +2592,14 @@ void EditorSession::bindToolbar() {
         L"Switch between 2D and 3D Scene View");
     attachEditorTooltip(this, _ui.findById("btn_view_shading"),
         L"Toggle Shaded / Wireframe rendering");
+    attachEditorTooltip(this, _ui.findById("btn_view_meshes"),
+        L"Show or hide 3D meshes");
+    attachEditorTooltip(this, _ui.findById("btn_view_world_lit_2d"),
+        L"Show or hide world-lit 2D content");
+    attachEditorTooltip(this, _ui.findById("btn_view_camera_overlay_2d"),
+        L"Show or hide camera-overlay 2D content");
+    attachEditorTooltip(this, _ui.findById("btn_view_ui"),
+        L"Show or hide the UI preview");
 }
 
 void EditorSession::bindShellIcons(const std::string& iconRootPath)
@@ -2629,6 +2633,10 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_run_project", "outline/rocket.svg",            L"Run current project",   20.0f, 7.0f, 7.0f},
         {"btn_tool_space",  "outline/world.svg",             L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
         {"btn_view_mode",   "outline/box.svg",               L"3D Scene View",        16.0f, 6.0f, 4.0f},
+        {"btn_view_meshes", "outline/box.svg",               L"Show 3D meshes",       15.0f, 5.0f, 4.0f},
+        {"btn_view_world_lit_2d", "outline/world.svg",       L"Show world-lit 2D content", 15.0f, 5.0f, 4.0f},
+        {"btn_view_camera_overlay_2d", "outline/frame.svg",  L"Show camera-overlay 2D content", 15.0f, 5.0f, 4.0f},
+        {"btn_view_ui",     "outline/layout.svg",            L"Show UI preview",      15.0f, 5.0f, 4.0f},
         {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
         {"btn_assets_add",   "outline/file-import.svg",      L"Import asset",          15.0f, 5.0f, 4.0f},
         {"btn_assets_up",    "outline/folder-up.svg",        L"Go to parent folder",   15.0f, 5.0f, 4.0f},
@@ -2686,6 +2694,10 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
     std::fprintf(stderr,
                  "[EditorSession] native SVG icons: %zu/%zu loaded from %s\n",
                  loadedCount, std::size(bindings), root.string().c_str());
+    // bindToolbar() establishes the initial visibility state before icons are
+    // available. Re-apply it now so each toggle immediately communicates its
+    // visible/hidden state through icon tint and accessibility text.
+    syncSceneVisibilityMenu();
 }
 
 void EditorSession::bindTransportBar() {
@@ -6142,20 +6154,25 @@ void EditorSession::setSceneVisibility(
 void EditorSession::syncSceneVisibilityMenu()
 {
     const bool editMode = _gameView.mode() == EditorMode::Edit;
-    const auto sync = [this, editMode](const char* id, const wchar_t* label,
-                                      bool visible) {
-        if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(_ui.findById(id))) {
-            item->setText((visible ? L"[x] " : L"[ ] ")
-                          + std::wstring(label));
-            item->setEnabled(editMode);
+    const ayt::math::FVector4 active = editorThemeColor(
+        "color.accent", ayt::math::FVector4(0.16f, 0.40f, 0.70f, 1.0f));
+    const ayt::math::FVector4 inactive = editorThemeColor(
+        "color.text.muted", ayt::math::FVector4(0.68f, 0.71f, 0.76f, 1.0f));
+    const auto sync = [this, editMode, &active, &inactive](
+        const char* id, const wchar_t* label, bool visible) {
+        if (auto* button = dynamic_cast<ayt::ui::Button*>(_ui.findById(id))) {
+            button->setIconColor(visible ? active : inactive);
+            button->setAccessibilityLabel(
+                std::wstring(label) + (visible ? L": visible" : L": hidden"));
+            button->setEnabled(editMode);
         }
     };
-    sync("menu_view_meshes", L"Meshes", _sceneVisibility.meshes);
-    sync("menu_view_world_lit_2d", L"World Lit 2D",
+    sync("btn_view_meshes", L"3D meshes", _sceneVisibility.meshes);
+    sync("btn_view_world_lit_2d", L"World-lit 2D content",
          _sceneVisibility.worldLit2D);
-    sync("menu_view_camera_overlay_2d", L"Camera Overlay 2D",
+    sync("btn_view_camera_overlay_2d", L"Camera-overlay 2D content",
          _sceneVisibility.cameraOverlay2D);
-    sync("menu_view_ui", L"UI Preview", _sceneVisibility.ui);
+    sync("btn_view_ui", L"UI preview", _sceneVisibility.ui);
     if (_sceneUiPreviewHost != nullptr) {
         _sceneUiPreviewHost->setVisible(editMode && _sceneVisibility.ui);
     }
