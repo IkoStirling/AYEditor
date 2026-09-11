@@ -855,6 +855,16 @@ public:
                                       : "  inputs: " + values)));
             }
         }
+        previewPresentationRevision = preview.presentationRevision();
+    }
+
+    void syncPreviewPresentation()
+    {
+        if (preview.presentationRevision()
+            == previewPresentationRevision) return;
+        refreshPreviewLists();
+        if (canvas != nullptr) canvas->markDirty();
+        if (stateChanged != nullptr) stateChanged();
     }
 
     void refreshGraphChoices()
@@ -1009,6 +1019,7 @@ public:
     ayt::app::UIFlowAssetValidationResult assetValidation;
     std::uint64_t assetValidationRevision = 0;
     std::unordered_set<std::string> debugBreakpoints;
+    std::uint64_t previewPresentationRevision = 0;
     bool attached = false;
     bool refreshing = false;
     bool refreshPending = false;
@@ -1287,6 +1298,7 @@ void EditorUiFlowController::tick(float deltaSeconds)
         _impl->visualViewport->setSize(
             _impl->visualPreviewHost->getSize());
         _impl->preview.tick(deltaSeconds);
+        _impl->syncPreviewPresentation();
     }
     if (_impl->refreshPending) _impl->refresh();
 }

@@ -89,6 +89,7 @@ public:
     const std::vector<EditorUiFlowPreviewScreen>& mountedScreens() const;
     const std::map<std::string, std::string>& activeStates() const;
     const std::vector<EditorUiFlowPreviewTrace>& trace() const;
+    std::uint64_t presentationRevision() const noexcept;
     std::string_view lastError() const noexcept;
 
 private:

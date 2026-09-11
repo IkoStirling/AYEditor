@@ -5,6 +5,7 @@
 #include <AYApplication/UIManagerFlowScreenHost.h>
 
 #include <algorithm>
+#include <functional>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -121,6 +122,11 @@ std::string debugPayloadText(const ayt::app::UIFlowPayload& payload)
 
 class EditorUiFlowPreview::Impl {
 public:
+    Impl()
+    {
+        host.changed = [this]() { ++presentationRevision; };
+    }
+
     class Host final : public ayt::app::IUIFlowScreenHost {
     public:
         bool mountScreen(const ayt::app::UIFlowScreenMountRequest& request,
@@ -136,6 +142,7 @@ public:
                 request.layerId, request.slotId, request.contextId,
                 request.layerOrder, request.orderInLayer});
             sort();
+            notifyChanged();
             return true;
         }
 
@@ -148,10 +155,12 @@ public:
             if (visualMount != visualMountIds.end()) {
                 visualMountIds.erase(visualMount);
             }
+            const std::size_t oldSize = screens.size();
             screens.erase(std::remove_if(screens.begin(), screens.end(),
                 [mountId](const auto& value) {
                     return value.mountId == mountId;
                 }), screens.end());
+            if (screens.size() != oldSize) notifyChanged();
         }
 
         void setScreenOrder(std::uint64_t mountId,
@@ -170,9 +179,12 @@ public:
                     return value.mountId == mountId;
                 });
             if (found == screens.end()) return;
+            if (found->layerOrder == layerOrder
+                && found->orderInLayer == orderInLayer) return;
             found->layerOrder = layerOrder;
             found->orderInLayer = orderInLayer;
             sort();
+            notifyChanged();
         }
 
         void setSignalEmitter(
@@ -195,20 +207,36 @@ public:
                 });
         }
 
+        void notifyChanged()
+        {
+            if (changed != nullptr) changed();
+        }
+
         std::vector<EditorUiFlowPreviewScreen> screens;
         std::unique_ptr<ayt::app::UIManagerFlowScreenHost> visual;
         ayt::app::UIFlowScreenSignalEmitter signalEmitter;
         std::unordered_map<std::uint64_t, std::uint64_t> visualMountIds;
         std::uint64_t nextVisualMountId = 1;
+        std::function<void()> changed;
     };
 
     void refreshStates()
     {
-        states.clear();
-        if (runtime == nullptr || document == nullptr) return;
-        for (const auto& region : document->regions) {
-            states[region.id] = std::string(runtime->activeState(region.id));
+        std::map<std::string, std::string> next;
+        if (runtime != nullptr && document != nullptr) {
+            for (const auto& region : document->regions) {
+                next[region.id] = std::string(runtime->activeState(region.id));
+            }
         }
+        if (next == states) return;
+        states = std::move(next);
+        ++presentationRevision;
+    }
+
+    void appendTrace(EditorUiFlowPreviewTrace value)
+    {
+        traces.push_back(std::move(value));
+        ++presentationRevision;
     }
 
     void syncGraphDebug()
@@ -223,9 +251,10 @@ public:
             if (!value.graphId.empty()) {
                 detail = value.graphId + "  ·  " + detail;
             }
-            traces.push_back({"Node", value.nodeId, std::move(detail)});
+            appendTrace({"Node", value.nodeId, std::move(detail)});
             lastGraphTraceSerial = value.serial;
         }
+        const auto previousPause = debugPause;
         const auto* pause = graphExecutor.debugPause();
         if (pause == nullptr) {
             debugPause.reset();
@@ -238,6 +267,17 @@ public:
                 pause->reason,
                 debugPayload(pause->inputs)};
         }
+        const bool pauseChanged = previousPause.has_value()
+                != debugPause.has_value()
+            || (previousPause.has_value() && debugPause.has_value()
+                && (previousPause->graphExecutionId
+                        != debugPause->graphExecutionId
+                    || previousPause->graphId != debugPause->graphId
+                    || previousPause->nodeId != debugPause->nodeId
+                    || previousPause->nodeType != debugPause->nodeType
+                    || previousPause->reason != debugPause->reason
+                    || previousPause->inputs != debugPause->inputs));
+        if (pauseChanged) ++presentationRevision;
     }
 
     Host host;
@@ -250,6 +290,7 @@ public:
     std::vector<EditorUiFlowPreviewTrace> traces;
     std::optional<EditorUiFlowDebugPause> debugPause;
     std::uint64_t lastGraphTraceSerial = 0;
+    std::uint64_t presentationRevision = 1;
     std::string error;
 };
 
@@ -265,6 +306,7 @@ bool EditorUiFlowPreview::rebuild(
     std::string_view entry,
     std::string* error)
 {
+    ++_impl->presentationRevision;
     _impl->host.screens.clear();
     _impl->states.clear();
     _impl->traces.clear();
@@ -331,7 +373,7 @@ bool EditorUiFlowPreview::rebuild(
     for (const auto& action : document.actions) {
         _impl->runtime->registerAction(action.id,
             [impl = _impl.get()](const ayt::app::UIFlowActionInvocation& value) {
-                impl->traces.push_back({"Action", value.actionId,
+                impl->appendTrace({"Action", value.actionId,
                     "mock accepted (" + std::to_string(value.inputs.size())
                         + " input fields)"});
                 return ayt::app::UIFlowActionResult::success();
@@ -344,7 +386,7 @@ bool EditorUiFlowPreview::rebuild(
             const auto found = impl->guardResults.find(std::string(expression));
             const bool result = found == impl->guardResults.end()
                 ? true : found->second;
-            impl->traces.push_back({"Guard", std::string(expression),
+            impl->appendTrace({"Guard", std::string(expression),
                 result ? "true" : "false"});
             return result;
         });
@@ -360,7 +402,7 @@ bool EditorUiFlowPreview::rebuild(
     _impl->runtime->setAsyncGraphRequestHandler(
         [impl = _impl.get()](
             const ayt::app::UIFlowGraphExecutionRequest& request) {
-            impl->traces.push_back({"Graph", request.graph.graphId,
+            impl->appendTrace({"Graph", request.graph.graphId,
                 request.graph.transitionId.empty()
                     ? "executing" : "transition "
                         + request.graph.transitionId});
@@ -373,7 +415,7 @@ bool EditorUiFlowPreview::rebuild(
     _impl->runtime->subscribeSignal("*",
         [impl = _impl.get()](std::string_view signal,
                              const ayt::app::UIFlowPayload& payload) {
-            impl->traces.push_back({"Signal", std::string(signal),
+            impl->appendTrace({"Signal", std::string(signal),
                 std::to_string(payload.size()) + " payload fields"});
         });
     if (!_impl->runtime->start(entry, &localError)
@@ -389,13 +431,14 @@ bool EditorUiFlowPreview::rebuild(
     _impl->refreshStates();
     _impl->syncGraphDebug();
     _impl->error.clear();
-    _impl->traces.push_back({"Preview", std::string(entry), "runtime started"});
+    _impl->appendTrace({"Preview", std::string(entry), "runtime started"});
     if (error != nullptr) error->clear();
     return true;
 }
 
 void EditorUiFlowPreview::stop() noexcept
 {
+    ++_impl->presentationRevision;
     _impl->graphExecutor.reset();
     _impl->graphExecutor.setDocument(nullptr);
     _impl->runtime.reset();
@@ -508,9 +551,11 @@ void EditorUiFlowPreview::setGuardResult(std::string expression, bool value)
 
 void EditorUiFlowPreview::clearTrace()
 {
+    const bool changed = !_impl->traces.empty();
     _impl->traces.clear();
     _impl->graphExecutor.clearTrace();
     _impl->lastGraphTraceSerial = 0;
+    if (changed) ++_impl->presentationRevision;
 }
 
 bool EditorUiFlowPreview::setBreakpoint(
@@ -571,6 +616,11 @@ EditorUiFlowPreview::activeStates() const
 const std::vector<EditorUiFlowPreviewTrace>& EditorUiFlowPreview::trace() const
 {
     return _impl->traces;
+}
+
+std::uint64_t EditorUiFlowPreview::presentationRevision() const noexcept
+{
+    return _impl->presentationRevision;
 }
 
 std::string_view EditorUiFlowPreview::lastError() const noexcept

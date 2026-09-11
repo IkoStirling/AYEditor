@@ -1249,6 +1249,17 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Runtime Trace 保存 node started inputs 与 completed outputs；编辑器底部调试栏显示当前暂停原因和输入，
   Graph 画布以琥珀色三像素边框标记暂停节点。调试控制复用生产 `UIFlowGraphExecutor`，不建立第二套执行器。
 
+### 10.22 UI Flow integration and visual contract（阶段十一）
+
+- 独立工具窗的生产链接路径由 `AYEditorShell_Demo` 和完整 `AYEditor_UnitTests` 共同覆盖；项目内容验证器
+  继续以 headless/full-client 两种 profile 验证 World、Layout 与 Flow 资产闭包。
+- Preview 以单调 `presentationRevision` 暴露 mounted Screens、Region state、Runtime Trace 和调试暂停
+  的显示变化。Controller 每帧只做 O(1) revision 比较，有变化才更新列表和 Graph 画布，异步 continuation
+  不再出现运行时已暂停但编辑器仍显示 Running 的延迟，同时避免对不断增长的 Trace 做逐帧扫描。
+- Flow chrome 建立 1280×720、1440×860、1920×1080 三档确定性视觉契约：主栏与两条 Graph 工具行必须
+  完整落在各自容器内，Canvas/真实 Screen Preview 必须保有正面积，所有操作文字必须进入渲染提交，
+  裁剪栈必须成对闭合。1280 档的 Graph 编排控件采用紧凑宽度，避免 Pin 选择器越界覆盖 Inspector。
+
 ---
 
 ## 11. Decisions log
@@ -1298,6 +1309,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-11 | UI Flow 阶段八以 AYApplication `UIFlowGraphExecutor` 执行宿主节点、传播类型化值并支持异步续跑/中断；Flow Editor 预览复用该执行器，Graph 画布按同一 registry 绘制彩色 Pin、贝塞尔 link 并过滤不兼容目标。 |
 | 2026-09-12 | UI Flow 阶段九升级为依赖感知执行：Flow Editor 预览逐帧驱动 Graph timeout，并在 Runtime/Document 销毁前先取消异步 continuation，保持与生产执行器的数据依赖、并行和 Join 语义一致。 |
 | 2026-09-12 | UI Flow 阶段十加入副作用前断点、Pause Next、Step/Continue 和输入/输出快照；Flow Editor 仅呈现生产执行器调试状态，并在 Graph 画布高亮暂停节点。 |
+| 2026-09-12 | UI Flow 阶段十一以 presentation revision 同步异步预览显示，并把三档窗口尺寸、操作文字、双预览区和裁剪栈固化为自动化视觉契约。 |
 
 ---
 

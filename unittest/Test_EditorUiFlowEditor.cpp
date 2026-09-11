@@ -28,6 +28,7 @@
 #include <AYUI/Widget.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <string>
 
@@ -53,6 +54,39 @@ struct TempFlow {
 
     fs::path path;
 };
+
+class ClipTrackingRenderer final : public ayt::ui::MockRenderer {
+public:
+    void pushClip(const ayt::math::FRectangle& bounds) override
+    {
+        ++pushCount;
+        ++depth;
+        maxDepth = (std::max)(maxDepth, depth);
+        ayt::ui::MockRenderer::pushClip(bounds);
+    }
+
+    void popClip() override
+    {
+        ++popCount;
+        --depth;
+        ayt::ui::MockRenderer::popClip();
+    }
+
+    int pushCount = 0;
+    int popCount = 0;
+    int depth = 0;
+    int maxDepth = 0;
+};
+
+bool contains(const ayt::math::FRectangle& outer,
+              const ayt::math::FRectangle& inner,
+              float tolerance = 0.5f)
+{
+    return inner.minX >= outer.minX - tolerance
+        && inner.minY >= outer.minY - tolerance
+        && inner.maxX <= outer.maxX + tolerance
+        && inner.maxY <= outer.maxY + tolerance;
+}
 
 ayt::ui::UIFlowDocument previewFlow()
 {
@@ -304,12 +338,20 @@ TEST_CASE(preview_debugger_pauses_before_mock_node_and_exposes_inputs)
     const ayt::ui::UIFlowDocument flow =
         editor_ui_flow_editor_test::previewFlow();
     EditorUiFlowPreview preview;
+    const std::uint64_t initialPresentationRevision =
+        preview.presentationRevision();
     preview.setGraphNodeTypes(
         editor_ui_flow_editor_test::previewNodeTypes());
     CHECK(preview.setBreakpoint("start_graph", "invoke"));
     std::string error;
     CHECK(preview.rebuild(flow, "Boot", &error));
+    CHECK(preview.presentationRevision() > initialPresentationRevision);
+    const std::uint64_t runningPresentationRevision =
+        preview.presentationRevision();
+    preview.tick(0.0f);
+    CHECK(preview.presentationRevision() == runningPresentationRevision);
     CHECK(preview.emitSignal("start", &error));
+    CHECK(preview.presentationRevision() > runningPresentationRevision);
     CHECK(preview.isPaused());
     const EditorUiFlowDebugPause* pause = preview.debugPause();
     CHECK(pause != nullptr);
@@ -319,7 +361,12 @@ TEST_CASE(preview_debugger_pauses_before_mock_node_and_exposes_inputs)
     CHECK(pause != nullptr && pause->inputs.at("action")
           == "\"load_world\"");
 
+    const std::uint64_t pausedPresentationRevision =
+        preview.presentationRevision();
+    preview.tick(0.0f);
+    CHECK(preview.presentationRevision() == pausedPresentationRevision);
     CHECK(preview.continueExecution(&error));
+    CHECK(preview.presentationRevision() > pausedPresentationRevision);
     CHECK_FALSE(preview.isPaused());
     CHECK(error.empty());
     CHECK(std::any_of(preview.trace().begin(), preview.trace().end(),
@@ -525,6 +572,127 @@ TEST_CASE(flow_graph_canvas_draws_typed_curves_and_filters_link_targets)
 
     controller.detach();
     manager.shutdown();
+}
+
+TEST_CASE(flow_editor_chrome_fits_and_clips_at_supported_desktop_sizes)
+{
+    namespace fs = std::filesystem;
+    const std::array viewportSizes{
+        ayt::math::FVector2{1280.0f, 720.0f},
+        ayt::math::FVector2{1440.0f, 860.0f},
+        ayt::math::FVector2{1920.0f, 1080.0f},
+    };
+    constexpr std::array<const char*, 7> graphControls{
+        "flow_graph_label", "flow_graph_node_type", "flow_btn_add_node",
+        "flow_graph_from", "flow_graph_arrow", "flow_graph_to",
+        "flow_btn_connect",
+    };
+    constexpr std::array<const char*, 7> debugControls{
+        "flow_debug_label", "flow_debug_node", "flow_btn_breakpoint",
+        "flow_btn_pause_next", "flow_btn_step", "flow_btn_continue",
+        "flow_debug_state",
+    };
+    constexpr std::array<const wchar_t*, 10> requiredText{
+        L"AYUI Flow Editor", L"Open", L"Save", L"Restart Preview",
+        L"+ Node", L"Connect", L"Breakpoint", L"Pause Next", L"Step",
+        L"Continue",
+    };
+
+    const fs::path chrome = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui" / "ui_flow_editor.ui.json";
+    int violations = 0;
+    for (const ayt::math::FVector2 size : viewportSizes) {
+        auto document = std::make_shared<EditorUiFlowDocument>();
+        std::string error;
+        if (!document->initialize({}, {}, &error)) {
+            ++violations;
+            continue;
+        }
+
+        editor_ui_flow_editor_test::ClipTrackingRenderer renderer;
+        ayt::ui::UIManager manager;
+        manager.initialize(&renderer);
+        manager.setClientSize(size.x, size.y);
+        if (!manager.loadLayout(chrome.string())) {
+            ++violations;
+            manager.shutdown();
+            continue;
+        }
+        EditorUiFlowController controller(document, {});
+        if (!controller.attach(manager)) {
+            ++violations;
+            manager.shutdown();
+            continue;
+        }
+        manager.root()->performLayout();
+        controller.tick(0.0f);
+
+        const auto* root = manager.findById("ui_flow_editor_root");
+        const auto* body = manager.findById("flow_body");
+        const auto* center = manager.findById("flow_center_col");
+        const auto* graphRow = manager.findById("flow_graph_author_row");
+        const auto* debugRow = manager.findById("flow_debug_row");
+        const auto* canvasHost = manager.findById("flow_canvas_host");
+        const auto* previewHost = manager.findById("flow_visual_preview_host");
+        if (root == nullptr || body == nullptr || center == nullptr
+            || graphRow == nullptr || debugRow == nullptr
+            || canvasHost == nullptr || previewHost == nullptr) {
+            ++violations;
+        } else {
+            const auto rootBounds = root->getWorldBounds();
+            const auto bodyBounds = body->getWorldBounds();
+            const auto centerBounds = center->getWorldBounds();
+            violations += editor_ui_flow_editor_test::contains(
+                rootBounds, bodyBounds) ? 0 : 1;
+            violations += editor_ui_flow_editor_test::contains(
+                bodyBounds, centerBounds) ? 0 : 1;
+            violations += editor_ui_flow_editor_test::contains(
+                centerBounds, graphRow->getWorldBounds())
+                ? 0 : 1;
+            violations += editor_ui_flow_editor_test::contains(
+                centerBounds, debugRow->getWorldBounds())
+                ? 0 : 1;
+            violations += canvasHost->getSize().x > 0.0f
+                && canvasHost->getSize().y > 0.0f ? 0 : 1;
+            violations += previewHost->getSize().x > 0.0f
+                && previewHost->getSize().y > 0.0f ? 0 : 1;
+
+            for (const char* id : graphControls) {
+                const auto* widget = manager.findById(id);
+                violations += widget != nullptr
+                    && editor_ui_flow_editor_test::contains(
+                        graphRow->getWorldBounds(), widget->getWorldBounds())
+                    ? 0 : 1;
+            }
+            for (const char* id : debugControls) {
+                const auto* widget = manager.findById(id);
+                violations += widget != nullptr
+                    && editor_ui_flow_editor_test::contains(
+                        debugRow->getWorldBounds(), widget->getWorldBounds())
+                    ? 0 : 1;
+            }
+        }
+
+        manager.render();
+        int visibleText = 0;
+        for (const wchar_t* text : requiredText) {
+            const bool found = std::any_of(renderer.getDrawCalls().begin(),
+                renderer.getDrawCalls().end(), [text](const auto& call) {
+                    return call.type == ayt::ui::MockRenderer::DrawCall::Text
+                        && call.text == text;
+                });
+            visibleText += found ? 1 : 0;
+        }
+        violations += visibleText
+            == static_cast<int>(requiredText.size()) ? 0 : 1;
+        violations += renderer.pushCount > 0
+            && renderer.pushCount == renderer.popCount
+            && renderer.depth == 0 && renderer.maxDepth > 0 ? 0 : 1;
+
+        controller.detach();
+        manager.shutdown();
+    }
+    CHECK(violations == 0);
 }
 #endif
 
