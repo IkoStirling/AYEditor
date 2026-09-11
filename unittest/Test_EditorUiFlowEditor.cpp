@@ -296,6 +296,37 @@ TEST_CASE(preview_uses_production_runtime_for_signal_state_and_mock_action)
     CHECK(std::any_of(preview.trace().begin(), preview.trace().end(),
         [](const auto& value) {
             return value.category == "Node" && value.id == "invoke";
+    }));
+}
+
+TEST_CASE(preview_debugger_pauses_before_mock_node_and_exposes_inputs)
+{
+    const ayt::ui::UIFlowDocument flow =
+        editor_ui_flow_editor_test::previewFlow();
+    EditorUiFlowPreview preview;
+    preview.setGraphNodeTypes(
+        editor_ui_flow_editor_test::previewNodeTypes());
+    CHECK(preview.setBreakpoint("start_graph", "invoke"));
+    std::string error;
+    CHECK(preview.rebuild(flow, "Boot", &error));
+    CHECK(preview.emitSignal("start", &error));
+    CHECK(preview.isPaused());
+    const EditorUiFlowDebugPause* pause = preview.debugPause();
+    CHECK(pause != nullptr);
+    CHECK(pause != nullptr && pause->graphId == "start_graph");
+    CHECK(pause != nullptr && pause->nodeId == "invoke");
+    CHECK(pause != nullptr && pause->reason == "breakpoint");
+    CHECK(pause != nullptr && pause->inputs.at("action")
+          == "\"load_world\"");
+
+    CHECK(preview.continueExecution(&error));
+    CHECK_FALSE(preview.isPaused());
+    CHECK(error.empty());
+    CHECK(std::any_of(preview.trace().begin(), preview.trace().end(),
+        [](const auto& value) {
+            return value.category == "Node" && value.id == "invoke"
+                && value.detail.find("inputs: action=\"load_world\"")
+                    != std::string::npos;
         }));
 }
 

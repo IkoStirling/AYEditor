@@ -164,7 +164,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 10u);
+    CHECK(kEditorSourceAbiVersion == 11u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 

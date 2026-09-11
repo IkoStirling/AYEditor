@@ -1239,6 +1239,16 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - 生产执行器测试覆盖 value propagation、异步 continuation、completion callback、cycle reject、
   interrupt 失效和 Runtime pipeline；编辑器 contract 测试覆盖真实节点 trace、类型过滤和 Path 绘制。
 
+### 10.21 UI Flow graph debugger（阶段十）
+
+- 断点由 `graphId + nodeId` 定位，执行器在调用 host handler 前暂停；暂停快照因此包含最终解析的
+  property/default/value-link 输入，同时保证未产生节点副作用。无断点和手动 pause 时该路径完全惰性。
+- `Pause Next` 在下一可运行节点停下；`Step` 只执行当前节点，并在下一可运行节点前再次暂停；
+  `Continue` 跳过当前断点一次，随后恢复普通断点行为。异步节点单步后会在 continuation 完成并产生下一
+  ready 节点时暂停，不伪造同步完成。
+- Runtime Trace 保存 node started inputs 与 completed outputs；编辑器底部调试栏显示当前暂停原因和输入，
+  Graph 画布以琥珀色三像素边框标记暂停节点。调试控制复用生产 `UIFlowGraphExecutor`，不建立第二套执行器。
+
 ---
 
 ## 11. Decisions log
@@ -1287,6 +1297,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-11 | UI Flow 阶段七以 Screen `handler -> Signal` 映射闭合真实 Widget 交互；Graph 节点与 Pin 选择统一由可扩展 registry 提供，基础 wire format 保持开放、编辑器按宿主词汇表执行严格校验。 |
 | 2026-09-11 | UI Flow 阶段八以 AYApplication `UIFlowGraphExecutor` 执行宿主节点、传播类型化值并支持异步续跑/中断；Flow Editor 预览复用该执行器，Graph 画布按同一 registry 绘制彩色 Pin、贝塞尔 link 并过滤不兼容目标。 |
 | 2026-09-12 | UI Flow 阶段九升级为依赖感知执行：Flow Editor 预览逐帧驱动 Graph timeout，并在 Runtime/Document 销毁前先取消异步 continuation，保持与生产执行器的数据依赖、并行和 Join 语义一致。 |
+| 2026-09-12 | UI Flow 阶段十加入副作用前断点、Pause Next、Step/Continue 和输入/输出快照；Flow Editor 仅呈现生产执行器调试状态，并在 Graph 画布高亮暂停节点。 |
 
 ---
 

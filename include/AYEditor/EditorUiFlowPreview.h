@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -31,6 +32,15 @@ struct EditorUiFlowPreviewTrace {
     std::string category;
     std::string id;
     std::string detail;
+};
+
+struct EditorUiFlowDebugPause {
+    std::uint64_t graphExecutionId = 0;
+    std::string graphId;
+    std::string nodeId;
+    std::string nodeType;
+    std::string reason;
+    std::map<std::string, std::string> inputs;
 };
 
 // Live preview backed by the production UIFlowRuntime. It always records the
@@ -66,6 +76,15 @@ public:
                       std::string* error = nullptr);
     void setGuardResult(std::string expression, bool value);
     void clearTrace();
+
+    bool setBreakpoint(std::string graphId, std::string nodeId,
+                       bool enabled = true);
+    void clearBreakpoints();
+    void requestPause();
+    bool continueExecution(std::string* error = nullptr);
+    bool stepExecution(std::string* error = nullptr);
+    bool isPaused() const noexcept;
+    const EditorUiFlowDebugPause* debugPause() const noexcept;
 
     const std::vector<EditorUiFlowPreviewScreen>& mountedScreens() const;
     const std::map<std::string, std::string>& activeStates() const;

@@ -735,6 +735,11 @@ TEST_CASE(ui_flow_editor_is_hosted_as_one_owned_tool_window)
         CHECK(childUi->findById("flow_btn_connect") != nullptr);
         CHECK(childUi->findById("flow_mounted") != nullptr);
         CHECK(childUi->findById("flow_trace") != nullptr);
+        CHECK(childUi->findById("flow_debug_node") != nullptr);
+        CHECK(childUi->findById("flow_btn_breakpoint") != nullptr);
+        CHECK(childUi->findById("flow_btn_pause_next") != nullptr);
+        CHECK(childUi->findById("flow_btn_step") != nullptr);
+        CHECK(childUi->findById("flow_btn_continue") != nullptr);
     }
 
     CHECK(session.openUiFlowEditor());

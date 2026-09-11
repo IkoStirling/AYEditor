@@ -5,6 +5,7 @@
 #include <AYApplication/UIManagerFlowScreenHost.h>
 
 #include <algorithm>
+#include <sstream>
 #include <unordered_map>
 #include <utility>
 
@@ -68,6 +69,52 @@ std::string stringInput(const ayt::app::UIFlowPayload& inputs,
         }
     }
     return {};
+}
+
+std::string debugValue(const ayt::ui::UIFlowValue& value)
+{
+    if (std::holds_alternative<std::monostate>(value.data)) return "null";
+    if (const auto* item = std::get_if<bool>(&value.data)) {
+        return *item ? "true" : "false";
+    }
+    if (const auto* item = std::get_if<std::int64_t>(&value.data)) {
+        return std::to_string(*item);
+    }
+    if (const auto* item = std::get_if<double>(&value.data)) {
+        std::ostringstream stream;
+        stream << *item;
+        return stream.str();
+    }
+    if (const auto* item = std::get_if<std::string>(&value.data)) {
+        return '"' + *item + '"';
+    }
+    if (const auto* item = std::get_if<ayt::ui::UIFlowValue::Array>(
+            &value.data)) {
+        return "array[" + std::to_string(item->size()) + "]";
+    }
+    const auto* item = std::get_if<ayt::ui::UIFlowValue::Object>(&value.data);
+    return "object{" + std::to_string(item == nullptr ? 0u : item->size())
+        + "}";
+}
+
+std::map<std::string, std::string> debugPayload(
+    const ayt::app::UIFlowPayload& payload)
+{
+    std::map<std::string, std::string> result;
+    for (const auto& [id, value] : payload) {
+        result[id] = debugValue(value);
+    }
+    return result;
+}
+
+std::string debugPayloadText(const ayt::app::UIFlowPayload& payload)
+{
+    std::string result;
+    for (const auto& [id, value] : debugPayload(payload)) {
+        if (!result.empty()) result += ", ";
+        result += id + "=" + value;
+    }
+    return result;
 }
 
 } // namespace
@@ -164,6 +211,35 @@ public:
         }
     }
 
+    void syncGraphDebug()
+    {
+        for (const auto& value : graphExecutor.trace()) {
+            if (value.serial <= lastGraphTraceSerial) continue;
+            std::string detail = value.detail;
+            const std::string inputs = debugPayloadText(value.inputs);
+            const std::string outputs = debugPayloadText(value.outputs);
+            if (!inputs.empty()) detail += "  inputs: " + inputs;
+            if (!outputs.empty()) detail += "  outputs: " + outputs;
+            if (!value.graphId.empty()) {
+                detail = value.graphId + "  ·  " + detail;
+            }
+            traces.push_back({"Node", value.nodeId, std::move(detail)});
+            lastGraphTraceSerial = value.serial;
+        }
+        const auto* pause = graphExecutor.debugPause();
+        if (pause == nullptr) {
+            debugPause.reset();
+        } else {
+            debugPause = EditorUiFlowDebugPause{
+                pause->graphExecutionId,
+                pause->graphId,
+                pause->nodeId,
+                pause->nodeType,
+                pause->reason,
+                debugPayload(pause->inputs)};
+        }
+    }
+
     Host host;
     std::unique_ptr<ayt::app::UIFlowRuntime> runtime;
     ayt::app::UIFlowGraphExecutor graphExecutor;
@@ -172,6 +248,8 @@ public:
     std::map<std::string, std::string> states;
     std::map<std::string, bool> guardResults;
     std::vector<EditorUiFlowPreviewTrace> traces;
+    std::optional<EditorUiFlowDebugPause> debugPause;
+    std::uint64_t lastGraphTraceSerial = 0;
     std::string error;
 };
 
@@ -191,6 +269,9 @@ bool EditorUiFlowPreview::rebuild(
     _impl->states.clear();
     _impl->traces.clear();
     _impl->graphExecutor.reset();
+    _impl->graphExecutor.clearTrace();
+    _impl->lastGraphTraceSerial = 0;
+    _impl->debugPause.reset();
     _impl->graphExecutor.clearNodeTypes();
     _impl->runtime = std::make_unique<ayt::app::UIFlowRuntime>(_impl->host);
     _impl->document = &document;
@@ -206,8 +287,6 @@ bool EditorUiFlowPreview::rebuild(
         if (!_impl->graphExecutor.registerNodeType(type,
                 [impl = _impl.get(), nodeType](
                     const ayt::app::UIFlowGraphNodeInvocation& invocation) {
-                    impl->traces.push_back({"Node", invocation.node->id,
-                        nodeType + " executed"});
                     if (nodeType == "flow.invokeAction"
                         || nodeType == "host.action") {
                         const std::string actionId = stringInput(
@@ -308,6 +387,7 @@ bool EditorUiFlowPreview::rebuild(
         return false;
     }
     _impl->refreshStates();
+    _impl->syncGraphDebug();
     _impl->error.clear();
     _impl->traces.push_back({"Preview", std::string(entry), "runtime started"});
     if (error != nullptr) error->clear();
@@ -322,6 +402,7 @@ void EditorUiFlowPreview::stop() noexcept
     _impl->document = nullptr;
     _impl->host.screens.clear();
     _impl->states.clear();
+    _impl->debugPause.reset();
 }
 
 void EditorUiFlowPreview::setGraphNodeTypes(
@@ -358,6 +439,7 @@ void EditorUiFlowPreview::tick(float deltaSeconds)
         _impl->host.visual->update(deltaSeconds);
     }
     _impl->refreshStates();
+    _impl->syncGraphDebug();
 }
 
 bool EditorUiFlowPreview::isRunning() const noexcept
@@ -387,6 +469,7 @@ bool EditorUiFlowPreview::emitSignal(
         return false;
     }
     _impl->refreshStates();
+    _impl->syncGraphDebug();
     _impl->error.clear();
     if (error != nullptr) error->clear();
     return true;
@@ -426,6 +509,51 @@ void EditorUiFlowPreview::setGuardResult(std::string expression, bool value)
 void EditorUiFlowPreview::clearTrace()
 {
     _impl->traces.clear();
+    _impl->graphExecutor.clearTrace();
+    _impl->lastGraphTraceSerial = 0;
+}
+
+bool EditorUiFlowPreview::setBreakpoint(
+    std::string graphId, std::string nodeId, bool enabled)
+{
+    return _impl->graphExecutor.setBreakpoint(
+        std::move(graphId), std::move(nodeId), enabled);
+}
+
+void EditorUiFlowPreview::clearBreakpoints()
+{
+    _impl->graphExecutor.clearBreakpoints();
+}
+
+void EditorUiFlowPreview::requestPause()
+{
+    _impl->graphExecutor.requestPause();
+}
+
+bool EditorUiFlowPreview::continueExecution(std::string* error)
+{
+    const bool result = _impl->graphExecutor.continueExecution(error);
+    _impl->refreshStates();
+    _impl->syncGraphDebug();
+    return result;
+}
+
+bool EditorUiFlowPreview::stepExecution(std::string* error)
+{
+    const bool result = _impl->graphExecutor.stepExecution(error);
+    _impl->refreshStates();
+    _impl->syncGraphDebug();
+    return result;
+}
+
+bool EditorUiFlowPreview::isPaused() const noexcept
+{
+    return _impl->graphExecutor.isPaused();
+}
+
+const EditorUiFlowDebugPause* EditorUiFlowPreview::debugPause() const noexcept
+{
+    return _impl->debugPause.has_value() ? &*_impl->debugPause : nullptr;
 }
 
 const std::vector<EditorUiFlowPreviewScreen>&

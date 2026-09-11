@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -383,8 +384,15 @@ private:
             if (found == nodes.end()) continue;
             const NodeVisual& visual = found->second;
             const FRectangle& card = visual.bounds;
+            const EditorUiFlowDebugPause* pause = _preview.debugPause();
+            const bool paused = pause != nullptr
+                && pause->graphId == graph.id
+                && pause->nodeId == graph.nodes[index].id;
             renderer.drawRect(card, {0.12f, 0.14f, 0.18f, 1.0f});
-            border(renderer, card, {0.30f, 0.44f, 0.62f, 1.0f});
+            border(renderer, card,
+                paused ? FVector4{1.0f, 0.68f, 0.18f, 1.0f}
+                       : FVector4{0.30f, 0.44f, 0.62f, 1.0f},
+                paused ? 3.0f : 1.0f);
             renderer.drawRect({card.minX, card.minY, card.maxX,
                                card.minY + 22.0f},
                               {0.11f, 0.32f, 0.47f, 1.0f});
@@ -675,6 +683,8 @@ public:
         graphNodeType = nullptr;
         graphFrom = nullptr;
         graphTo = nullptr;
+        debugNode = nullptr;
+        debugState = nullptr;
         status = nullptr;
         canvasHost = nullptr;
         visualPreviewHost = nullptr;
@@ -829,6 +839,22 @@ public:
         }
         if (traceRows.empty()) traceRows.push_back(L"No preview events");
         trace->setItems(traceRows);
+        if (debugState != nullptr) {
+            const EditorUiFlowDebugPause* pause = preview.debugPause();
+            if (pause == nullptr) {
+                debugState->setText(L"Running");
+            } else {
+                std::string values;
+                for (const auto& [id, value] : pause->inputs) {
+                    if (!values.empty()) values += ", ";
+                    values += id + "=" + value;
+                }
+                debugState->setText(wide("Paused " + pause->graphId + "/"
+                    + pause->nodeId + " (" + pause->reason + ")"
+                    + (values.empty() ? std::string{}
+                                      : "  inputs: " + values)));
+            }
+        }
     }
 
     void refreshGraphChoices()
@@ -888,6 +914,22 @@ public:
             }
         }
         selectComboItem(*graphTo, compatibleInputs, selectedInput);
+
+        const std::wstring selectedDebugNode = debugNode != nullptr
+            ? debugNode->getSelectedItem() : std::wstring{};
+        std::vector<std::wstring> debugNodes;
+        if (document->selection().kind == EditorUiFlowObjectKind::Graph) {
+            if (const auto* graph = document->flow().findGraph(
+                    document->selection().id)) {
+                debugNodes.reserve(graph->nodes.size());
+                for (const auto& node : graph->nodes) {
+                    debugNodes.push_back(wide(node.id));
+                }
+            }
+        }
+        if (debugNode != nullptr) {
+            selectComboItem(*debugNode, debugNodes, selectedDebugNode);
+        }
     }
 
     bool restart(std::string* output)
@@ -956,6 +998,8 @@ public:
     ayt::ui::ComboBox* graphNodeType = nullptr;
     ayt::ui::ComboBox* graphFrom = nullptr;
     ayt::ui::ComboBox* graphTo = nullptr;
+    ayt::ui::ComboBox* debugNode = nullptr;
+    ayt::ui::TextLabel* debugState = nullptr;
     ayt::ui::TextLabel* status = nullptr;
     ayt::ui::Panel* canvasHost = nullptr;
     ayt::ui::Panel* visualPreviewHost = nullptr;
@@ -964,6 +1008,7 @@ public:
     std::vector<EditorUiFlowOutlineItem> outlineItems;
     ayt::app::UIFlowAssetValidationResult assetValidation;
     std::uint64_t assetValidationRevision = 0;
+    std::unordered_set<std::string> debugBreakpoints;
     bool attached = false;
     bool refreshing = false;
     bool refreshPending = false;
@@ -1003,6 +1048,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->graphNodeType = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_node_type");
     _impl->graphFrom = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_from");
     _impl->graphTo = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_to");
+    _impl->debugNode = widgetAs<ayt::ui::ComboBox>(ui, "flow_debug_node");
+    _impl->debugState = widgetAs<ayt::ui::TextLabel>(ui, "flow_debug_state");
     _impl->status = widgetAs<ayt::ui::TextLabel>(ui, "flow_status");
     _impl->canvasHost = widgetAs<ayt::ui::Panel>(ui, "flow_canvas_host");
     _impl->visualPreviewHost =
@@ -1018,6 +1065,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         || _impl->propNumber == nullptr
         || _impl->propFlag == nullptr || _impl->graphNodeType == nullptr
         || _impl->graphFrom == nullptr || _impl->graphTo == nullptr
+        || _impl->debugNode == nullptr || _impl->debugState == nullptr
         || _impl->status == nullptr
         || _impl->canvasHost == nullptr
         || _impl->visualPreviewHost == nullptr) {
@@ -1117,6 +1165,54 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
             impl->setStatus("Mock Action executed");
             impl->refreshPreviewLists();
         }
+    });
+    _impl->bindButton("flow_btn_breakpoint", [impl = _impl.get()]() {
+        if (impl->document->selection().kind
+                != EditorUiFlowObjectKind::Graph
+            || impl->debugNode->getSelectedIndex() < 0) {
+            impl->setStatus("Select a Graph node for a breakpoint.", true);
+            return;
+        }
+        const std::string graphId = impl->document->selection().id;
+        const std::string nodeId = encodeUtf8(
+            impl->debugNode->getSelectedItem());
+        const std::string key = graphId + "\n" + nodeId;
+        const bool enabled = !impl->debugBreakpoints.contains(key);
+        if (!impl->preview.setBreakpoint(graphId, nodeId, enabled)) {
+            impl->setStatus("Cannot update breakpoint.", true);
+            return;
+        }
+        if (enabled) impl->debugBreakpoints.insert(key);
+        else impl->debugBreakpoints.erase(key);
+        impl->setStatus(std::string(enabled ? "Breakpoint set: "
+                                            : "Breakpoint cleared: ")
+            + graphId + "/" + nodeId);
+    });
+    _impl->bindButton("flow_btn_pause_next", [impl = _impl.get()]() {
+        impl->preview.requestPause();
+        impl->setStatus("Debugger will pause before the next Graph node.");
+    });
+    _impl->bindButton("flow_btn_step", [impl = _impl.get()]() {
+        std::string error;
+        if (!impl->preview.stepExecution(&error)) {
+            impl->setStatus(error, true);
+            return;
+        }
+        impl->refreshPreviewLists();
+        impl->canvas->markDirty();
+        impl->setStatus(impl->preview.isPaused()
+            ? "Stepped to next node" : "Graph completed");
+    });
+    _impl->bindButton("flow_btn_continue", [impl = _impl.get()]() {
+        std::string error;
+        if (!impl->preview.continueExecution(&error)) {
+            impl->setStatus(error, true);
+            return;
+        }
+        impl->refreshPreviewLists();
+        impl->canvas->markDirty();
+        impl->setStatus(impl->preview.isPaused()
+            ? "Paused at breakpoint" : "Graph continued");
     });
     _impl->bindButton("flow_btn_add_node", [impl = _impl.get()]() {
         if (impl->document->selection().kind != EditorUiFlowObjectKind::Graph) {
