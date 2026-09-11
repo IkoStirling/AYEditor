@@ -164,7 +164,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 7u);
+    CHECK(kEditorSourceAbiVersion == 9u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -265,22 +265,29 @@ TEST_CASE(project_asset_factory_creates_valid_assets_in_conventional_folders)
         cleanup.root.string(), EditorAssetType::UiLayout);
     const auto tilemap = createEditorProjectAsset(
         cleanup.root.string(), EditorAssetType::Tilemap);
+    const auto flow = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::UiFlow);
     const auto scene2 = createEditorProjectAsset(
         cleanup.root.string(), EditorAssetType::Scene);
 
     CHECK(scene);
     CHECK(ui);
     CHECK(tilemap);
+    CHECK(flow);
     CHECK(scene2);
     CHECK(std::filesystem::exists(scene.absolutePath));
     CHECK(std::filesystem::exists(ui.absolutePath));
     CHECK(std::filesystem::exists(tilemap.absolutePath));
+    CHECK(std::filesystem::exists(flow.absolutePath));
     CHECK(scene.logicalPath.find("Assets/worlds/") == 0u);
     CHECK(ui.logicalPath.find("Assets/ui/") == 0u);
     CHECK(tilemap.logicalPath.find("Assets/tilemaps/") == 0u);
+    CHECK(flow.logicalPath.find("Assets/ui/") == 0u);
     CHECK(scene.absolutePath != scene2.absolutePath);
     CHECK(classifyEditorAssetPath(tilemap.absolutePath)
         == EditorAssetType::Tilemap);
+    CHECK(classifyEditorAssetPath(flow.absolutePath)
+        == EditorAssetType::UiFlow);
 }
 
 TEST_CASE(project_asset_trash_moves_and_restores_one_transaction)

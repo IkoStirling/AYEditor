@@ -4,6 +4,7 @@
 #include "AYEditor/EditorTilemapDocument.h"
 
 #include <AYIO/File.h>
+#include <AYUI/UIFlow.h>
 
 #include <filesystem>
 
@@ -27,6 +28,9 @@ bool templateFor(EditorAssetType type, AssetTemplate& value)
         return true;
     case EditorAssetType::Tilemap:
         value = {"tilemaps", "NewTilemap", ".aytilemap.json"};
+        return true;
+    case EditorAssetType::UiFlow:
+        value = {"ui", "NewFlow", ".uiflow.json"};
         return true;
     default:
         return false;
@@ -86,6 +90,30 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         EditorTilemapDocument document;
         saved = document.create(32u, 18u, 32u, 32u, 0u)
             && document.save(destination.string(), &error);
+    } else if (type == EditorAssetType::UiFlow) {
+        ayt::ui::UIFlowDocument flow;
+        flow.id = "new-ui-flow";
+        flow.defaultEntry = "Boot";
+        flow.layers = {
+            ayt::ui::UIFlowLayerDefinition{"application", 0},
+            ayt::ui::UIFlowLayerDefinition{"hud", 100},
+        };
+        flow.slots = {
+            ayt::ui::UIFlowSlotDefinition{"application.main", "application"},
+            ayt::ui::UIFlowSlotDefinition{"hud.main", "hud"},
+        };
+        flow.contexts = {ayt::ui::UIFlowContextDefinition{"Application"}};
+        flow.entries = {ayt::ui::UIFlowEntryDefinition{
+            "Boot", {"Application"}, {}}};
+        std::string encoded;
+        std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
+        saved = ayt::ui::UIFlowSerializer::serialize(
+            flow, encoded, &diagnostics, true)
+            && ayt::io::File::atomicWrite(
+                destination.string(), encoded.data(), encoded.size());
+        if (!saved) error = diagnostics.empty()
+            ? "Atomic UI Flow save failed."
+            : diagnostics.front().message;
     } else {
         static constexpr const char kUiLayout[] =
             "{\n"

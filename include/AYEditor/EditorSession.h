@@ -74,6 +74,8 @@ class EditorDockViewHost;
 class IEditorHostServices;
 class EditorUiLayoutController;
 class EditorUiLayoutDocument;
+class EditorUiFlowController;
+class EditorUiFlowDocument;
 class EditorAssetPreviewCache;
 class EditorAssetImportQueue;
 class EditorAssetTrash;
@@ -246,6 +248,8 @@ public:
     bool openTilemapEditor(const std::string& path = {});
     bool openUiLayoutEditor(const std::string& path = {});
     std::size_t openUiLayoutDocumentCount() const noexcept;
+    bool openUiFlowEditor(const std::string& path = {});
+    std::size_t openUiFlowDocumentCount() const noexcept;
     bool createProjectAsset(EditorAssetType type);
     bool restoreLastDeletedAssets();
     bool runCurrentProject();
@@ -293,6 +297,10 @@ private:
     bool confirmUiDesignerClose();
     void releaseUiDesigner(bool closeDocument);
     void refreshUiDesignerTitle();
+    void syncUiFlowDesignerLifetime();
+    bool confirmUiFlowDesignerClose();
+    void releaseUiFlowDesigner(bool closeDocument);
+    void refreshUiFlowDesignerTitle();
     bool openRegisteredTool(const std::string& editorId);
     void bindTransportBar();
     void bindNetworkPanelStub();
@@ -513,6 +521,14 @@ private:
     std::shared_ptr<EditorUiLayoutDocument> _uiDesignerDocument;
     std::string _uiDesignerDocumentId;
     EditorChildWindowManager::Handle _uiDesignerHandle = nullptr;
+
+    // UI Flow Designer authors the project-level presentation state machine
+    // in its own window. Its logical preview delegates to production
+    // AYApplication::UIFlowRuntime rather than duplicating runtime behavior.
+    std::unique_ptr<EditorUiFlowController> _uiFlowDesigner;
+    std::shared_ptr<EditorUiFlowDocument> _uiFlowDesignerDocument;
+    std::string _uiFlowDesignerDocumentId;
+    EditorChildWindowManager::Handle _uiFlowDesignerHandle = nullptr;
 
     // Audio Editor child (shared with AYAudio_AudioEditor).
     std::unique_ptr<ayt::audio::AudioEditorSession> _audioEditor;

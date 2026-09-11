@@ -1,8 +1,9 @@
 #include "AYTest.h"
 
 #include "Test_EditorUiFlowProjectDescriptor.cpp"
+#include "Test_EditorUiFlowEditor.cpp"
 
 int main()
 {
-    return ayt::test::runSuite("AYEditor_UIFlowProjectContract");
+    return ayt::test::runAllTests("AYEditor UI Flow contracts");
 }

@@ -33,6 +33,9 @@
 #include <AYEditor/EditorRecoveryStore.h>
 #include <AYEditor/EditorUiLayoutDocument.h>
 #include <AYEditor/EditorUiLayoutExtension.h>
+#include <AYEditor/EditorUiFlowDocument.h>
+#include <AYEditor/EditorUiFlowExtension.h>
+#include <AYEditor/EditorUiFlowPreview.h>
 #include <AYEditor/Editor2DViewportModel.h>
 #include <AYEditor/EditorTilemapDocument.h>
 #include <AYEditor/ImportDialog.h>

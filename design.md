@@ -1173,6 +1173,27 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   child UI teardown. Import preview, Source Sheet selection, and painted map
   tiles therefore never pass a primary-window GPU handle to another backend.
 
+### 10.16 Project UI Flow authoring（阶段四）
+
+- `.uiflow.json` 是项目级 UI 编排资产，不是 Scene 内的 Widget 树。Content Browser 会识别该
+  后缀，`File -> New UI Flow` 创建可立即通过 validator 的 Boot 模板，双击资产或
+  `Tools -> UI Flow Editor...` 在独立 AYDevice 非模态子窗中打开；Tools 入口优先解析项目
+  描述符声明的 `ui.flow`，不存在时才创建未命名文档。
+- `EditorUiFlowDocument` 直接持有 AYUI `UIFlowDocument`，提供统一 dirty/revision、100 步
+  snapshot undo/redo、原子保存/恢复副本、引用安全重命名和被引用对象删除保护。Layer、Slot、
+  Screen、Context、Entry、Signal、Action、Region、State、Transition 与 Graph 都使用生产
+  serializer/validator，没有编辑器私有 wire format。
+- 三栏工具窗左侧是完整模型 Outline，中间画布绘制并行 Region/State、Transition 连线、Graph
+  node/link、活动 State 和 mounted Screen，右侧 Inspector 编辑 Layer 输入/容量、Context
+  `slot=screen`/`!slot` 赋值、Screen Scope/动画以及 Transition guard/action graph。所有修改后
+  即时运行同一个 validator，诊断列表显示稳定 JSON path 和消息。
+- `EditorUiFlowPreview` 的逻辑预览直接实例化生产 `AYApplicationUI::UIFlowRuntime`。模拟 Signal
+  使用声明的默认 payload，Mock Action 使用声明的默认 inputs；Context、Slot、Scope、并行 Region
+  和 graph request 因而不会在编辑器内形成第二套状态机。当前 Screen Host 记录挂载关系和 trace，
+  真实 Widget 像素加载/动画交接属于阶段五生产视觉集成。
+- 阶段四测试锁定跨引用重命名、删除保护、历史往返、Context 编排、资产创建/分类、磁盘往返，
+  以及 Signal 驱动生产 Runtime 后活动 State 和 mounted Screen 的变化。
+
 ---
 
 ## 11. Decisions log
@@ -1215,6 +1236,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-10 | Tilemap 独立窗改用无原生标题栏的 AYUI 自绘外框与最小化/最大化/关闭按钮；窗口移动只接受外框标题拖拽，内部文档标签继续由 Dock 系统处理，并以私有 DockArea 作为后续跨窗口合并边界。 |
 | 2026-09-10 | Tilemap 子窗口不再直接复用主渲染器的 authoring texture 句柄；`EditorDockViewHost` 依据共享 BGRA 原图为子窗口 GDI 后端创建并缓存本地副本，统一修复导入预览、原图选砖和画布 Tile 空白。 |
 | 2026-09-10 | 2D 制作闭环继续使用通用 Scene/World：模板和创建命令只装配 Sprite、Tilemap、OrthoCamera 与 Transform；Scene View 以组件平面边界进行拾取并向 Renderer 提交世界空间选择轮廓，2D Universal Gizmo 固定屏幕尺寸且复用统一 Undo/Redo 命令栈；AYEditor Source ABI 升至 7。 |
+| 2026-09-11 | UI Flow 阶段四采用独立 AYDevice 工具窗；创作、诊断与逻辑预览复用同一 `UIFlowDocument`/serializer/validator/`UIFlowRuntime`，编辑器只以 mock Screen Host/Action 显示状态，不另建运行格式或状态机。 |
 
 ---
 

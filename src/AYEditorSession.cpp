@@ -23,6 +23,8 @@
 #include "AYEditor/EditorDockViewHost.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorUiLayoutDocument.h"
+#include "AYEditor/EditorUiFlowExtension.h"
+#include "AYEditor/EditorUiFlowDocument.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
@@ -455,6 +457,13 @@ std::string resolveLayoutEditorChromePath(
     return path;
 }
 
+std::string resolveUiFlowEditorChromePath(
+    const std::string& engineAssetsRoot)
+{
+    return (std::filesystem::path(engineAssetsRoot)
+        / "AYEditor" / "ui" / "ui_flow_editor.ui.json").string();
+}
+
 std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
     const std::string& engineAssetsRoot, const std::string& projectRoot) {
     namespace fs = std::filesystem;
@@ -592,6 +601,46 @@ std::string showUiJsonSaveDialog(HWND owner,
         return {};
     }
     return std::string(path);
+}
+
+std::string showUiFlowOpenDialog(HWND owner,
+                                 const std::string& initialDirectory = {})
+{
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
+    ofn.lpstrFilter =
+        "AYUI Flow (*.uiflow.json)\0*.uiflow.json\0"
+        "JSON (*.json)\0*.json\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "uiflow.json";
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string showUiFlowSaveDialog(HWND owner,
+                                 const std::string& initialDirectory = {})
+{
+    char path[MAX_PATH] = {};
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
+    ofn.lpstrFilter =
+        "AYUI Flow (*.uiflow.json)\0*.uiflow.json\0"
+        "JSON (*.json)\0*.json\0"
+        "All files (*.*)\0*.*\0";
+    ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrDefExt = "uiflow.json";
+    return ::GetSaveFileNameA(&ofn) ? std::string(path) : std::string{};
 }
 
 std::string showUiTextureOpenDialog(HWND owner,
@@ -818,6 +867,27 @@ EditorSession::EditorSession()
             "[EditorSession] UI Layout workspace registration failed: %s\n",
             error.c_str());
     }
+    EditorUiFlowExtensionConfig flowConfig;
+    flowConfig.chromePath = [this]() {
+        return resolveUiFlowEditorChromePath(_engineAssetsRoot);
+    };
+    flowConfig.openPathPicker = [this]() {
+        return showUiFlowOpenDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    flowConfig.savePathPicker = [this]() {
+        return showUiFlowSaveDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    error.clear();
+    if (!registerEditorUiFlowExtension(
+            _workspace->registry(), std::move(flowConfig), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] UI Flow workspace registration failed: %s\n",
+            error.c_str());
+    }
     error.clear();
     EditorBuiltInExtensionConfig builtIns;
     builtIns.openAudioMixer = [this]() { openAudioEditorWindow(); };
@@ -856,6 +926,16 @@ std::size_t EditorSession::openUiLayoutDocumentCount() const noexcept
     for (const EditorDocumentRecord& record :
          _workspace->documents().records()) {
         if (record.editorId == kEditorUiLayoutExtensionId) ++count;
+    }
+    return count;
+}
+
+std::size_t EditorSession::openUiFlowDocumentCount() const noexcept
+{
+    std::size_t count = 0;
+    if (_workspace == nullptr) return count;
+    for (const EditorDocumentRecord& record : _workspace->documents().records()) {
+        if (record.editorId == kEditorUiFlowExtensionId) ++count;
     }
     return count;
 }
@@ -1399,6 +1479,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     syncUiDesignerLifetime();
     if (_uiDesigner != nullptr) {
         _uiDesigner->pumpDeferred(dt);
+    }
+    syncUiFlowDesignerLifetime();
+    if (_uiFlowDesigner != nullptr) {
+        _uiFlowDesigner->tick(dt);
     }
     syncAudioEditorLifetime();
     if (_audioEditor != nullptr) {
@@ -4377,6 +4461,8 @@ bool EditorSession::openAsset(EditorAssetId assetId)
     }
     case EditorAssetType::UiLayout:
         return openUiLayoutEditor(record->absolutePath);
+    case EditorAssetType::UiFlow:
+        return openUiFlowEditor(record->absolutePath);
     case EditorAssetType::Animation:
     case EditorAssetType::Audio: {
         if (_dockViewHost == nullptr) return false;
@@ -6535,6 +6621,11 @@ void EditorSession::bindMenuBar() {
                 (void)createProjectAsset(EditorAssetType::UiLayout);
             });
         }
+        if (auto* item = fileMenu->addItem(L"New UI Flow")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::UiFlow);
+            });
+        }
         if (auto* item = fileMenu->addItem(L"New Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
@@ -6703,6 +6794,9 @@ void EditorSession::bindMenuBar() {
         toolsMenu->addSeparator();
         if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
             item->setOnActivate([this]() { (void)openUiLayoutEditor(); });
+        }
+        if (auto* item = toolsMenu->addItem(L"UI Flow Editor...")) {
+            item->setOnActivate([this]() { (void)openUiFlowEditor(); });
         }
         if (auto* item = toolsMenu->addItem(L"2D Tilemap Editor...")) {
             item->setId("menu_tools_tilemap_editor");
@@ -6991,13 +7085,220 @@ void EditorSession::refreshUiDesignerTitle()
     (void)_childWindows->setChildWindowTitle(_uiDesignerHandle, title);
 }
 
+bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
+{
+    if (_childWindows == nullptr || _workspace == nullptr) {
+        setAssetBrowserStatus(
+            L"UI Flow Editor requires the AYDevice child-window host", true);
+        return false;
+    }
+
+    syncUiFlowDesignerLifetime();
+    if (_uiFlowDesigner != nullptr && _uiFlowDesignerHandle != nullptr) {
+        const bool sameDocument = requestedPath.empty()
+            || EditorDocumentManager::normalizeResourceKey(requestedPath)
+                == EditorDocumentManager::normalizeResourceKey(
+                    _uiFlowDesignerDocument != nullptr
+                        ? _uiFlowDesignerDocument->path() : std::string{});
+        if (sameDocument) {
+            (void)_workspace->documents().activate(_uiFlowDesignerDocumentId);
+            (void)_childWindows->activateChildWindow(_uiFlowDesignerHandle);
+            setAssetBrowserStatus(L"UI Flow Editor focused");
+            return true;
+        }
+        if (!confirmUiFlowDesignerClose()) return false;
+        const EditorChildWindowManager::Handle previousHandle =
+            _uiFlowDesignerHandle;
+        releaseUiFlowDesigner(false);
+        (void)_childWindows->closeChildWindow(previousHandle);
+    }
+
+    std::string path = requestedPath;
+    if (path.empty() && !_projectRoot.empty()) {
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(_projectRoot, &descriptorError);
+        if (descriptor && !descriptor.ui.flow.empty()) {
+            const std::filesystem::path configured =
+                std::filesystem::path(_projectRoot)
+                / (descriptor.assetRoot.empty() ? "Assets" : descriptor.assetRoot)
+                / std::filesystem::path(descriptor.ui.flow);
+            std::error_code existsError;
+            if (std::filesystem::is_regular_file(configured, existsError)) {
+                path = configured.string();
+            }
+        }
+    }
+
+    EditorOpenRequest request;
+    request.resourcePath = path;
+    request.resourceKey = path.empty()
+        ? "workspace:ui-flow:untitled" : path;
+    request.displayPath = path.empty() ? "Untitled UI Flow" : path;
+    request.assetType = "ui-flow";
+    request.preferredEditorId = kEditorUiFlowExtensionId;
+
+    EditorOpenResult opened = _workspace->documents().open(request);
+    if (!opened) {
+        setAssetBrowserStatus(L"UI Flow Editor open failed: "
+            + ayt::ui::decodeUtf8Text(opened.error), true);
+        return false;
+    }
+    auto document = std::dynamic_pointer_cast<EditorUiFlowDocument>(
+        opened.document);
+    if (document == nullptr) {
+        if (opened.status == EditorOpenStatus::Opened) {
+            (void)_workspace->documents().close(
+                opened.documentId, EditorDocumentCloseAction::Discard);
+        }
+        setAssetBrowserStatus(L"UI Flow Editor document type mismatch", true);
+        return false;
+    }
+
+    _uiFlowDesignerDocumentId = opened.documentId;
+    _uiFlowDesignerDocument = std::move(document);
+    EditorUiFlowExtensionConfig controllerConfig;
+    controllerConfig.openPathPicker = [this]() {
+        HWND owner = _uiFlowDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+        return showUiFlowOpenDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    controllerConfig.savePathPicker = [this]() {
+        HWND owner = _uiFlowDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+        return showUiFlowSaveDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui").string());
+    };
+    _uiFlowDesigner = std::make_unique<EditorUiFlowController>(
+        _uiFlowDesignerDocument, std::move(controllerConfig));
+    _uiFlowDesigner->setStateChanged([this]() {
+        refreshUiFlowDesignerTitle();
+    });
+
+    ChildWindowConfig cfg;
+    cfg.title = "AYUI Flow Editor";
+    cfg.layoutPath = resolveUiFlowEditorChromePath(_engineAssetsRoot);
+    cfg.x = 112;
+    cfg.y = 80;
+    cfg.width = 1440;
+    cfg.height = 860;
+    cfg.beforeCloseRequested = [this](ayt::ui::UIManager&) {
+        return confirmUiFlowDesignerClose();
+    };
+    cfg.beforeClose = [this](ayt::ui::UIManager&) {
+        releaseUiFlowDesigner(true);
+    };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        releaseUiFlowDesigner(true);
+        setAssetBrowserStatus(L"UI Flow Editor window creation failed", true);
+        return false;
+    }
+    _uiFlowDesignerHandle = handle;
+    ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
+    if (childUi == nullptr || !_uiFlowDesigner->attach(*childUi)) {
+        (void)_childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"UI Flow Editor UI attach failed", true);
+        return false;
+    }
+
+    refreshUiFlowDesignerTitle();
+    setAssetBrowserStatus(L"UI Flow Editor opened in a dedicated window");
+    return true;
+}
+
+void EditorSession::syncUiFlowDesignerLifetime()
+{
+    if (_uiFlowDesignerHandle == nullptr || _childWindows == nullptr) return;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == _uiFlowDesignerHandle) return;
+    }
+    releaseUiFlowDesigner(true);
+}
+
+bool EditorSession::confirmUiFlowDesignerClose()
+{
+    if (_uiFlowDesignerDocument == nullptr || _workspace == nullptr) return true;
+    EditorDocumentCloseAction action = EditorDocumentCloseAction::Discard;
+    if (_uiFlowDesignerDocument->isDirty()) {
+        if (_hostWindow != nullptr) {
+            const std::wstring prompt =
+                ayt::ui::decodeUtf8Text(_uiFlowDesignerDocument->title())
+                + L" has unsaved changes.\n\nSave before closing?";
+            HWND owner = _uiFlowDesignerHandle != nullptr
+                ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+            const int choice = ::MessageBoxW(
+                owner, prompt.c_str(), L"AYUI Flow Editor",
+                MB_YESNOCANCEL | MB_ICONWARNING);
+            if (choice == IDCANCEL) return false;
+            action = choice == IDYES
+                ? EditorDocumentCloseAction::Save
+                : EditorDocumentCloseAction::Discard;
+            if (action == EditorDocumentCloseAction::Save
+                && _uiFlowDesignerDocument->path().empty()) {
+                const std::string destination = showUiFlowSaveDialog(owner,
+                    (std::filesystem::path(_assetDatabase.projectRoot())
+                        / "Assets" / "ui").string());
+                if (destination.empty()) return false;
+                std::string saveError;
+                if (!_uiFlowDesignerDocument->saveAs(destination, &saveError)) {
+                    setAssetBrowserStatus(L"UI Flow Editor save failed: "
+                        + ayt::ui::decodeUtf8Text(saveError), true);
+                    return false;
+                }
+                action = EditorDocumentCloseAction::Discard;
+            }
+        }
+    }
+    const EditorCloseResult closed = _workspace->documents().close(
+        _uiFlowDesignerDocumentId, action);
+    if (!closed) {
+        if (closed.status == EditorCloseStatus::SaveFailed) {
+            setAssetBrowserStatus(L"UI Flow Editor save failed: "
+                + ayt::ui::decodeUtf8Text(closed.error), true);
+        }
+        return false;
+    }
+    return true;
+}
+
+void EditorSession::releaseUiFlowDesigner(bool closeDocument)
+{
+    const std::string documentId = _uiFlowDesignerDocumentId;
+    if (_uiFlowDesigner != nullptr) _uiFlowDesigner->detach();
+    _uiFlowDesigner.reset();
+    _uiFlowDesignerDocument.reset();
+    _uiFlowDesignerDocumentId.clear();
+    _uiFlowDesignerHandle = nullptr;
+    if (closeDocument && _workspace != nullptr && !documentId.empty()
+        && _workspace->documents().find(documentId) != nullptr) {
+        (void)_workspace->documents().close(
+            documentId, EditorDocumentCloseAction::Discard);
+    }
+}
+
+void EditorSession::refreshUiFlowDesignerTitle()
+{
+    if (_childWindows == nullptr || _uiFlowDesignerHandle == nullptr
+        || _uiFlowDesignerDocument == nullptr) return;
+    std::string title = "AYUI Flow Editor - "
+        + _uiFlowDesignerDocument->title();
+    if (_uiFlowDesignerDocument->isDirty()) title += " *";
+    (void)_childWindows->setChildWindowTitle(_uiFlowDesignerHandle, title);
+}
+
 void EditorSession::syncAudioEditorLifetime() {
     if (_audioEditor == nullptr) {
         return;
     }
     if (_childWindows == nullptr || _audioEditorHandle == nullptr) {
-        _audioEditor.reset();
-        _audioEditorHandle = nullptr;
+    _audioEditor.reset();
+    _audioEditorHandle = nullptr;
+    releaseUiFlowDesigner(true);
         return;
     }
     bool alive = false;

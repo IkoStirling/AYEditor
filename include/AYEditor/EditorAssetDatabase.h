@@ -30,6 +30,7 @@ enum class EditorAssetType : std::uint8_t {
     SourceModel,
     // Appended to preserve the numeric values of the public asset-type ABI.
     Tilemap,
+    UiFlow,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

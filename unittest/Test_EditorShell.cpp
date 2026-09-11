@@ -2,6 +2,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
+#include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "EditorGameViewTestAccess.h"
@@ -674,6 +675,77 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     CHECK(children->count() == 0u);
     CHECK_FALSE(::IsWindow(static_cast<HWND>(handle)));
 
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+
+TEST_CASE(ui_flow_editor_is_hosted_as_one_owned_tool_window)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor UI Flow host test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = std::filesystem::path(
+        AY_EDITOR_TEST_SOURCE_DIR).parent_path().string();
+    desc.hostWindow = static_cast<HWND>(windowManager.getWindowHandle());
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    EditorChildWindowManager* children = session.childWindows();
+    CHECK(children != nullptr);
+    CHECK(session.openUiFlowEditor());
+    session.update(0.0f);
+    CHECK(session.openUiFlowDocumentCount() == 1u);
+    CHECK(children != nullptr && children->count() == 1u);
+    const EditorDocumentRecord* active = session.workspace().documents().active();
+    CHECK(active != nullptr);
+    CHECK(active != nullptr && active->editorId == kEditorUiFlowExtensionId);
+    if (children == nullptr || children->count() != 1u) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    const auto handle = children->entries().front().handle;
+    ayt::ui::UIManager* childUi = children->uiForHandle(handle);
+    CHECK(handle != nullptr);
+    CHECK(childUi != nullptr);
+    if (childUi != nullptr) {
+        childUi->layout();
+        CHECK(childUi->findById("ui_flow_editor_root") != nullptr);
+        CHECK(childUi->findById("flow_outline") != nullptr);
+        CHECK(childUi->findById("flow_canvas_host") != nullptr);
+        CHECK(childUi->findById("flow_diagnostics") != nullptr);
+        CHECK(childUi->findById("flow_graph_node_type") != nullptr);
+        CHECK(childUi->findById("flow_btn_connect") != nullptr);
+        CHECK(childUi->findById("flow_mounted") != nullptr);
+        CHECK(childUi->findById("flow_trace") != nullptr);
+    }
+
+    CHECK(session.openUiFlowEditor());
+    session.update(0.0f);
+    CHECK(children->count() == 1u);
+    CHECK(session.openUiFlowDocumentCount() == 1u);
+    CHECK(children->entries().front().handle == handle);
+
+    children->closeChildWindow(handle);
+    CHECK(session.openUiFlowDocumentCount() == 0u);
+    CHECK(children->count() == 0u);
     session.shutdown();
     windowManager.destroyWindow();
 }

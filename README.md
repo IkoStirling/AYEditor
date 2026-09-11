@@ -18,6 +18,12 @@ RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
 独立窗口的绘制后端建立本地纹理，因此导入预览、Source Sheet 与画布铺砖共用同一
 份可见图像，不会误用主窗口的后端句柄。
 
+项目 UI Flow 创作阶段四也已接入：`.uiflow.json` 可由 Content Browser 创建、识别和双击打开，
+或通过 `Tools -> UI Flow Editor...` 打开项目描述符声明的 Flow。独立 Flow 工具窗提供完整模型
+Outline、Region/State/Transition 与 Graph 画布、Layer/Screen/Context/Transition Inspector、
+实时诊断、Signal 模拟和 Mock Action trace。预览直接复用生产 `UIFlowRuntime`；本阶段展示逻辑
+mounted Screen，真实 Widget 像素预览与动画交接留给生产视觉集成阶段。
+
 ## 公开接口
 
 ```cpp

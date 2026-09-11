@@ -27,6 +27,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorFramework.cpp
     Test_EditorProjectWorkflow.cpp
     Test_EditorUiFlowProjectDescriptor.cpp
+    Test_EditorUiFlowEditor.cpp
     Test_EditorRecoveryAndTrash.cpp
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
