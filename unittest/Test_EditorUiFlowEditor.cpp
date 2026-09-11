@@ -1,5 +1,15 @@
 #include "AYTest.h"
 
+#ifndef NOMINMAX
+#  define NOMINMAX
+#endif
+#ifdef min
+#  undef min
+#endif
+#ifdef max
+#  undef max
+#endif
+
 #include <AYEditor/EditorUiFlowDocument.h>
 #include <AYEditor/EditorUiFlowPreview.h>
 #include <AYEditor/EditorUiFlowExtension.h>
@@ -8,6 +18,8 @@
 #include <AYEditor/EditorProjectAssetFactory.h>
 #include <AYIO/File.h>
 #include <AYUI/UIFlow.h>
+#include <AYUI/UIManager.h>
+#include <AYUI/Widget.h>
 
 #include <filesystem>
 #include <string>
@@ -239,6 +251,48 @@ TEST_CASE(preview_uses_production_runtime_for_signal_state_and_mock_action)
     CHECK_FALSE(preview.trace().empty());
     CHECK(preview.trace().back().category == "Action");
     CHECK(preview.trace().back().id == "load_world");
+}
+
+TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path()
+        / "ayeditor_flow_visual_preview";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root / "ui", ignored);
+    CHECK(ayt::io::File::writeAllText(
+        (root / "ui" / "menu.ui.json").string(),
+        R"json({"type":"Panel","id":"visual_menu","children":[{"type":"Button","id":"visual_start","text":"Start"}]})json"));
+    CHECK(ayt::io::File::writeAllText(
+        (root / "ui" / "hud.ui.json").string(),
+        R"json({"type":"Panel","id":"visual_hud"})json"));
+
+    ayt::ui::UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(960.0f, 540.0f);
+    ayt::ui::CompoundWidget viewport;
+    viewport.setSize({480.0f, 320.0f});
+    manager.root()->addChildExternal(&viewport);
+
+    EditorUiFlowPreview preview;
+    preview.configureVisualHost(manager, viewport, root.string());
+    const ayt::ui::UIFlowDocument flow =
+        editor_ui_flow_editor_test::previewFlow();
+    std::string error;
+    CHECK(preview.rebuild(flow, "Boot", &error));
+    CHECK(error.empty());
+    CHECK(manager.findById("visual_menu") != nullptr);
+    CHECK(manager.findById("visual_start") != nullptr);
+    CHECK(manager.findById("visual_menu") != nullptr
+          && manager.findById("visual_menu")->getSize().x == 480.0f);
+    CHECK(manager.findById("visual_menu") != nullptr
+          && manager.findById("visual_menu")->getSize().y == 320.0f);
+
+    preview.clearVisualHost();
+    CHECK(manager.findById("visual_menu") == nullptr);
+    viewport.detachFromParent();
+    fs::remove_all(root, ignored);
 }
 
 TEST_SUITE_END

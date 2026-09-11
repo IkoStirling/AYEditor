@@ -464,6 +464,16 @@ std::string resolveUiFlowEditorChromePath(
         / "AYEditor" / "ui" / "ui_flow_editor.ui.json").string();
 }
 
+std::string resolveProjectAssetRoot(const std::string& projectRoot)
+{
+    std::string error;
+    const EditorProjectDescriptor descriptor =
+        EditorProjectDescriptor::load(projectRoot, &error);
+    const std::string relative = descriptor && !descriptor.assetRoot.empty()
+        ? descriptor.assetRoot : "Assets";
+    return (std::filesystem::path(projectRoot) / relative).string();
+}
+
 std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
     const std::string& engineAssetsRoot, const std::string& projectRoot) {
     namespace fs = std::filesystem;
@@ -868,6 +878,8 @@ EditorSession::EditorSession()
             error.c_str());
     }
     EditorUiFlowExtensionConfig flowConfig;
+    flowConfig.assetRoot = resolveProjectAssetRoot(
+        _assetDatabase.projectRoot());
     flowConfig.chromePath = [this]() {
         return resolveUiFlowEditorChromePath(_engineAssetsRoot);
     };
@@ -7158,6 +7170,8 @@ bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
     _uiFlowDesignerDocumentId = opened.documentId;
     _uiFlowDesignerDocument = std::move(document);
     EditorUiFlowExtensionConfig controllerConfig;
+    controllerConfig.assetRoot = resolveProjectAssetRoot(
+        _assetDatabase.projectRoot());
     controllerConfig.openPathPicker = [this]() {
         HWND owner = _uiFlowDesignerHandle != nullptr
             ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;

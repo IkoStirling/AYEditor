@@ -9,6 +9,11 @@
 #include <string_view>
 #include <vector>
 
+namespace ayt::ui {
+class UIManager;
+class Widget;
+}
+
 namespace ayt::editor {
 
 struct EditorUiFlowPreviewScreen {
@@ -27,10 +32,9 @@ struct EditorUiFlowPreviewTrace {
     std::string detail;
 };
 
-// Logical live preview backed by the production UIFlowRuntime. The screen host
-// records mounted presentation rather than loading pixels; Stage 5 performs
-// full visual layout integration. This still exercises the exact Context,
-// Slot, Scope, transition, guard, graph, and action runtime paths.
+// Live preview backed by the production UIFlowRuntime. It always records the
+// mounted presentation for diagnostics and can additionally mount the real
+// Screen widget trees into an editor-owned, clipped viewport.
 class EditorUiFlowPreview {
 public:
     EditorUiFlowPreview();
@@ -43,6 +47,11 @@ public:
                  std::string_view entry = {},
                  std::string* error = nullptr);
     void stop() noexcept;
+    void configureVisualHost(ayt::ui::UIManager& manager,
+                             ayt::ui::Widget& parent,
+                             std::string assetRoot);
+    void clearVisualHost() noexcept;
+    void tick(float deltaSeconds);
     bool isRunning() const noexcept;
 
     bool emitSignal(std::string_view signalId,

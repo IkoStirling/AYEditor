@@ -21,6 +21,7 @@ struct EditorUiFlowExtensionConfig {
     std::function<std::string()> chromePath;
     std::function<std::string()> openPathPicker;
     std::function<std::string()> savePathPicker;
+    std::string assetRoot;
 };
 
 class EditorUiFlowController {

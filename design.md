@@ -1194,6 +1194,17 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - 阶段四测试锁定跨引用重命名、删除保护、历史往返、Context 编排、资产创建/分类、磁盘往返，
   以及 Signal 驱动生产 Runtime 后活动 State 和 mounted Screen 的变化。
 
+### 10.17 UI Flow production preview（阶段五）
+
+- Flow 工具窗中间区域拆分为编排图和真实 Screen 预览。预览使用项目描述符的 `assetRoot`，通过生产
+  `UIManagerFlowScreenHost` 加载同一 `*.ui.json`、动画库、Layer 顺序和输入策略，不维护编辑器专用
+  Widget 模型。
+- 真实预览挂在编辑器持有的 `CompoundWidget` 视口中；渲染和 hit-test 共用 client clip，设计尺寸大于
+  面板时不会泄漏到图画布、Outline 或 Inspector。逻辑记录 Host 仍并行保留 mounted Screen 和 trace，
+  因此视觉预览不可用时错误也能稳定显示。
+- Controller 每帧同步预览视口大小并推进 Screen enter/exit Timeline；系统 reduced-motion 设置沿生产
+  Timeline 生效。关闭工具窗时先停止 Flow、销毁生产 Host，再释放视口，确保无外部 Widget 悬挂。
+
 ---
 
 ## 11. Decisions log
@@ -1237,6 +1248,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-10 | Tilemap 子窗口不再直接复用主渲染器的 authoring texture 句柄；`EditorDockViewHost` 依据共享 BGRA 原图为子窗口 GDI 后端创建并缓存本地副本，统一修复导入预览、原图选砖和画布 Tile 空白。 |
 | 2026-09-10 | 2D 制作闭环继续使用通用 Scene/World：模板和创建命令只装配 Sprite、Tilemap、OrthoCamera 与 Transform；Scene View 以组件平面边界进行拾取并向 Renderer 提交世界空间选择轮廓，2D Universal Gizmo 固定屏幕尺寸且复用统一 Undo/Redo 命令栈；AYEditor Source ABI 升至 7。 |
 | 2026-09-11 | UI Flow 阶段四采用独立 AYDevice 工具窗；创作、诊断与逻辑预览复用同一 `UIFlowDocument`/serializer/validator/`UIFlowRuntime`，编辑器只以 mock Screen Host/Action 显示状态，不另建运行格式或状态机。 |
+| 2026-09-11 | UI Flow 阶段五将生产 `UIManagerFlowScreenHost` 挂入独立裁剪预览视口，并以项目 `assetRoot` 加载真实 Screen；异步 Graph、中断策略、动画交接、reload/replay 与 reduced-motion 共用运行时契约。 |
 
 ---
 

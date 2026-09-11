@@ -1,8 +1,10 @@
 #include "AYEditor/EditorUiFlowPreview.h"
 
 #include <AYApplication/UIFlowRuntime.h>
+#include <AYApplication/UIManagerFlowScreenHost.h>
 
 #include <algorithm>
+#include <unordered_map>
 #include <utility>
 
 namespace ayt::editor {
@@ -61,8 +63,14 @@ public:
     class Host final : public ayt::app::IUIFlowScreenHost {
     public:
         bool mountScreen(const ayt::app::UIFlowScreenMountRequest& request,
-                         std::string&) override
+                         std::string& error) override
         {
+            if (visual != nullptr) {
+                ayt::app::UIFlowScreenMountRequest visualRequest = request;
+                visualRequest.mountId = nextVisualMountId++;
+                if (!visual->mountScreen(visualRequest, error)) return false;
+                visualMountIds[request.mountId] = visualRequest.mountId;
+            }
             screens.push_back({request.mountId, request.screenId,
                 request.layerId, request.slotId, request.contextId,
                 request.layerOrder, request.orderInLayer});
@@ -72,6 +80,13 @@ public:
 
         void unmountScreen(std::uint64_t mountId) noexcept override
         {
+            const auto visualMount = visualMountIds.find(mountId);
+            if (visual != nullptr && visualMount != visualMountIds.end()) {
+                visual->unmountScreen(visualMount->second);
+            }
+            if (visualMount != visualMountIds.end()) {
+                visualMountIds.erase(visualMount);
+            }
             screens.erase(std::remove_if(screens.begin(), screens.end(),
                 [mountId](const auto& value) {
                     return value.mountId == mountId;
@@ -82,6 +97,13 @@ public:
                             int layerOrder,
                             std::uint32_t orderInLayer) noexcept override
         {
+            if (visual != nullptr) {
+                const auto visualMount = visualMountIds.find(mountId);
+                if (visualMount != visualMountIds.end()) {
+                    visual->setScreenOrder(
+                        visualMount->second, layerOrder, orderInLayer);
+                }
+            }
             const auto found = std::find_if(screens.begin(), screens.end(),
                 [mountId](const auto& value) {
                     return value.mountId == mountId;
@@ -104,6 +126,9 @@ public:
         }
 
         std::vector<EditorUiFlowPreviewScreen> screens;
+        std::unique_ptr<ayt::app::UIManagerFlowScreenHost> visual;
+        std::unordered_map<std::uint64_t, std::uint64_t> visualMountIds;
+        std::uint64_t nextVisualMountId = 1;
     };
 
     void refreshStates()
@@ -201,6 +226,33 @@ void EditorUiFlowPreview::stop() noexcept
     _impl->document = nullptr;
     _impl->host.screens.clear();
     _impl->states.clear();
+}
+
+void EditorUiFlowPreview::configureVisualHost(
+    ayt::ui::UIManager& manager,
+    ayt::ui::Widget& parent,
+    std::string assetRoot)
+{
+    stop();
+    _impl->host.visualMountIds.clear();
+    _impl->host.nextVisualMountId = 1;
+    _impl->host.visual =
+        std::make_unique<ayt::app::UIManagerFlowScreenHost>(
+            manager, std::move(assetRoot), &parent);
+}
+
+void EditorUiFlowPreview::clearVisualHost() noexcept
+{
+    stop();
+    _impl->host.visual.reset();
+    _impl->host.visualMountIds.clear();
+}
+
+void EditorUiFlowPreview::tick(float deltaSeconds)
+{
+    if (_impl->host.visual != nullptr) {
+        _impl->host.visual->update(deltaSeconds);
+    }
 }
 
 bool EditorUiFlowPreview::isRunning() const noexcept

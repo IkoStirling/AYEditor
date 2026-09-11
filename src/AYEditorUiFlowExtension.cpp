@@ -333,6 +333,30 @@ private:
     std::vector<Hit> _hits;
 };
 
+// Runtime layouts are authored against a full UI viewport. Keep that contract
+// inside the editor while clipping both rendering and picking to the preview
+// pane, so an oversized Screen can never leak into the graph or inspector.
+class EditorUiFlowPreviewViewport final : public ayt::ui::CompoundWidget {
+public:
+    EditorUiFlowPreviewViewport()
+    {
+        setId("__ay_ui_flow_visual_preview");
+        setLayoutPositionManaged(false);
+        setLayoutSizeManaged(false);
+    }
+
+    ayt::ui::Widget* hitTest(const FVector2& worldPos) override
+    {
+        return ayt::ui::compoundDescendHitTestClipped(this, worldPos);
+    }
+
+protected:
+    void renderChildren(ayt::ui::IRenderBackend& renderer) override
+    {
+        ayt::ui::compoundDescendClippedRender(this, renderer);
+    }
+};
+
 template<class T>
 T* widgetAs(ayt::ui::UIManager& ui, const char* id)
 {
@@ -435,6 +459,10 @@ public:
 
     void detach()
     {
+        preview.clearVisualHost();
+        if (visualViewport != nullptr) visualViewport->detachFromParent();
+        delete visualViewport;
+        visualViewport = nullptr;
         if (canvas != nullptr) canvas->detachFromParent();
         delete canvas;
         canvas = nullptr;
@@ -461,6 +489,7 @@ public:
         graphTo = nullptr;
         status = nullptr;
         canvasHost = nullptr;
+        visualPreviewHost = nullptr;
         attached = false;
     }
 
@@ -647,7 +676,9 @@ public:
     ayt::ui::TextInput* graphTo = nullptr;
     ayt::ui::TextLabel* status = nullptr;
     ayt::ui::Panel* canvasHost = nullptr;
+    ayt::ui::Panel* visualPreviewHost = nullptr;
     EditorUiFlowCanvas* canvas = nullptr;
+    EditorUiFlowPreviewViewport* visualViewport = nullptr;
     std::vector<EditorUiFlowOutlineItem> outlineItems;
     bool attached = false;
     bool refreshing = false;
@@ -689,6 +720,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->graphTo = widgetAs<ayt::ui::TextInput>(ui, "flow_graph_to");
     _impl->status = widgetAs<ayt::ui::TextLabel>(ui, "flow_status");
     _impl->canvasHost = widgetAs<ayt::ui::Panel>(ui, "flow_canvas_host");
+    _impl->visualPreviewHost =
+        widgetAs<ayt::ui::Panel>(ui, "flow_visual_preview_host");
     if (_impl->outline == nullptr || _impl->diagnostics == nullptr
         || _impl->trace == nullptr || _impl->mounted == nullptr
         || _impl->signal == nullptr || _impl->action == nullptr
@@ -700,7 +733,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         || _impl->propFlag == nullptr || _impl->graphNodeType == nullptr
         || _impl->graphFrom == nullptr || _impl->graphTo == nullptr
         || _impl->status == nullptr
-        || _impl->canvasHost == nullptr) {
+        || _impl->canvasHost == nullptr
+        || _impl->visualPreviewHost == nullptr) {
         _impl->detach();
         return false;
     }
@@ -833,6 +867,10 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
             impl->refreshPending = true;
         });
     _impl->canvasHost->addChild(_impl->canvas);
+    _impl->visualViewport = new EditorUiFlowPreviewViewport();
+    _impl->visualPreviewHost->addChild(_impl->visualViewport);
+    _impl->preview.configureVisualHost(
+        ui, *_impl->visualViewport, _impl->config.assetRoot);
     _impl->refresh();
     (void)_impl->restart(nullptr);
     return true;
@@ -848,13 +886,20 @@ bool EditorUiFlowController::isAttached() const noexcept
     return _impl != nullptr && _impl->attached;
 }
 
-void EditorUiFlowController::tick(float)
+void EditorUiFlowController::tick(float deltaSeconds)
 {
     if (!isAttached()) return;
     if (_impl->canvas != nullptr && _impl->canvasHost != nullptr) {
         const FVector2 size = _impl->canvasHost->getSize();
         _impl->canvas->setPosition({0.0f, 0.0f});
         _impl->canvas->setSize(size);
+    }
+    if (_impl->visualViewport != nullptr
+        && _impl->visualPreviewHost != nullptr) {
+        _impl->visualViewport->setPosition({0.0f, 0.0f});
+        _impl->visualViewport->setSize(
+            _impl->visualPreviewHost->getSize());
+        _impl->preview.tick(deltaSeconds);
     }
     if (_impl->refreshPending) _impl->refresh();
 }
