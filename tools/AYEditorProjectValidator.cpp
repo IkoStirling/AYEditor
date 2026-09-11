@@ -21,8 +21,18 @@ bool validate(const std::filesystem::path& projectRoot,
         projectRoot.string(), profile);
     std::cout << profileName(profile) << ": " << result.checked()
               << " file(s): " << result.scenes << " scene(s), "
-              << result.uiLayouts << " UI layout(s), " << result.tilemaps
+              << result.uiLayouts << " UI layout(s), " << result.uiFlows
+              << " UI Flow(s), " << result.tilemaps
               << " tilemap file(s)" << '\n';
+    for (const auto& dependency : result.uiFlowDependencies) {
+        std::cout << "  UI Flow dependency: " << dependency.flowAsset
+                  << " -> " << dependency.layoutAsset << " [";
+        for (std::size_t index = 0; index < dependency.screens.size(); ++index) {
+            if (index != 0u) std::cout << ", ";
+            std::cout << dependency.screens[index];
+        }
+        std::cout << "]\n";
+    }
     for (const auto& issue : result.issues) {
         std::cerr << "  " << issue.path << ": " << issue.message << '\n';
     }

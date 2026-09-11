@@ -16,16 +16,26 @@ struct EditorRuntimeValidationIssue {
     std::string message;
 };
 
+struct EditorRuntimeUiFlowDependency {
+    std::string flowAsset;
+    std::string layoutAsset;
+    std::vector<std::string> screens;
+};
+
 struct EditorRuntimeValidationResult {
     EditorRuntimeValidationProfile profile =
         EditorRuntimeValidationProfile::Headless;
     std::size_t scenes = 0;
     std::size_t uiLayouts = 0;
+    std::size_t uiFlows = 0;
     std::size_t tilemaps = 0;
     std::vector<EditorRuntimeValidationIssue> issues;
+    std::vector<EditorRuntimeUiFlowDependency> uiFlowDependencies;
 
     explicit operator bool() const noexcept { return issues.empty(); }
-    std::size_t checked() const noexcept { return scenes + uiLayouts + tilemaps; }
+    std::size_t checked() const noexcept {
+        return scenes + uiLayouts + uiFlows + tilemaps;
+    }
 };
 
 // Loads every project Scene and Tilemap through their data serializers without

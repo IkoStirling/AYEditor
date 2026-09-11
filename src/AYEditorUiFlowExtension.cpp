@@ -3,6 +3,7 @@
 #include "AYEditor/EditorUiFlowDocument.h"
 #include "AYEditor/EditorUiFlowPreview.h"
 
+#include <AYApplication/UIFlowAssetValidation.h>
 #include <AYUI/Button.h>
 #include <AYUI/CheckBox.h>
 #include <AYUI/ComboBox.h>
@@ -518,6 +519,16 @@ public:
         outline->setItems(rows);
         outline->setSelectedIndex(selected);
 
+        if (!config.assetRoot.empty() && document->isValid()
+            && assetValidationRevision != document->revision()) {
+            assetValidation = ayt::app::validateUIFlowAssets(
+                document->flow(), config.assetRoot);
+            assetValidationRevision = document->revision();
+        } else if (!document->isValid()) {
+            assetValidation = {};
+            assetValidationRevision = document->revision();
+        }
+
         std::vector<std::wstring> diagnosticRows;
         for (const auto& value : document->diagnostics()) {
             diagnosticRows.push_back(wide(
@@ -525,8 +536,20 @@ public:
                     ? "ERROR  " : "WARN   ")
                 + value.path + "  " + value.message));
         }
+        for (const auto& value : assetValidation.diagnostics) {
+            diagnosticRows.push_back(wide(
+                std::string(value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
+                    ? "ASSET ERROR  " : "ASSET WARN   ")
+                + value.path + "  " + value.message));
+        }
         if (diagnosticRows.empty()) diagnosticRows.push_back(L"No diagnostics");
         diagnostics->setItems(diagnosticRows);
+        if (auto* title = widgetAs<ayt::ui::TextLabel>(
+                *ui, "flow_diag_title")) {
+            title->setText(wide("DIAGNOSTICS  ·  "
+                + std::to_string(assetValidation.dependencies.size())
+                + " LAYOUT ASSET(S)"));
+        }
 
         const EditorUiFlowProperties properties = document->selectedProperties();
         const EditorUiFlowPropertyLabels labels = document->selectedPropertyLabels();
@@ -680,6 +703,8 @@ public:
     EditorUiFlowCanvas* canvas = nullptr;
     EditorUiFlowPreviewViewport* visualViewport = nullptr;
     std::vector<EditorUiFlowOutlineItem> outlineItems;
+    ayt::app::UIFlowAssetValidationResult assetValidation;
+    std::uint64_t assetValidationRevision = 0;
     bool attached = false;
     bool refreshing = false;
     bool refreshPending = false;

@@ -18,6 +18,8 @@
 #include <AYEditor/EditorProjectAssetFactory.h>
 #include <AYIO/File.h>
 #include <AYUI/UIFlow.h>
+#include <AYUI/ListView.h>
+#include <AYUI/TextLabel.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
 
@@ -294,5 +296,59 @@ TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
     viewport.detachFromParent();
     fs::remove_all(root, ignored);
 }
+
+#ifdef AY_EDITOR_TEST_SOURCE_DIR
+TEST_CASE(flow_editor_surfaces_asset_closure_diagnostics_per_revision)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path()
+        / "ayeditor_flow_asset_diagnostics";
+    std::error_code ignored;
+    fs::remove_all(root, ignored);
+    fs::create_directories(root / "ui", ignored);
+
+    auto document = std::make_shared<EditorUiFlowDocument>();
+    std::string error;
+    CHECK(document->initialize({}, {}, &error));
+    CHECK(document->addObject(EditorUiFlowObjectKind::Screen, {}, &error));
+
+    ayt::ui::UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(1440.0f, 860.0f);
+    const fs::path chrome = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui" / "ui_flow_editor.ui.json";
+    CHECK(manager.loadLayout(chrome.string()));
+
+    EditorUiFlowExtensionConfig config;
+    config.assetRoot = root.string();
+    EditorUiFlowController controller(document, std::move(config));
+    CHECK(controller.attach(manager));
+    auto* diagnostics = dynamic_cast<ayt::ui::ListView*>(
+        manager.findById("flow_diagnostics"));
+    CHECK(diagnostics != nullptr);
+    CHECK(diagnostics != nullptr && diagnostics->getItemCount() == 1u);
+    CHECK(diagnostics != nullptr
+          && diagnostics->getItem(0).find(L"ASSET ERROR")
+              != std::wstring::npos);
+
+    CHECK(ayt::io::File::writeAllText(
+        (root / "ui" / "valid.ui.json").string(),
+        R"json({"type":"Panel","id":"valid_screen"})json"));
+    EditorUiFlowProperties properties = document->selectedProperties();
+    properties.first = "ui/valid.ui.json";
+    CHECK(document->applySelectedProperties(properties, &error));
+    controller.tick(0.0f);
+    CHECK(diagnostics->getItemCount() == 1u);
+    CHECK(diagnostics->getItem(0) == L"No diagnostics");
+    auto* title = dynamic_cast<ayt::ui::TextLabel*>(
+        manager.findById("flow_diag_title"));
+    CHECK(title != nullptr);
+    CHECK(title != nullptr
+          && title->getText().find(L"1 LAYOUT ASSET") != std::wstring::npos);
+
+    controller.detach();
+    fs::remove_all(root, ignored);
+}
+#endif
 
 TEST_SUITE_END

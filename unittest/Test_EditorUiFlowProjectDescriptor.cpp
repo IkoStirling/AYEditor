@@ -1,6 +1,7 @@
 #include "AYTest.h"
 
 #include <AYEditor/EditorProjectDescriptor.h>
+#include <AYEditor/EditorProjectRuntimeValidator.h>
 #include <AYEditor/EditorProjectUiFlow.h>
 #include <AYUI/UIFlow.h>
 
@@ -31,6 +32,15 @@ struct ProjectRoot {
     void writeDescriptor(const std::string& source) const
     {
         std::ofstream output(path / "project.ayproject.json",
+                             std::ios::binary | std::ios::trunc);
+        output << source;
+    }
+
+    void writeAsset(const fs::path& relative, const std::string& source) const
+    {
+        const fs::path destination = path / "Assets" / relative;
+        fs::create_directories(destination.parent_path());
+        std::ofstream output(destination,
                              std::ios::binary | std::ios::trunc);
         output << source;
     }
@@ -170,6 +180,83 @@ TEST_CASE(world_context_without_project_flow_is_rejected_by_resolution)
     EditorProjectUiFlowResolution resolution;
     CHECK_FALSE(resolveEditorProjectUiFlow(descriptor, resolution, &error));
     CHECK(error.find("without project ui.flow") != std::string::npos);
+}
+
+TEST_CASE(project_validation_resolves_flow_layout_dependencies_for_packaging)
+{
+    editor_ui_flow_project_test::ProjectRoot project("asset_dependencies");
+    project.writeDescriptor(R"json({
+        "schemaVersion":1,
+        "id":"flow_assets",
+        "paths":{"assets":"Assets"},
+        "ui":{"flow":"ui/game.uiflow.json","entry":"Boot"},
+        "worlds":[]
+    })json");
+    project.writeAsset("ui/shell.ui.json", R"json({
+        "animations":[{"name":"enter","tracks":[{
+            "target":"shell","property":"opacity",
+            "keyframes":[{"timeMs":0,"value":0},{"timeMs":100,"value":1}]
+        }]}],
+        "root":{"type":"Panel","id":"shell"}
+    })json");
+    project.writeAsset("ui/game.uiflow.json", R"json({
+        "schemaVersion":1,
+        "id":"game",
+        "defaultEntry":"Boot",
+        "layers":[{"id":"application","order":0}],
+        "slots":[{"id":"application.main","layer":"application"}],
+        "screens":[{
+            "id":"shell","layout":"ui/shell.ui.json",
+            "layer":"application","slot":"application.main",
+            "scope":"application","enterAnimation":"enter"
+        }],
+        "contexts":[{"id":"Application","slots":[{
+            "slot":"application.main","operation":"present","screen":"shell"
+        }]}],
+        "entries":[{"id":"Boot","contexts":["Application"]}]
+    })json");
+
+    const EditorRuntimeValidationResult headless =
+        EditorProjectRuntimeValidator::validate(
+            project.path.string(), EditorRuntimeValidationProfile::Headless);
+    const EditorRuntimeValidationResult client =
+        EditorProjectRuntimeValidator::validate(
+            project.path.string(), EditorRuntimeValidationProfile::FullClient);
+    CHECK(headless);
+    CHECK(client);
+    CHECK(client.uiFlows == 1u);
+    CHECK(client.uiFlowDependencies.size() == 1u);
+    if (client.uiFlowDependencies.empty()) return;
+    CHECK(client.uiFlowDependencies.front().flowAsset
+          == "ui/game.uiflow.json");
+    CHECK(client.uiFlowDependencies.front().layoutAsset
+          == "ui/shell.ui.json");
+    CHECK(client.uiFlowDependencies.front().screens.size() == 1u);
+    CHECK(client.uiFlowDependencies.front().screens.front() == "shell");
+
+    project.writeDescriptor(R"json({
+        "schemaVersion":1,
+        "id":"flow_assets",
+        "paths":{"assets":"Assets"},
+        "ui":{"flow":"ui/game.uiflow.json","entry":"Missing"},
+        "worlds":[]
+    })json");
+    const EditorRuntimeValidationResult invalidEntry =
+        EditorProjectRuntimeValidator::validate(
+            project.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(invalidEntry));
+    CHECK(invalidEntry.issues.size() == 1u);
+    CHECK(invalidEntry.issues.front().path.find("$.ui.entry")
+          != std::string::npos);
+
+    project.writeDescriptor("{ invalid json");
+    const EditorRuntimeValidationResult malformedDescriptor =
+        EditorProjectRuntimeValidator::validate(
+            project.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(malformedDescriptor));
+    CHECK(malformedDescriptor.issues.size() == 1u);
+    CHECK(malformedDescriptor.issues.front().path.find(
+              "project.ayproject.json") != std::string::npos);
 }
 
 TEST_SUITE_END

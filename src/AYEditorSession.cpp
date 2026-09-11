@@ -4301,6 +4301,7 @@ void EditorSession::validateProjectContent()
     setAssetBrowserStatus(L"Validated "
         + std::to_wstring(client.scenes) + L" Scene, "
         + std::to_wstring(client.uiLayouts) + L" UI and "
+        + std::to_wstring(client.uiFlows) + L" UI Flow, "
         + std::to_wstring(client.tilemaps)
         + L" Tilemap asset(s) for headless and full client.", true);
 }

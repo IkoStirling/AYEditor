@@ -1205,6 +1205,17 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Controller 每帧同步预览视口大小并推进 Screen enter/exit Timeline；系统 reduced-motion 设置沿生产
   Timeline 生效。关闭工具窗时先停止 Flow、销毁生产 Host，再释放视口，确保无外部 Widget 悬挂。
 
+### 10.18 UI Flow asset closure（阶段六）
+
+- Flow Editor 的 Diagnostics 合并模型 validator 与生产资产 audit。每次文档 revision 只审计一次，
+  可在未触发对应 Context/State 前发现 Screen 布局缺失、路径越界、Loader 拒绝、动画片段缺失以及
+  动画轨道 Widget ID 失效；标题同时显示去重后的 Layout 依赖数量。
+- `EditorProjectRuntimeValidator` 解析项目 `ui.flow`，校验 descriptor 的 Entry 和 World Context 引用，
+  并把每个 `Flow -> layout -> Screens` 关系放入 `uiFlowDependencies`。独立验证器会打印这份稳定闭包，
+  后续 packager 无需扫描编辑器视图或实际运行状态。
+- Headless profile 只确认 Flow schema、引用、根目录约束和文件存在；Full Client profile 才创建真实
+  Widget 树并解析动画。两者共用同一 portable dependency key，避免验证结果与部署输入分叉。
+
 ---
 
 ## 11. Decisions log
@@ -1249,6 +1260,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-10 | 2D 制作闭环继续使用通用 Scene/World：模板和创建命令只装配 Sprite、Tilemap、OrthoCamera 与 Transform；Scene View 以组件平面边界进行拾取并向 Renderer 提交世界空间选择轮廓，2D Universal Gizmo 固定屏幕尺寸且复用统一 Undo/Redo 命令栈；AYEditor Source ABI 升至 7。 |
 | 2026-09-11 | UI Flow 阶段四采用独立 AYDevice 工具窗；创作、诊断与逻辑预览复用同一 `UIFlowDocument`/serializer/validator/`UIFlowRuntime`，编辑器只以 mock Screen Host/Action 显示状态，不另建运行格式或状态机。 |
 | 2026-09-11 | UI Flow 阶段五将生产 `UIManagerFlowScreenHost` 挂入独立裁剪预览视口，并以项目 `assetRoot` 加载真实 Screen；异步 Graph、中断策略、动画交接、reload/replay 与 reduced-motion 共用运行时契约。 |
+| 2026-09-11 | UI Flow 阶段六以 `validateUIFlowAssets` 建立 Screen 布局/动画的生产资产闭包；Flow Editor、项目验证器和后续 packager 共用去重依赖与反向 Screen 引用，不再等到状态实际挂载后才暴露缺失资产。 |
 
 ---
 

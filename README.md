@@ -24,6 +24,8 @@ Outline、Region/State/Transition 与 Graph 画布、Layer/Screen/Context/Transi
 实时诊断、Signal 模拟和 Mock Action trace。预览直接复用生产 `UIFlowRuntime`，并在裁剪视口中
 通过生产 Screen Host 加载项目 `assetRoot` 下的真实 Widget 布局和进出场动画，同时保留 mounted
 Screen 与运行 trace 列表用于诊断。
+阶段六进一步把模型诊断扩展到完整资产闭包：所有 Screen 引用的布局、进出场动画及轨道目标会在
+编辑时验证；项目内容验证器同时输出去重的 `Flow -> Layout -> Screens` 依赖，供部署打包复用。
 
 ## 公开接口
 
