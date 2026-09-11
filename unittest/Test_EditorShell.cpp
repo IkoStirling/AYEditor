@@ -1654,12 +1654,12 @@ TEST_CASE(editor_view_menu_toggles_viewport_orientation_axis)
     CHECK(axisItem != nullptr);
     CHECK(session.viewportOrientationAxisVisible());
     if (axisItem != nullptr) {
-        CHECK(axisItem->getText() == L"[x] Viewport Orientation Axis");
+        CHECK(axisItem->getText() == L"Viewport Orientation Axis");
         CHECK(axisItem->handleClick());
         CHECK_FALSE(session.viewportOrientationAxisVisible());
         CHECK_FALSE(persistedVisible);
         CHECK(persistenceCalls == 1);
-        CHECK(axisItem->getText() == L"[ ] Viewport Orientation Axis");
+        CHECK(axisItem->getText() == L"Viewport Orientation Axis");
         CHECK(axisItem->handleClick());
         CHECK(session.viewportOrientationAxisVisible());
         CHECK(persistedVisible);
@@ -1987,7 +1987,7 @@ TEST_CASE(editor_transform_inspector_writes_edit_entity_and_supports_undo)
         CHECK(session.onKeyDown(UIKey_Z));
         session.onKeyUp(UIKey_Control);
         CHECK_FLOAT_EQ(transform->position.x, 0.0f, 1.0e-5f);
-        CHECK(positionX->getText() == L"0.000");
+        CHECK(positionX->getText() == L"0");
         CHECK(positionX == findWidgetInTree(
             positionRow, "inspector_field_position_0"));
     }

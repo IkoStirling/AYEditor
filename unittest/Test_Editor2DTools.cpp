@@ -18,6 +18,7 @@
 #include <AYUI/MenuBar.h>
 #include <AYUI/MenuItem.h>
 #include <AYUI/TextInput.h>
+#include <AYUI/TextLabel.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYScene.h>
 #include <AYTest.h>
@@ -203,6 +204,11 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     std::error_code ignored;
     fs::remove_all(projectRoot, ignored);
     fs::copy(sourceRoot, projectRoot, fs::copy_options::recursive);
+    // The validation source may be opened manually between test runs. Never
+    // copy its editor recovery state into this isolated fixture: a recovery
+    // modal would correctly intercept toolbar clicks and hide the behavior
+    // under test.
+    fs::remove_all(projectRoot / ".ayeditor", ignored);
 
     ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
     MockRenderer backend;
@@ -233,6 +239,18 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     CHECK(hud != nullptr && hud->getId() == "mixed_hud_root");
     CHECK(session.ui().findById("mixed_hud_root") == nullptr);
     CHECK(preview != nullptr && preview->hitTest({640.0f, 360.0f}) == nullptr);
+    if (hud != nullptr) {
+        ayt::ui::TextLabel* title = nullptr;
+        for (ayt::ui::Widget* child : hud->getChildren()) {
+            if (child != nullptr && child->getId() == "mixed_hud_title") {
+                title = dynamic_cast<ayt::ui::TextLabel*>(child);
+                break;
+            }
+        }
+        CHECK(title != nullptr);
+        CHECK(title != nullptr && title->getTextColor().w > 0.99f);
+        CHECK(title != nullptr && title->getBackgroundColor().w > 0.8f);
+    }
 
     const SceneViewMode modeBefore = session.sceneViewMode();
     EditorSceneVisibility visibility;
@@ -293,6 +311,10 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
             const float buttonY = (bounds.minY + bounds.maxY) * 0.5f;
             CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
             CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+            CHECK(session.sceneViewMode() == SceneViewMode::TwoD);
+            CHECK(std::fabs(session.sceneCamera().twoDCenter().x) < 0.01f);
+            CHECK(std::fabs(session.sceneCamera().twoDCenter().y) < 0.01f);
+            CHECK(session.sceneCamera().twoDViewHeight() < 10.0f);
         }
     }
     CHECK(session.sceneViewMode() == SceneViewMode::TwoD);

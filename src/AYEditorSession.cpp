@@ -135,6 +135,110 @@ protected:
     }
 };
 
+// Inspector numeric editor: keeps an exact backing string while presenting a
+// compact value in dense rows. A click restores the full value before
+// TextInput places the caret; horizontal drag then uses TextInput's numeric
+// scrub path. Hosts may temporarily redistribute the containing row on focus.
+class InspectorNumberInput final : public ayt::ui::TextInput {
+public:
+    void setInspectorText(const std::wstring& precise, bool integral = false) {
+        _precise = precise;
+        _integral = integral;
+        ayt::ui::TextInput::setText(hasFocus() ? _precise : compact(_precise));
+    }
+
+    void setInspectorValue(double value) {
+        wchar_t buffer[64] = {};
+        if (_integral) {
+            std::swprintf(buffer, std::size(buffer), L"%.0f", value);
+        } else {
+            std::swprintf(buffer, std::size(buffer), L"%.9g", value);
+        }
+        setInspectorText(buffer, _integral);
+    }
+
+    void setFocusLayoutCallback(std::function<void(bool)> callback) {
+        _focusLayout = std::move(callback);
+    }
+
+protected:
+    void onFocusGained() override {
+        ayt::ui::TextInput::setText(_precise);
+        ayt::ui::TextInput::onFocusGained();
+        if (_focusLayout) _focusLayout(true);
+    }
+
+    void onFocusLost() override {
+        // TextInput fires the host commit callback here while the precise,
+        // user-edited string is still installed.
+        ayt::ui::TextInput::onFocusLost();
+        _precise = getText();
+        ayt::ui::TextInput::setText(compact(_precise));
+        if (_focusLayout) _focusLayout(false);
+    }
+
+private:
+    static std::wstring compact(const std::wstring& source) {
+        if (source.empty()) return source;
+        wchar_t* end = nullptr;
+        const double value = std::wcstod(source.c_str(), &end);
+        if (end == source.c_str() || (end != nullptr && *end != L'\0')
+            || !std::isfinite(value)) {
+            return source.size() <= 6u ? source : source.substr(0u, 6u);
+        }
+        const double normalized = std::fabs(value) < 5.0e-10 ? 0.0 : value;
+        if (_isIntegralText(source)) {
+            wchar_t integerBuffer[64] = {};
+            std::swprintf(integerBuffer, std::size(integerBuffer), L"%.0f",
+                          normalized);
+            const std::wstring result(integerBuffer);
+            if (result.size() <= 6u) return result;
+        }
+        for (int decimals = 3; decimals >= 0; --decimals) {
+            wchar_t buffer[64] = {};
+            std::swprintf(buffer, std::size(buffer), L"%.*f", decimals,
+                          normalized);
+            std::wstring result(buffer);
+            while (result.find(L'.') != std::wstring::npos
+                   && !result.empty() && result.back() == L'0') {
+                result.pop_back();
+            }
+            if (!result.empty() && result.back() == L'.') result.pop_back();
+            if (result.size() <= 6u) return result;
+        }
+        wchar_t scientific[64] = {};
+        std::swprintf(scientific, std::size(scientific), L"%.1g", normalized);
+        return scientific;
+    }
+
+    static bool _isIntegralText(const std::wstring& value) {
+        return value.find(L'.') == std::wstring::npos
+            && value.find(L'e') == std::wstring::npos
+            && value.find(L'E') == std::wstring::npos;
+    }
+
+    std::wstring _precise;
+    bool _integral = false;
+    std::function<void(bool)> _focusLayout;
+};
+
+void setEditorMenuToggleIcon(ayt::ui::MenuItem* item,
+                             const std::string& engineAssetsRoot,
+                             bool checked)
+{
+    if (item == nullptr || engineAssetsRoot.empty()) return;
+    const std::filesystem::path path =
+        std::filesystem::path(engineAssetsRoot) / "Icons" / "Tabler"
+        / "outline" / (checked ? "check.svg" : "x.svg");
+    std::string error;
+    item->setLeadingIconDocument(
+        ayt::ui::SvgDocument::loadFromFile(path, &error));
+    item->setLeadingIconSize(13.0f);
+    item->setLeadingIconColor(checked
+        ? ayt::math::FVector4(0.35f, 0.72f, 1.0f, 1.0f)
+        : ayt::math::FVector4(0.50f, 0.53f, 0.58f, 0.85f));
+}
+
 void attachEditorTooltip(const EditorSession* session, ayt::ui::Widget* target,
                          const std::wstring& text)
 {
@@ -706,6 +810,19 @@ std::string showSceneSaveDialog(HWND owner,
 std::wstring formatFloat(float value) {
     wchar_t buffer[32] = {};
     std::swprintf(buffer, sizeof(buffer) / sizeof(buffer[0]), L"%.3f", value);
+    return buffer;
+}
+
+std::wstring formatPreciseFloat(float value) {
+    wchar_t buffer[48] = {};
+    std::swprintf(buffer, std::size(buffer), L"%.9g",
+                  static_cast<double>(value));
+    return buffer;
+}
+
+std::wstring formatPreciseDouble(double value) {
+    wchar_t buffer[64] = {};
+    std::swprintf(buffer, std::size(buffer), L"%.17g", value);
     return buffer;
 }
 
@@ -1659,11 +1776,15 @@ void EditorSession::pushSceneCameraToRenderer()
             _sceneVisibility.meshes,
             _sceneVisibility.worldLit2D,
             _sceneVisibility.cameraOverlay2D});
+        sub->renderer().setWireframeEnabled(_wireframeView);
         const EditorSceneCameraFrame camera = _sceneCamera.frame();
         sub->setCameraMatrices(camera.view, camera.projection, camera.position);
         ayt::render::EditorGrid2DState grid;
         if (_sceneCamera.isTwoD()) {
-            sub->setOverlayCamera2DOverride(camera.view, camera.projection);
+            // Camera-overlay sprites are screen/game-camera content. They keep
+            // the authored OrthoCameraComponent while the Scene View camera
+            // observes WorldLit content in world units.
+            sub->clearOverlayCamera2DOverride();
             grid.visible = true;
             grid.center = _sceneCamera.twoDCenter();
             grid.verticalWorldSize = _sceneCamera.twoDViewHeight();
@@ -2475,7 +2596,7 @@ void EditorSession::bindToolbar() {
     auto* viewportOptions = new ayt::ui::Menu();
     viewportOptions->setId("viewport_options_menu");
     if (ayt::ui::Widget* root = _ui.root()) root->addChild(viewportOptions);
-    if (auto* item = viewportOptions->addItem(L"[ ] 2D Scene View")) {
+    if (auto* item = viewportOptions->addItem(L"2D Scene View")) {
         item->setId("menu_scene_view_2d");
         item->setOnActivate([this]() { toggleSceneViewMode(); });
         _sceneViewModeMenuItem = item;
@@ -2489,7 +2610,7 @@ void EditorSession::bindToolbar() {
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
     viewportOptions->addSeparator();
-    if (auto* item = viewportOptions->addItem(L"[x] Orientation Axis")) {
+    if (auto* item = viewportOptions->addItem(L"Orientation Axis")) {
         item->setId("menu_view_orientation_axis");
         item->setOnActivate([this]() {
             setViewportOrientationAxisVisible(
@@ -5752,10 +5873,10 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _viewportOrientationAxisVisible =
         preferences.viewportOrientationAxisVisible;
     if (_viewportOrientationAxisMenuItem != nullptr) {
-        _viewportOrientationAxisMenuItem->setText(
-            _viewportOrientationAxisVisible
-                ? L"[x] Viewport Orientation Axis"
-                : L"[ ] Viewport Orientation Axis");
+        _viewportOrientationAxisMenuItem->setText(L"Viewport Orientation Axis");
+        setEditorMenuToggleIcon(_viewportOrientationAxisMenuItem,
+                                _engineAssetsRoot,
+                                _viewportOrientationAxisVisible);
     }
     if (preferences.cameraPoseValid) {
         _sceneCamera.threeD().setPose(preferences.cameraEye,
@@ -5777,15 +5898,15 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
-        item->setText((_wireframeView ? L"[x] " : L"[ ] ")
-                      + std::wstring(L"Wireframe Rendering"));
+        item->setText(L"Wireframe Rendering");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
     }
     syncSceneViewToolbar();
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
-        item->setText(_viewportOrientationAxisVisible
-                          ? L"[x] Orientation Axis"
-                          : L"[ ] Orientation Axis");
+        item->setText(L"Orientation Axis");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot,
+                                _viewportOrientationAxisVisible);
     }
 
     auto setSlider = [this](const char* id, float value) {
@@ -6079,6 +6200,7 @@ void EditorSession::setSceneViewMode(SceneViewMode mode, bool persist)
         _sceneCamera.endTwoDPan();
         _gizmoHoverHandle = EditorGizmoHandle::None;
         _sceneCamera.setMode(mode);
+        if (mode == SceneViewMode::TwoD) fitTwoDViewToSceneCamera();
         if (persist) rememberCurrentSceneView();
     }
     syncSceneViewToolbar();
@@ -6129,14 +6251,25 @@ void EditorSession::syncSceneViewToolbar()
         button->setEnabled(!twoD);
     }
     if (_sceneViewModeMenuItem != nullptr) {
-        _sceneViewModeMenuItem->setText(
-            twoD ? L"[x] 2D Scene View" : L"[ ] 2D Scene View");
+        _sceneViewModeMenuItem->setText(L"2D Scene View");
+        setEditorMenuToggleIcon(_sceneViewModeMenuItem, _engineAssetsRoot, twoD);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_projection"))) {
-        item->setText((orthographic ? L"[x] " : L"[ ] ")
-                      + std::wstring(L"Orthographic Projection"));
+        item->setText(L"Orthographic Projection");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot, orthographic);
         item->setEnabled(!twoD);
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_shading"))) {
+        item->setText(L"Wireframe Rendering");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
+    }
+    if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
+            _ui.findById("menu_view_orientation_axis"))) {
+        item->setText(L"Orientation Axis");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot,
+                                _viewportOrientationAxisVisible);
     }
 }
 
@@ -6232,6 +6365,45 @@ void EditorSession::fitTwoDViewToSceneCamera()
 {
     if (_document == nullptr) return;
     ayt::entity::World& world = _document->scene().world();
+
+    bool hasWorldContent = false;
+    float minX = std::numeric_limits<float>::max();
+    float minY = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float maxY = std::numeric_limits<float>::lowest();
+    for (ayt::entity::Entity* entity : world.getAllEntities()) {
+        if (entity == nullptr) continue;
+        auto* transform = entity->getComponent<ayt::entity::Transform>();
+        if (transform == nullptr) continue;
+        bool worldLit = false;
+        if (auto* sprite = entity->getComponent<ayt::entity::SpriteComponent>()) {
+            worldLit = sprite->visible && sprite->isWorldLit();
+        }
+        if (auto* tilemap = entity->getComponent<ayt::entity::TilemapComponent>()) {
+            worldLit = worldLit || (tilemap->visible && tilemap->isWorldLit());
+        }
+        if (!worldLit) continue;
+        const float halfWidth = std::max(0.5f,
+            std::fabs(transform->scale.x) * 0.5f);
+        const float halfHeight = std::max(0.5f,
+            std::fabs(transform->scale.y) * 0.5f);
+        minX = std::min(minX, transform->position.x - halfWidth);
+        maxX = std::max(maxX, transform->position.x + halfWidth);
+        minY = std::min(minY, transform->position.y - halfHeight);
+        maxY = std::max(maxY, transform->position.y + halfHeight);
+        hasWorldContent = true;
+    }
+    if (hasWorldContent) {
+        const float aspect = std::max(0.01f, _sceneCamera.viewportAspect());
+        const float contentWidth = std::max(1.0f, maxX - minX);
+        const float contentHeight = std::max(1.0f, maxY - minY);
+        const float viewHeight = std::max(contentHeight,
+            contentWidth / aspect) * 1.35f;
+        _sceneCamera.setTwoDPose(
+            {(minX + maxX) * 0.5f, (minY + maxY) * 0.5f}, viewHeight);
+        return;
+    }
+
     const ayt::entity::SelectedOrthoCamera2D selected =
         ayt::entity::selectOrthoCamera2D(world);
     if (!selected) return;
@@ -6401,8 +6573,11 @@ void EditorSession::toggleViewportShading()
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
-        item->setText((_wireframeView ? L"[x] " : L"[ ] ")
-                      + std::wstring(L"Wireframe Rendering"));
+        item->setText(L"Wireframe Rendering");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
+    }
+    if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        sub->renderer().setWireframeEnabled(_wireframeView);
     }
     if (_repaintCallback) _repaintCallback();
 }
@@ -6413,13 +6588,14 @@ void EditorSession::setViewportOrientationAxisVisible(bool visible)
     _viewportOrientationAxisVisible = visible;
     if (_viewportOrientationAxisMenuItem != nullptr) {
         _viewportOrientationAxisMenuItem->setText(
-            visible ? L"[x] Viewport Orientation Axis"
-                    : L"[ ] Viewport Orientation Axis");
+            L"Viewport Orientation Axis");
+        setEditorMenuToggleIcon(_viewportOrientationAxisMenuItem,
+                                _engineAssetsRoot, visible);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
-        item->setText(visible ? L"[x] Orientation Axis"
-                              : L"[ ] Orientation Axis");
+        item->setText(L"Orientation Axis");
+        setEditorMenuToggleIcon(item, _engineAssetsRoot, visible);
     }
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
         sub->renderer().setViewportOrientationAxisEnabled(visible);
@@ -7915,12 +8091,23 @@ void EditorSession::rebuildComponentPropertyEditor()
 
         auto makeInput = [this, componentTypeName, fieldName, readOnly](
                              const std::wstring& valueText,
-                             int elementIndex) {
-            auto* input = new ayt::ui::TextInput();
+                             int elementIndex,
+                             bool numeric = false,
+                             bool integral = false) {
+            ayt::ui::TextInput* input = numeric
+                ? static_cast<ayt::ui::TextInput*>(new InspectorNumberInput())
+                : new ayt::ui::TextInput();
             input->setStyleId("editor_property_input");
-            input->setText(valueText);
+            if (auto* number = dynamic_cast<InspectorNumberInput*>(input)) {
+                number->setInspectorText(valueText, integral);
+                number->setOnNumericScrub([number](float value) {
+                    number->setInspectorValue(value);
+                });
+            } else {
+                input->setText(valueText);
+            }
             input->setReadOnly(readOnly);
-            input->setNumericScrubEnabled(true);
+            input->setNumericScrubEnabled(numeric);
             input->setSize({70.0f, 26.0f});
             input->setOnSubmit(
                 [this, componentTypeName, fieldName, elementIndex](
@@ -7989,7 +8176,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                 if (!tooltip.empty()) {
                     fieldLabel->setAccessibilityDescription(tooltip);
                 }
-                row->addWidget(fieldLabel, 56.0f);
+                row->addWidget(fieldLabel, 46.0f);
             }
 
             static constexpr wchar_t axisNames[] = {L'X', L'Y', L'Z', L'W'};
@@ -7999,6 +8186,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                 {0.42f, 0.60f, 0.90f},
                 {0.70f, 0.72f, 0.78f},
             };
+            std::vector<InspectorNumberInput*> vectorInputs;
             for (int element = 0; element < elementCount; ++element) {
                 auto* axis = new ayt::ui::TextLabel();
                 axis->setId("inspector_field_axis_" + fieldName + "_"
@@ -8016,11 +8204,27 @@ void EditorSession::rebuildComponentPropertyEditor()
                     ayt::ui::TextLabel::VAlignment::Center);
                 row->addWidget(axis, angleValues ? 12.0f : 9.0f);
 
-                auto* input = makeInput(formatFloat(values[element]), element);
+                auto* input = makeInput(formatPreciseFloat(values[element]), element,
+                                        true);
                 input->setId("inspector_field_" + fieldName + "_"
                              + std::to_string(element));
                 row->addWidget(input);
+                vectorInputs.push_back(
+                    static_cast<InspectorNumberInput*>(input));
                 if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
+            }
+            for (InspectorNumberInput* input : vectorInputs) {
+                input->setFocusLayoutCallback(
+                    [this, row, input, vectorInputs](bool focused) {
+                        for (InspectorNumberInput* peer : vectorInputs) {
+                            const int slot = row->slotIndexOf(peer);
+                            if (slot < 0) continue;
+                            row->setSlotSize(slot,
+                                focused && peer != input ? 32.0f : 0.0f);
+                        }
+                        _ui.invalidateLayout();
+                        if (_repaintCallback) _repaintCallback();
+                    });
             }
             _componentPropertyBody->addWidget(row, 26.0f);
 
@@ -8068,6 +8272,7 @@ void EditorSession::rebuildComponentPropertyEditor()
         std::wstring valueText;
         bool editableText = true;
         bool numericScalar = false;
+        bool integralScalar = false;
         double scalarValue = 0.0;
         if (isReflectedType<std::string>(fieldType)) {
             valueText = ayt::ui::decodeUtf8Text(
@@ -8075,34 +8280,53 @@ void EditorSession::rebuildComponentPropertyEditor()
         } else if (isReflectedType<float>(fieldType)) {
             scalarValue = *static_cast<float*>(fieldValue);
             numericScalar = true;
-            valueText = formatFloat(static_cast<float>(scalarValue));
+            valueText = formatPreciseFloat(static_cast<float>(scalarValue));
         } else if (isReflectedType<double>(fieldType)) {
             scalarValue = *static_cast<double*>(fieldValue);
             numericScalar = true;
-            valueText = std::to_wstring(scalarValue);
+            valueText = formatPreciseDouble(scalarValue);
         } else if (isReflectedType<std::int8_t>(fieldType)) {
-            valueText = std::to_wstring(
-                static_cast<int>(*static_cast<std::int8_t*>(fieldValue)));
+            scalarValue = *static_cast<std::int8_t*>(fieldValue);
+            numericScalar = true;
+            integralScalar = true;
+            valueText = std::to_wstring(static_cast<int>(scalarValue));
         } else if (isReflectedType<std::uint8_t>(fieldType)) {
-            valueText = std::to_wstring(
-                static_cast<unsigned>(*static_cast<std::uint8_t*>(fieldValue)));
+            scalarValue = *static_cast<std::uint8_t*>(fieldValue);
+            numericScalar = true;
+            integralScalar = true;
+            valueText = std::to_wstring(static_cast<unsigned>(scalarValue));
         } else if (isReflectedType<std::int16_t>(fieldType)) {
-            valueText = std::to_wstring(
-                static_cast<int>(*static_cast<std::int16_t*>(fieldValue)));
+            scalarValue = *static_cast<std::int16_t*>(fieldValue);
+            numericScalar = true;
+            integralScalar = true;
+            valueText = std::to_wstring(static_cast<int>(scalarValue));
         } else if (isReflectedType<std::uint16_t>(fieldType)) {
-            valueText = std::to_wstring(
-                static_cast<unsigned>(*static_cast<std::uint16_t*>(fieldValue)));
+            scalarValue = *static_cast<std::uint16_t*>(fieldValue);
+            numericScalar = true;
+            integralScalar = true;
+            valueText = std::to_wstring(static_cast<unsigned>(scalarValue));
         } else if (isReflectedType<std::int32_t>(fieldType)) {
             scalarValue = *static_cast<std::int32_t*>(fieldValue);
             numericScalar = true;
+            integralScalar = true;
             valueText = std::to_wstring(static_cast<std::int64_t>(scalarValue));
         } else if (isReflectedType<std::uint32_t>(fieldType)) {
-            valueText = std::to_wstring(
-                *static_cast<std::uint32_t*>(fieldValue));
+            scalarValue = *static_cast<std::uint32_t*>(fieldValue);
+            numericScalar = true;
+            integralScalar = true;
+            valueText = std::to_wstring(static_cast<std::uint64_t>(scalarValue));
         } else if (isReflectedType<std::int64_t>(fieldType)) {
+            scalarValue = static_cast<double>(
+                *static_cast<std::int64_t*>(fieldValue));
+            numericScalar = true;
+            integralScalar = true;
             valueText = std::to_wstring(
                 *static_cast<std::int64_t*>(fieldValue));
         } else if (isReflectedType<std::uint64_t>(fieldType)) {
+            scalarValue = static_cast<double>(
+                *static_cast<std::uint64_t*>(fieldValue));
+            numericScalar = true;
+            integralScalar = true;
             valueText = std::to_wstring(
                 *static_cast<std::uint64_t*>(fieldValue));
         } else if (auto* container = dynamic_cast<
@@ -8156,15 +8380,19 @@ void EditorSession::rebuildComponentPropertyEditor()
             slider->setEnabled(!readOnly);
             if (!tooltip.empty()) slider->setAccessibilityDescription(tooltip);
             row->addWidget(slider);
-            auto* input = makeInput(valueText, -1);
+            auto* input = makeInput(valueText, -1, true, integralScalar);
             input->setSize({68.0f, 26.0f});
             input->setId("inspector_field_value_" + fieldName);
             const float step = field->getStep();
             slider->setOnValueChanged(
                 [this, componentTypeName, fieldName, input, step](float value) {
                     if (step > 0.0f) value = std::round(value / step) * step;
-                    const std::wstring text = formatFloat(value);
-                    input->setText(text);
+                    const std::wstring text = formatPreciseFloat(value);
+                    if (auto* number = dynamic_cast<InspectorNumberInput*>(input)) {
+                        number->setInspectorText(text);
+                    } else {
+                        input->setText(text);
+                    }
                     commitInspectorTextField(
                         componentTypeName, fieldName, -1, text);
                 });
@@ -8180,7 +8408,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             row->setId("inspector_field_" + fieldName);
             row->setSpacing(4.0f);
             row->setSize({240.0f, 26.0f});
-            auto* input = makeInput(valueText, -1);
+            auto* input = makeInput(valueText, -1, false);
             input->setId("inspector_field_value_" + fieldName);
             if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
             row->addWidget(input);
@@ -8215,11 +8443,10 @@ void EditorSession::rebuildComponentPropertyEditor()
             _componentPropertyBody->addWidget(row, 26.0f);
             continue;
         }
-        auto* input = makeInput(valueText, -1);
+        auto* input = makeInput(valueText, -1, numericScalar, integralScalar);
         input->setId("inspector_field_" + fieldName);
         input->setReadOnly(readOnly || !editableText);
-        input->setNumericScrubEnabled(
-            editableText && !isReflectedType<std::string>(fieldType));
+        input->setNumericScrubEnabled(editableText && numericScalar);
         input->setSize({240.0f, 26.0f});
         if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
         _componentPropertyBody->addWidget(input, 26.0f);
@@ -8459,7 +8686,11 @@ void EditorSession::refreshTransformInspector()
                 findDescendantById(
                     row, std::string(id) + "_" + std::to_string(index)));
             if (input == nullptr) return false;
-            input->setText(formatFloat(values[index]));
+            if (auto* number = dynamic_cast<InspectorNumberInput*>(input)) {
+                number->setInspectorText(formatPreciseFloat(values[index]));
+            } else {
+                input->setText(formatFloat(values[index]));
+            }
             input->setReadOnly(readOnly);
         }
         return true;
