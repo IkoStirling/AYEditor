@@ -1227,6 +1227,18 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   `EditorUiFlowExtensionConfig::graphNodeTypes` 共用 AYUI `UIFlowGraphNodeRegistry`；宿主可覆盖同名定义，
   Inspector diagnostics 对节点类型、Pin 方向/类型和属性做严格检查，但执行语义仍由游戏/插件注册。
 
+### 10.20 UI Flow executable graph preview（阶段八）
+
+- `EditorUiFlowPreview` 不再只记录整张 Graph request，而是把 Controller 的节点词汇表注册到生产
+  `AYApplicationUI::UIFlowGraphExecutor`。预览节点使用明确的 mock host handler；
+  `flow.invokeAction`/`host.action` 会进入同一 Runtime Action registry，`flow.emitSignal` 会进入同一
+  Signal queue，节点执行、失败和状态迁移因而共享生产调度路径。
+- Graph 画布从固定卡片升级为按 registry 展示 input/output Pin。Execution 与 bool/integer/number/
+  string/entity/asset value 使用不同颜色，link 以连续贝塞尔 Path 绘制；连接 UI 选定 source 后只保留
+  `areUIFlowGraphPinsCompatible()` 接受且不属于自身的 target，避免先写入无效连接再依赖诊断纠错。
+- 生产执行器测试覆盖 value propagation、异步 continuation、completion callback、cycle reject、
+  interrupt 失效和 Runtime pipeline；编辑器 contract 测试覆盖真实节点 trace、类型过滤和 Path 绘制。
+
 ---
 
 ## 11. Decisions log
@@ -1273,6 +1285,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-11 | UI Flow 阶段五将生产 `UIManagerFlowScreenHost` 挂入独立裁剪预览视口，并以项目 `assetRoot` 加载真实 Screen；异步 Graph、中断策略、动画交接、reload/replay 与 reduced-motion 共用运行时契约。 |
 | 2026-09-11 | UI Flow 阶段六以 `validateUIFlowAssets` 建立 Screen 布局/动画的生产资产闭包；Flow Editor、项目验证器和后续 packager 共用去重依赖与反向 Screen 引用，不再等到状态实际挂载后才暴露缺失资产。 |
 | 2026-09-11 | UI Flow 阶段七以 Screen `handler -> Signal` 映射闭合真实 Widget 交互；Graph 节点与 Pin 选择统一由可扩展 registry 提供，基础 wire format 保持开放、编辑器按宿主词汇表执行严格校验。 |
+| 2026-09-11 | UI Flow 阶段八以 AYApplication `UIFlowGraphExecutor` 执行宿主节点、传播类型化值并支持异步续跑/中断；Flow Editor 预览复用该执行器，Graph 画布按同一 registry 绘制彩色 Pin、贝塞尔 link 并过滤不兼容目标。 |
 
 ---
 

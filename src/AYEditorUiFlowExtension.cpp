@@ -98,6 +98,20 @@ void connector(ayt::ui::IRenderBackend& renderer,
                FVector2 to,
                const FVector4& color)
 {
+    const auto path = renderer.createPath();
+    if (path.id >= 0) {
+        const float reach = std::max(42.0f, std::abs(to.x - from.x) * 0.5f);
+        renderer.addPathBezier(path, from,
+            {from.x + reach, from.y}, {to.x - reach, to.y}, to);
+        renderer.setPathStrokeColor(path, color);
+        renderer.setPathStrokeWidth(path, 2.0f);
+        renderer.setPathStrokeStyle(path,
+            ayt::ui::PathStrokeCap::Round,
+            ayt::ui::PathStrokeJoin::Round);
+        renderer.drawPath(path, ayt::ui::PathFillMode::Stroke);
+        renderer.releasePath(path);
+        return;
+    }
     const float middle = std::floor((from.x + to.x) * 0.5f + 0.5f);
     renderer.drawRect({std::min(from.x, middle), from.y - 1.0f,
                        std::max(from.x, middle), from.y + 1.0f}, color);
@@ -107,12 +121,36 @@ void connector(ayt::ui::IRenderBackend& renderer,
                        std::max(middle, to.x), to.y + 1.0f}, color);
 }
 
+FVector4 graphPinColor(const ayt::ui::UIFlowGraphPinTypeDefinition& pin)
+{
+    if (pin.kind == ayt::ui::UIFlowGraphPinKind::Execution) {
+        return {0.78f, 0.84f, 0.92f, 1.0f};
+    }
+    switch (pin.valueType) {
+    case ayt::ui::UIFlowValueType::Boolean:
+        return {0.92f, 0.28f, 0.34f, 1.0f};
+    case ayt::ui::UIFlowValueType::Integer:
+        return {0.22f, 0.76f, 0.82f, 1.0f};
+    case ayt::ui::UIFlowValueType::Number:
+        return {0.28f, 0.82f, 0.48f, 1.0f};
+    case ayt::ui::UIFlowValueType::Entity:
+        return {0.94f, 0.54f, 0.23f, 1.0f};
+    case ayt::ui::UIFlowValueType::Asset:
+        return {0.93f, 0.72f, 0.22f, 1.0f};
+    case ayt::ui::UIFlowValueType::String:
+    default:
+        return {0.76f, 0.39f, 0.88f, 1.0f};
+    }
+}
+
 class EditorUiFlowCanvas final : public ayt::ui::Widget {
 public:
     EditorUiFlowCanvas(EditorUiFlowDocument& document,
                        EditorUiFlowPreview& preview,
+                       const ayt::ui::UIFlowGraphNodeRegistry& registry,
                        std::function<void()> changed)
-        : _document(document), _preview(preview), _changed(std::move(changed))
+        : _document(document), _preview(preview), _registry(registry),
+          _changed(std::move(changed))
     {
         setId("flow_graph_canvas");
         setLayoutPositionManaged(false);
@@ -272,14 +310,79 @@ private:
                            bounds.maxX - 18.0f, bounds.minY + 44.0f},
             ayt::ui::decodeUtf8Text("Action Graph — " + graph.id), 15,
             FVector4{0.84f, 0.88f, 0.94f, 1.0f});
-        std::unordered_map<std::string, FRectangle> nodes;
-        const float nodeWidth = 190.0f;
+        struct NodeVisual {
+            FRectangle bounds;
+            const ayt::ui::UIFlowGraphNodeTypeDefinition* type = nullptr;
+            std::unordered_map<std::string, FVector2> inputs;
+            std::unordered_map<std::string, FVector2> outputs;
+        };
+        std::unordered_map<std::string, NodeVisual> nodes;
+        const float nodeWidth = 228.0f;
         for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
             const float x = bounds.minX + 24.0f
-                + static_cast<float>(index % 3u) * 224.0f;
+                + static_cast<float>(index % 3u) * 260.0f;
             const float y = bounds.minY + 62.0f
-                + static_cast<float>(index / 3u) * 112.0f;
-            const FRectangle card{x, y, x + nodeWidth, y + 72.0f};
+                + static_cast<float>(index / 3u) * 154.0f;
+            const auto* type = _registry.find(graph.nodes[index].type);
+            std::size_t inputCount = 0;
+            std::size_t outputCount = 0;
+            if (type != nullptr) {
+                for (const auto& pin : type->pins) {
+                    if (pin.direction
+                        == ayt::ui::UIFlowGraphPinDirection::Input) {
+                        ++inputCount;
+                    } else {
+                        ++outputCount;
+                    }
+                }
+            }
+            const float rows = static_cast<float>(
+                std::max(inputCount, outputCount));
+            const float height = std::max(78.0f, 42.0f + rows * 20.0f);
+            NodeVisual visual;
+            visual.bounds = {x, y, x + nodeWidth, y + height};
+            visual.type = type;
+            std::size_t inputIndex = 0;
+            std::size_t outputIndex = 0;
+            if (type != nullptr) {
+                for (const auto& pin : type->pins) {
+                    if (pin.direction
+                        == ayt::ui::UIFlowGraphPinDirection::Input) {
+                        visual.inputs[pin.id] = {x,
+                            y + 38.0f + 20.0f
+                                * static_cast<float>(inputIndex++)};
+                    } else {
+                        visual.outputs[pin.id] = {x + nodeWidth,
+                            y + 38.0f + 20.0f
+                                * static_cast<float>(outputIndex++)};
+                    }
+                }
+            }
+            nodes[graph.nodes[index].id] = std::move(visual);
+        }
+        for (const auto& link : graph.links) {
+            const auto from = nodes.find(link.fromNode);
+            const auto to = nodes.find(link.toNode);
+            if (from == nodes.end() || to == nodes.end()) continue;
+            const auto fromPin = from->second.outputs.find(link.fromPin);
+            const auto toPin = to->second.inputs.find(link.toPin);
+            if (fromPin == from->second.outputs.end()
+                || toPin == to->second.inputs.end()) continue;
+            FVector4 color{0.68f, 0.43f, 0.95f, 0.9f};
+            if (from->second.type != nullptr) {
+                if (const auto* pin = ayt::ui::findUIFlowGraphPin(
+                        *from->second.type, link.fromPin,
+                        ayt::ui::UIFlowGraphPinDirection::Output)) {
+                    color = graphPinColor(*pin);
+                }
+            }
+            connector(renderer, fromPin->second, toPin->second, color);
+        }
+        for (std::size_t index = 0; index < graph.nodes.size(); ++index) {
+            const auto found = nodes.find(graph.nodes[index].id);
+            if (found == nodes.end()) continue;
+            const NodeVisual& visual = found->second;
+            const FRectangle& card = visual.bounds;
             renderer.drawRect(card, {0.12f, 0.14f, 0.18f, 1.0f});
             border(renderer, card, {0.30f, 0.44f, 0.62f, 1.0f});
             renderer.drawRect({card.minX, card.minY, card.maxX,
@@ -289,20 +392,30 @@ private:
                                card.maxX - 8.0f, card.minY + 22.0f},
                 ayt::ui::decodeUtf8Text(graph.nodes[index].type), 12,
                 FVector4{0.94f, 0.96f, 1.0f, 1.0f});
-            renderer.drawText({card.minX + 8.0f, card.minY + 25.0f,
-                               card.maxX - 8.0f, card.maxY - 5.0f},
+            renderer.drawText({card.minX + 8.0f, card.minY + 22.0f,
+                               card.maxX - 8.0f, card.minY + 39.0f},
                 ayt::ui::decodeUtf8Text(graph.nodes[index].id), 13,
                 FVector4{0.72f, 0.77f, 0.84f, 1.0f});
-            nodes[graph.nodes[index].id] = card;
-        }
-        for (const auto& link : graph.links) {
-            const auto from = nodes.find(link.fromNode);
-            const auto to = nodes.find(link.toNode);
-            if (from == nodes.end() || to == nodes.end()) continue;
-            connector(renderer,
-                {from->second.maxX, (from->second.minY + from->second.maxY) * 0.5f},
-                {to->second.minX, (to->second.minY + to->second.maxY) * 0.5f},
-                {0.68f, 0.43f, 0.95f, 0.9f});
+            if (visual.type == nullptr) continue;
+            for (const auto& pin : visual.type->pins) {
+                const auto& endpoint = pin.direction
+                        == ayt::ui::UIFlowGraphPinDirection::Input
+                    ? visual.inputs.at(pin.id) : visual.outputs.at(pin.id);
+                const FVector4 color = graphPinColor(pin);
+                renderer.drawRect({endpoint.x - 4.0f, endpoint.y - 4.0f,
+                                   endpoint.x + 4.0f, endpoint.y + 4.0f},
+                                  color);
+                const bool input = pin.direction
+                    == ayt::ui::UIFlowGraphPinDirection::Input;
+                renderer.drawText(
+                    input
+                        ? FRectangle{endpoint.x + 8.0f, endpoint.y - 9.0f,
+                                     card.minX + 106.0f, endpoint.y + 10.0f}
+                        : FRectangle{card.maxX - 106.0f, endpoint.y - 9.0f,
+                                     endpoint.x - 8.0f, endpoint.y + 10.0f},
+                    ayt::ui::decodeUtf8Text(pin.id), 10,
+                    FVector4{0.72f, 0.77f, 0.84f, 1.0f});
+            }
         }
     }
 
@@ -330,6 +443,7 @@ private:
 
     EditorUiFlowDocument& _document;
     EditorUiFlowPreview& _preview;
+    const ayt::ui::UIFlowGraphNodeRegistry& _registry;
     std::function<void()> _changed;
     std::vector<Hit> _hits;
 };
@@ -425,7 +539,10 @@ ayt::ui::UIFlowGraphNodeTypeDefinition makeCommandNodeType(
 
 std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> builtInGraphNodeTypes()
 {
-    return {
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    using ValueType = ayt::ui::UIFlowValueType;
+    auto types = std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition>{
         makeCommandNodeType("host.action", "Invoke Host Action", "Host", true),
         makeCommandNodeType("ui.present", "Present Screen", "UI"),
         makeCommandNodeType("ui.playAnimation", "Play UI Animation", "UI"),
@@ -433,6 +550,21 @@ std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> builtInGraphNodeTypes()
         makeCommandNodeType("flow.emitSignal", "Emit Signal", "Flow"),
         makeCommandNodeType("flow.invokeAction", "Invoke Action", "Flow", true),
     };
+    const auto addInput = [](auto& type, const char* id, ValueType valueType) {
+        type.pins.push_back({id, Direction::Input, Kind::Value, valueType});
+        type.properties.push_back({id, valueType, false, {}});
+    };
+    addInput(types[0], "action", ValueType::String);
+    addInput(types[1], "screen", ValueType::String);
+    addInput(types[2], "animation", ValueType::String);
+    addInput(types[3], "world", ValueType::Asset);
+    addInput(types[4], "signal", ValueType::String);
+    addInput(types[5], "action", ValueType::String);
+    types[0].pins.push_back(
+        {"accepted", Direction::Output, Kind::Value, ValueType::Boolean});
+    types[5].pins.push_back(
+        {"accepted", Direction::Output, Kind::Value, ValueType::Boolean});
+    return types;
 }
 
 void selectComboItem(ayt::ui::ComboBox& combo,
@@ -496,6 +628,7 @@ public:
             (void)graphRegistry.unregisterType(type.type);
             (void)graphRegistry.registerType(std::move(type));
         }
+        preview.setGraphNodeTypes(graphRegistry.types());
         if (document != nullptr) {
             document->setChangedHandler([this]() {
                 refreshPending = true;
@@ -513,6 +646,7 @@ public:
     void detach()
     {
         preview.clearVisualHost();
+        if (graphFrom != nullptr) graphFrom->setOnSelectionChanged({});
         if (visualViewport != nullptr) visualViewport->detachFromParent();
         delete visualViewport;
         visualViewport = nullptr;
@@ -707,8 +841,13 @@ public:
         }
         selectComboItem(*graphNodeType, nodeTypes, selectedType);
 
-        std::vector<std::wstring> outputs;
-        std::vector<std::wstring> inputs;
+        struct Endpoint {
+            std::wstring label;
+            std::string nodeId;
+            const ayt::ui::UIFlowGraphPinTypeDefinition* pin = nullptr;
+        };
+        std::vector<Endpoint> outputs;
+        std::vector<Endpoint> inputs;
         if (document->selection().kind == EditorUiFlowObjectKind::Graph) {
             if (const auto* graph = document->flow().findGraph(
                     document->selection().id)) {
@@ -719,15 +858,36 @@ public:
                         auto& choices = pin.direction
                                 == ayt::ui::UIFlowGraphPinDirection::Output
                             ? outputs : inputs;
-                        choices.push_back(wide(node.id + "." + pin.id));
+                        choices.push_back({wide(node.id + "." + pin.id),
+                                           node.id, &pin});
                     }
                 }
             }
         }
         const std::wstring selectedOutput = graphFrom->getSelectedItem();
         const std::wstring selectedInput = graphTo->getSelectedItem();
-        selectComboItem(*graphFrom, outputs, selectedOutput);
-        selectComboItem(*graphTo, inputs, selectedInput);
+        std::vector<std::wstring> outputLabels;
+        outputLabels.reserve(outputs.size());
+        for (const auto& endpoint : outputs) {
+            outputLabels.push_back(endpoint.label);
+        }
+        selectComboItem(*graphFrom, outputLabels, selectedOutput);
+
+        const auto selectedSource = std::find_if(outputs.begin(), outputs.end(),
+            [this](const Endpoint& endpoint) {
+                return endpoint.label == graphFrom->getSelectedItem();
+            });
+        std::vector<std::wstring> compatibleInputs;
+        if (selectedSource != outputs.end()) {
+            for (const auto& endpoint : inputs) {
+                if (endpoint.nodeId == selectedSource->nodeId) continue;
+                if (ayt::ui::areUIFlowGraphPinsCompatible(
+                        *selectedSource->pin, *endpoint.pin)) {
+                    compatibleInputs.push_back(endpoint.label);
+                }
+            }
+        }
+        selectComboItem(*graphTo, compatibleInputs, selectedInput);
     }
 
     bool restart(std::string* output)
@@ -874,6 +1034,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
             || static_cast<std::size_t>(index) >= impl->outlineItems.size()) return;
         (void)impl->document->select(impl->outlineItems[static_cast<std::size_t>(index)].selection);
     });
+    _impl->graphFrom->setOnSelectionChanged([impl = _impl.get()](int) {
+        if (!impl->refreshing) impl->refreshGraphChoices();
+    });
     _impl->bindButton("flow_btn_add", [impl = _impl.get()]() {
         std::string error;
         if (!impl->document->addObject(
@@ -990,7 +1153,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->canvas = new EditorUiFlowCanvas(
-        *_impl->document, _impl->preview, [impl = _impl.get()]() {
+        *_impl->document, _impl->preview, _impl->graphRegistry,
+        [impl = _impl.get()]() {
             impl->refreshPending = true;
         });
     _impl->canvasHost->addChild(_impl->canvas);

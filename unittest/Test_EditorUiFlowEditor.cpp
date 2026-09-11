@@ -22,10 +22,12 @@
 #include <AYUI/UIFlow.h>
 #include <AYUI/UIFlowGraphNodeRegistry.h>
 #include <AYUI/ListView.h>
+#include <AYUI/MockRenderer.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 
@@ -89,8 +91,26 @@ ayt::ui::UIFlowDocument previewFlow()
         {UIFlowStateDefinition{"menu"},
          UIFlowStateDefinition{"game", {}, {}, {"Gameplay"}}}}};
     flow.transitions = {UIFlowTransitionDefinition{
-        "start_game", "application", "menu", "game", "start"}};
+        "start_game", "application", "menu", "game", "start", {},
+        "start_graph"}};
+    flow.graphs = {UIFlowGraphDefinition{"start_graph",
+        {UIFlowNodeDefinition{"invoke", "flow.invokeAction",
+            {{"action", "load_world"}}}}, {}}};
     return flow;
+}
+
+std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> previewNodeTypes()
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    using ValueType = ayt::ui::UIFlowValueType;
+    return {{"flow.invokeAction", "Invoke Action", "Flow",
+        {{"execute", Direction::Input, Kind::Execution},
+         {"completed", Direction::Output, Kind::Execution},
+         {"failed", Direction::Output, Kind::Execution},
+         {"accepted", Direction::Output, Kind::Value, ValueType::Boolean},
+         {"action", Direction::Input, Kind::Value, ValueType::String}},
+        {{"action", ValueType::String, false, {}}}}};
 }
 
 bool hasMountedScreen(
@@ -255,6 +275,8 @@ TEST_CASE(preview_uses_production_runtime_for_signal_state_and_mock_action)
     const ayt::ui::UIFlowDocument flow =
         editor_ui_flow_editor_test::previewFlow();
     EditorUiFlowPreview preview;
+    preview.setGraphNodeTypes(
+        editor_ui_flow_editor_test::previewNodeTypes());
     std::string error;
     CHECK(preview.rebuild(flow, "Boot", &error));
     CHECK(error.empty());
@@ -271,6 +293,10 @@ TEST_CASE(preview_uses_production_runtime_for_signal_state_and_mock_action)
     CHECK_FALSE(preview.trace().empty());
     CHECK(preview.trace().back().category == "Action");
     CHECK(preview.trace().back().id == "load_world");
+    CHECK(std::any_of(preview.trace().begin(), preview.trace().end(),
+        [](const auto& value) {
+            return value.category == "Node" && value.id == "invoke";
+        }));
 }
 
 TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
@@ -296,6 +322,8 @@ TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
     manager.root()->addChildExternal(&viewport);
 
     EditorUiFlowPreview preview;
+    preview.setGraphNodeTypes(
+        editor_ui_flow_editor_test::previewNodeTypes());
     preview.configureVisualHost(manager, viewport, root.string());
     const ayt::ui::UIFlowDocument flow =
         editor_ui_flow_editor_test::previewFlow();
@@ -386,6 +414,86 @@ TEST_CASE(flow_editor_surfaces_asset_closure_diagnostics_per_revision)
 
     controller.detach();
     fs::remove_all(root, ignored);
+}
+
+TEST_CASE(flow_graph_canvas_draws_typed_curves_and_filters_link_targets)
+{
+    namespace fs = std::filesystem;
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    using ValueType = ayt::ui::UIFlowValueType;
+
+    auto document = std::make_shared<EditorUiFlowDocument>();
+    std::string error;
+    CHECK(document->initialize({}, {}, &error));
+    CHECK(document->addObject(EditorUiFlowObjectKind::Graph, {}, &error));
+    const std::string graphId = document->selection().id;
+    CHECK(document->addGraphNode(graphId, "flow.invokeAction", &error));
+    CHECK(document->addGraphNode(graphId, "test.bool", &error));
+    CHECK(document->addGraphNode(graphId, "test.number", &error));
+    CHECK(document->connectGraphNodes(
+        graphId, "node_1", "accepted", "node_2", "value", &error));
+
+    ayt::ui::MockRenderer renderer;
+    ayt::ui::UIManager manager;
+    manager.initialize(&renderer);
+    manager.setClientSize(1440.0f, 860.0f);
+    const fs::path chrome = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui" / "ui_flow_editor.ui.json";
+    CHECK(manager.loadLayout(chrome.string()));
+
+    EditorUiFlowExtensionConfig config;
+    config.graphNodeTypes = {
+        {"test.bool", "Boolean Consumer", "Test",
+            {{"execute", Direction::Input, Kind::Execution},
+             {"completed", Direction::Output, Kind::Execution},
+             {"value", Direction::Input, Kind::Value, ValueType::Boolean}},
+            {}},
+        {"test.number", "Number Consumer", "Test",
+            {{"execute", Direction::Input, Kind::Execution},
+             {"completed", Direction::Output, Kind::Execution},
+             {"value", Direction::Input, Kind::Value, ValueType::Number}},
+            {}},
+    };
+    EditorUiFlowController controller(document, std::move(config));
+    CHECK(controller.attach(manager));
+    manager.root()->performLayout();
+    controller.tick(0.0f);
+
+    auto* from = dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_graph_from"));
+    auto* to = dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_graph_to"));
+    CHECK(from != nullptr);
+    CHECK(to != nullptr);
+    int acceptedIndex = -1;
+    if (from != nullptr) {
+        const auto& items = from->getItemsRef();
+        const auto accepted = std::find(items.begin(), items.end(),
+                                        L"node_1.accepted");
+        if (accepted != items.end()) {
+            acceptedIndex = static_cast<int>(
+                std::distance(items.begin(), accepted));
+        }
+        from->setSelectedIndexAndNotify(acceptedIndex);
+    }
+    CHECK(acceptedIndex >= 0);
+    CHECK(to != nullptr && to->getItemCount() == 1u);
+    CHECK(to != nullptr && to->getSelectedItem() == L"node_2.value");
+
+    manager.render();
+    CHECK(std::any_of(renderer.getDrawCalls().begin(),
+                      renderer.getDrawCalls().end(), [](const auto& call) {
+        return call.type == ayt::ui::MockRenderer::DrawCall::Path;
+    }));
+    CHECK(std::any_of(renderer.getDrawCalls().begin(),
+                      renderer.getDrawCalls().end(), [](const auto& call) {
+        return call.type == ayt::ui::MockRenderer::DrawCall::Text
+            && call.text == L"accepted";
+    }));
+
+    controller.detach();
+    manager.shutdown();
 }
 #endif
 

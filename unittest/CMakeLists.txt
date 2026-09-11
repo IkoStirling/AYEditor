@@ -78,6 +78,9 @@ add_executable(AYEditor_UIFlowContractTests UIFlowContractTestMain.cpp)
 target_link_libraries(AYEditor_UIFlowContractTests PRIVATE AYEditor AYUI AYTest)
 target_include_directories(AYEditor_UIFlowContractTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_compile_definitions(AYEditor_UIFlowContractTests PRIVATE
+    AY_EDITOR_TEST_SOURCE_DIR="${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor"
+)
 if(MSVC)
     target_link_options(AYEditor_UIFlowContractTests PRIVATE "/OPT:NOREF")
 endif()

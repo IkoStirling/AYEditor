@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AYUI/UIFlow.h>
+#include <AYUI/UIFlowGraphNodeRegistry.h>
 
 #include <cstdint>
 #include <map>
@@ -51,6 +52,11 @@ public:
                              ayt::ui::Widget& parent,
                              std::string assetRoot);
     void clearVisualHost() noexcept;
+    // Supplies the same authoring vocabulary used by the graph canvas. The
+    // preview binds deterministic mock handlers to these contracts while the
+    // production runtime owns the real host implementations.
+    void setGraphNodeTypes(
+        std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> types);
     void tick(float deltaSeconds);
     bool isRunning() const noexcept;
 

@@ -1,5 +1,6 @@
 #include "AYEditor/EditorUiFlowPreview.h"
 
+#include <AYApplication/UIFlowGraphExecutor.h>
 #include <AYApplication/UIFlowRuntime.h>
 #include <AYApplication/UIManagerFlowScreenHost.h>
 
@@ -54,6 +55,19 @@ ayt::app::UIFlowPayload sampleInputs(
         }
     }
     return inputs;
+}
+
+std::string stringInput(const ayt::app::UIFlowPayload& inputs,
+                        std::initializer_list<std::string_view> names)
+{
+    for (const std::string_view name : names) {
+        const auto found = inputs.find(std::string(name));
+        if (found == inputs.end()) continue;
+        if (const auto* value = std::get_if<std::string>(&found->second.data)) {
+            return *value;
+        }
+    }
+    return {};
 }
 
 } // namespace
@@ -152,6 +166,8 @@ public:
 
     Host host;
     std::unique_ptr<ayt::app::UIFlowRuntime> runtime;
+    ayt::app::UIFlowGraphExecutor graphExecutor;
+    std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> graphNodeTypes;
     const ayt::ui::UIFlowDocument* document = nullptr;
     std::map<std::string, std::string> states;
     std::map<std::string, bool> guardResults;
@@ -174,6 +190,8 @@ bool EditorUiFlowPreview::rebuild(
     _impl->host.screens.clear();
     _impl->states.clear();
     _impl->traces.clear();
+    _impl->graphExecutor.reset();
+    _impl->graphExecutor.clearNodeTypes();
     _impl->runtime = std::make_unique<ayt::app::UIFlowRuntime>(_impl->host);
     _impl->document = &document;
     std::string localError;
@@ -181,6 +199,55 @@ bool EditorUiFlowPreview::rebuild(
         _impl->error = std::move(localError);
         if (error != nullptr) *error = _impl->error;
         return false;
+    }
+    _impl->graphExecutor.setDocument(_impl->runtime->document());
+    for (const auto& type : _impl->graphNodeTypes) {
+        const std::string nodeType = type.type;
+        if (!_impl->graphExecutor.registerNodeType(type,
+                [impl = _impl.get(), nodeType](
+                    const ayt::app::UIFlowGraphNodeInvocation& invocation) {
+                    impl->traces.push_back({"Node", invocation.node->id,
+                        nodeType + " executed"});
+                    if (nodeType == "flow.invokeAction"
+                        || nodeType == "host.action") {
+                        const std::string actionId = stringInput(
+                            invocation.inputs, {"action", "actionId"});
+                        if (!actionId.empty()) {
+                            auto actionInputs = invocation.inputs;
+                            actionInputs.erase("action");
+                            actionInputs.erase("actionId");
+                            const auto result = impl->runtime->invokeAction(
+                                actionId, std::move(actionInputs));
+                            if (!result.accepted) {
+                                return ayt::app::UIFlowGraphNodeResult::failure(
+                                    result.message);
+                            }
+                        }
+                        return ayt::app::UIFlowGraphNodeResult::completed(
+                            "completed", {{"accepted", true}});
+                    } else if (nodeType == "flow.emitSignal") {
+                        const std::string signalId = stringInput(
+                            invocation.inputs, {"signal", "signalId"});
+                        if (!signalId.empty()) {
+                            auto payload = invocation.inputs;
+                            payload.erase("signal");
+                            payload.erase("signalId");
+                            std::string signalError;
+                            if (!impl->runtime->emitSignal(
+                                    signalId, std::move(payload), &signalError)) {
+                                return ayt::app::UIFlowGraphNodeResult::failure(
+                                    std::move(signalError));
+                            }
+                        }
+                    }
+                    return ayt::app::UIFlowGraphNodeResult::completed();
+                }, false, &localError)) {
+            _impl->error = std::move(localError);
+            _impl->runtime.reset();
+            _impl->graphExecutor.setDocument(nullptr);
+            if (error != nullptr) *error = _impl->error;
+            return false;
+        }
     }
     for (const auto& action : document.actions) {
         _impl->runtime->registerAction(action.id,
@@ -202,11 +269,27 @@ bool EditorUiFlowPreview::rebuild(
                 result ? "true" : "false"});
             return result;
         });
-    _impl->runtime->setGraphRequestHandler(
-        [impl = _impl.get()](const ayt::app::UIFlowGraphRequest& request) {
-            impl->traces.push_back({"Graph", request.graphId,
-                request.transitionId.empty()
-                    ? "requested" : "transition " + request.transitionId});
+    _impl->graphExecutor.setCompletionHandler(
+        [impl = _impl.get()](ayt::app::UIFlowGraphExecutionId executionId,
+                             bool succeeded,
+                             std::string message) {
+            if (impl->runtime != nullptr) {
+                (void)impl->runtime->completeGraphExecution(
+                    executionId, succeeded, std::move(message));
+            }
+        });
+    _impl->runtime->setAsyncGraphRequestHandler(
+        [impl = _impl.get()](
+            const ayt::app::UIFlowGraphExecutionRequest& request) {
+            impl->traces.push_back({"Graph", request.graph.graphId,
+                request.graph.transitionId.empty()
+                    ? "executing" : "transition "
+                        + request.graph.transitionId});
+            return impl->graphExecutor.start(request);
+        },
+        [impl = _impl.get()](ayt::app::UIFlowGraphExecutionId executionId,
+                             ayt::app::UIFlowGraphInterrupt interrupt) {
+            (void)impl->graphExecutor.interruptGraph(executionId, interrupt);
         });
     _impl->runtime->subscribeSignal("*",
         [impl = _impl.get()](std::string_view signal,
@@ -233,9 +316,18 @@ bool EditorUiFlowPreview::rebuild(
 void EditorUiFlowPreview::stop() noexcept
 {
     _impl->runtime.reset();
+    _impl->graphExecutor.reset();
+    _impl->graphExecutor.setDocument(nullptr);
     _impl->document = nullptr;
     _impl->host.screens.clear();
     _impl->states.clear();
+}
+
+void EditorUiFlowPreview::setGraphNodeTypes(
+    std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> types)
+{
+    stop();
+    _impl->graphNodeTypes = std::move(types);
 }
 
 void EditorUiFlowPreview::configureVisualHost(
