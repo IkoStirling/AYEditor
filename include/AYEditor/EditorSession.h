@@ -571,6 +571,9 @@ private:
     // Non-serialized Scene View camera. Its 2D and 3D poses are independent;
     // Play clears these overrides so Scene runtime cameras remain authoritative.
     EditorSceneCamera _sceneCamera;
+    // A document gets one automatic 2D framing pass. Once initialized, mode
+    // switches preserve the user's independent 2D pan and zoom pose.
+    bool _twoDSceneViewInitialized = false;
     EditorSceneViewWorkspace _sceneViewWorkspace;
     EditorSceneVisibility _sceneVisibility;
     std::unique_ptr<ayt::ui::UILayoutLoader> _sceneUiPreviewLoader;

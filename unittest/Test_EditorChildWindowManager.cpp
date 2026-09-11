@@ -636,7 +636,7 @@ TEST_CASE(test_promote_live_card_migration) {
     CHECK(overlay != nullptr);
     auto* profiler = new DockCard();
     profiler->setId("profiler");
-    profiler->setTitle(L"Profiler");
+    profiler->setTitle(L"\u5206\u6790\u5668");
     profiler->setPosition({800.0f, 60.0f});
     profiler->setSize({320.0f, 220.0f});
     // Live content subtree — must survive the migration verbatim.
@@ -664,6 +664,10 @@ TEST_CASE(test_promote_live_card_migration) {
     CHECK(profiler->getParent() == entry.ui->root());
     CHECK(profiler->getContent() == content);
     CHECK(overlay->getFloatingCardCount() == 0);
+    wchar_t promotedTitle[128]{};
+    CHECK(::GetWindowTextW(static_cast<HWND>(entry.handle),
+                           promotedTitle, 128) > 0);
+    CHECK(std::wstring(promotedTitle) == L"\u5206\u6790\u5668");
 
     // Child renders through a real GDI backend.
     CHECK(entry.backend != nullptr);

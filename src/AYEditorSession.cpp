@@ -88,6 +88,7 @@
 #include <AYResource/assetsDefs/ITilemap.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -98,6 +99,7 @@
 #include <filesystem>
 #include <optional>
 #include <limits>
+#include <type_traits>
 #include <unordered_map>
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -141,9 +143,13 @@ protected:
 // scrub path. Hosts may temporarily redistribute the containing row on focus.
 class InspectorNumberInput final : public ayt::ui::TextInput {
 public:
-    void setInspectorText(const std::wstring& precise, bool integral = false) {
+    void setInspectorText(const std::wstring& precise, bool integral = false,
+                          bool unsignedIntegral = false,
+                          int significantDigits = 9) {
         _precise = precise;
         _integral = integral;
+        _unsignedIntegral = integral && unsignedIntegral;
+        _significantDigits = std::clamp(significantDigits, 1, 17);
         ayt::ui::TextInput::setText(hasFocus() ? _precise : compact(_precise));
     }
 
@@ -152,9 +158,61 @@ public:
         if (_integral) {
             std::swprintf(buffer, std::size(buffer), L"%.0f", value);
         } else {
-            std::swprintf(buffer, std::size(buffer), L"%.9g", value);
+            std::swprintf(buffer, std::size(buffer), L"%.*g",
+                          _significantDigits, value);
         }
-        setInspectorText(buffer, _integral);
+        setInspectorText(buffer, _integral, _unsignedIntegral,
+                         _significantDigits);
+    }
+
+    const std::wstring& preciseText() const noexcept { return _precise; }
+
+    void applyInspectorScrubDelta(double delta) {
+        if (!std::isfinite(delta)) return;
+        if (!_integral) {
+            double base = 0.0;
+            if (!parseFloating(_scrubOrigin, base)) return;
+            setInspectorValue(base + delta);
+            return;
+        }
+
+        const std::int64_t wholeDelta = roundedIntegralDelta(delta);
+        if (_unsignedIntegral) {
+            std::uint64_t base = 0;
+            if (!parseUnsigned(_scrubOrigin, base)) return;
+            std::uint64_t next = base;
+            if (wholeDelta >= 0) {
+                const auto amount = static_cast<std::uint64_t>(wholeDelta);
+                next = amount > std::numeric_limits<std::uint64_t>::max() - base
+                    ? std::numeric_limits<std::uint64_t>::max()
+                    : base + amount;
+            } else {
+                const std::uint64_t amount = wholeDelta
+                    == std::numeric_limits<std::int64_t>::lowest()
+                    ? std::uint64_t{1} << 63u
+                    : static_cast<std::uint64_t>(-wholeDelta);
+                next = amount > base ? 0u : base - amount;
+            }
+            setInspectorText(std::to_wstring(next), true, true,
+                             _significantDigits);
+            return;
+        }
+
+        std::int64_t base = 0;
+        if (!parseSigned(_scrubOrigin, base)) return;
+        std::int64_t next = base;
+        if (wholeDelta > 0
+            && base > std::numeric_limits<std::int64_t>::max() - wholeDelta) {
+            next = std::numeric_limits<std::int64_t>::max();
+        } else if (wholeDelta < 0
+                   && base < std::numeric_limits<std::int64_t>::lowest()
+                               - wholeDelta) {
+            next = std::numeric_limits<std::int64_t>::lowest();
+        } else {
+            next = base + wholeDelta;
+        }
+        setInspectorText(std::to_wstring(next), true, false,
+                         _significantDigits);
     }
 
     void setFocusLayoutCallback(std::function<void(bool)> callback) {
@@ -162,6 +220,11 @@ public:
     }
 
 protected:
+    bool onMouseButtonDown(const ayt::ui::UIMouseEvent& event) override {
+        _scrubOrigin = hasFocus() ? getText() : _precise;
+        return ayt::ui::TextInput::onMouseButtonDown(event);
+    }
+
     void onFocusGained() override {
         ayt::ui::TextInput::setText(_precise);
         ayt::ui::TextInput::onFocusGained();
@@ -178,6 +241,56 @@ protected:
     }
 
 private:
+    static bool parseFloating(const std::wstring& source, double& value) {
+        wchar_t* end = nullptr;
+        const double parsed = std::wcstod(source.c_str(), &end);
+        if (end == source.c_str() || end == nullptr || *end != L'\0'
+            || !std::isfinite(parsed)) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    }
+
+    static bool parseSigned(const std::wstring& source, std::int64_t& value) {
+        errno = 0;
+        wchar_t* end = nullptr;
+        const long long parsed = std::wcstoll(source.c_str(), &end, 10);
+        if (errno == ERANGE || end == source.c_str() || end == nullptr
+            || *end != L'\0') {
+            return false;
+        }
+        value = static_cast<std::int64_t>(parsed);
+        return true;
+    }
+
+    static bool parseUnsigned(const std::wstring& source,
+                              std::uint64_t& value) {
+        if (!source.empty() && source.front() == L'-') return false;
+        errno = 0;
+        wchar_t* end = nullptr;
+        const unsigned long long parsed =
+            std::wcstoull(source.c_str(), &end, 10);
+        if (errno == ERANGE || end == source.c_str() || end == nullptr
+            || *end != L'\0') {
+            return false;
+        }
+        value = static_cast<std::uint64_t>(parsed);
+        return true;
+    }
+
+    static std::int64_t roundedIntegralDelta(double delta) {
+        if (delta >= static_cast<double>(
+                         std::numeric_limits<std::int64_t>::max())) {
+            return std::numeric_limits<std::int64_t>::max();
+        }
+        if (delta <= static_cast<double>(
+                         std::numeric_limits<std::int64_t>::lowest())) {
+            return std::numeric_limits<std::int64_t>::lowest();
+        }
+        return static_cast<std::int64_t>(std::llround(delta));
+    }
+
     static std::wstring compact(const std::wstring& source) {
         if (source.empty()) return source;
         wchar_t* end = nullptr;
@@ -218,7 +331,10 @@ private:
     }
 
     std::wstring _precise;
+    std::wstring _scrubOrigin;
     bool _integral = false;
+    bool _unsignedIntegral = false;
+    int _significantDigits = 9;
     std::function<void(bool)> _focusLayout;
 };
 
@@ -431,8 +547,8 @@ bool editor2DSelectionShape(ayt::entity::Entity& entity,
                             float viewportAspect,
                             Editor2DSelectionShape& out)
 {
-    if (auto* sprite = entity.getComponent<ayt::entity::SpriteComponent>()) {
-        if (!sprite->visible) return false;
+    if (auto* sprite = entity.getComponent<ayt::entity::SpriteComponent>();
+        sprite != nullptr && sprite->visible) {
         out.localMin = {-0.5f, -0.5f};
         out.localMax = {0.5f, 0.5f};
         out.priority = 2;
@@ -440,8 +556,8 @@ bool editor2DSelectionShape(ayt::entity::Entity& entity,
         out.sortingKey = sprite->sortingKey;
         return true;
     }
-    if (auto* tilemap = entity.getComponent<ayt::entity::TilemapComponent>()) {
-        if (!tilemap->visible) return false;
+    if (auto* tilemap = entity.getComponent<ayt::entity::TilemapComponent>();
+        tilemap != nullptr && tilemap->visible) {
         float width = 32.0f;
         float height = 32.0f;
         if (!tilemap->tilemapPath.empty()) {
@@ -870,6 +986,52 @@ bool assignIntegralValue(void* address, double parsed)
     } else {
         next = static_cast<T>(parsed);
     }
+    if (*target == next) return false;
+    *target = next;
+    return true;
+}
+
+template<typename T>
+bool assignIntegralText(void* address, const std::wstring& text)
+{
+    static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
+    const wchar_t* begin = text.c_str();
+    while (*begin == L' ') ++begin;
+    if (*begin == L'\0') return false;
+
+    wchar_t* end = nullptr;
+    T next{};
+    errno = 0;
+    if constexpr (std::is_signed_v<T>) {
+        const long long parsed = std::wcstoll(begin, &end, 10);
+        while (end != nullptr && *end == L' ') ++end;
+        if (end == begin || end == nullptr || *end != L'\0') return false;
+        if (errno == ERANGE
+            || parsed <= static_cast<long long>(
+                std::numeric_limits<T>::lowest())) {
+            next = std::numeric_limits<T>::lowest();
+        } else if (parsed >= static_cast<long long>(
+                       std::numeric_limits<T>::max())) {
+            next = std::numeric_limits<T>::max();
+        } else {
+            next = static_cast<T>(parsed);
+        }
+    } else {
+        const bool negative = *begin == L'-';
+        const unsigned long long parsed = std::wcstoull(begin, &end, 10);
+        while (end != nullptr && *end == L' ') ++end;
+        if (end == begin || end == nullptr || *end != L'\0') return false;
+        if (negative) {
+            next = 0;
+        } else if (errno == ERANGE
+                   || parsed >= static_cast<unsigned long long>(
+                       std::numeric_limits<T>::max())) {
+            next = std::numeric_limits<T>::max();
+        } else {
+            next = static_cast<T>(parsed);
+        }
+    }
+    auto* target = static_cast<T*>(address);
     if (*target == next) return false;
     *target = next;
     return true;
@@ -6194,15 +6356,19 @@ void EditorSession::toggleSceneViewMode()
 
 void EditorSession::setSceneViewMode(SceneViewMode mode, bool persist)
 {
-    if (_sceneCamera.mode() != mode) {
+    const bool changed = _sceneCamera.mode() != mode;
+    if (changed) {
         if (_transformGizmo.active()) finishTransformGizmoDrag(false);
         _sceneCamera.threeD().endLook();
         _sceneCamera.endTwoDPan();
         _gizmoHoverHandle = EditorGizmoHandle::None;
         _sceneCamera.setMode(mode);
-        if (mode == SceneViewMode::TwoD) fitTwoDViewToSceneCamera();
-        if (persist) rememberCurrentSceneView();
     }
+    if (mode == SceneViewMode::TwoD && !_twoDSceneViewInitialized) {
+        fitTwoDViewToSceneCamera();
+        _twoDSceneViewInitialized = true;
+    }
+    if (changed && persist) rememberCurrentSceneView();
     syncSceneViewToolbar();
     syncSceneVisibilityMenu();
     pushSceneCameraToRenderer();
@@ -6314,6 +6480,7 @@ void EditorSession::syncSceneVisibilityMenu()
 void EditorSession::selectInitialSceneViewForDocument()
 {
     if (_document == nullptr) return;
+    _twoDSceneViewInitialized = false;
     _sceneVisibility = {};
     if (const EditorSceneVisibility* savedVisibility =
             _sceneViewWorkspace.findVisibility(_document->path())) {
@@ -6324,6 +6491,7 @@ void EditorSession::selectInitialSceneViewForDocument()
     const char* source = "engine-profile";
     if (saved != nullptr) {
         _sceneCamera.restoreState(*saved);
+        _twoDSceneViewInitialized = true;
         source = "workspace";
     } else {
         EditorSceneContentProfile content;
@@ -6348,7 +6516,10 @@ void EditorSession::selectInitialSceneViewForDocument()
             source = "content";
         }
         _sceneCamera.setMode(mode);
-        if (mode == SceneViewMode::TwoD) fitTwoDViewToSceneCamera();
+        if (mode == SceneViewMode::TwoD) {
+            fitTwoDViewToSceneCamera();
+            _twoDSceneViewInitialized = true;
+        }
     }
     const ayt::math::FVector2 center = _sceneCamera.twoDCenter();
     std::fprintf(stderr,
@@ -6383,14 +6554,27 @@ void EditorSession::fitTwoDViewToSceneCamera()
             worldLit = worldLit || (tilemap->visible && tilemap->isWorldLit());
         }
         if (!worldLit) continue;
-        const float halfWidth = std::max(0.5f,
-            std::fabs(transform->scale.x) * 0.5f);
-        const float halfHeight = std::max(0.5f,
-            std::fabs(transform->scale.y) * 0.5f);
-        minX = std::min(minX, transform->position.x - halfWidth);
-        maxX = std::max(maxX, transform->position.x + halfWidth);
-        minY = std::min(minY, transform->position.y - halfHeight);
-        maxY = std::max(maxY, transform->position.y + halfHeight);
+        Editor2DSelectionShape shape;
+        if (!editor2DSelectionShape(*entity, _assetDatabase,
+                                    _sceneCamera.viewportAspect(), shape)) {
+            continue;
+        }
+        const ayt::math::Float4x4 matrix =
+            editor2DShapeMatrix(*transform, shape);
+        const ayt::math::FVector2 localCorners[4] = {
+            {shape.localMin.x, shape.localMin.y},
+            {shape.localMax.x, shape.localMin.y},
+            {shape.localMax.x, shape.localMax.y},
+            {shape.localMin.x, shape.localMax.y},
+        };
+        for (const ayt::math::FVector2& corner : localCorners) {
+            const ayt::math::FVector3 worldCorner = matrix.transformPoint(
+                {corner.x, corner.y, 0.0f});
+            minX = std::min(minX, worldCorner.x);
+            maxX = std::max(maxX, worldCorner.x);
+            minY = std::min(minY, worldCorner.y);
+            maxY = std::max(maxY, worldCorner.y);
+        }
         hasWorldContent = true;
     }
     if (hasWorldContent) {
@@ -8093,15 +8277,19 @@ void EditorSession::rebuildComponentPropertyEditor()
                              const std::wstring& valueText,
                              int elementIndex,
                              bool numeric = false,
-                             bool integral = false) {
+                             bool integral = false,
+                             bool unsignedIntegral = false,
+                             int significantDigits = 9) {
             ayt::ui::TextInput* input = numeric
                 ? static_cast<ayt::ui::TextInput*>(new InspectorNumberInput())
                 : new ayt::ui::TextInput();
             input->setStyleId("editor_property_input");
             if (auto* number = dynamic_cast<InspectorNumberInput*>(input)) {
-                number->setInspectorText(valueText, integral);
-                number->setOnNumericScrub([number](float value) {
-                    number->setInspectorValue(value);
+                number->setInspectorText(valueText, integral,
+                                         unsignedIntegral,
+                                         significantDigits);
+                number->setOnNumericScrubDelta([number](double delta) {
+                    number->applyInspectorScrubDelta(delta);
                 });
             } else {
                 input->setText(valueText);
@@ -8273,6 +8461,9 @@ void EditorSession::rebuildComponentPropertyEditor()
         bool editableText = true;
         bool numericScalar = false;
         bool integralScalar = false;
+        bool unsignedIntegralScalar = false;
+        bool scrubbableScalar = false;
+        int scalarSignificantDigits = 9;
         double scalarValue = 0.0;
         if (isReflectedType<std::string>(fieldType)) {
             valueText = ayt::ui::decodeUtf8Text(
@@ -8280,46 +8471,59 @@ void EditorSession::rebuildComponentPropertyEditor()
         } else if (isReflectedType<float>(fieldType)) {
             scalarValue = *static_cast<float*>(fieldValue);
             numericScalar = true;
+            scrubbableScalar = true;
             valueText = formatPreciseFloat(static_cast<float>(scalarValue));
         } else if (isReflectedType<double>(fieldType)) {
             scalarValue = *static_cast<double*>(fieldValue);
             numericScalar = true;
+            scrubbableScalar = true;
+            scalarSignificantDigits = 17;
             valueText = formatPreciseDouble(scalarValue);
         } else if (isReflectedType<std::int8_t>(fieldType)) {
             scalarValue = *static_cast<std::int8_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<int>(scalarValue));
         } else if (isReflectedType<std::uint8_t>(fieldType)) {
             scalarValue = *static_cast<std::uint8_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            unsignedIntegralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<unsigned>(scalarValue));
         } else if (isReflectedType<std::int16_t>(fieldType)) {
             scalarValue = *static_cast<std::int16_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<int>(scalarValue));
         } else if (isReflectedType<std::uint16_t>(fieldType)) {
             scalarValue = *static_cast<std::uint16_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            unsignedIntegralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<unsigned>(scalarValue));
         } else if (isReflectedType<std::int32_t>(fieldType)) {
             scalarValue = *static_cast<std::int32_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<std::int64_t>(scalarValue));
         } else if (isReflectedType<std::uint32_t>(fieldType)) {
             scalarValue = *static_cast<std::uint32_t*>(fieldValue);
             numericScalar = true;
             integralScalar = true;
+            unsignedIntegralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(static_cast<std::uint64_t>(scalarValue));
         } else if (isReflectedType<std::int64_t>(fieldType)) {
             scalarValue = static_cast<double>(
                 *static_cast<std::int64_t*>(fieldValue));
             numericScalar = true;
             integralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(
                 *static_cast<std::int64_t*>(fieldValue));
         } else if (isReflectedType<std::uint64_t>(fieldType)) {
@@ -8327,6 +8531,8 @@ void EditorSession::rebuildComponentPropertyEditor()
                 *static_cast<std::uint64_t*>(fieldValue));
             numericScalar = true;
             integralScalar = true;
+            unsignedIntegralScalar = true;
+            scrubbableScalar = true;
             valueText = std::to_wstring(
                 *static_cast<std::uint64_t*>(fieldValue));
         } else if (auto* container = dynamic_cast<
@@ -8380,16 +8586,19 @@ void EditorSession::rebuildComponentPropertyEditor()
             slider->setEnabled(!readOnly);
             if (!tooltip.empty()) slider->setAccessibilityDescription(tooltip);
             row->addWidget(slider);
-            auto* input = makeInput(valueText, -1, true, integralScalar);
+            auto* input = makeInput(valueText, -1, true, integralScalar,
+                                    unsignedIntegralScalar,
+                                    scalarSignificantDigits);
             input->setSize({68.0f, 26.0f});
             input->setId("inspector_field_value_" + fieldName);
             const float step = field->getStep();
             slider->setOnValueChanged(
                 [this, componentTypeName, fieldName, input, step](float value) {
                     if (step > 0.0f) value = std::round(value / step) * step;
-                    const std::wstring text = formatPreciseFloat(value);
+                    std::wstring text = formatPreciseFloat(value);
                     if (auto* number = dynamic_cast<InspectorNumberInput*>(input)) {
-                        number->setInspectorText(text);
+                        number->setInspectorValue(static_cast<double>(value));
+                        text = number->preciseText();
                     } else {
                         input->setText(text);
                     }
@@ -8443,10 +8652,12 @@ void EditorSession::rebuildComponentPropertyEditor()
             _componentPropertyBody->addWidget(row, 26.0f);
             continue;
         }
-        auto* input = makeInput(valueText, -1, numericScalar, integralScalar);
+        auto* input = makeInput(valueText, -1, numericScalar, integralScalar,
+                                unsignedIntegralScalar,
+                                scalarSignificantDigits);
         input->setId("inspector_field_" + fieldName);
         input->setReadOnly(readOnly || !editableText);
-        input->setNumericScrubEnabled(editableText && numericScalar);
+        input->setNumericScrubEnabled(editableText && scrubbableScalar);
         input->setSize({240.0f, 26.0f});
         if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
         _componentPropertyBody->addWidget(input, 26.0f);
@@ -8520,14 +8731,17 @@ void EditorSession::commitInspectorTextField(
     const bool stringField = isReflectedType<std::string>(fieldType);
     double parsed = 0.0;
     if (!stringField && !parseDouble(text, parsed)) return;
+    bool constrainedIntegral = false;
     if ((componentType == "SpriteComponent"
          || componentType == "TilemapComponent")
         && fieldName == "layer") {
         parsed = std::clamp(parsed, 0.0, 31.0);
+        constrainedIntegral = true;
     } else if ((componentType == "SpriteComponent"
                 || componentType == "TilemapComponent")
                && fieldName == "sortingKey") {
         parsed = std::clamp(parsed, 0.0, 16777215.0);
+        constrainedIntegral = true;
     } else if (componentType == "OrthoCameraComponent"
                && (fieldName == "zoom" || fieldName == "viewSize")) {
         parsed = std::max(parsed, 0.0001);
@@ -8608,21 +8822,37 @@ void EditorSession::commitInspectorTextField(
         target = ayt::math::FQuaternion::fromEulerAngles(euler);
         changed = true;
     } else if (isReflectedType<std::int8_t>(fieldType)) {
-        changed = assignIntegralValue<std::int8_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::int8_t>(value, parsed)
+            : assignIntegralText<std::int8_t>(value, text);
     } else if (isReflectedType<std::uint8_t>(fieldType)) {
-        changed = assignIntegralValue<std::uint8_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::uint8_t>(value, parsed)
+            : assignIntegralText<std::uint8_t>(value, text);
     } else if (isReflectedType<std::int16_t>(fieldType)) {
-        changed = assignIntegralValue<std::int16_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::int16_t>(value, parsed)
+            : assignIntegralText<std::int16_t>(value, text);
     } else if (isReflectedType<std::uint16_t>(fieldType)) {
-        changed = assignIntegralValue<std::uint16_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::uint16_t>(value, parsed)
+            : assignIntegralText<std::uint16_t>(value, text);
     } else if (isReflectedType<std::int32_t>(fieldType)) {
-        changed = assignIntegralValue<std::int32_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::int32_t>(value, parsed)
+            : assignIntegralText<std::int32_t>(value, text);
     } else if (isReflectedType<std::uint32_t>(fieldType)) {
-        changed = assignIntegralValue<std::uint32_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::uint32_t>(value, parsed)
+            : assignIntegralText<std::uint32_t>(value, text);
     } else if (isReflectedType<std::int64_t>(fieldType)) {
-        changed = assignIntegralValue<std::int64_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::int64_t>(value, parsed)
+            : assignIntegralText<std::int64_t>(value, text);
     } else if (isReflectedType<std::uint64_t>(fieldType)) {
-        changed = assignIntegralValue<std::uint64_t>(value, parsed);
+        changed = constrainedIntegral
+            ? assignIntegralValue<std::uint64_t>(value, parsed)
+            : assignIntegralText<std::uint64_t>(value, text);
     }
     if (!changed) return;
     _commands.clear();

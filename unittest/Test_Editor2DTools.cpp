@@ -330,6 +330,30 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     CHECK(centerAfterDrag.x != centerBeforeDrag.x
           || centerAfterDrag.y != centerBeforeDrag.y);
 
+    // Switching away and back must preserve the user's independent 2D pose;
+    // automatic framing is a one-time document initialization operation.
+    const float heightAfterDrag = session.sceneCamera().twoDViewHeight();
+    auto* modeButton = dynamic_cast<ayt::ui::Button*>(
+        session.ui().findById("btn_view_mode"));
+    CHECK(modeButton != nullptr);
+    if (modeButton != nullptr) {
+        const auto bounds = modeButton->getWorldBounds();
+        const float buttonX = (bounds.minX + bounds.maxX) * 0.5f;
+        const float buttonY = (bounds.minY + bounds.maxY) * 0.5f;
+        CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
+        CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+        CHECK(session.sceneViewMode() == SceneViewMode::ThreeD);
+        CHECK_TRUE(session.onMouseButtonDown(buttonX, buttonY, 0));
+        CHECK_TRUE(session.onMouseButtonUp(buttonX, buttonY, 0));
+        CHECK(session.sceneViewMode() == SceneViewMode::TwoD);
+        CHECK_FLOAT_EQ(session.sceneCamera().twoDCenter().x,
+                       centerAfterDrag.x, 1e-5f);
+        CHECK_FLOAT_EQ(session.sceneCamera().twoDCenter().y,
+                       centerAfterDrag.y, 1e-5f);
+        CHECK_FLOAT_EQ(session.sceneCamera().twoDViewHeight(),
+                       heightAfterDrag, 1e-5f);
+    }
+
     EditorSceneDocument* editDocument = session.document();
     const std::size_t editEntityCount = editDocument != nullptr
         ? editDocument->scene().world().getAllEntities().size() : 0u;

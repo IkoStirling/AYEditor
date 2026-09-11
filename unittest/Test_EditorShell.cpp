@@ -2064,8 +2064,11 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
             picker->setSelectedIndex(healthIndex);
             CHECK(clickButton(add));
             CHECK(entity->getComponent<ayt::entity::HealthComponent>() != nullptr);
-            CHECK(findWidgetInTree(propertyBody,
-                                   "inspector_field_currentHp") != nullptr);
+            auto* healthValue = dynamic_cast<TextInput*>(findWidgetInTree(
+                propertyBody, "inspector_field_currentHp"));
+            CHECK(healthValue != nullptr);
+            CHECK(healthValue != nullptr
+                  && healthValue->isNumericScrubEnabled());
             CHECK(findWidgetInTree(propertyBody,
                                    "inspector_field_maxHp") != nullptr);
             CHECK(session.document() != nullptr);
