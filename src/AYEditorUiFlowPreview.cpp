@@ -243,8 +243,8 @@ bool EditorUiFlowPreview::rebuild(
                     return ayt::app::UIFlowGraphNodeResult::completed();
                 }, false, &localError)) {
             _impl->error = std::move(localError);
-            _impl->runtime.reset();
             _impl->graphExecutor.setDocument(nullptr);
+            _impl->runtime.reset();
             if (error != nullptr) *error = _impl->error;
             return false;
         }
@@ -300,6 +300,7 @@ bool EditorUiFlowPreview::rebuild(
     if (!_impl->runtime->start(entry, &localError)
         || !_impl->runtime->beginScope(
             ayt::ui::UIFlowScope::World, "preview-world", &localError)) {
+        _impl->graphExecutor.setDocument(nullptr);
         _impl->error = std::move(localError);
         _impl->runtime.reset();
         _impl->host.screens.clear();
@@ -315,9 +316,9 @@ bool EditorUiFlowPreview::rebuild(
 
 void EditorUiFlowPreview::stop() noexcept
 {
-    _impl->runtime.reset();
     _impl->graphExecutor.reset();
     _impl->graphExecutor.setDocument(nullptr);
+    _impl->runtime.reset();
     _impl->document = nullptr;
     _impl->host.screens.clear();
     _impl->states.clear();
@@ -352,6 +353,7 @@ void EditorUiFlowPreview::clearVisualHost() noexcept
 
 void EditorUiFlowPreview::tick(float deltaSeconds)
 {
+    _impl->graphExecutor.update(static_cast<double>(deltaSeconds));
     if (_impl->host.visual != nullptr) {
         _impl->host.visual->update(deltaSeconds);
     }

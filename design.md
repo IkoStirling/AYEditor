@@ -1286,6 +1286,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-11 | UI Flow 阶段六以 `validateUIFlowAssets` 建立 Screen 布局/动画的生产资产闭包；Flow Editor、项目验证器和后续 packager 共用去重依赖与反向 Screen 引用，不再等到状态实际挂载后才暴露缺失资产。 |
 | 2026-09-11 | UI Flow 阶段七以 Screen `handler -> Signal` 映射闭合真实 Widget 交互；Graph 节点与 Pin 选择统一由可扩展 registry 提供，基础 wire format 保持开放、编辑器按宿主词汇表执行严格校验。 |
 | 2026-09-11 | UI Flow 阶段八以 AYApplication `UIFlowGraphExecutor` 执行宿主节点、传播类型化值并支持异步续跑/中断；Flow Editor 预览复用该执行器，Graph 画布按同一 registry 绘制彩色 Pin、贝塞尔 link 并过滤不兼容目标。 |
+| 2026-09-12 | UI Flow 阶段九升级为依赖感知执行：Flow Editor 预览逐帧驱动 Graph timeout，并在 Runtime/Document 销毁前先取消异步 continuation，保持与生产执行器的数据依赖、并行和 Join 语义一致。 |
 
 ---
 
