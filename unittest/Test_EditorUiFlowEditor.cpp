@@ -17,7 +17,10 @@
 #include <AYEditor/EditorAssetDatabase.h>
 #include <AYEditor/EditorProjectAssetFactory.h>
 #include <AYIO/File.h>
+#include <AYUI/Button.h>
+#include <AYUI/ComboBox.h>
 #include <AYUI/UIFlow.h>
+#include <AYUI/UIFlowGraphNodeRegistry.h>
 #include <AYUI/ListView.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/UIManager.h>
@@ -65,7 +68,8 @@ ayt::ui::UIFlowDocument previewFlow()
     };
     flow.screens = {
         UIFlowScreenDefinition{"menu", "ui/menu.ui.json", "application",
-                               "application.main", UIFlowScope::Application},
+                               "application.main", UIFlowScope::Application,
+                               {}, {}, {}, {{"continueFlow", "start"}}},
         UIFlowScreenDefinition{"hud", "ui/hud.ui.json", "hud",
                                "hud.main", UIFlowScope::World},
     };
@@ -132,6 +136,20 @@ TEST_CASE(document_starts_valid_and_renames_references_atomically)
     screen.sixth = "fade-out";
     CHECK(document.applySelectedProperties(screen, &error));
     CHECK(document.flow().screens.front().enterAnimation == "fade-in");
+    CHECK(document.addObject(EditorUiFlowObjectKind::Signal, {}, &error));
+    const std::string signalId = document.selection().id;
+    CHECK(document.select({EditorUiFlowObjectKind::Screen, "screen_1", {}}));
+    screen = document.selectedProperties();
+    screen.seventh = "continueFlow=" + signalId;
+    CHECK(document.applySelectedProperties(screen, &error));
+    CHECK(document.flow().screens.front().events.size() == 1u);
+    CHECK(document.select({EditorUiFlowObjectKind::Signal, signalId, {}}));
+    EditorUiFlowProperties signal = document.selectedProperties();
+    signal.id = "start_game";
+    CHECK(document.applySelectedProperties(signal, &error));
+    CHECK(document.flow().screens.front().events.front().signal == "start_game");
+    CHECK_FALSE(document.deleteSelection(&error));
+    CHECK(error.find("referenced") != std::string::npos);
     CHECK(document.select({EditorUiFlowObjectKind::Context, "Application", {}}));
     EditorUiFlowProperties context = document.selectedProperties();
     context.first = "application.main=screen_1; !hud.main";
@@ -265,7 +283,7 @@ TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
     fs::create_directories(root / "ui", ignored);
     CHECK(ayt::io::File::writeAllText(
         (root / "ui" / "menu.ui.json").string(),
-        R"json({"type":"Panel","id":"visual_menu","children":[{"type":"Button","id":"visual_start","text":"Start"}]})json"));
+        R"json({"type":"Panel","id":"visual_menu","children":[{"type":"Button","id":"visual_start","text":"Start","events":{"onClick":"continueFlow"}}]})json"));
     CHECK(ayt::io::File::writeAllText(
         (root / "ui" / "hud.ui.json").string(),
         R"json({"type":"Panel","id":"visual_hud"})json"));
@@ -290,6 +308,21 @@ TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
           && manager.findById("visual_menu")->getSize().x == 480.0f);
     CHECK(manager.findById("visual_menu") != nullptr
           && manager.findById("visual_menu")->getSize().y == 320.0f);
+    auto* start = dynamic_cast<ayt::ui::Button*>(
+        manager.findById("visual_start"));
+    CHECK(start != nullptr);
+    if (start != nullptr) {
+        const auto bounds = start->getWorldBounds();
+        const ayt::ui::UIMouseEvent click(
+            {(bounds.minX + bounds.maxX) * 0.5f,
+             (bounds.minY + bounds.maxY) * 0.5f}, 0);
+        CHECK(start->onMouseMove(click));
+        CHECK(start->onMouseButtonDown(click));
+        CHECK(start->onMouseButtonUp(click));
+    }
+    preview.tick(0.0f);
+    CHECK(preview.activeStates().at("application") == "game");
+    CHECK(manager.findById("visual_hud") != nullptr);
 
     preview.clearVisualHost();
     CHECK(manager.findById("visual_menu") == nullptr);
@@ -323,6 +356,11 @@ TEST_CASE(flow_editor_surfaces_asset_closure_diagnostics_per_revision)
     config.assetRoot = root.string();
     EditorUiFlowController controller(document, std::move(config));
     CHECK(controller.attach(manager));
+    CHECK(dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_graph_node_type")) != nullptr);
+    CHECK(dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_graph_from")) != nullptr);
+    CHECK(manager.findById("flow_prop_g") != nullptr);
     auto* diagnostics = dynamic_cast<ayt::ui::ListView*>(
         manager.findById("flow_diagnostics"));
     CHECK(diagnostics != nullptr);

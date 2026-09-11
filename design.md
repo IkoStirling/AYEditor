@@ -1216,6 +1216,17 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Headless profile 只确认 Flow schema、引用、根目录约束和文件存在；Full Client profile 才创建真实
   Widget 树并解析动画。两者共用同一 portable dependency key，避免验证结果与部署输入分叉。
 
+### 10.19 UI Flow interaction authoring（阶段七）
+
+- Screen Inspector 增加可往返的 `handler=signal; ...` 映射。Signal 重命名会原子更新映射，被 Screen
+  引用的 Signal 不允许删除；模型 validator 检查 Signal 存在及 command-event 所需默认 payload，
+  Full Client 资产审计再确认 handler 确实存在于 Screen 布局。
+- 真实预览把生产 Runtime emitter 透传到内部 `UIManagerFlowScreenHost`。用户点击带声明式事件的真实
+  Button 会立即进入同一 Signal 队列、驱动 Region/State/Context 和 Screen 重挂，而不是由编辑器模拟。
+- Graph 工具栏的节点类型、输出端和输入端改为 ComboBox。内建通用节点词汇和
+  `EditorUiFlowExtensionConfig::graphNodeTypes` 共用 AYUI `UIFlowGraphNodeRegistry`；宿主可覆盖同名定义，
+  Inspector diagnostics 对节点类型、Pin 方向/类型和属性做严格检查，但执行语义仍由游戏/插件注册。
+
 ---
 
 ## 11. Decisions log
@@ -1261,6 +1272,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-11 | UI Flow 阶段四采用独立 AYDevice 工具窗；创作、诊断与逻辑预览复用同一 `UIFlowDocument`/serializer/validator/`UIFlowRuntime`，编辑器只以 mock Screen Host/Action 显示状态，不另建运行格式或状态机。 |
 | 2026-09-11 | UI Flow 阶段五将生产 `UIManagerFlowScreenHost` 挂入独立裁剪预览视口，并以项目 `assetRoot` 加载真实 Screen；异步 Graph、中断策略、动画交接、reload/replay 与 reduced-motion 共用运行时契约。 |
 | 2026-09-11 | UI Flow 阶段六以 `validateUIFlowAssets` 建立 Screen 布局/动画的生产资产闭包；Flow Editor、项目验证器和后续 packager 共用去重依赖与反向 Screen 引用，不再等到状态实际挂载后才暴露缺失资产。 |
+| 2026-09-11 | UI Flow 阶段七以 Screen `handler -> Signal` 映射闭合真实 Widget 交互；Graph 节点与 Pin 选择统一由可扩展 registry 提供，基础 wire format 保持开放、编辑器按宿主词汇表执行严格校验。 |
 
 ---
 

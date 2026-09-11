@@ -2,9 +2,12 @@
 
 #include "AYEditor/EditorExtensionRegistry.h"
 
+#include <AYUI/UIFlowGraphNodeRegistry.h>
+
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ayt::ui {
 class UIManager;
@@ -22,6 +25,7 @@ struct EditorUiFlowExtensionConfig {
     std::function<std::string()> openPathPicker;
     std::function<std::string()> savePathPicker;
     std::string assetRoot;
+    std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> graphNodeTypes;
 };
 
 class EditorUiFlowController {

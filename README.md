@@ -18,7 +18,7 @@ RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
 独立窗口的绘制后端建立本地纹理，因此导入预览、Source Sheet 与画布铺砖共用同一
 份可见图像，不会误用主窗口的后端句柄。
 
-项目 UI Flow 创作阶段五也已接入：`.uiflow.json` 可由 Content Browser 创建、识别和双击打开，
+项目 UI Flow 创作阶段七也已接入：`.uiflow.json` 可由 Content Browser 创建、识别和双击打开，
 或通过 `Tools -> UI Flow Editor...` 打开项目描述符声明的 Flow。独立 Flow 工具窗提供完整模型
 Outline、Region/State/Transition 与 Graph 画布、Layer/Screen/Context/Transition Inspector、
 实时诊断、Signal 模拟和 Mock Action trace。预览直接复用生产 `UIFlowRuntime`，并在裁剪视口中
@@ -26,6 +26,8 @@ Outline、Region/State/Transition 与 Graph 画布、Layer/Screen/Context/Transi
 Screen 与运行 trace 列表用于诊断。
 阶段六进一步把模型诊断扩展到完整资产闭包：所有 Screen 引用的布局、进出场动画及轨道目标会在
 编辑时验证；项目内容验证器同时输出去重的 `Flow -> Layout -> Screens` 依赖，供部署打包复用。
+Screen Inspector 现在可把布局语义 handler 映射到 Flow Signal，真实预览中的控件点击会直接驱动
+生产状态机；Graph 节点类型和兼容 Pin 由可扩展注册表提供下拉选择，并在编辑时进行严格诊断。
 
 ## 公开接口
 

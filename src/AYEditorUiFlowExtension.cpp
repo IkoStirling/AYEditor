@@ -401,6 +401,51 @@ bool splitEndpoint(const std::wstring& text,
     return !node.empty() && !pin.empty();
 }
 
+ayt::ui::UIFlowGraphNodeTypeDefinition makeCommandNodeType(
+    std::string type,
+    std::string displayName,
+    std::string category,
+    bool canFail = false)
+{
+    using Direction = ayt::ui::UIFlowGraphPinDirection;
+    using Kind = ayt::ui::UIFlowGraphPinKind;
+    ayt::ui::UIFlowGraphNodeTypeDefinition result;
+    result.type = std::move(type);
+    result.displayName = std::move(displayName);
+    result.category = std::move(category);
+    result.pins = {
+        {"execute", Direction::Input, Kind::Execution},
+        {"completed", Direction::Output, Kind::Execution},
+    };
+    if (canFail) {
+        result.pins.push_back({"failed", Direction::Output, Kind::Execution});
+    }
+    return result;
+}
+
+std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> builtInGraphNodeTypes()
+{
+    return {
+        makeCommandNodeType("host.action", "Invoke Host Action", "Host", true),
+        makeCommandNodeType("ui.present", "Present Screen", "UI"),
+        makeCommandNodeType("ui.playAnimation", "Play UI Animation", "UI"),
+        makeCommandNodeType("game.world.load", "Load World", "Game", true),
+        makeCommandNodeType("flow.emitSignal", "Emit Signal", "Flow"),
+        makeCommandNodeType("flow.invokeAction", "Invoke Action", "Flow", true),
+    };
+}
+
+void selectComboItem(ayt::ui::ComboBox& combo,
+                     const std::vector<std::wstring>& items,
+                     const std::wstring& preferred)
+{
+    combo.setItems(items);
+    const auto found = std::find(items.begin(), items.end(), preferred);
+    combo.setSelectedIndex(found != items.end()
+        ? static_cast<int>(std::distance(items.begin(), found))
+        : items.empty() ? -1 : 0);
+}
+
 // EditorExtensionRegistry requires every document editor to expose a view
 // factory. Desktop AYEditor opens this editor in an AYDevice child window;
 // hosts without child-window support receive an explicit launch surface
@@ -444,6 +489,13 @@ public:
          EditorUiFlowExtensionConfig cfg)
         : document(std::move(value)), config(std::move(cfg))
     {
+        for (auto& type : builtInGraphNodeTypes()) {
+            (void)graphRegistry.registerType(std::move(type));
+        }
+        for (auto& type : config.graphNodeTypes) {
+            (void)graphRegistry.unregisterType(type.type);
+            (void)graphRegistry.registerType(std::move(type));
+        }
         if (document != nullptr) {
             document->setChangedHandler([this]() {
                 refreshPending = true;
@@ -483,6 +535,7 @@ public:
         propD = nullptr;
         propE = nullptr;
         propF = nullptr;
+        propG = nullptr;
         propNumber = nullptr;
         propFlag = nullptr;
         graphNodeType = nullptr;
@@ -542,6 +595,14 @@ public:
                     ? "ASSET ERROR  " : "ASSET WARN   ")
                 + value.path + "  " + value.message));
         }
+        std::vector<ayt::ui::UIFlowDiagnostic> graphDiagnostics;
+        (void)ayt::ui::validateUIFlowGraphNodes(
+            document->flow(), graphRegistry, &graphDiagnostics);
+        for (const auto& value : graphDiagnostics) {
+            diagnosticRows.push_back(wide(
+                std::string("NODE ERROR  ") + value.path + "  "
+                + value.message));
+        }
         if (diagnosticRows.empty()) diagnosticRows.push_back(L"No diagnostics");
         diagnostics->setItems(diagnosticRows);
         if (auto* title = widgetAs<ayt::ui::TextLabel>(
@@ -560,6 +621,7 @@ public:
         propD->setText(wide(properties.fourth));
         propE->setText(wide(properties.fifth));
         propF->setText(wide(properties.sixth));
+        propG->setText(wide(properties.seventh));
         propNumber->setText(std::to_wstring(properties.number));
         propFlag->setChecked(properties.flag);
         setFieldLabel("flow_lbl_a", labels.first, propA);
@@ -568,6 +630,7 @@ public:
         setFieldLabel("flow_lbl_d", labels.fourth, propD);
         setFieldLabel("flow_lbl_e", labels.fifth, propE);
         setFieldLabel("flow_lbl_f", labels.sixth, propF);
+        setFieldLabel("flow_lbl_g", labels.seventh, propG);
         setFieldLabel("flow_lbl_number", labels.number, propNumber);
         if (auto* label = widgetAs<ayt::ui::TextLabel>(*ui, "flow_lbl_flag")) {
             label->setText(wide(labels.flag));
@@ -598,6 +661,7 @@ public:
             entry->setSelectedIndex(static_cast<int>(
                 std::distance(document->flow().entries.begin(), selectedEntry)));
         }
+        refreshGraphChoices();
         refreshPreviewLists();
         if (canvas != nullptr) canvas->markDirty();
         ui->invalidateLayout();
@@ -631,6 +695,39 @@ public:
         }
         if (traceRows.empty()) traceRows.push_back(L"No preview events");
         trace->setItems(traceRows);
+    }
+
+    void refreshGraphChoices()
+    {
+        const std::wstring selectedType = graphNodeType->getSelectedItem();
+        std::vector<std::wstring> nodeTypes;
+        nodeTypes.reserve(graphRegistry.types().size());
+        for (const auto& type : graphRegistry.types()) {
+            nodeTypes.push_back(wide(type.type));
+        }
+        selectComboItem(*graphNodeType, nodeTypes, selectedType);
+
+        std::vector<std::wstring> outputs;
+        std::vector<std::wstring> inputs;
+        if (document->selection().kind == EditorUiFlowObjectKind::Graph) {
+            if (const auto* graph = document->flow().findGraph(
+                    document->selection().id)) {
+                for (const auto& node : graph->nodes) {
+                    const auto* type = graphRegistry.find(node.type);
+                    if (type == nullptr) continue;
+                    for (const auto& pin : type->pins) {
+                        auto& choices = pin.direction
+                                == ayt::ui::UIFlowGraphPinDirection::Output
+                            ? outputs : inputs;
+                        choices.push_back(wide(node.id + "." + pin.id));
+                    }
+                }
+            }
+        }
+        const std::wstring selectedOutput = graphFrom->getSelectedItem();
+        const std::wstring selectedInput = graphTo->getSelectedItem();
+        selectComboItem(*graphFrom, outputs, selectedOutput);
+        selectComboItem(*graphTo, inputs, selectedInput);
     }
 
     bool restart(std::string* output)
@@ -675,6 +772,7 @@ public:
     std::shared_ptr<EditorUiFlowDocument> document;
     EditorUiFlowExtensionConfig config;
     EditorUiFlowPreview preview;
+    ayt::ui::UIFlowGraphNodeRegistry graphRegistry;
     StateChanged stateChanged;
     ayt::ui::UIManager* ui = nullptr;
     ayt::ui::ListView* outline = nullptr;
@@ -692,11 +790,12 @@ public:
     ayt::ui::TextInput* propD = nullptr;
     ayt::ui::TextInput* propE = nullptr;
     ayt::ui::TextInput* propF = nullptr;
+    ayt::ui::TextInput* propG = nullptr;
     ayt::ui::TextInput* propNumber = nullptr;
     ayt::ui::CheckBox* propFlag = nullptr;
-    ayt::ui::TextInput* graphNodeType = nullptr;
-    ayt::ui::TextInput* graphFrom = nullptr;
-    ayt::ui::TextInput* graphTo = nullptr;
+    ayt::ui::ComboBox* graphNodeType = nullptr;
+    ayt::ui::ComboBox* graphFrom = nullptr;
+    ayt::ui::ComboBox* graphTo = nullptr;
     ayt::ui::TextLabel* status = nullptr;
     ayt::ui::Panel* canvasHost = nullptr;
     ayt::ui::Panel* visualPreviewHost = nullptr;
@@ -738,11 +837,12 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->propD = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_d");
     _impl->propE = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_e");
     _impl->propF = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_f");
+    _impl->propG = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_g");
     _impl->propNumber = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_number");
     _impl->propFlag = widgetAs<ayt::ui::CheckBox>(ui, "flow_prop_flag");
-    _impl->graphNodeType = widgetAs<ayt::ui::TextInput>(ui, "flow_graph_node_type");
-    _impl->graphFrom = widgetAs<ayt::ui::TextInput>(ui, "flow_graph_from");
-    _impl->graphTo = widgetAs<ayt::ui::TextInput>(ui, "flow_graph_to");
+    _impl->graphNodeType = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_node_type");
+    _impl->graphFrom = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_from");
+    _impl->graphTo = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_to");
     _impl->status = widgetAs<ayt::ui::TextLabel>(ui, "flow_status");
     _impl->canvasHost = widgetAs<ayt::ui::Panel>(ui, "flow_canvas_host");
     _impl->visualPreviewHost =
@@ -754,7 +854,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         || _impl->propId == nullptr || _impl->propA == nullptr
         || _impl->propB == nullptr || _impl->propC == nullptr
         || _impl->propD == nullptr || _impl->propE == nullptr
-        || _impl->propF == nullptr || _impl->propNumber == nullptr
+        || _impl->propF == nullptr || _impl->propG == nullptr
+        || _impl->propNumber == nullptr
         || _impl->propFlag == nullptr || _impl->graphNodeType == nullptr
         || _impl->graphFrom == nullptr || _impl->graphTo == nullptr
         || _impl->status == nullptr
@@ -793,6 +894,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         value.fourth = encodeUtf8(impl->propD->getText());
         value.fifth = encodeUtf8(impl->propE->getText());
         value.sixth = encodeUtf8(impl->propF->getText());
+        value.seventh = encodeUtf8(impl->propG->getText());
         try { value.number = std::stoi(impl->propNumber->getText()); }
         catch (...) { value.number = 0; }
         value.flag = impl->propFlag->isChecked();
@@ -861,7 +963,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         std::string error;
         if (!impl->document->addGraphNode(
                 impl->document->selection().id,
-                encodeUtf8(impl->graphNodeType->getText()), &error)) {
+                encodeUtf8(impl->graphNodeType->getSelectedItem()), &error)) {
             impl->setStatus(error, true);
         }
     });
@@ -874,9 +976,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         std::string fromPin;
         std::string toNode;
         std::string toPin;
-        if (!splitEndpoint(impl->graphFrom->getText(), fromNode, fromPin)
-            || !splitEndpoint(impl->graphTo->getText(), toNode, toPin)) {
-            impl->setStatus("Graph endpoints use node.pin syntax.", true);
+        if (!splitEndpoint(impl->graphFrom->getSelectedItem(), fromNode, fromPin)
+            || !splitEndpoint(impl->graphTo->getSelectedItem(), toNode, toPin)) {
+            impl->setStatus("Select compatible graph endpoints.", true);
             return;
         }
         std::string error;

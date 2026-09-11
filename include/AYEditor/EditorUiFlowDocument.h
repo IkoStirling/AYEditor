@@ -54,6 +54,7 @@ struct EditorUiFlowProperties {
     std::string fourth;
     std::string fifth;
     std::string sixth;
+    std::string seventh;
     std::int32_t number = 0;
     bool flag = false;
 };
@@ -65,6 +66,7 @@ struct EditorUiFlowPropertyLabels {
     std::string fourth;
     std::string fifth;
     std::string sixth;
+    std::string seventh;
     std::string number;
     std::string flag;
 };

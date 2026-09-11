@@ -114,6 +114,15 @@ public:
             sort();
         }
 
+        void setSignalEmitter(
+            ayt::app::UIFlowScreenSignalEmitter emitter) override
+        {
+            signalEmitter = std::move(emitter);
+            if (visual != nullptr) {
+                visual->setSignalEmitter(signalEmitter);
+            }
+        }
+
         void sort()
         {
             std::stable_sort(screens.begin(), screens.end(),
@@ -127,6 +136,7 @@ public:
 
         std::vector<EditorUiFlowPreviewScreen> screens;
         std::unique_ptr<ayt::app::UIManagerFlowScreenHost> visual;
+        ayt::app::UIFlowScreenSignalEmitter signalEmitter;
         std::unordered_map<std::uint64_t, std::uint64_t> visualMountIds;
         std::uint64_t nextVisualMountId = 1;
     };
@@ -253,6 +263,7 @@ void EditorUiFlowPreview::tick(float deltaSeconds)
     if (_impl->host.visual != nullptr) {
         _impl->host.visual->update(deltaSeconds);
     }
+    _impl->refreshStates();
 }
 
 bool EditorUiFlowPreview::isRunning() const noexcept

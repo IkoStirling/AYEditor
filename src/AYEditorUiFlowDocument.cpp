@@ -124,6 +124,55 @@ bool parseAssignments(
     return true;
 }
 
+std::string joinScreenEvents(
+    const std::vector<ayt::ui::UIFlowScreenEventBinding>& values)
+{
+    std::string result;
+    for (const auto& value : values) {
+        if (!result.empty()) result += "; ";
+        result += value.handler + "=" + value.signal;
+    }
+    return result;
+}
+
+bool parseScreenEvents(
+    const std::string& source,
+    std::vector<ayt::ui::UIFlowScreenEventBinding>& values,
+    std::string* error)
+{
+    values.clear();
+    std::unordered_set<std::string> handlers;
+    std::stringstream stream(source);
+    std::string item;
+    while (std::getline(stream, item, ';')) {
+        item = trim(std::move(item));
+        if (item.empty()) continue;
+        const std::size_t equals = item.find('=');
+        if (equals == std::string::npos) {
+            if (error != nullptr) {
+                *error = "Screen events use handler=signal, separated by ';'.";
+            }
+            return false;
+        }
+        std::string handler = trim(item.substr(0, equals));
+        std::string signal = trim(item.substr(equals + 1));
+        if (handler.empty() || signal.empty()) {
+            if (error != nullptr) {
+                *error = "Screen event mappings require handler and Signal IDs.";
+            }
+            return false;
+        }
+        if (!handlers.insert(handler).second) {
+            if (error != nullptr) {
+                *error = "A Screen handler can map to only one Signal.";
+            }
+            return false;
+        }
+        values.push_back({std::move(handler), std::move(signal)});
+    }
+    return true;
+}
+
 bool parseUnsigned(const std::string& source, std::uint32_t& value)
 {
     const std::string input = trim(source);
@@ -528,6 +577,7 @@ EditorUiFlowProperties EditorUiFlowDocument::selectedProperties() const
             result.fourth = ayt::ui::uiFlowScopeName(value->scope);
             result.fifth = value->enterAnimation;
             result.sixth = value->exitAnimation;
+            result.seventh = joinScreenEvents(value->events);
         }
         break;
     case EditorUiFlowObjectKind::Context:
@@ -585,14 +635,15 @@ EditorUiFlowPropertyLabels EditorUiFlowDocument::selectedPropertyLabels() const
         return {"Default Entry"};
     case EditorUiFlowObjectKind::Layer:
         return {"Input Policy", "Max Active Screens (0 = unlimited)",
-                {}, {}, {}, {}, "Order", "Block Lower"};
+                {}, {}, {}, {}, {}, "Order", "Block Lower"};
     case EditorUiFlowObjectKind::Slot:
-        return {"Layer", {}, {}, {}, "Capacity", "Restore"};
+        return {"Layer", {}, {}, {}, {}, {}, {}, "Capacity", "Restore"};
     case EditorUiFlowObjectKind::Screen:
         return {"Layout Asset", "Layer", "Slot", "Scope",
-                "Enter Animation", "Exit Animation"};
+                "Enter Animation", "Exit Animation",
+                "Widget Events (handler=signal; ...)"};
     case EditorUiFlowObjectKind::Context:
-        return {"Assignments (slot=screen; !slot)", {}, {}, {}, {}, {},
+        return {"Assignments (slot=screen; !slot)", {}, {}, {}, {}, {}, {},
                 "Priority"};
     case EditorUiFlowObjectKind::Entry:
         return {"Contexts (CSV)", "Action Graph"};
@@ -603,7 +654,7 @@ EditorUiFlowPropertyLabels EditorUiFlowDocument::selectedPropertyLabels() const
                 "Enter Graph, Exit Graph"};
     case EditorUiFlowObjectKind::Transition:
         return {"Region", "From State", "To State", "Trigger Signal",
-                "Guard Expression", "Action Graph", "Priority", "Coalesce"};
+                "Guard Expression", "Action Graph", {}, "Priority", "Coalesce"};
     case EditorUiFlowObjectKind::Signal:
         return {"Payload fields are preserved by the wire contract"};
     case EditorUiFlowObjectKind::Action:
@@ -692,6 +743,11 @@ bool EditorUiFlowDocument::renameSelection(
         for (auto& value : _flow.transitions) {
             if (value.triggerSignal == oldId) value.triggerSignal = newId;
         }
+        for (auto& screen : _flow.screens) {
+            for (auto& event : screen.events) {
+                if (event.signal == oldId) event.signal = newId;
+            }
+        }
         break;
     case EditorUiFlowObjectKind::Action:
         findById(_flow.actions, oldId)->id = newId;
@@ -753,6 +809,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
         && beforeProperties.fourth == properties.fourth
         && beforeProperties.fifth == properties.fifth
         && beforeProperties.sixth == properties.sixth
+        && beforeProperties.seventh == properties.seventh
         && beforeProperties.number == properties.number
         && beforeProperties.flag == properties.flag) {
         if (error != nullptr) error->clear();
@@ -760,6 +817,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
     }
     std::uint32_t parsedMaximum = 0u;
     std::vector<ayt::ui::UIFlowSlotAssignment> parsedAssignments;
+    std::vector<ayt::ui::UIFlowScreenEventBinding> parsedScreenEvents;
     if (_selection.kind == EditorUiFlowObjectKind::Layer
         && !parseUnsigned(properties.second, parsedMaximum)) {
         if (error != nullptr) *error = "Max Active Screens must be a non-negative integer.";
@@ -767,6 +825,11 @@ bool EditorUiFlowDocument::applySelectedProperties(
     }
     if (_selection.kind == EditorUiFlowObjectKind::Context
         && !parseAssignments(properties.first, parsedAssignments, error)) {
+        return false;
+    }
+    if (_selection.kind == EditorUiFlowObjectKind::Screen
+        && !parseScreenEvents(
+            properties.seventh, parsedScreenEvents, error)) {
         return false;
     }
     Snapshot before = snapshot();
@@ -800,6 +863,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
         value->scope = parseScope(properties.fourth);
         value->enterAnimation = trim(properties.fifth);
         value->exitAnimation = trim(properties.sixth);
+        value->events = std::move(parsedScreenEvents);
         break;
     }
     case EditorUiFlowObjectKind::Context: {
@@ -1057,6 +1121,7 @@ bool EditorUiFlowDocument::selectionIsReferenced(std::string& reference) const
         break;
     case EditorUiFlowObjectKind::Signal:
         for (const auto& transition : _flow.transitions) if (transition.triggerSignal == id) { reference = "Transition " + transition.id; return true; }
+        for (const auto& screen : _flow.screens) for (const auto& event : screen.events) if (event.signal == id) { reference = "Screen " + screen.id; return true; }
         break;
     case EditorUiFlowObjectKind::Region:
         for (const auto& transition : _flow.transitions) if (transition.region == id) { reference = "Transition " + transition.id; return true; }
