@@ -26,8 +26,16 @@ struct EditorUiLayoutExtensionConfig {
     std::function<std::string()> openPathPicker;
     std::function<std::string()> savePathPicker;
     std::function<std::string()> texturePathPicker;
+    std::function<std::string()> themePathPicker;
     std::function<std::vector<ayt::ui::LayoutTextureResource>()>
         textureResourceProvider;
+    // Project-level reusable components shared by every *.ui.json document.
+    // Evaluated on attach so projects selected after editor construction use
+    // the current asset root.
+    std::function<std::string()> externalComponentLibraryPath;
+    std::function<bool(const std::string&, std::string&)> openOwningFlowAction;
+    std::function<bool(const std::string&, std::string&)>
+        completeFlowSignalsAction;
 };
 
 // Shared UI-layout authoring controller used by both the AYEditor tool-window

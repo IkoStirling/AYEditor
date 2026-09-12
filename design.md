@@ -1260,6 +1260,20 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   完整落在各自容器内，Canvas/真实 Screen Preview 必须保有正面积，所有操作文字必须进入渲染提交，
   裁剪栈必须成对闭合。1280 档的 Graph 编排控件采用紧凑宽度，避免 Pin 选择器越界覆盖 Inspector。
 
+### 10.23 UI Designer project workflow
+
+- `EditorUiDesignerWorkflow` 扫描项目 asset root 下的 `.ui.json` 与 `.uiflow.json`，建立
+  `Screen -> Layout` 和 `Layout -> Screens` 双向索引。它是 editor-only 项目服务，不进入 AYUI
+  runtime，也不复制 Flow 执行语义。
+- Layout Designer 的 Workflow 菜单可定位第一个 owning Screen，并可将布局中声明的 Widget handler
+  补全为 Screen event 与 Flow Signal；已有同名 Signal 优先复用，新 Signal 使用稳定的
+  `screen.handler` 名字。Flow Editor 的 **Open Layout** 对选中 Screen 执行反向导航。
+- 项目重构只处理已知 schema 字段：Layout asset、Flow signal、Widget handler、Widget ID 及动画轨道
+  target。计划阶段记录每个文件的原始内容；提交前全部复核，随后用同目录 temporary/backup 文件安装，
+  任一失败则恢复所有已安装文件。字符串相同但语义无关的普通文本不会被替换。
+- 文档所有权保持在 Workspace：跳转优先聚焦已有文档；补全或重构若会覆盖一个已打开的 dirty Flow，
+  必须拒绝并要求用户先保存或放弃。磁盘事务完成后只重载未修改的打开文档。
+
 ---
 
 ## 11. Decisions log
@@ -1310,6 +1324,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-12 | UI Flow 阶段九升级为依赖感知执行：Flow Editor 预览逐帧驱动 Graph timeout，并在 Runtime/Document 销毁前先取消异步 continuation，保持与生产执行器的数据依赖、并行和 Join 语义一致。 |
 | 2026-09-12 | UI Flow 阶段十加入副作用前断点、Pause Next、Step/Continue 和输入/输出快照；Flow Editor 仅呈现生产执行器调试状态，并在 Graph 画布高亮暂停节点。 |
 | 2026-09-12 | UI Flow 阶段十一以 presentation revision 同步异步预览显示，并把三档窗口尺寸、操作文字、双预览区和裁剪栈固化为自动化视觉契约。 |
+| 2026-09-12 | UI Designer 工作流建立 Layout/Flow 双向项目索引、一键导航、handler-to-Signal 补全及 schema-aware 多文件重命名事务；dirty 打开文档禁止被磁盘操作覆盖。 |
 
 ---
 

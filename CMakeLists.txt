@@ -72,6 +72,7 @@ set(SRC_FILES
     src/AYEditorDslDocument.cpp
     src/AYEditorDslExtension.cpp
     src/AYEditorUiLayoutDocument.cpp
+    src/AYEditorUiDesignerWorkflow.cpp
     src/AYEditorUiLayoutExtension.cpp
     src/AYEditorUiFlowDocument.cpp
     src/AYEditorUiFlowPreview.cpp
@@ -138,6 +139,7 @@ set(HEAD_FILES
     include/AYEditor/EditorDslDocument.h
     include/AYEditor/EditorDslExtension.h
     include/AYEditor/EditorUiLayoutDocument.h
+    include/AYEditor/EditorUiDesignerWorkflow.h
     include/AYEditor/EditorUiLayoutExtension.h
     include/AYEditor/EditorUiFlowDocument.h
     include/AYEditor/EditorUiFlowPreview.h

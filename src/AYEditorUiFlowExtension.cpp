@@ -1149,6 +1149,26 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->bindButton("flow_btn_preview", [impl = _impl.get()]() {
         (void)impl->restart(nullptr);
     });
+    _impl->bindButton("flow_btn_open_layout", [impl = _impl.get()]() {
+        if (impl->config.openLayoutForScreen == nullptr
+            || impl->document->selection().kind
+                != EditorUiFlowObjectKind::Screen) {
+            impl->setStatus("Select a Screen before opening its UI Layout.", true);
+            return;
+        }
+        const auto* screen = impl->document->flow().findScreen(
+            impl->document->selection().id);
+        if (screen == nullptr) {
+            impl->setStatus("Selected Screen no longer exists.", true);
+            return;
+        }
+        std::string message;
+        const bool opened = impl->config.openLayoutForScreen(
+            screen->layoutAsset, message);
+        impl->setStatus(message.empty()
+            ? (opened ? "UI Layout opened" : "UI Layout could not be opened")
+            : message, !opened);
+    });
     _impl->bindButton("flow_btn_emit", [impl = _impl.get()]() {
         const int index = impl->signal->getSelectedIndex();
         if (index < 0 || static_cast<std::size_t>(index)
@@ -1306,6 +1326,18 @@ void EditorUiFlowController::tick(float deltaSeconds)
 bool EditorUiFlowController::restartPreview(std::string* error)
 {
     return isAttached() && _impl->restart(error);
+}
+
+bool EditorUiFlowController::selectScreen(const std::string& screenId)
+{
+    if (_impl == nullptr || _impl->document == nullptr
+        || _impl->document->flow().findScreen(screenId) == nullptr) {
+        return false;
+    }
+    const bool selected = _impl->document->select(
+        {EditorUiFlowObjectKind::Screen, screenId, {}});
+    if (_impl->attached) _impl->refresh();
+    return selected;
 }
 
 void EditorUiFlowController::setStateChanged(StateChanged changed)

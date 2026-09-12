@@ -25,6 +25,7 @@
 #include "AYEditor/EditorUiLayoutDocument.h"
 #include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorUiFlowDocument.h"
+#include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
@@ -1145,9 +1146,27 @@ EditorSession::EditorSession()
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "textures").string());
     };
+    layoutConfig.themePathPicker = [this]() {
+        return showUiJsonOpenDialog(_hostWindow,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui" / "themes").string());
+    };
     layoutConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
             _engineAssetsRoot, _assetDatabase.projectRoot());
+    };
+    layoutConfig.externalComponentLibraryPath = [this]() {
+        return (std::filesystem::path(resolveProjectAssetRoot(
+                    _assetDatabase.projectRoot()))
+                / "ui" / "project.ayuicomponents.json").string();
+    };
+    layoutConfig.openOwningFlowAction = [this](
+        const std::string& layoutPath, std::string& message) {
+        return openOwningFlowForLayout(layoutPath, message);
+    };
+    layoutConfig.completeFlowSignalsAction = [this](
+        const std::string& layoutPath, std::string& message) {
+        return completeFlowSignalsForLayout(layoutPath, message);
     };
     error.clear();
     if (!registerEditorUiLayoutExtension(
@@ -1171,6 +1190,10 @@ EditorSession::EditorSession()
         return showUiFlowSaveDialog(_hostWindow,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
+    };
+    flowConfig.openLayoutForScreen = [this](
+        const std::string& layoutAsset, std::string& message) {
+        return openLayoutForFlowScreen(layoutAsset, message);
     };
     error.clear();
     if (!registerEditorUiFlowExtension(
@@ -7314,9 +7337,29 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "textures").string());
     };
+    controllerConfig.themePathPicker = [this]() {
+        HWND owner = _uiDesignerHandle != nullptr
+            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+        return showUiJsonOpenDialog(owner,
+            (std::filesystem::path(_assetDatabase.projectRoot())
+                / "Assets" / "ui" / "themes").string());
+    };
     controllerConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
             _engineAssetsRoot, _assetDatabase.projectRoot());
+    };
+    controllerConfig.externalComponentLibraryPath = [this]() {
+        return (std::filesystem::path(resolveProjectAssetRoot(
+                    _assetDatabase.projectRoot()))
+                / "ui" / "project.ayuicomponents.json").string();
+    };
+    controllerConfig.openOwningFlowAction = [this](
+        const std::string& layoutPath, std::string& message) {
+        return openOwningFlowForLayout(layoutPath, message);
+    };
+    controllerConfig.completeFlowSignalsAction = [this](
+        const std::string& layoutPath, std::string& message) {
+        return completeFlowSignalsForLayout(layoutPath, message);
     };
     _uiDesigner = std::make_unique<EditorUiLayoutController>(
         _uiDesignerDocument, std::move(controllerConfig));
@@ -7475,6 +7518,103 @@ void EditorSession::refreshUiDesignerTitle()
     (void)_childWindows->setChildWindowTitle(_uiDesignerHandle, title);
 }
 
+bool EditorSession::openOwningFlowForLayout(
+    const std::string& layoutPath, std::string& message)
+{
+    EditorUiDesignerWorkflow workflow(resolveProjectAssetRoot(
+        _assetDatabase.projectRoot()));
+    if (!workflow.refresh(&message)) return false;
+    const auto links = workflow.screensForLayout(layoutPath);
+    if (links.empty()) {
+        message = "No UI Flow Screen references this Layout";
+        return false;
+    }
+    const EditorUiScreenLayoutLink& link = links.front();
+    if (!openUiFlowEditor(link.flowPath) || _uiFlowDesigner == nullptr
+        || !_uiFlowDesigner->selectScreen(link.screenId)) {
+        message = "Owning UI Flow Screen could not be opened";
+        return false;
+    }
+    message = "Opened " + link.screenId + " in "
+        + std::filesystem::path(link.flowPath).filename().string();
+    return true;
+}
+
+bool EditorSession::completeFlowSignalsForLayout(
+    const std::string& layoutPath, std::string& message)
+{
+    if (_uiDesignerDocument != nullptr && _uiDesignerDocument->isDirty()) {
+        message = "Save the UI Layout before completing Flow Signals";
+        return false;
+    }
+    EditorUiDesignerWorkflow workflow(resolveProjectAssetRoot(
+        _assetDatabase.projectRoot()));
+    if (!workflow.refresh(&message)) return false;
+    const auto links = workflow.screensForLayout(layoutPath);
+    if (links.empty()) {
+        message = "No UI Flow Screen references this Layout";
+        return false;
+    }
+    if (_uiFlowDesignerDocument != nullptr
+        && _uiFlowDesignerDocument->isDirty()) {
+        for (const auto& link : links) {
+            if (EditorDocumentManager::normalizeResourceKey(link.flowPath)
+                == EditorDocumentManager::normalizeResourceKey(
+                    _uiFlowDesignerDocument->path())) {
+                message = "Save the open UI Flow before completing Signals";
+                return false;
+            }
+        }
+    }
+    std::size_t total = 0u;
+    for (const auto& link : links) {
+        std::size_t applied = 0u;
+        if (!workflow.applyHandlerCompletions(
+                link.flowPath, link.screenId, {}, &applied, &message)) {
+            return false;
+        }
+        total += applied;
+    }
+    if (_uiFlowDesignerDocument != nullptr) {
+        for (const auto& link : links) {
+            if (EditorDocumentManager::normalizeResourceKey(link.flowPath)
+                == EditorDocumentManager::normalizeResourceKey(
+                    _uiFlowDesignerDocument->path())) {
+                if (!_uiFlowDesignerDocument->reload(&message)) return false;
+                if (_uiFlowDesigner != nullptr) {
+                    (void)_uiFlowDesigner->selectScreen(link.screenId);
+                }
+                break;
+            }
+        }
+    }
+    message = total == 0u
+        ? "All Widget handlers already have Flow Signals"
+        : "Completed " + std::to_string(total)
+            + " Widget handler to Flow Signal binding(s)";
+    return true;
+}
+
+bool EditorSession::openLayoutForFlowScreen(
+    const std::string& layoutAsset, std::string& message)
+{
+    if (layoutAsset.empty()) {
+        message = "Selected Screen has no Layout asset";
+        return false;
+    }
+    std::filesystem::path path(layoutAsset);
+    if (!path.is_absolute()) {
+        path = std::filesystem::path(resolveProjectAssetRoot(
+            _assetDatabase.projectRoot())) / path;
+    }
+    if (!openUiLayoutEditor(path.lexically_normal().string())) {
+        message = "UI Layout could not be opened";
+        return false;
+    }
+    message = "Opened UI Layout " + path.filename().string();
+    return true;
+}
+
 bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
 {
     if (_childWindows == nullptr || _workspace == nullptr) {
@@ -7563,6 +7703,10 @@ bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
         return showUiFlowSaveDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
+    };
+    controllerConfig.openLayoutForScreen = [this](
+        const std::string& layoutAsset, std::string& message) {
+        return openLayoutForFlowScreen(layoutAsset, message);
     };
     _uiFlowDesigner = std::make_unique<EditorUiFlowController>(
         _uiFlowDesignerDocument, std::move(controllerConfig));

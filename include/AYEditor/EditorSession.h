@@ -297,6 +297,12 @@ private:
     bool confirmUiDesignerClose();
     void releaseUiDesigner(bool closeDocument);
     void refreshUiDesignerTitle();
+    bool openOwningFlowForLayout(const std::string& layoutPath,
+                                 std::string& message);
+    bool completeFlowSignalsForLayout(const std::string& layoutPath,
+                                      std::string& message);
+    bool openLayoutForFlowScreen(const std::string& layoutAsset,
+                                 std::string& message);
     void syncUiFlowDesignerLifetime();
     bool confirmUiFlowDesignerClose();
     void releaseUiFlowDesigner(bool closeDocument);

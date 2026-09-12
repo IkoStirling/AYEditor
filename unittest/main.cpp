@@ -24,6 +24,7 @@
 #include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
 #include "Test_EditorUiFlowProjectDescriptor.cpp" // project Flow contract + legacy migration
 #include "Test_EditorUiFlowEditor.cpp"          // UI Flow authoring + production-runtime preview
+#include "Test_EditorUiDesignerWorkflow.cpp"    // cross-document UI authoring workflow
 #include "Test_EditorRecoveryAndTrash.cpp"      // selective recovery + trash browser services
 
 int main(int argc, char* argv[]) {

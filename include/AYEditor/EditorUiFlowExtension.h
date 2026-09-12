@@ -26,6 +26,8 @@ struct EditorUiFlowExtensionConfig {
     std::function<std::string()> savePathPicker;
     std::string assetRoot;
     std::vector<ayt::ui::UIFlowGraphNodeTypeDefinition> graphNodeTypes;
+    std::function<bool(const std::string& layoutAsset, std::string& message)>
+        openLayoutForScreen;
 };
 
 class EditorUiFlowController {
@@ -45,6 +47,7 @@ public:
     bool isAttached() const noexcept;
     void tick(float deltaSeconds);
     bool restartPreview(std::string* error = nullptr);
+    bool selectScreen(const std::string& screenId);
 
     void setStateChanged(StateChanged changed);
     const std::shared_ptr<EditorUiFlowDocument>& document() const noexcept;

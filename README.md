@@ -34,6 +34,14 @@ Screen Inspector 现在可把布局语义 handler 映射到 Flow Signal，真实
 异步 Graph 的暂停、Trace、Region 和 Screen 变化通过 presentation revision 增量刷新；独立工具窗还以
 1280×720、1440×860、1920×1080 三档布局/裁剪渲染契约防止窄窗口控件越界。
 
+UI Designer 项目工作流现在建立 `.ui.json` 与 `.uiflow.json` 的双向索引。Layout Designer 的
+Workflow 菜单可跳到第一个引用当前布局的 Screen，并可扫描布局中的声明式 handler，为所有引用
+Screen 补齐 `handler -> Signal` 映射；Flow Editor 选中 Screen 后可用 **Open Layout** 回到其布局。
+`EditorUiDesignerWorkflow` 还提供 Layout asset、Flow signal、Widget handler 和 Widget ID 的类型化
+跨文档重命名计划。应用前会验证全部源文件仍与规划时一致，再以同目录临时文件和备份执行多文件
+事务；任何一步失败都会回滚，避免部分引用已改、部分未改。已打开且 dirty 的目标文档不会被磁盘
+工作流静默覆盖。
+
 ## 公开接口
 
 ```cpp

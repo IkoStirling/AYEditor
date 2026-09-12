@@ -32,6 +32,7 @@
 #include <AYEditor/EditorProjectRuntimeValidator.h>
 #include <AYEditor/EditorRecoveryStore.h>
 #include <AYEditor/EditorUiLayoutDocument.h>
+#include <AYEditor/EditorUiDesignerWorkflow.h>
 #include <AYEditor/EditorUiLayoutExtension.h>
 #include <AYEditor/EditorUiFlowDocument.h>
 #include <AYEditor/EditorUiFlowExtension.h>

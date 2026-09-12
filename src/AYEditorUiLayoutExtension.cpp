@@ -40,6 +40,9 @@ struct EditorUiLayoutController::Impl {
         session.setOpenPathPicker(config.openPathPicker);
         session.setSavePathPicker(config.savePathPicker);
         session.setTexturePathPicker(config.texturePathPicker);
+        session.setThemePathPicker(config.themePathPicker);
+        session.setOpenOwningFlowAction(config.openOwningFlowAction);
+        session.setCompleteFlowSignalsAction(config.completeFlowSignalsAction);
         session.setTextureResourceProvider(config.textureResourceProvider);
         session.setDocumentStateUpdater(
             [this](const std::string& path, bool dirty) {
@@ -136,6 +139,10 @@ bool EditorUiLayoutController::attach(
     ayt::ui::UIManager& ui, ayt::ui::Widget* chromeRoot)
 {
     if (_impl == nullptr) return false;
+    if (_impl->config.externalComponentLibraryPath != nullptr) {
+        _impl->session.setExternalComponentLibraryPath(
+            _impl->config.externalComponentLibraryPath());
+    }
     _impl->attached = _impl->session.attach(ui, chromeRoot);
 #if defined(_WIN32)
     if (_impl->attached) {
