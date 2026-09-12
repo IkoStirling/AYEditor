@@ -44,6 +44,11 @@ Screen 补齐 `handler -> Signal` 映射；Flow Editor 选中 Screen 后可用 *
 Project Safe Rename 面板：可以选择引用类型、预览文件级改动及诊断，再执行安全提交，不再要求开发者
 直接调用底层工作流 API。
 
+项目索引现在是长生命周期服务，而非每次菜单操作都重新解析全工程。它以 UI authoring 文件的大小和
+写入时间维护 revision，500ms 轮询只做元数据扫描；`.ui.json`/`.uiflow.json` 新增、删除或变化时才
+重建语义索引。外部变化会自动重载 Workspace 中对应的干净文档；dirty、已删除或不可重载文档保留
+内存内容并报告冲突，避免后台同步覆盖编辑。
+
 ## 公开接口
 
 ```cpp

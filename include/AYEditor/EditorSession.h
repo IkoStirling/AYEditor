@@ -77,6 +77,7 @@ class EditorUiLayoutController;
 class EditorUiLayoutDocument;
 class EditorUiFlowController;
 class EditorUiFlowDocument;
+class EditorUiDesignerWorkflow;
 class EditorAssetPreviewCache;
 class EditorAssetImportQueue;
 class EditorAssetTrash;
@@ -298,6 +299,9 @@ private:
     bool confirmUiDesignerClose();
     void releaseUiDesigner(bool closeDocument);
     void refreshUiDesignerTitle();
+    EditorUiDesignerWorkflow* uiDesignerProjectWorkflow(
+        std::string* error = nullptr);
+    void pollUiDesignerProjectChanges(float dtSeconds);
     bool openOwningFlowForLayout(const std::string& layoutPath,
                                  std::string& message);
     bool completeFlowSignalsForLayout(const std::string& layoutPath,
@@ -532,6 +536,8 @@ private:
     std::shared_ptr<EditorUiLayoutDocument> _uiDesignerDocument;
     std::string _uiDesignerDocumentId;
     EditorChildWindowManager::Handle _uiDesignerHandle = nullptr;
+    std::unique_ptr<EditorUiDesignerWorkflow> _uiDesignerWorkflow;
+    float _uiDesignerWorkflowPollCountdown = 0.0f;
 
     // UI Flow Designer authors the project-level presentation state machine
     // in its own window. Its logical preview delegates to production

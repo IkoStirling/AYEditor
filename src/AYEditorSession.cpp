@@ -102,6 +102,7 @@
 #include <limits>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -1812,6 +1813,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     if (_uiDesigner != nullptr) {
         _uiDesigner->pumpDeferred(dt);
     }
+    pollUiDesignerProjectChanges(dt);
     syncUiFlowDesignerLifetime();
     if (_uiFlowDesigner != nullptr) {
         _uiFlowDesigner->tick(dt);
@@ -7543,13 +7545,95 @@ void EditorSession::refreshUiDesignerTitle()
     (void)_childWindows->setChildWindowTitle(_uiDesignerHandle, title);
 }
 
+EditorUiDesignerWorkflow* EditorSession::uiDesignerProjectWorkflow(
+    std::string* error)
+{
+    const std::string assetRoot = resolveProjectAssetRoot(
+        _assetDatabase.projectRoot());
+    if (assetRoot.empty()) {
+        if (error != nullptr) *error = "Project asset root is unavailable";
+        return nullptr;
+    }
+    if (_uiDesignerWorkflow == nullptr
+        || EditorDocumentManager::normalizeResourceKey(
+               _uiDesignerWorkflow->assetRoot())
+            != EditorDocumentManager::normalizeResourceKey(assetRoot)) {
+        auto workflow = std::make_unique<EditorUiDesignerWorkflow>(assetRoot);
+        if (!workflow->refresh(error)) return nullptr;
+        _uiDesignerWorkflow = std::move(workflow);
+    }
+    return _uiDesignerWorkflow.get();
+}
+
+void EditorSession::pollUiDesignerProjectChanges(float dtSeconds)
+{
+    if (_uiDesigner == nullptr && _uiFlowDesigner == nullptr
+        && _uiDesignerWorkflow == nullptr) {
+        return;
+    }
+    _uiDesignerWorkflowPollCountdown -= std::max(0.0f, dtSeconds);
+    if (_uiDesignerWorkflowPollCountdown > 0.0f) return;
+    _uiDesignerWorkflowPollCountdown = 0.5f;
+
+    std::string error;
+    EditorUiDesignerWorkflow* workflow = uiDesignerProjectWorkflow(&error);
+    if (workflow == nullptr) return;
+    bool changed = false;
+    std::vector<std::string> changedPaths;
+    if (!workflow->refreshIfChanged(&changed, &changedPaths, &error)) {
+        setAssetBrowserStatus(
+            L"UI project index refresh failed: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return;
+    }
+    if (!changed || _workspace == nullptr) return;
+
+    std::unordered_set<std::string> changedKeys;
+    for (const std::string& path : changedPaths) {
+        changedKeys.insert(EditorDocumentManager::normalizeResourceKey(path));
+    }
+    std::size_t reloaded = 0u;
+    std::size_t conflicts = 0u;
+    for (const EditorDocumentRecord& record :
+         _workspace->documents().records()) {
+        if (record.document == nullptr
+            || changedKeys.find(EditorDocumentManager::normalizeResourceKey(
+                   record.document->path())) == changedKeys.end()) {
+            continue;
+        }
+        if (record.document->isDirty() || !record.document->canReload()) {
+            ++conflicts;
+            continue;
+        }
+        std::string reloadError;
+        if (record.document->reload(&reloadError)) ++reloaded;
+        else {
+            ++conflicts;
+            error = std::move(reloadError);
+        }
+    }
+    refreshUiDesignerTitle();
+    refreshUiFlowDesignerTitle();
+    if (conflicts != 0u) {
+        setAssetBrowserStatus(
+            L"UI project changed externally; "
+            + std::to_wstring(conflicts)
+            + L" dirty/missing document(s) need review", true);
+    } else if (reloaded != 0u) {
+        setAssetBrowserStatus(
+            L"UI project index updated; reloaded "
+            + std::to_wstring(reloaded) + L" document(s)");
+    }
+}
+
 bool EditorSession::openOwningFlowForLayout(
     const std::string& layoutPath, std::string& message)
 {
-    EditorUiDesignerWorkflow workflow(resolveProjectAssetRoot(
-        _assetDatabase.projectRoot()));
-    if (!workflow.refresh(&message)) return false;
-    const auto links = workflow.screensForLayout(layoutPath);
+    EditorUiDesignerWorkflow* workflow = uiDesignerProjectWorkflow(&message);
+    if (workflow == nullptr) return false;
+    bool changed = false;
+    if (!workflow->refreshIfChanged(&changed, nullptr, &message)) return false;
+    const auto links = workflow->screensForLayout(layoutPath);
     if (links.empty()) {
         message = "No UI Flow Screen references this Layout";
         return false;
@@ -7572,10 +7656,11 @@ bool EditorSession::completeFlowSignalsForLayout(
         message = "Save the UI Layout before completing Flow Signals";
         return false;
     }
-    EditorUiDesignerWorkflow workflow(resolveProjectAssetRoot(
-        _assetDatabase.projectRoot()));
-    if (!workflow.refresh(&message)) return false;
-    const auto links = workflow.screensForLayout(layoutPath);
+    EditorUiDesignerWorkflow* workflow = uiDesignerProjectWorkflow(&message);
+    if (workflow == nullptr) return false;
+    bool changed = false;
+    if (!workflow->refreshIfChanged(&changed, nullptr, &message)) return false;
+    const auto links = workflow->screensForLayout(layoutPath);
     if (links.empty()) {
         message = "No UI Flow Screen references this Layout";
         return false;
@@ -7594,7 +7679,7 @@ bool EditorSession::completeFlowSignalsForLayout(
     std::size_t total = 0u;
     for (const auto& link : links) {
         std::size_t applied = 0u;
-        if (!workflow.applyHandlerCompletions(
+        if (!workflow->applyHandlerCompletions(
                 link.flowPath, link.screenId, {}, &applied, &message)) {
             return false;
         }
@@ -7662,13 +7747,18 @@ EditorSession::refactorUiProjectReferences(
     request.newValue = request.kind == EditorUiRenameKind::LayoutAsset
         ? projectAssetValue(newValue) : newValue;
 
-    EditorUiDesignerWorkflow workflow(assetRoot.string());
     std::string error;
-    if (!workflow.refresh(&error)) {
+    EditorUiDesignerWorkflow* workflow = uiDesignerProjectWorkflow(&error);
+    if (workflow == nullptr) {
         result.message = std::move(error);
         return result;
     }
-    const EditorUiRenamePlan plan = workflow.planRename(request);
+    bool indexChanged = false;
+    if (!workflow->refreshIfChanged(&indexChanged, nullptr, &error)) {
+        result.message = std::move(error);
+        return result;
+    }
+    const EditorUiRenamePlan plan = workflow->planRename(request);
     result.safe = plan.safe;
     result.changedFiles = plan.edits.size();
     for (const EditorUiFileEdit& edit : plan.edits) {
@@ -7718,7 +7808,7 @@ EditorSession::refactorUiProjectReferences(
         }
     }
 
-    if (!workflow.applyRename(plan, &error)) {
+    if (!workflow->applyRename(plan, &error)) {
         result.message = std::move(error);
         return result;
     }

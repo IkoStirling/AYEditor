@@ -288,7 +288,52 @@ EditorUiDesignerWorkflow::EditorUiDesignerWorkflow(std::string assetRoot)
 EditorUiDesignerWorkflow::~EditorUiDesignerWorkflow() = default;
 
 void EditorUiDesignerWorkflow::setAssetRoot(std::string assetRoot) {
+    if (_assetRoot == assetRoot) return;
     _assetRoot = std::move(assetRoot);
+    _layouts.clear();
+    _flows.clear();
+    _screenLinks.clear();
+    _diagnostics.clear();
+    _fileStamps.clear();
+    _revision = 0u;
+}
+
+bool EditorUiDesignerWorkflow::captureFileStamps(
+    std::unordered_map<std::string, FileStamp>& stamps,
+    std::string* error) const {
+    stamps.clear();
+    std::error_code fsError;
+    if (_assetRoot.empty() || !fs::is_directory(_assetRoot, fsError)) {
+        return fail(error, "UI workflow asset root is not a directory");
+    }
+    for (fs::recursive_directory_iterator it(
+             _assetRoot, fs::directory_options::skip_permission_denied, fsError), end;
+         it != end; it.increment(fsError)) {
+        if (fsError) {
+            fsError.clear();
+            continue;
+        }
+        if (!it->is_regular_file(fsError)) continue;
+        const std::string generic = it->path().generic_string();
+        if (!endsWith(generic, ".ui.json")
+            && !endsWith(generic, ".uiflow.json")) {
+            continue;
+        }
+        const std::string key = normalizedPath(it->path());
+        const std::uintmax_t size = it->file_size(fsError);
+        if (fsError) {
+            fsError.clear();
+            continue;
+        }
+        const auto writeTime = it->last_write_time(fsError);
+        if (fsError) {
+            fsError.clear();
+            continue;
+        }
+        stamps.emplace(key, FileStamp{
+            size, static_cast<std::int64_t>(writeTime.time_since_epoch().count())});
+    }
+    return true;
 }
 
 bool EditorUiDesignerWorkflow::refresh(std::string* error) {
@@ -296,10 +341,9 @@ bool EditorUiDesignerWorkflow::refresh(std::string* error) {
     _flows.clear();
     _screenLinks.clear();
     _diagnostics.clear();
+    std::unordered_map<std::string, FileStamp> nextStamps;
+    if (!captureFileStamps(nextStamps, error)) return false;
     std::error_code fsError;
-    if (_assetRoot.empty() || !fs::is_directory(_assetRoot, fsError)) {
-        return fail(error, "UI workflow asset root is not a directory");
-    }
     for (fs::recursive_directory_iterator it(
              _assetRoot, fs::directory_options::skip_permission_denied, fsError), end;
          it != end; it.increment(fsError)) {
@@ -360,6 +404,40 @@ bool EditorUiDesignerWorkflow::refresh(std::string* error) {
                                     displayPath(layout)});
         }
     }
+    _fileStamps = std::move(nextStamps);
+    ++_revision;
+    return true;
+}
+
+bool EditorUiDesignerWorkflow::refreshIfChanged(
+    bool* changed, std::vector<std::string>* changedPaths,
+    std::string* error) {
+    if (changed != nullptr) *changed = false;
+    if (changedPaths != nullptr) changedPaths->clear();
+    std::unordered_map<std::string, FileStamp> current;
+    if (!captureFileStamps(current, error)) return false;
+    if (current == _fileStamps) return true;
+
+    if (changedPaths != nullptr) {
+        for (const auto& [path, stamp] : current) {
+            const auto old = _fileStamps.find(path);
+            if (old == _fileStamps.end() || !(old->second == stamp)) {
+                changedPaths->push_back(path);
+            }
+        }
+        for (const auto& [path, stamp] : _fileStamps) {
+            (void)stamp;
+            if (current.find(path) == current.end()) {
+                changedPaths->push_back(path);
+            }
+        }
+        std::sort(changedPaths->begin(), changedPaths->end());
+        changedPaths->erase(
+            std::unique(changedPaths->begin(), changedPaths->end()),
+            changedPaths->end());
+    }
+    if (!refresh(error)) return false;
+    if (changed != nullptr) *changed = true;
     return true;
 }
 

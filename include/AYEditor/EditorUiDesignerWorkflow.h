@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace ayt::editor {
@@ -72,6 +74,13 @@ public:
     void setAssetRoot(std::string assetRoot);
     const std::string& assetRoot() const noexcept { return _assetRoot; }
     bool refresh(std::string* error = nullptr);
+    // Performs a metadata-only scan and reparses the project only when a UI
+    // authoring file was added, removed or changed. changedPaths contains
+    // normalized absolute paths and is suitable for open-document matching.
+    bool refreshIfChanged(bool* changed,
+                          std::vector<std::string>* changedPaths = nullptr,
+                          std::string* error = nullptr);
+    std::uint64_t revision() const noexcept { return _revision; }
 
     const std::vector<EditorUiScreenLayoutLink>& screenLinks() const {
         return _screenLinks;
@@ -97,15 +106,25 @@ public:
 private:
     struct LayoutRecord;
     struct FlowRecord;
+    struct FileStamp {
+        std::uintmax_t size = 0u;
+        std::int64_t writeTick = 0;
+        bool operator==(const FileStamp&) const = default;
+    };
 
     const LayoutRecord* findLayout(const std::string& path) const;
     const FlowRecord* findFlow(const std::string& path) const;
+    bool captureFileStamps(
+        std::unordered_map<std::string, FileStamp>& stamps,
+        std::string* error) const;
 
     std::string _assetRoot;
     std::vector<LayoutRecord> _layouts;
     std::vector<FlowRecord> _flows;
     std::vector<EditorUiScreenLayoutLink> _screenLinks;
     std::vector<std::string> _diagnostics;
+    std::unordered_map<std::string, FileStamp> _fileStamps;
+    std::uint64_t _revision = 0u;
 };
 
 } // namespace ayt::editor

@@ -194,6 +194,48 @@ TEST_CASE(rename_transaction_rejects_files_changed_after_planning) {
           == std::string::npos);
 }
 
+TEST_CASE(live_index_refreshes_only_when_ui_authoring_files_change) {
+    TempWorkflowProject project;
+    project.write("ui/menu.ui.json",
+        R"({"type":"Panel","id":"root"})");
+    project.write("main.uiflow.json", validFlow());
+
+    ayt::editor::EditorUiDesignerWorkflow workflow(project.root.string());
+    std::string error;
+    CHECK(workflow.refresh(&error));
+    const std::uint64_t initialRevision = workflow.revision();
+    bool changed = true;
+    std::vector<std::string> changedPaths;
+    CHECK(workflow.refreshIfChanged(&changed, &changedPaths, &error));
+    CHECK_FALSE(changed);
+    CHECK(changedPaths.empty());
+    CHECK(workflow.revision() == initialRevision);
+
+    project.write("ui/menu.ui.json", R"({
+      "type":"Panel","id":"root","children":[
+        {"type":"Button","id":"play","events":{"onClick":"begin"}}
+      ]
+    })");
+    CHECK(workflow.refreshIfChanged(&changed, &changedPaths, &error));
+    CHECK(changed);
+    CHECK(changedPaths.size() == 1u);
+    CHECK(workflow.revision() == initialRevision + 1u);
+    CHECK(workflow.handlersForLayout(
+        (project.root / "ui/menu.ui.json").string()).size() == 1u);
+
+    project.write("notes.txt", "not part of the UI project index");
+    CHECK(workflow.refreshIfChanged(&changed, &changedPaths, &error));
+    CHECK_FALSE(changed);
+    CHECK(workflow.revision() == initialRevision + 1u);
+
+    std::error_code ignored;
+    fs::remove(project.root / "main.uiflow.json", ignored);
+    CHECK(workflow.refreshIfChanged(&changed, &changedPaths, &error));
+    CHECK(changed);
+    CHECK(changedPaths.size() == 1u);
+    CHECK(workflow.screenLinks().empty());
+}
+
 TEST_SUITE_END
 
 } // namespace editor_ui_designer_workflow_test

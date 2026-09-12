@@ -1326,6 +1326,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-12 | UI Flow 阶段十一以 presentation revision 同步异步预览显示，并把三档窗口尺寸、操作文字、双预览区和裁剪栈固化为自动化视觉契约。 |
 | 2026-09-12 | UI Designer 工作流建立 Layout/Flow 双向项目索引、一键导航、handler-to-Signal 补全及 schema-aware 多文件重命名事务；dirty 打开文档禁止被磁盘操作覆盖。 |
 | 2026-09-12 | Layout Designer 增加可视化 Project Safe Rename；AYUI 只承载中性预览/提交表单，AYEditor 负责引用类型映射、原子磁盘事务与干净文档重载。 |
+| 2026-09-12 | UI Designer 项目索引改为带文件指纹/revision 的长生命周期服务；仅 authoring 文件变化时重解析，并自动同步干净的 Workspace 文档，dirty 冲突只告警不覆盖。 |
 
 ---
 
