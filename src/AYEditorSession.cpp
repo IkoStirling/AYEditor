@@ -3192,14 +3192,16 @@ void EditorSession::refreshUnsavedIndicator() {
 
     const std::string documentTitle = _document != nullptr
         ? _document->title() : std::string("Untitled");
-    const std::wstring wideTitle(documentTitle.begin(), documentTitle.end());
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_document_title"))) {
-        label->setText(wideTitle + L"  —  Aliyat Editor");
+        label->setText(localizedText(
+            "ui.editor.window.document_title",
+            "{0}  —  Aliyat Editor", documentTitle));
     }
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_status_scene"))) {
-        label->setText(L"Scene: " + wideTitle);
+        label->setText(localizedText(
+            "ui.editor.status.scene", "Scene: {0}", documentTitle));
     }
 }
 
@@ -3296,11 +3298,10 @@ void EditorSession::refreshOutliner()
         return;
     }
 
-    auto setUtf8 = [this](const char* id, const std::string& utf8) {
+    auto setText = [this](const char* id, const std::wstring& text) {
         if (auto* w = _ui.findById(id)) {
             if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-                label->setText(
-                    std::wstring(utf8.begin(), utf8.end()));
+                label->setText(text);
             }
         }
     };
@@ -3311,7 +3312,8 @@ void EditorSession::refreshOutliner()
     if (world == nullptr) {
         _outliner->clearTree();
         clearSelectedEntity(false);
-        setUtf8("outliner_hint", "Scene: -");
+        setText("outliner_hint", localizedText(
+            "ui.editor.outliner.scene", "Scene: {0}", "-"));
         return;
     }
 
@@ -3330,7 +3332,8 @@ void EditorSession::refreshOutliner()
     if (_gameView.mode() != EditorMode::Edit) {
         rootLabel += "  (Play World)";
     }
-    setUtf8("outliner_hint", "Scene: " + rootLabel);
+    setText("outliner_hint", localizedText(
+        "ui.editor.outliner.scene", "Scene: {0}", rootLabel));
 
     std::vector<ayt::ui::TreeNodeData> nodes;
     ayt::ui::TreeNodeData root;
@@ -5497,6 +5500,99 @@ void EditorSession::toggleDockCard(const char* cardId, bool& visibleFlag) {
     setDockCardVisible(cardId, visibleFlag);
 }
 
+std::wstring EditorSession::localizedText(const char* key,
+                                          const char* fallback) const
+{
+    const std::string text = _localization != nullptr
+        ? _localization->get(key, fallback)
+        : std::string(fallback);
+    return ayt::ui::decodeUtf8Text(text);
+}
+
+std::wstring EditorSession::localizedText(const char* key,
+                                          const char* fallback,
+                                          const std::string& argument) const
+{
+    const std::string text = _localization != nullptr
+        ? _localization->formatWithFallback(key, fallback, argument)
+        : std::string(fallback);
+    if (_localization == nullptr) {
+        const std::size_t marker = text.find("{0}");
+        if (marker != std::string::npos) {
+            std::string expanded = text;
+            expanded.replace(marker, 3u, argument);
+            return ayt::ui::decodeUtf8Text(expanded);
+        }
+    }
+    return ayt::ui::decodeUtf8Text(text);
+}
+
+void EditorSession::setLocalizedValueLabel(const char* widgetId,
+                                           const char* key,
+                                           const char* fallback,
+                                           const char* formattedValue)
+{
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
+            _ui.findById(widgetId))) {
+        label->setText(localizedText(
+            key, fallback, std::string(formattedValue)));
+    }
+}
+
+void EditorSession::refreshLocalizedValueLabels()
+{
+    struct SliderLabel {
+        const char* sliderId;
+        const char* labelId;
+        const char* key;
+        const char* fallback;
+        const char* numberFormat;
+    };
+    static constexpr SliderLabel labels[] = {
+        {"sld_gamma", "lbl_gamma", "ui.editor.render.gamma_value",
+         "Gamma  {0}", "%.2f"},
+        {"sld_exposure", "lbl_exposure", "ui.editor.render.exposure_value",
+         "Exposure  {0}", "%.2f"},
+        {"sld_bloom", "lbl_bloom", "ui.editor.render.bloom_value",
+         "Bloom  {0}", "%.2f"},
+        {"sld_haze_strength", "lbl_haze_strength",
+         "ui.editor.render.haze_strength_value", "Haze Strength  {0}", "%.2f"},
+        {"sld_haze_density", "lbl_haze_density",
+         "ui.editor.render.haze_density_value", "Haze Density  {0}", "%.3f"},
+        {"sld_ssao_strength", "lbl_ssao_strength",
+         "ui.editor.render.ssao_strength_value", "SSAO Strength  {0}", "%.2f"},
+        {"sld_ssao_radius", "lbl_ssao_radius",
+         "ui.editor.render.ssao_radius_value", "SSAO Radius  {0}", "%.2f"},
+        {"sld_ssao_bias", "lbl_ssao_bias",
+         "ui.editor.render.ssao_bias_value", "SSAO Bias  {0}", "%.3f"},
+        {"sld_ambient", "lbl_ambient", "ui.editor.render.ambient_value",
+         "IBL Ambient  {0}", "%.2f"},
+        {"sld_shadow_bias", "lbl_shadow_bias",
+         "ui.editor.render.shadow_bias_value", "Shadow Bias  {0}", "%.4f"},
+        {"sld_color_grading_strength", "lbl_color_grading_strength",
+         "ui.editor.render.color_grading_strength_value",
+         "Color Grade Strength  {0}", "%.2f"},
+    };
+    for (const SliderLabel& binding : labels) {
+        auto* slider = dynamic_cast<ayt::ui::Slider*>(
+            _ui.findById(binding.sliderId));
+        if (slider == nullptr) continue;
+        char value[32]{};
+        std::snprintf(value, sizeof(value), binding.numberFormat,
+                      static_cast<double>(slider->getValue()));
+        setLocalizedValueLabel(binding.labelId, binding.key,
+                               binding.fallback, value);
+    }
+    if (auto* slider = dynamic_cast<ayt::ui::Slider*>(
+            _ui.findById("sld_net_hp"))) {
+        char value[32]{};
+        std::snprintf(value, sizeof(value), "%.0f",
+                      static_cast<double>(slider->getValue()));
+        setLocalizedValueLabel("lbl_net_hp", "ui.editor.network.cube_hp",
+                               "Cube HP  {0}", value);
+    }
+}
+
 void EditorSession::bindNetworkPanelStub() {
     auto bindButton = [this](const char* id, std::function<void()> handler) {
         _ui.bindEvent(id, "onClick", handler);
@@ -5520,16 +5616,15 @@ void EditorSession::bindNetworkPanelStub() {
         if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
             slider->setOnValueChanged([this](float v) {
                 char buf[64];
-                std::snprintf(buf, sizeof(buf), "Cube HP  %.0f",
+                std::snprintf(buf, sizeof(buf), "%.0f",
                               static_cast<double>(v));
-                if (auto* lbl = _ui.findById("lbl_net_hp")) {
-                    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(lbl)) {
-                        label->setText(std::wstring(buf, buf + std::strlen(buf)));
-                    }
-                }
+                setLocalizedValueLabel(
+                    "lbl_net_hp", "ui.editor.network.cube_hp",
+                    "Cube HP  {0}", buf);
             });
         }
     }
+    refreshLocalizedValueLabels();
 }
 
 void EditorSession::bindRenderSettingsPanel()
@@ -5543,14 +5638,6 @@ void EditorSession::bindRenderSettingsPanel()
         return nullptr;
     };
 
-    auto setLabel = [this](const char* id, const char* textUtf8) {
-        if (auto* w = _ui.findById(id)) {
-            if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(w)) {
-                label->setText(std::wstring(textUtf8, textUtf8 + std::strlen(textUtf8)));
-            }
-        }
-    };
-
     auto bindSlider = [this](const char* id, std::function<void(float)> onChanged) {
         if (auto* w = _ui.findById(id)) {
             if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
@@ -5559,28 +5646,32 @@ void EditorSession::bindRenderSettingsPanel()
         }
     };
 
-    bindSlider("sld_gamma", [rendererOrNull, setLabel](float v) {
+    bindSlider("sld_gamma", [this, rendererOrNull](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Gamma  %.2f", static_cast<double>(v));
-        setLabel("lbl_gamma", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel("lbl_gamma", "ui.editor.render.gamma_value",
+                               "Gamma  {0}", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
             r->setPostProcessGamma(v);
         }
     });
 
-    bindSlider("sld_exposure", [rendererOrNull, setLabel](float v) {
+    bindSlider("sld_exposure", [this, rendererOrNull](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Exposure  %.2f", static_cast<double>(v));
-        setLabel("lbl_exposure", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_exposure", "ui.editor.render.exposure_value",
+            "Exposure  {0}", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
             r->setPostProcessExposure(v);
         }
     });
 
-    bindSlider("sld_bloom", [this, rendererOrNull, setLabel](float v) {
+    bindSlider("sld_bloom", [this, rendererOrNull](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Bloom  %.2f", static_cast<double>(v));
-        setLabel("lbl_bloom", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel("lbl_bloom", "ui.editor.render.bloom_value",
+                               "Bloom  {0}", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
             bool enabled = true;
             if (auto* w = _ui.findById("chk_bloom")) {
@@ -5639,10 +5730,12 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
-    bindSlider("sld_haze_strength", [this, setLabel, applyHazeParams](float v) {
+    bindSlider("sld_haze_strength", [this, applyHazeParams](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Haze Strength  %.2f", static_cast<double>(v));
-        setLabel("lbl_haze_strength", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_haze_strength", "ui.editor.render.haze_strength_value",
+            "Haze Strength  {0}", buf);
         bool enabled = true;
         float density = 0.04f;
         if (auto* cw = _ui.findById("chk_depth_haze")) {
@@ -5658,10 +5751,12 @@ void EditorSession::bindRenderSettingsPanel()
         applyHazeParams(enabled, v, density);
     });
 
-    bindSlider("sld_haze_density", [this, setLabel, applyHazeParams](float v) {
+    bindSlider("sld_haze_density", [this, applyHazeParams](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Haze Density  %.3f", static_cast<double>(v));
-        setLabel("lbl_haze_density", buf);
+        std::snprintf(buf, sizeof(buf), "%.3f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_haze_density", "ui.editor.render.haze_density_value",
+            "Haze Density  {0}", buf);
         bool enabled = true;
         float strength = 1.0f;
         if (auto* cw = _ui.findById("chk_depth_haze")) {
@@ -5713,10 +5808,12 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
-    bindSlider("sld_ssao_strength", [this, setLabel, applySsaoParams](float v) {
+    bindSlider("sld_ssao_strength", [this, applySsaoParams](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "SSAO Strength  %.2f", static_cast<double>(v));
-        setLabel("lbl_ssao_strength", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_ssao_strength", "ui.editor.render.ssao_strength_value",
+            "SSAO Strength  {0}", buf);
         bool enabled = true;
         float radius = 0.4f;
         float bias = 0.04f;
@@ -5738,10 +5835,12 @@ void EditorSession::bindRenderSettingsPanel()
         applySsaoParams(enabled, v, radius, bias);
     });
 
-    bindSlider("sld_ssao_radius", [this, setLabel, applySsaoParams](float v) {
+    bindSlider("sld_ssao_radius", [this, applySsaoParams](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "SSAO Radius  %.2f", static_cast<double>(v));
-        setLabel("lbl_ssao_radius", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_ssao_radius", "ui.editor.render.ssao_radius_value",
+            "SSAO Radius  {0}", buf);
         bool enabled = true;
         float strength = 0.45f;
         float bias = 0.04f;
@@ -5763,10 +5862,12 @@ void EditorSession::bindRenderSettingsPanel()
         applySsaoParams(enabled, strength, v, bias);
     });
 
-    bindSlider("sld_ssao_bias", [this, setLabel, applySsaoParams](float v) {
+    bindSlider("sld_ssao_bias", [this, applySsaoParams](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "SSAO Bias  %.3f", static_cast<double>(v));
-        setLabel("lbl_ssao_bias", buf);
+        std::snprintf(buf, sizeof(buf), "%.3f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_ssao_bias", "ui.editor.render.ssao_bias_value",
+            "SSAO Bias  {0}", buf);
         bool enabled = true;
         float strength = 0.45f;
         float radius = 0.4f;
@@ -5788,19 +5889,23 @@ void EditorSession::bindRenderSettingsPanel()
         applySsaoParams(enabled, strength, radius, v);
     });
 
-    bindSlider("sld_ambient", [rendererOrNull, setLabel](float v) {
+    bindSlider("sld_ambient", [this, rendererOrNull](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "IBL Ambient  %.2f", static_cast<double>(v));
-        setLabel("lbl_ambient", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_ambient", "ui.editor.render.ambient_value",
+            "IBL Ambient  {0}", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
             r->setAmbientStrength(v);
         }
     });
 
-    bindSlider("sld_shadow_bias", [rendererOrNull, setLabel](float v) {
+    bindSlider("sld_shadow_bias", [this, rendererOrNull](float v) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Shadow Bias  %.4f", static_cast<double>(v));
-        setLabel("lbl_shadow_bias", buf);
+        std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(v));
+        setLocalizedValueLabel(
+            "lbl_shadow_bias", "ui.editor.render.shadow_bias_value",
+            "Shadow Bias  {0}", buf);
         if (ayt::render::Renderer* r = rendererOrNull()) {
             r->setShadowBias(v);
         }
@@ -5966,41 +6071,19 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
     bindSlider("sld_color_grading_strength",
-               [setLabel, applyColorGrading](float value) {
+               [this, applyColorGrading](float value) {
         char buf[64];
-        std::snprintf(buf, sizeof(buf), "Color Grade Strength  %.2f",
-                      static_cast<double>(value));
-        setLabel("lbl_color_grading_strength", buf);
+        std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(value));
+        setLocalizedValueLabel(
+            "lbl_color_grading_strength",
+            "ui.editor.render.color_grading_strength_value",
+            "Color Grade Strength  {0}", buf);
         applyColorGrading();
     });
 
     // Labels in JSON are decorative until Slider min/max/value load;
     // refresh from the live widget values so thumb ↔ text stay aligned.
-    auto refreshLabelFromSlider = [this, setLabel](const char* sliderId,
-                                                   const char* labelId,
-                                                   const char* fmt) {
-        if (auto* w = _ui.findById(sliderId)) {
-            if (auto* slider = dynamic_cast<ayt::ui::Slider*>(w)) {
-                char buf[64];
-                std::snprintf(buf, sizeof(buf), fmt,
-                              static_cast<double>(slider->getValue()));
-                setLabel(labelId, buf);
-            }
-        }
-    };
-    refreshLabelFromSlider("sld_gamma", "lbl_gamma", "Gamma  %.2f");
-    refreshLabelFromSlider("sld_exposure", "lbl_exposure", "Exposure  %.2f");
-    refreshLabelFromSlider("sld_bloom", "lbl_bloom", "Bloom  %.2f");
-    refreshLabelFromSlider("sld_haze_strength", "lbl_haze_strength", "Haze Strength  %.2f");
-    refreshLabelFromSlider("sld_haze_density", "lbl_haze_density", "Haze Density  %.3f");
-    refreshLabelFromSlider("sld_ssao_strength", "lbl_ssao_strength", "SSAO Strength  %.2f");
-    refreshLabelFromSlider("sld_ssao_radius", "lbl_ssao_radius", "SSAO Radius  %.2f");
-    refreshLabelFromSlider("sld_ssao_bias", "lbl_ssao_bias", "SSAO Bias  %.3f");
-    refreshLabelFromSlider("sld_ambient", "lbl_ambient", "IBL Ambient  %.2f");
-    refreshLabelFromSlider("sld_shadow_bias", "lbl_shadow_bias", "Shadow Bias  %.4f");
-    refreshLabelFromSlider("sld_color_grading_strength",
-                           "lbl_color_grading_strength",
-                           "Color Grade Strength  %.2f");
+    refreshLocalizedValueLabels();
 }
 
 void EditorSession::applyRenderSettingsFromPanel()
@@ -6170,7 +6253,9 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _wireframeView = preferences.wireframeView;
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_shading"))) {
-        button->setText(_wireframeView ? L"Wireframe" : L"Shaded");
+        button->setText(_wireframeView
+            ? localizedText("ui.editor.viewport.wireframe", "Wireframe")
+            : localizedText("ui.editor.viewport.shaded", "Shaded"));
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
@@ -6357,6 +6442,63 @@ EditorPreferences EditorSession::currentPreferences() const
     return capturePreferences();
 }
 
+std::string EditorSession::currentLanguage() const
+{
+    return _localization != nullptr
+        ? _localization->currentLanguage() : std::string{};
+}
+
+bool EditorSession::setLanguage(const std::string& language)
+{
+    if (_localization == nullptr) return false;
+    const std::string requested = language.empty() ? "system" : language;
+    const std::string locale = requested == "system"
+        ? systemLanguageTag() : requested;
+    const std::string resolved =
+        _localization->resolveSupportedLanguage(locale);
+    if (resolved.empty()) return false;
+
+    _localization->setLanguage(locale);
+    _preferences.language = requested;
+    _ui.loader().retranslate(_ui.root());
+    if (_childWindows != nullptr) {
+        for (const EditorChildWindowManager::Entry& entry
+             : _childWindows->entries()) {
+            if (entry.ui != nullptr) {
+                entry.ui->loader().retranslate(entry.ui->root());
+                entry.ui->invalidateLayout();
+                entry.ui->layout();
+            }
+        }
+    }
+
+    // These labels encode live editor state, so their key depends on the
+    // current value rather than only on the original layout property.
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_camera"))) {
+        const bool orthographic = _sceneCamera.isTwoD()
+            || _sceneCamera.threeDProjection() == ProjectionMode::Orthographic;
+        button->setText(orthographic
+            ? localizedText("ui.editor.viewport.orthographic", "Orthographic")
+            : localizedText("ui.editor.viewport.perspective", "Perspective"));
+    }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_view_shading"))) {
+        button->setText(_wireframeView
+            ? localizedText("ui.editor.viewport.wireframe", "Wireframe")
+            : localizedText("ui.editor.viewport.shaded", "Shaded"));
+    }
+
+    refreshUnsavedIndicator();
+    refreshOutliner();
+    refreshLocalizedValueLabels();
+    _ui.invalidateLayout();
+    _ui.layout();
+    if (_repaintCallback) _repaintCallback();
+    savePreferencesNow();
+    return true;
+}
+
 void EditorSession::savePreferencesNow()
 {
     if (_applyingPreferences) return;
@@ -6414,10 +6556,10 @@ void EditorSession::setActiveTool(EditorTool tool)
     _gizmoHoverHandle = EditorGizmoHandle::None;
     // Kept as a preferences/API compatibility shim. Transform interaction no
     // longer branches on this legacy mode; every selection uses Universal.
-    const wchar_t* name = L"Universal";
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_active_tool"))) {
-        label->setText(name);
+        label->setText(localizedText(
+            "ui.editor.tool.universal", "Universal"));
     }
     syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
@@ -6432,9 +6574,11 @@ void EditorSession::setLocalTransformSpace(bool local)
     _gizmoHoverHandle = EditorGizmoHandle::None;
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_tool_space"))) {
-        const wchar_t* accessibleLabel = local
-            ? L"Transform orientation: Local"
-            : L"Transform orientation: World";
+        const std::wstring accessibleLabel = local
+            ? localizedText("ui.editor.accessibility.transform_local",
+                            "Transform orientation: Local")
+            : localizedText("ui.editor.accessibility.transform_world",
+                            "Transform orientation: World");
         button->setAccessibilityLabel(accessibleLabel);
 
         // Production shells bind the World icon before preferences are
@@ -6456,7 +6600,9 @@ void EditorSession::setLocalTransformSpace(bool local)
                 button->setText(local ? L"L" : L"W");
             }
         } else {
-            button->setText(local ? L"Local" : L"World");
+            button->setText(local
+                ? localizedText("ui.editor.tool.local", "Local")
+                : localizedText("ui.editor.tool.world", "World"));
         }
     }
     syncTransformGizmoToRenderer();
@@ -6524,7 +6670,8 @@ void EditorSession::syncSceneViewToolbar()
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_camera"))) {
         const std::wstring label = orthographic
-            ? L"Orthographic" : L"Perspective";
+            ? localizedText("ui.editor.viewport.orthographic", "Orthographic")
+            : localizedText("ui.editor.viewport.perspective", "Perspective");
         button->setText(label);
         button->setAccessibilityLabel(twoD
             ? L"2D Scene View always uses orthographic projection"
@@ -6864,7 +7011,9 @@ void EditorSession::toggleViewportProjection()
 void EditorSession::toggleViewportShading()
 {
     _wireframeView = !_wireframeView;
-    const std::wstring label = _wireframeView ? L"Wireframe" : L"Shaded";
+    const std::wstring label = _wireframeView
+        ? localizedText("ui.editor.viewport.wireframe", "Wireframe")
+        : localizedText("ui.editor.viewport.shaded", "Shaded");
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_shading"))) {
         button->setText(label);

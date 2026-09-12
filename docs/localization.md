@@ -26,7 +26,7 @@ Example:
 }
 ```
 
-## Phase 1 behavior
+## Runtime behavior
 
 At startup the product host loads every packaged catalog. The persisted
 `Editor.Appearance.Language` setting accepts a locale such as `zh-CN`; the
@@ -37,9 +37,16 @@ user locale. The compatibility/headless initializer remains pinned to
 The migrated resource slice covers the editor shell's fixed controls,
 accessibility labels, render options, asset/console/network chrome, and the
 fixed UI Flow editor chrome. Existing inline strings remain valid and can be
-migrated incrementally without blocking feature work. Runtime-generated
-labels containing document names, numeric values, or state remain a separate
-formatted-message migration.
+migrated incrementally without blocking feature work.
+
+`EditorSession::setLanguage()` switches catalogs without rebuilding the UI.
+`UILayoutLoader::retranslate()` walks existing widgets and preserves list,
+combo-box, and tile-view selection and scroll state. Editor-owned child windows
+are refreshed in the same operation.
+
+Runtime-generated labels use numbered placeholders (`{0}`, `{1}`, ...). The
+first formatted slice includes document/scene titles, render-setting values,
+and network HP. Placeholder names and counts must match across catalogs.
 
 Validate catalog parity, layout references, and English fallback drift with:
 
@@ -47,6 +54,5 @@ Validate catalog parity, layout references, and English fallback drift with:
 powershell -ExecutionPolicy Bypass -File scripts/validate_editor_localization.ps1
 ```
 
-Live retranslation of an already-created widget tree and an in-editor language
-picker are intentionally deferred. Until those are added, changing the
-language setting takes effect after restarting/reloading the editor shell.
+An in-editor language picker remains a separate UI task; hosts can already call
+`EditorSession::setLanguage("zh-CN")` and the selected value is persisted.

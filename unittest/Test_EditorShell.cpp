@@ -229,6 +229,21 @@ TEST_CASE(editor_session_loads_packaged_zh_cn_localization) {
         session.ui().findById("card_outliner"));
     auto* workspace = dynamic_cast<TextLabel*>(
         session.ui().findById("lbl_workspace"));
+    auto* gamma = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_gamma"));
+    CHECK(hierarchy != nullptr && hierarchy->getTitle() == L"\u5C42\u7EA7");
+    CHECK(workspace != nullptr && workspace->getText() == L"\u573A\u666F");
+    CHECK(gamma != nullptr
+          && gamma->getText().find(L"\u4F3D\u9A6C") != std::wstring::npos);
+    CHECK(session.currentLanguage() == "zh-CN");
+
+    CHECK(session.setLanguage("en-US"));
+    CHECK(hierarchy != nullptr && hierarchy->getTitle() == L"Hierarchy");
+    CHECK(workspace != nullptr && workspace->getText() == L"SCENE");
+    CHECK(gamma != nullptr
+          && gamma->getText().find(L"Gamma") != std::wstring::npos);
+
+    CHECK(session.setLanguage("zh-CN"));
     CHECK(hierarchy != nullptr && hierarchy->getTitle() == L"\u5C42\u7EA7");
     CHECK(workspace != nullptr && workspace->getText() == L"\u573A\u666F");
     session.shutdown();

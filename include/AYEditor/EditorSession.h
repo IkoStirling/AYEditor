@@ -277,6 +277,10 @@ public:
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
+    // Switch the editor catalog and retranslate the live UI tree in place.
+    // "system" resolves against the current operating-system locale.
+    bool setLanguage(const std::string& language);
+    std::string currentLanguage() const;
 
     // D5.5 (2026-07-26): accessor for the optional child-window manager
     // so the promote-callback injection (wirePromoteCallback) can route
@@ -323,6 +327,13 @@ private:
     void bindTransportBar();
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
+    std::wstring localizedText(const char* key, const char* fallback) const;
+    std::wstring localizedText(const char* key, const char* fallback,
+                               const std::string& argument) const;
+    void setLocalizedValueLabel(const char* widgetId, const char* key,
+                                const char* fallback,
+                                const char* formattedValue);
+    void refreshLocalizedValueLabels();
     void bindComponentBrowser();
     void refreshComponentBrowser();
     void addSelectedComponent();
