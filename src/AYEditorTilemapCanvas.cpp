@@ -163,7 +163,8 @@ void EditorTilemapCanvas::setSpacePan(bool enabled)
 
 bool EditorTilemapCanvas::editingGestureActive() const noexcept
 {
-    return _drawing || _rectangleDrawing || _panning;
+    return _drawing || _rectangleDrawing || _selectionDrawing
+        || _selectionMoving || _panning;
 }
 
 ayt::math::FVector2 EditorTilemapCanvas::localPoint(
@@ -317,6 +318,17 @@ bool EditorTilemapCanvas::onMouseButtonDown(
     if (event.mouseButton != 0 || !isInDocument(_hover)) return false;
 
     _lastPainted = {-1, -1};
+    if (_model.tool() == PaintTool::Selection) {
+        const auto& selection = _model.selection();
+        _selectionMoving = selection.contains(
+            static_cast<uint32_t>(_hover.x),
+            static_cast<uint32_t>(_hover.y));
+        _selectionDrawing = !_selectionMoving;
+        _selectionStart = _hover;
+        _selectionCurrent = _hover;
+        markDirty();
+        return true;
+    }
     if (_model.tool() == PaintTool::FloodFill) {
         _model.applyAt(static_cast<uint32_t>(_hover.x),
                        static_cast<uint32_t>(_hover.y));
@@ -352,6 +364,11 @@ bool EditorTilemapCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
     _lastPointer = event.mousePos;
     if (_rectangleDrawing) {
         _rectangleCurrent = clampToDocument(_hover);
+        markDirty();
+        return true;
+    }
+    if (_selectionDrawing || _selectionMoving) {
+        _selectionCurrent = clampToDocument(_hover);
         markDirty();
         return true;
     }
@@ -392,6 +409,30 @@ bool EditorTilemapCanvas::onMouseButtonUp(
         markDirty();
         return true;
     }
+    if (event.mouseButton == 0
+        && (_selectionDrawing || _selectionMoving)) {
+        const bool moving = _selectionMoving;
+        _selectionDrawing = false;
+        _selectionMoving = false;
+        const TileCell end = clampToDocument(_selectionCurrent);
+        bool changed = false;
+        if (moving) {
+            changed = _model.moveSelection(
+                end.x - _selectionStart.x,
+                end.y - _selectionStart.y);
+            if (changed && _onEdited) _onEdited();
+        } else {
+            changed = _model.setSelection(
+                static_cast<uint32_t>(_selectionStart.x),
+                static_cast<uint32_t>(_selectionStart.y),
+                static_cast<uint32_t>(end.x),
+                static_cast<uint32_t>(end.y));
+        }
+        _selectionStart = {-1, -1};
+        _selectionCurrent = {-1, -1};
+        markDirty();
+        return changed || moving;
+    }
     return false;
 }
 
@@ -408,15 +449,24 @@ bool EditorTilemapCanvas::onMouseWheel(
 
 void EditorTilemapCanvas::onMouseLeave()
 {
-    if (_drawing || _panning || _rectangleDrawing) return;
+    if (_drawing || _panning || _rectangleDrawing
+        || _selectionDrawing || _selectionMoving) return;
     _hover = {-1, -1};
     markDirty();
 }
 
 ayt::ui::UiCursorHint EditorTilemapCanvas::getCursorHint() const
 {
-    return (_panning || _spacePan)
-        ? ayt::ui::UiCursorHint::Move : ayt::ui::UiCursorHint::Default;
+    if (_panning || _spacePan || _selectionMoving) {
+        return ayt::ui::UiCursorHint::Move;
+    }
+    if (_model.tool() == PaintTool::Selection && isInDocument(_hover)
+        && _model.selection().contains(
+            static_cast<uint32_t>(_hover.x),
+            static_cast<uint32_t>(_hover.y))) {
+        return ayt::ui::UiCursorHint::Move;
+    }
+    return ayt::ui::UiCursorHint::Default;
 }
 
 void EditorTilemapCanvas::tick(float dt)
@@ -451,6 +501,10 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
         std::wstring label;
         ayt::math::FVector4 accent{0.30f, 0.62f, 0.92f, 1.0f};
         switch (_model.tool()) {
+        case PaintTool::Selection:
+            label = L"SELECT  ·  drag to select or move";
+            accent = {0.30f, 0.82f, 0.95f, 1.0f};
+            break;
         case PaintTool::Pencil:
             label = L"PENCIL  ·  Tile "
                 + std::to_wstring(_model.selectedTileId());
@@ -614,6 +668,52 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
     }
     renderer.drawBorderRect(mapRect, {0.31f, 0.52f, 0.79f, 0.92f}, 1.0f);
 
+    ayt::ay2d::editor::TileRegionSelection shownSelection =
+        _model.selection();
+    if (_selectionDrawing && isInDocument(_selectionStart)
+        && isInDocument(_selectionCurrent)) {
+        shownSelection = {
+            static_cast<uint32_t>(std::min(
+                _selectionStart.x, _selectionCurrent.x)),
+            static_cast<uint32_t>(std::min(
+                _selectionStart.y, _selectionCurrent.y)),
+            static_cast<uint32_t>(std::max(
+                _selectionStart.x, _selectionCurrent.x)),
+            static_cast<uint32_t>(std::max(
+                _selectionStart.y, _selectionCurrent.y)),
+            true};
+    } else if (_selectionMoving && shownSelection.valid
+               && isInDocument(_selectionCurrent)) {
+        const int dx = _selectionCurrent.x - _selectionStart.x;
+        const int dy = _selectionCurrent.y - _selectionStart.y;
+        const int firstCol = static_cast<int>(shownSelection.firstCol) + dx;
+        const int firstRow = static_cast<int>(shownSelection.firstRow) + dy;
+        const int lastCol = static_cast<int>(shownSelection.lastCol) + dx;
+        const int lastRow = static_cast<int>(shownSelection.lastRow) + dy;
+        if (firstCol >= 0 && firstRow >= 0
+            && lastCol < static_cast<int>(document.cols())
+            && lastRow < static_cast<int>(document.rows())) {
+            shownSelection = {
+                static_cast<uint32_t>(firstCol),
+                static_cast<uint32_t>(firstRow),
+                static_cast<uint32_t>(lastCol),
+                static_cast<uint32_t>(lastRow), true};
+        }
+    }
+    if (shownSelection.valid) {
+        const auto a = _viewport.worldToScreen(
+            {static_cast<float>(shownSelection.firstCol) * tileWidth,
+             static_cast<float>(shownSelection.lastRow + 1u) * tileHeight});
+        const auto b = _viewport.worldToScreen(
+            {static_cast<float>(shownSelection.lastCol + 1u) * tileWidth,
+             static_cast<float>(shownSelection.firstRow) * tileHeight});
+        const ayt::math::FRectangle selectionRect = normalizedRect(
+            a, b, offset);
+        renderer.drawRect(selectionRect, {0.20f, 0.68f, 0.94f, 0.10f});
+        renderer.drawBorderRect(
+            selectionRect, {0.30f, 0.82f, 1.0f, 1.0f}, 2.0f);
+    }
+
     if (_rectangleDrawing && isInDocument(_rectangleStart)
         && isInDocument(_rectangleCurrent)) {
         const int minX = std::min(_rectangleStart.x, _rectangleCurrent.x);
@@ -632,6 +732,11 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
         renderer.drawBorderRect(preview, {0.48f, 0.76f, 1.0f, 1.0f},
                                 2.0f);
     } else if (isInDocument(_hover)) {
+        if (_model.tool() == PaintTool::Selection) {
+            drawToolBadge();
+            renderer.popClip();
+            return;
+        }
         if (_model.tool() == PaintTool::Shadow) {
             const auto a = _viewport.worldToScreen(
                 {static_cast<float>(_hover.x) * tileWidth,

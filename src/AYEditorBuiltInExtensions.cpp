@@ -673,6 +673,11 @@ public:
             L"Save Tilemap As…", [this]() {
                 (void)saveDocument(true);
             });
+        _selection = addIconButton(
+            toolbar, "tilemap_tool_selection", "select.svg", L"M",
+            L"Select and move a map region (M)", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::Selection);
+            });
         _pencil = addIconButton(
             toolbar, "tilemap_tool_pencil", "pencil.svg", L"P",
             L"Pencil (P)", [this]() {
@@ -1026,6 +1031,26 @@ public:
                     activeLayer(), encodeUtf8(_layerName->getText())));
             });
         inspector->addWidget(layerNameRow, 32.0f);
+        inspector->addWidget(makeLabel(L"Selection", 14), 24.0f);
+        auto* selectionButtons = new ayt::ui::HBox();
+        selectionButtons->setSpacing(3.0f);
+        addIconButton(
+            selectionButtons, "tilemap_selection_flip_h",
+            "flip-horizontal.svg", L"H", L"Flip selection horizontally",
+            [this]() { mutate(_document->model().flipSelectionHorizontal()); });
+        addIconButton(
+            selectionButtons, "tilemap_selection_flip_v",
+            "flip-vertical.svg", L"V", L"Flip selection vertically",
+            [this]() { mutate(_document->model().flipSelectionVertical()); });
+        addIconButton(
+            selectionButtons, "tilemap_selection_rotate",
+            "rotate-clockwise.svg", L"R", L"Rotate selection clockwise",
+            [this]() { mutate(_document->model().rotateSelectionClockwise()); });
+        addIconButton(
+            selectionButtons, "tilemap_selection_stamp",
+            "rubber-stamp.svg", L"S", L"Save selection as a reusable Stamp",
+            [this]() { saveSelectionAsStamp(); });
+        inspector->addWidget(selectionButtons, 32.0f);
         inspector->addWidget(makeLabel(L"Map Shadow Color · #RRGGBBAA", 13),
                              23.0f);
         _shadowColor = new ayt::ui::TextInput();
@@ -1165,6 +1190,7 @@ public:
         _atlasSelector = nullptr;
         _save = nullptr;
         _saveAs = nullptr;
+        _selection = nullptr;
         _pencil = nullptr;
         _eraser = nullptr;
         _fill = nullptr;
@@ -1209,11 +1235,15 @@ public:
     }
     bool handlesCommand(const std::string& id) const override {
         return id == "file.save" || id == "file.save_as"
-            || id == "edit.undo" || id == "edit.redo";
+            || id == "edit.undo" || id == "edit.redo"
+            || id == "edit.delete";
     }
     bool canExecuteCommand(const std::string& id) const override {
         if (id == "edit.undo") return _document->model().canUndo();
         if (id == "edit.redo") return _document->model().canRedo();
+        if (id == "edit.delete") {
+            return _document->model().selection().valid;
+        }
         return (id == "file.save" || id == "file.save_as")
             && _document->hasSavePathProvider();
     }
@@ -1225,6 +1255,9 @@ public:
             if (changed) _document->changed();
         } else if (id == "edit.redo") {
             changed = _document->model().redo();
+            if (changed) _document->changed();
+        } else if (id == "edit.delete") {
+            changed = _document->model().deleteSelection();
             if (changed) _document->changed();
         } else {
             return saveDocument(id == "file.save_as");
@@ -1241,8 +1274,32 @@ public:
     bool onPointerUp(float, float, int) override { return false; }
     bool onWheel(float, float, float) override { return false; }
     bool onKeyDown(int keyCode) override {
+        if (keyCode == ayt::ui::UIKey_Control) {
+            _ctrlDown = true;
+            return false;
+        }
+        if (keyCode == ayt::ui::UIKey_Shift) {
+            _shiftDown = true;
+            return false;
+        }
         if (textInputFocused()) return false;
+        if (_ctrlDown && keyCode == ayt::ui::UIKey_C) {
+            _host.setStatusText(_document->model().copySelection()
+                ? L"Tilemap selection copied." : L"Nothing selected.");
+            return true;
+        }
+        if (_ctrlDown && keyCode == ayt::ui::UIKey_X) {
+            mutate(_document->model().cutSelection());
+            return true;
+        }
+        if (_ctrlDown && keyCode == ayt::ui::UIKey_V) {
+            mutate(_document->model().pasteSelection());
+            return true;
+        }
         switch (keyCode) {
+        case ayt::ui::UIKey_M:
+            setTool(ayt::ay2d::editor::PaintTool::Selection);
+            return true;
         case ayt::ui::UIKey_P:
             setTool(ayt::ay2d::editor::PaintTool::Pencil);
             return true;
@@ -1273,11 +1330,25 @@ public:
             if (_canvas != nullptr) _canvas->frameDocument();
             _host.requestRepaint();
             return true;
+        case ayt::ui::UIKey_Left:
+            mutate(_document->model().moveSelection(-1, 0));
+            return true;
+        case ayt::ui::UIKey_Right:
+            mutate(_document->model().moveSelection(1, 0));
+            return true;
+        case ayt::ui::UIKey_Up:
+            mutate(_document->model().moveSelection(0, 1));
+            return true;
+        case ayt::ui::UIKey_Down:
+            mutate(_document->model().moveSelection(0, -1));
+            return true;
         default:
             return false;
         }
     }
     void onKeyUp(int keyCode) override {
+        if (keyCode == ayt::ui::UIKey_Control) _ctrlDown = false;
+        if (keyCode == ayt::ui::UIKey_Shift) _shiftDown = false;
         if (keyCode == ayt::ui::UIKey_Space && _canvas != nullptr) {
             _canvas->setSpacePan(false);
             _host.requestRepaint();
@@ -2123,6 +2194,27 @@ private:
         _host.setStatusText(L"Reusable Stamp created. Click the map to place it.");
     }
 
+    void saveSelectionAsStamp()
+    {
+        const uint32_t stampId = nextStampId();
+        if (stampId == 0u) {
+            _host.setStatusText(L"No free Stamp ID is available.");
+            return;
+        }
+        if (!_document->model().saveSelectionAsStamp(
+                stampId, "Selection " + std::to_string(stampId))) {
+            _host.setStatusText(
+                L"Select a region containing imported tile assets first.");
+            return;
+        }
+        _document->model().setTool(ayt::ay2d::editor::PaintTool::Stamp);
+        _document->changed();
+        refresh();
+        _host.requestRepaint();
+        _host.setStatusText(
+            L"Selection saved as a reusable Stamp. Undo removes it.");
+    }
+
     void deleteSelectedStamp()
     {
         const uint32_t stampId = _document->model().selectedStampId();
@@ -2311,6 +2403,8 @@ private:
 
         const bool pencil = model.tool()
             == ayt::ay2d::editor::PaintTool::Pencil;
+        const bool selection = model.tool()
+            == ayt::ay2d::editor::PaintTool::Selection;
         const bool eraser = model.tool()
             == ayt::ay2d::editor::PaintTool::Eraser;
         const bool fill = model.tool()
@@ -2321,6 +2415,7 @@ private:
             == ayt::ay2d::editor::PaintTool::Stamp;
         const bool shadow = model.tool()
             == ayt::ay2d::editor::PaintTool::Shadow;
+        setIconState(_selection, selection, L"Selection (M)");
         setIconState(_pencil, pencil, L"Pencil (P)");
         setIconState(_eraser, eraser, L"Eraser (E)");
         setIconState(_fill, fill, L"Flood Fill (F)");
@@ -2429,6 +2524,7 @@ private:
     ayt::ui::Button* _pencil = nullptr;
     ayt::ui::Button* _save = nullptr;
     ayt::ui::Button* _saveAs = nullptr;
+    ayt::ui::Button* _selection = nullptr;
     ayt::ui::Button* _eraser = nullptr;
     ayt::ui::Button* _fill = nullptr;
     ayt::ui::Button* _rectangle = nullptr;
@@ -2491,6 +2587,8 @@ private:
     bool _importCommitPending = false;
     bool _skipTransparent = true;
     bool _selectingStamp = false;
+    bool _ctrlDown = false;
+    bool _shiftDown = false;
 };
 
 class TimedAssetDocument final

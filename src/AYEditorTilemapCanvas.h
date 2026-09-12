@@ -90,10 +90,14 @@ private:
     bool _spacePan = false;
     int _panButton = -1;
     bool _rectangleDrawing = false;
+    bool _selectionDrawing = false;
+    bool _selectionMoving = false;
     ayt::ay2d::editor::TileCell _hover{-1, -1};
     ayt::ay2d::editor::TileCell _lastPainted{-1, -1};
     ayt::ay2d::editor::TileCell _rectangleStart{-1, -1};
     ayt::ay2d::editor::TileCell _rectangleCurrent{-1, -1};
+    ayt::ay2d::editor::TileCell _selectionStart{-1, -1};
+    ayt::ay2d::editor::TileCell _selectionCurrent{-1, -1};
     ayt::math::FVector2 _lastPointer{0.0f, 0.0f};
     ayt::math::FVector2 _lastCanvasSize{0.0f, 0.0f};
     std::function<void()> _onEdited;
