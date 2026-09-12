@@ -13,6 +13,8 @@
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYResource/Converter/TilemapConverter.h>
+#include <AYResource/ResourceManager.h>
+#include <AYResource/assetsDefs/ITilemap.h>
 #include <AYUI/Box.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
@@ -69,6 +71,11 @@ namespace {
 struct TilemapSaveResult {
     bool sourceSaved = false;
     bool cooked = false;
+    bool runtimeFileValidated = false;
+    bool hotReloadRequested = false;
+    std::filesystem::path cookedPath;
+    uint64_t cookedBytes = 0u;
+    size_t dependencyCount = 0u;
     std::string notice;
 };
 
@@ -257,18 +264,49 @@ TilemapSaveResult saveTilemapSourceAndTryCook(
     ayt::resource::TilemapConverter converter(source.string());
     converter.setOutputDir(assetRoot.string());
     const ayt::resource::ConversionResult cooked = converter.convert();
-    const size_t tilemapCount = static_cast<size_t>(std::count_if(
+    const auto primary = std::find_if(
         cooked.resources.begin(), cooked.resources.end(),
         [](const ayt::resource::ConversionResult::ConvertedResource& resource) {
             return resource.type == "Tilemap";
-        }));
-    if (tilemapCount != 1u) {
+        });
+    if (primary == cooked.resources.end()) {
         if (!result.notice.empty()) result.notice += " ";
         result.notice += "Authoring source saved, but runtime cooking failed.";
         if (error != nullptr) error->clear();
         return result;
     }
     result.cooked = true;
+    result.cookedPath = assetRoot / std::filesystem::u8path(primary->path);
+    result.cookedBytes = primary->size;
+    result.dependencyCount = cooked.dependencies.size();
+    std::error_code fileError;
+    const uintmax_t writtenBytes = std::filesystem::file_size(
+        result.cookedPath, fileError);
+    if (fileError || writtenBytes != result.cookedBytes) {
+        if (!result.notice.empty()) result.notice += " ";
+        result.notice += "Cook output verification failed: "
+            + result.cookedPath.string();
+        if (error != nullptr) error->clear();
+        return result;
+    }
+    try {
+        auto& resources = ayt::resource::ResourceManager::instance();
+        const std::string runtimePath = result.cookedPath.string();
+        result.hotReloadRequested = resources.isLoaded(runtimePath);
+        if (result.hotReloadRequested) {
+            resources.reloadResource(runtimePath);
+        }
+        const auto runtime = resources.load<ayt::resource::ITilemap>(runtimePath);
+        result.runtimeFileValidated = runtime != nullptr
+            && runtime->getCols() == model.document().cols()
+            && runtime->getRows() == model.document().rows();
+    } catch (...) {
+        result.runtimeFileValidated = false;
+    }
+    if (!result.runtimeFileValidated) {
+        if (!result.notice.empty()) result.notice += " ";
+        result.notice += "The cooked file was written, but runtime validation failed.";
+    }
     if (error != nullptr) error->clear();
     return result;
 }
@@ -405,6 +443,7 @@ public:
         }
         const TilemapSaveResult result = saveTilemapSourceAndTryCook(
             _model, _path, error);
+        _lastSaveResult = result;
         _lastSaveNotice = result.notice;
         if (result.sourceSaved) ++_revision;
         return result.sourceSaved;
@@ -417,6 +456,7 @@ public:
         }
         const TilemapSaveResult result = saveTilemapSourceAndTryCook(
             _model, path, error);
+        _lastSaveResult = result;
         _lastSaveNotice = result.notice;
         if (result.sourceSaved) {
             _path = path;
@@ -438,6 +478,9 @@ public:
     const std::string& lastSaveNotice() const noexcept {
         return _lastSaveNotice;
     }
+    const TilemapSaveResult& lastSaveResult() const noexcept {
+        return _lastSaveResult;
+    }
     void setSavePathProvider(SavePathProvider provider) {
         _savePathProvider = std::move(provider);
     }
@@ -450,6 +493,7 @@ private:
     std::string _path;
     std::string _title = "Untitled Tilemap";
     std::string _lastSaveNotice;
+    TilemapSaveResult _lastSaveResult;
     SavePathProvider _savePathProvider;
     uint64_t _revision = 1u;
     ayt::ay2d::editor::TilemapEditorModel _model;
@@ -665,7 +709,7 @@ public:
         toolbar->setId("tilemap_workspace_toolbar");
         _save = addIconButton(
             toolbar, "tilemap_file_save", "device-floppy.svg", L"Save",
-            L"Save Tilemap (Ctrl+S)", [this]() {
+            L"Save, cook and hot-reload Tilemap (Ctrl+S)", [this]() {
                 (void)saveDocument(false);
             });
         _saveAs = addIconButton(
@@ -783,6 +827,11 @@ public:
                 _tooltips.push_back(tooltip);
             }
         }
+
+        _runtimeStatus = new ayt::ui::TextLabel();
+        _runtimeStatus->setId("tilemap_workspace_runtime_status");
+        _runtimeStatus->setFontSize(11);
+        root->addWidget(_runtimeStatus, 20.0f);
 
         _document->setSavePathProvider([this](bool saveAs) {
             if (auto* provider = dynamic_cast<
@@ -1382,6 +1431,7 @@ public:
         _terrainRuleTile = nullptr;
         _summary = nullptr;
         _documentPath = nullptr;
+        _runtimeStatus = nullptr;
         _atlasHealth = nullptr;
         _documentPathTooltip = nullptr;
         _atlasSelector = nullptr;
@@ -3084,6 +3134,7 @@ private:
             + std::to_wstring(static_cast<int>(std::round(_zoomPercent)))
             + L"%");
         updateDocumentPath();
+        updateRuntimeStatus();
     }
 
     void updateDocumentPath() {
@@ -3099,6 +3150,37 @@ private:
                   L"the default folder is Assets/tilemaps."
                 : text);
         }
+    }
+
+    void updateRuntimeStatus() {
+        if (_runtimeStatus == nullptr) return;
+        if (_document->path().empty()) {
+            _runtimeStatus->setText(
+                L"Runtime: Not cooked — save inside project Assets");
+            return;
+        }
+        if (_document->model().dirty()) {
+            _runtimeStatus->setText(
+                L"Runtime: Source changed — Ctrl+S to cook and reload");
+            return;
+        }
+        const auto& result = _document->lastSaveResult();
+        if (!result.sourceSaved) {
+            _runtimeStatus->setText(
+                L"Runtime: Save to validate the cooked asset");
+            return;
+        }
+        if (!result.cooked) {
+            _runtimeStatus->setText(L"Runtime: Cook skipped or failed");
+            return;
+        }
+        std::wstring text = result.runtimeFileValidated
+            ? L"Runtime: Ready" : L"Runtime: Cooked but validation failed";
+        text += L"  ·  " + std::to_wstring(result.cookedBytes) + L" bytes";
+        text += L"  ·  " + std::to_wstring(result.dependencyCount)
+            + L" dependencies";
+        if (result.hotReloadRequested) text += L"  ·  Hot reloaded";
+        _runtimeStatus->setText(text);
     }
 
     bool saveDocument(bool saveAs) {
@@ -3267,6 +3349,7 @@ private:
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _summary = nullptr;
     ayt::ui::TextLabel* _documentPath = nullptr;
+    ayt::ui::TextLabel* _runtimeStatus = nullptr;
     ayt::ui::TextLabel* _atlasHealth = nullptr;
     ayt::ui::Tooltip* _documentPathTooltip = nullptr;
     ayt::ui::ComboBox* _atlasSelector = nullptr;
