@@ -22,7 +22,7 @@ enum class EditorDensity : uint8_t {
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 3;
+    static constexpr int kCurrentSchemaVersion = 4;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -79,6 +79,8 @@ struct EditorPreferences {
     // demo/library boundary, so preserving existing member offsets reduces
     // stale-object ABI failures during incremental Visual Studio builds.
     bool taaEnabled = false;
+    // "system" selects the closest packaged locale at process startup.
+    std::string language = "system";
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -131,7 +133,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.colorGradingStrength == b.colorGradingStrength
         && a.shadowsEnabled == b.shadowsEnabled
         && a.shadowPcfEnabled == b.shadowPcfEnabled
-        && a.taaEnabled == b.taaEnabled;
+        && a.taaEnabled == b.taaEnabled
+        && a.language == b.language;
 }
 
 inline bool operator!=(const EditorPreferences& a,

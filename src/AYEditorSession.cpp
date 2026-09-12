@@ -64,6 +64,7 @@
 #include "AYDevice/DeviceManager.h"
 #include <AYApplication/GameFlowUIBridge.h>
 #include <AYApplication/GameFlowWorldActions.h>
+#include <AYLocalization.h>
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因文档层需 SceneMode/Scene 完整类型；
@@ -1088,6 +1089,16 @@ std::string wideToUtf8(const std::wstring& text)
     return result;
 }
 
+std::string systemLanguageTag()
+{
+    wchar_t localeName[LOCALE_NAME_MAX_LENGTH]{};
+    if (::GetUserDefaultLocaleName(
+            localeName, LOCALE_NAME_MAX_LENGTH) <= 0) {
+        return "en-US";
+    }
+    return wideToUtf8(localeName);
+}
+
 std::wstring assetSizeText(std::uintmax_t bytes)
 {
     wchar_t buffer[64]{};
@@ -1371,6 +1382,14 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
                      shortcutError.c_str());
     }
     _preferences = desc.preferences;
+    _localization =
+        std::make_unique<ayt::localization::Localization>();
+    _localization->loadAllFromDirectory(
+        (std::filesystem::path(_engineAssetsRoot) / "AYEditor"
+         / "Localization").string());
+    _localization->setFallbackLanguage("en-US");
+    _localization->setLanguage(_preferences.language == "system"
+        ? systemLanguageTag() : _preferences.language);
     if (desc.createAssetPreviewTexture
         && desc.releaseAssetPreviewTexture) {
         _assetPreviewCache = std::make_unique<EditorAssetPreviewCache>(
@@ -1405,6 +1424,11 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     // AY_EDITOR_HEAP_CHECK("session_after_set_host");
 
     _ui.initialize(desc.uiBackend);
+    _ui.loader().setTextResolver(
+        [this](std::string_view key, std::wstring_view fallback) {
+            return ayt::ui::decodeUtf8Text(_localization->get(
+                std::string(key), wideToUtf8(std::wstring(fallback))));
+        });
     installEditorTheme(_preferences.themeName);
     _ui.setUiScale(std::clamp(_preferences.uiScale, 0.75f, 1.25f));
     AY_EDITOR_TRACE("initialize: ui backend set");
@@ -1663,6 +1687,9 @@ bool EditorSession::initialize(ayt::ui::IRenderBackend* backend, const std::stri
     EditorSessionDesc desc;
     desc.uiBackend = backend;
     desc.layoutPath = layoutPath;
+    // Keep the compatibility/headless entry point deterministic. Product
+    // hosts pass persisted preferences and may opt into "system" locale.
+    desc.preferences.language = "en-US";
     return initialize(desc);
 }
 
@@ -6373,6 +6400,7 @@ void EditorSession::resetWorkspacePreferences()
     defaults.themeName = _preferences.themeName;
     defaults.density = _preferences.density;
     defaults.uiScale = _preferences.uiScale;
+    defaults.language = _preferences.language;
     applyPreferences(defaults);
     savePreferencesNow();
 }

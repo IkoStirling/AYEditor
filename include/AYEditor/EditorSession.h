@@ -46,6 +46,7 @@ namespace ayt::device { class DeviceManager; class WindowManager; }
 // 否则会嵌套在 `ayt::editor::ayt::scene::Scene`，导致
 // `std::unique_ptr<ayt::scene::Scene>` 类型校验失败。
 namespace ayt::scene { class Scene; }
+namespace ayt::localization { class Localization; }
 
 // v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
 // TreeView 完整定义在 .cpp 引入（AYTreeView.h），避免把 AYUI 全头暴露到
@@ -502,6 +503,10 @@ private:
     EditorWorldContext _worldContext;
     EditorPlayRuntime _playRuntime;
     EditorGameView _gameView;
+    // Editor-owned catalog state must not overwrite project/game localization
+    // when both run in the same process. Declared before UI so it outlives all
+    // resolver callbacks held by UI managers and child tools.
+    std::unique_ptr<ayt::localization::Localization> _localization;
     ayt::ui::UIManager _ui;
 
     // P0: document owns one stable Edit Scene for the whole session.

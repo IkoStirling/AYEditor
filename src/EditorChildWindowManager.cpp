@@ -350,6 +350,8 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
 #else
     e.ui->initialize(nullptr);  // K-INV-D5-4 null backend = no render
 #endif
+    // Child tools share the primary editor's host-owned localization resolver.
+    e.ui->loader().setTextResolver(_primary.loader().textResolver());
     // initialize() claims g_activeUIManager; restore the editor primary
     // so tryGet() between frames does not stay on the child.
     ayt::ui::UIManager::makeActive(&_primary);

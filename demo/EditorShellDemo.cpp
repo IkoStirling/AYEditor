@@ -272,6 +272,8 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         0, 1));
     out.uiScale = std::clamp(preferenceFloat(
         saved, "Editor.Appearance.UiScale", out.uiScale), 0.75f, 1.25f);
+    out.language = saved.getString(
+        "Editor.Appearance.Language", out.language);
 
     out.dockTree = saved.getString("Editor.Workspace.DockTree", out.dockTree);
     out.panelRenderVisible = saved.getBool(
@@ -382,6 +384,7 @@ bool saveEditorPreferences(const std::string& path,
     config.setString("Editor.Appearance.Theme", value.themeName);
     config.setInt("Editor.Appearance.Density", static_cast<int>(value.density));
     config.setFloat("Editor.Appearance.UiScale", value.uiScale);
+    config.setString("Editor.Appearance.Language", value.language);
     config.setString("Editor.Workspace.DockTree", value.dockTree);
     config.setBool("Editor.Workspace.Panel.Render", value.panelRenderVisible);
     config.setBool("Editor.Workspace.Panel.Inspector", value.panelInspectorVisible);

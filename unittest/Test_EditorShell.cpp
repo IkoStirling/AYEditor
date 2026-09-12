@@ -77,6 +77,12 @@ std::string resolveEditorShellLayoutPath()
     return {};
 }
 
+std::string resolveEditorEngineAssetsRoot()
+{
+    return std::filesystem::path(AY_EDITOR_TEST_SOURCE_DIR)
+        .parent_path().string();
+}
+
 bool clickButton(Button* button)
 {
     if (button == nullptr) return false;
@@ -202,6 +208,29 @@ TEST_CASE(test_editor_session_loads_shell_json) {
         session.ui().findById("btn_remove_component")) != nullptr);
     CHECK(dynamic_cast<VBox*>(
         session.ui().findById("inspector_component_properties")) != nullptr);
+    session.shutdown();
+}
+
+TEST_CASE(editor_session_loads_packaged_zh_cn_localization) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    MockRenderer backend;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = resolveEditorEngineAssetsRoot();
+    desc.preferences.language = "zh-CN";
+
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    auto* hierarchy = dynamic_cast<DockCard*>(
+        session.ui().findById("card_outliner"));
+    auto* workspace = dynamic_cast<TextLabel*>(
+        session.ui().findById("lbl_workspace"));
+    CHECK(hierarchy != nullptr && hierarchy->getTitle() == L"\u5C42\u7EA7");
+    CHECK(workspace != nullptr && workspace->getText() == L"\u573A\u666F");
     session.shutdown();
 }
 
@@ -1761,6 +1790,7 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     requested.themeName = kAliyatEditorDarkTheme;
     requested.density = EditorDensity::Compact;
     requested.uiScale = 0.90f;
+    requested.language = "en-US";
     requested.gamma = 2.0f;
     requested.bloomEnabled = false;
 
@@ -1815,6 +1845,7 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     CHECK(persisted.themeName == kAliyatEditorDarkTheme);
     CHECK(persisted.density == EditorDensity::Compact);
     CHECK_FLOAT_EQ(persisted.uiScale, 0.90f, 1.0e-5f);
+    CHECK(persisted.language == "en-US");
     CHECK(!persisted.dockTree.empty());
 
     CHECK(session.ui().findById("btn_tool_select") == nullptr);
