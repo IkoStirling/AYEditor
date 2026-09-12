@@ -826,6 +826,10 @@ public:
             _host.requestRepaint();
         });
         assets->addWidget(_atlasSelector, 28.0f);
+        _atlasHealth = makeLabel(L"Source: no atlas selected", 10);
+        _atlasHealth->setId("tilemap_workspace_atlas_health");
+        _atlasHealth->setWordWrap(true);
+        assets->addWidget(_atlasHealth, 30.0f);
         auto* pickerPanel = new ayt::ui::Panel();
         pickerPanel->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         _atlasPicker = new EditorTileAtlasPicker();
@@ -852,6 +856,18 @@ public:
             _host.requestRepaint();
         })->setId("tilemap_workspace_fit_sheet");
         assets->addWidget(sourceButtons, 29.0f);
+        auto* sourceMaintenance = new ayt::ui::HBox();
+        sourceMaintenance->setSpacing(4.0f);
+        addButton(sourceMaintenance, L"Refresh", 72.0f, [this]() {
+            refreshSelectedAtlasSource();
+        })->setId("tilemap_workspace_refresh_atlas");
+        addButton(sourceMaintenance, L"Locate…", 72.0f, [this]() {
+            locateSelectedAtlasSource(false);
+        })->setId("tilemap_workspace_locate_atlas");
+        addButton(sourceMaintenance, L"Relink siblings…", 0.0f, [this]() {
+            locateSelectedAtlasSource(true);
+        })->setId("tilemap_workspace_relink_atlases");
+        assets->addWidget(sourceMaintenance, 29.0f);
         auto* stampRow = new ayt::ui::HBox();
         stampRow->setSpacing(4.0f);
         _stampSelector = new ayt::ui::ComboBox();
@@ -1264,11 +1280,21 @@ public:
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     IEditorViewInputTarget* inputTarget() noexcept override { return this; }
-    void tick(float) override {
-        if (!_importCommitPending) return;
-        auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
-        _importCommitPending = false;
-        commitAtlasImport();
+    void tick(float dt) override {
+        if (_importCommitPending) {
+            auto activeScope = ayt::ui::UIManager::pushActive(
+                _host.uiManager());
+            _importCommitPending = false;
+            commitAtlasImport();
+        }
+        _atlasHealthPoll += std::max(0.0f, dt);
+        if (_atlasHealthPoll >= 1.0f) {
+            _atlasHealthPoll = 0.0f;
+            if (scanAtlasSourceHealth()) {
+                syncAtlasHealthLabel();
+                _host.requestRepaint();
+            }
+        }
     }
     void prepareForUiShutdown() override {
         auto activeScope = ayt::ui::UIManager::pushActive(_host.uiManager());
@@ -1356,6 +1382,7 @@ public:
         _terrainRuleTile = nullptr;
         _summary = nullptr;
         _documentPath = nullptr;
+        _atlasHealth = nullptr;
         _documentPathTooltip = nullptr;
         _atlasSelector = nullptr;
         _save = nullptr;
@@ -1425,10 +1452,16 @@ public:
         bool changed = false;
         if (id == "edit.undo") {
             changed = _document->model().undo();
-            if (changed) _document->changed();
+            if (changed) {
+                _document->changed();
+                loadSavedAtlasImages();
+            }
         } else if (id == "edit.redo") {
             changed = _document->model().redo();
-            if (changed) _document->changed();
+            if (changed) {
+                _document->changed();
+                loadSavedAtlasImages();
+            }
         } else if (id == "edit.delete") {
             changed = _document->model().deleteSelection();
             if (changed) _document->changed();
@@ -2227,6 +2260,13 @@ private:
         }
         _atlasImages[atlasId] = _pendingAtlasImage;
         _atlasTextures[atlasId] = _pendingAtlasImage.texture;
+        const std::string resolved = resolvedAtlasPath(_pendingAtlasPath);
+        _atlasResolvedPaths[atlasId] = resolved;
+        if (const auto hash = atlasFileHash(
+                std::filesystem::u8path(resolved))) {
+            _atlasFileHashes[atlasId] = *hash;
+        }
+        _atlasHealthStates[atlasId] = L"Source: Ready";
         _document->model().setSelectedTileId(firstTileId);
         _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
         _document->changed();
@@ -2258,24 +2298,226 @@ private:
         return std::filesystem::absolute(path).lexically_normal().string();
     }
 
+    uint32_t selectedAtlasId() const noexcept
+    {
+        if (_document->model().document().tileAtlases().contains(
+                _shownAtlasId)) {
+            return _shownAtlasId;
+        }
+        if (_atlasSelector != nullptr) {
+            const int index = _atlasSelector->getSelectedIndex();
+            if (index >= 0 && index < static_cast<int>(_atlasIds.size())) {
+                return _atlasIds[static_cast<size_t>(index)];
+            }
+        }
+        return 0u;
+    }
+
+    bool atlasImageFits(uint32_t atlasId,
+                        const EditorAuthoringImage& image,
+                        std::string& error) const
+    {
+        for (const auto& [tileId, asset] :
+             _document->model().document().tileAssets()) {
+            if (asset.atlasId != atlasId) continue;
+            const uint64_t right = static_cast<uint64_t>(asset.sourceX)
+                + asset.sourceWidth;
+            const uint64_t bottom = static_cast<uint64_t>(asset.sourceY)
+                + asset.sourceHeight;
+            if (right > image.width || bottom > image.height) {
+                error = "Tile " + std::to_string(tileId)
+                    + " lies outside the replacement image. Reimport it "
+                      "with new slicing settings instead.";
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool loadAtlasImage(uint32_t atlasId,
+                        const std::string& absolutePath,
+                        bool force,
+                        std::string& error)
+    {
+        (void)force;
+        EditorAuthoringImage image = _host.loadAuthoringImage(
+            absolutePath, &error);
+        if (!image || !atlasImageFits(atlasId, image, error)) return false;
+        _atlasTextures[atlasId] = image.texture;
+        _atlasImages[atlasId] = std::move(image);
+        _atlasResolvedPaths[atlasId] = absolutePath;
+        if (const auto hash = atlasFileHash(
+                std::filesystem::u8path(absolutePath))) {
+            _atlasFileHashes[atlasId] = *hash;
+        } else {
+            _atlasFileHashes.erase(atlasId);
+        }
+        _atlasHealthStates[atlasId] = L"Source: Ready";
+        return true;
+    }
+
+    bool scanAtlasSourceHealth()
+    {
+        bool changed = false;
+        std::map<uint32_t, std::wstring> next;
+        for (const auto& [atlasId, source] :
+             _document->model().document().tileAtlases()) {
+            const std::string resolved = resolvedAtlasPath(source.sourcePath);
+            std::error_code fileError;
+            if (!std::filesystem::is_regular_file(
+                    std::filesystem::u8path(resolved), fileError)
+                || fileError) {
+                next[atlasId] = L"Source: Missing — use Locate";
+                continue;
+            }
+            if (const auto loaded = _atlasResolvedPaths.find(atlasId);
+                loaded != _atlasResolvedPaths.end()
+                && loaded->second != resolved) {
+                next[atlasId] = L"Source: Reference changed — Refresh";
+                continue;
+            }
+            const auto hash = atlasFileHash(std::filesystem::u8path(resolved));
+            const auto previous = _atlasFileHashes.find(atlasId);
+            if (!hash) {
+                next[atlasId] = L"Source: Unreadable — use Locate";
+            } else if (previous != _atlasFileHashes.end()
+                       && previous->second != *hash) {
+                next[atlasId] = L"Source: Changed on disk — Refresh";
+            } else {
+                next[atlasId] = L"Source: Ready";
+            }
+        }
+        changed = next != _atlasHealthStates;
+        _atlasHealthStates = std::move(next);
+        return changed;
+    }
+
+    void syncAtlasHealthLabel()
+    {
+        if (_atlasHealth == nullptr) return;
+        const uint32_t atlasId = selectedAtlasId();
+        const auto found = _atlasHealthStates.find(atlasId);
+        _atlasHealth->setText(found == _atlasHealthStates.end()
+            ? L"Source: No atlas selected" : found->second);
+    }
+
+    void refreshSelectedAtlasSource()
+    {
+        const uint32_t atlasId = selectedAtlasId();
+        const auto* source =
+            _document->model().document().tileAtlas(atlasId);
+        if (source == nullptr) {
+            _host.setStatusText(L"Select an imported tile sheet first.");
+            return;
+        }
+        const std::string path = resolvedAtlasPath(source->sourcePath);
+        std::string error;
+        if (!loadAtlasImage(atlasId, path, true, error)) {
+            scanAtlasSourceHealth();
+            syncAtlasHealthLabel();
+            _host.setStatusText(L"Atlas refresh failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        scanAtlasSourceHealth();
+        syncSourcePicker();
+        _host.requestRepaint();
+        _host.setStatusText(L"Tile sheet reimported from disk.");
+    }
+
+    void locateSelectedAtlasSource(bool relinkSiblings)
+    {
+        const uint32_t selectedId = selectedAtlasId();
+        const auto* selected =
+            _document->model().document().tileAtlas(selectedId);
+        if (selected == nullptr) {
+            _host.setStatusText(L"Select a missing tile sheet first.");
+            return;
+        }
+        const std::string chosen = _host.chooseImageFile();
+        if (chosen.empty()) return;
+        const std::filesystem::path selectedPath =
+            std::filesystem::absolute(std::filesystem::u8path(chosen))
+                .lexically_normal();
+        std::map<uint32_t, std::string> replacements;
+        std::string error;
+        if (!loadAtlasImage(selectedId, selectedPath.string(), true, error)) {
+            _host.setStatusText(L"Atlas relink failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        replacements.emplace(selectedId, selectedPath.string());
+
+        if (relinkSiblings) {
+            const std::filesystem::path folder = selectedPath.parent_path();
+            for (const auto& [atlasId, source] :
+                 _document->model().document().tileAtlases()) {
+                if (atlasId == selectedId) continue;
+                std::error_code fileError;
+                const std::filesystem::path current =
+                    std::filesystem::u8path(
+                        resolvedAtlasPath(source.sourcePath));
+                if (std::filesystem::is_regular_file(current, fileError)
+                    && !fileError) continue;
+                const std::filesystem::path candidate = folder
+                    / std::filesystem::u8path(source.sourcePath).filename();
+                fileError.clear();
+                if (!std::filesystem::is_regular_file(candidate, fileError)
+                    || fileError) continue;
+                std::string siblingError;
+                if (loadAtlasImage(atlasId, candidate.string(), true,
+                                   siblingError)) {
+                    replacements.emplace(atlasId, candidate.string());
+                }
+            }
+        }
+
+        if (!_document->model().relinkTileAtlasSources(replacements)) {
+            _host.setStatusText(L"Atlas paths could not be updated.");
+            return;
+        }
+        _shownAtlasId = selectedId;
+        _document->changed();
+        scanAtlasSourceHealth();
+        refresh();
+        _host.requestRepaint();
+        _host.setStatusText(L"Relinked "
+            + std::to_wstring(replacements.size())
+            + (replacements.size() == 1u
+                ? L" tile sheet." : L" tile sheets from the same folder."));
+    }
+
     void loadSavedAtlasImages()
     {
         std::wstring failures;
+        const auto& atlases = _document->model().document().tileAtlases();
+        for (auto it = _atlasImages.begin(); it != _atlasImages.end();) {
+            if (!atlases.contains(it->first)) {
+                _atlasTextures.erase(it->first);
+                _atlasResolvedPaths.erase(it->first);
+                _atlasFileHashes.erase(it->first);
+                it = _atlasImages.erase(it);
+            } else {
+                ++it;
+            }
+        }
         for (const auto& [atlasId, source] :
-             _document->model().document().tileAtlases()) {
+             atlases) {
             std::string error;
-            EditorAuthoringImage image = _host.loadAuthoringImage(
-                resolvedAtlasPath(source.sourcePath), &error);
-            if (!image) {
+            const std::string path = resolvedAtlasPath(source.sourcePath);
+            if (!loadAtlasImage(atlasId, path, false, error)) {
+                _atlasTextures.erase(atlasId);
+                _atlasImages.erase(atlasId);
+                _atlasResolvedPaths.erase(atlasId);
+                _atlasFileHashes.erase(atlasId);
                 if (!failures.empty()) failures += L"; ";
                 failures += ayt::ui::decodeUtf8Text(source.name);
                 continue;
             }
-            _atlasTextures[atlasId] = image.texture;
-            _atlasImages[atlasId] = std::move(image);
         }
+        scanAtlasSourceHealth();
         if (!failures.empty()) {
-            _host.setStatusText(L"Atlas source unavailable (using fallback): "
+            _host.setStatusText(L"Atlas source unavailable — use Locate: "
                                 + failures);
         }
     }
@@ -2773,14 +3015,17 @@ private:
         }
         const auto* source = document.tileAtlas(atlasId);
         const auto texture = _atlasTextures.find(atlasId);
+        _shownAtlasId = atlasId;
+        const auto atlasIndex = std::find(
+            _atlasIds.begin(), _atlasIds.end(), atlasId);
+        if (_atlasSelector != nullptr) {
+            _atlasSelector->setSelectedIndex(atlasIndex == _atlasIds.end()
+                ? -1 : static_cast<int>(atlasIndex - _atlasIds.begin()));
+        }
+        syncAtlasHealthLabel();
         if (source == nullptr || texture == _atlasTextures.end()) {
-            _shownAtlasId = 0u;
             _selectingStamp = false;
             _atlasPicker->clearAtlas();
-            if (_atlasSelector != nullptr) {
-                _atlasSelector->setSelectedIndex(
-                    document.tileAtlases().empty() ? 0 : -1);
-            }
             return;
         }
         std::vector<EditorTileAtlasPicker::Cell> cells;
@@ -2788,13 +3033,6 @@ private:
             if (asset.atlasId != atlasId) continue;
             cells.push_back({tileId, asset.sourceX, asset.sourceY,
                              asset.sourceWidth, asset.sourceHeight});
-        }
-        _shownAtlasId = atlasId;
-        const auto atlasIndex = std::find(
-            _atlasIds.begin(), _atlasIds.end(), atlasId);
-        if (_atlasSelector != nullptr) {
-            _atlasSelector->setSelectedIndex(atlasIndex == _atlasIds.end()
-                ? -1 : static_cast<int>(atlasIndex - _atlasIds.begin()));
         }
         _atlasPicker->setAtlas(texture->second, *source, std::move(cells));
         _atlasPicker->setSelectedTileId(
@@ -3029,6 +3267,7 @@ private:
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _summary = nullptr;
     ayt::ui::TextLabel* _documentPath = nullptr;
+    ayt::ui::TextLabel* _atlasHealth = nullptr;
     ayt::ui::Tooltip* _documentPathTooltip = nullptr;
     ayt::ui::ComboBox* _atlasSelector = nullptr;
     ayt::ui::ComboBox* _stampSelector = nullptr;
@@ -3099,6 +3338,9 @@ private:
     std::vector<ayt::ui::TextInput*> _importInputs;
     std::map<uint32_t, EditorAuthoringImage> _atlasImages;
     std::map<uint32_t, ayt::ui::ImageTextureHandle> _atlasTextures;
+    std::map<uint32_t, std::string> _atlasResolvedPaths;
+    std::map<uint32_t, std::string> _atlasFileHashes;
+    std::map<uint32_t, std::wstring> _atlasHealthStates;
     EditorAuthoringImage _pendingAtlasImage;
     ayt::ay2d::editor::TileAtlasImportPlan _pendingImportPlan;
     std::string _pendingAtlasPath;
@@ -3120,6 +3362,7 @@ private:
     uint8_t _terrainRuleNeighborMask = 0u;
     int _animationFrameIndex = -1;
     float _zoomPercent = 100.0f;
+    float _atlasHealthPoll = 0.0f;
     bool _syncing = false;
     bool _syncingImport = false;
     bool _importCommitPending = false;
