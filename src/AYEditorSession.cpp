@@ -695,6 +695,17 @@ std::string resolveProjectAssetRoot(const std::string& projectRoot)
     return (std::filesystem::path(projectRoot) / relative).string();
 }
 
+std::vector<ayt::ui::LayoutProjectRefactorKind> uiProjectRefactorKinds()
+{
+    using Kind = ayt::ui::LayoutProjectRefactorKind;
+    return {
+        {"widget-id", L"Widget ID", Kind::Seed::SelectedWidgetId},
+        {"widget-handler", L"Widget Handler", Kind::Seed::None},
+        {"flow-signal", L"Flow Signal", Kind::Seed::None},
+        {"layout-reference", L"Layout Reference", Kind::Seed::DocumentPath},
+    };
+}
+
 std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
     const std::string& engineAssetsRoot, const std::string& projectRoot) {
     namespace fs = std::filesystem;
@@ -1167,6 +1178,13 @@ EditorSession::EditorSession()
     layoutConfig.completeFlowSignalsAction = [this](
         const std::string& layoutPath, std::string& message) {
         return completeFlowSignalsForLayout(layoutPath, message);
+    };
+    layoutConfig.projectRefactorKinds = uiProjectRefactorKinds();
+    layoutConfig.projectRefactorAction = [this](
+        const std::string& layoutPath, const std::string& kind,
+        const std::string& oldValue, const std::string& newValue, bool apply) {
+        return refactorUiProjectReferences(
+            layoutPath, kind, oldValue, newValue, apply);
     };
     error.clear();
     if (!registerEditorUiLayoutExtension(
@@ -7361,6 +7379,13 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
         const std::string& layoutPath, std::string& message) {
         return completeFlowSignalsForLayout(layoutPath, message);
     };
+    controllerConfig.projectRefactorKinds = uiProjectRefactorKinds();
+    controllerConfig.projectRefactorAction = [this](
+        const std::string& layoutPath, const std::string& kind,
+        const std::string& oldValue, const std::string& newValue, bool apply) {
+        return refactorUiProjectReferences(
+            layoutPath, kind, oldValue, newValue, apply);
+    };
     _uiDesigner = std::make_unique<EditorUiLayoutController>(
         _uiDesignerDocument, std::move(controllerConfig));
     _uiDesigner->setStateChanged([this]() {
@@ -7593,6 +7618,139 @@ bool EditorSession::completeFlowSignalsForLayout(
         : "Completed " + std::to_string(total)
             + " Widget handler to Flow Signal binding(s)";
     return true;
+}
+
+ayt::ui::LayoutProjectRefactorResult
+EditorSession::refactorUiProjectReferences(
+    const std::string& layoutPath, const std::string& kind,
+    const std::string& oldValue, const std::string& newValue, bool apply)
+{
+    ayt::ui::LayoutProjectRefactorResult result;
+    if (_uiDesignerDocument != nullptr && _uiDesignerDocument->isDirty()) {
+        result.message = "Save the UI Layout before project refactoring";
+        return result;
+    }
+
+    EditorUiRenameRequest request;
+    if (kind == "widget-id") {
+        request.kind = EditorUiRenameKind::WidgetId;
+        request.scopePath = layoutPath;
+    } else if (kind == "widget-handler") {
+        request.kind = EditorUiRenameKind::WidgetHandler;
+        request.scopePath = layoutPath;
+    } else if (kind == "flow-signal") {
+        request.kind = EditorUiRenameKind::FlowSignal;
+    } else if (kind == "layout-reference") {
+        request.kind = EditorUiRenameKind::LayoutAsset;
+    } else {
+        result.message = "Unknown project reference kind";
+        return result;
+    }
+
+    const std::filesystem::path assetRoot = resolveProjectAssetRoot(
+        _assetDatabase.projectRoot());
+    auto projectAssetValue = [&assetRoot](const std::string& value) {
+        std::filesystem::path path(value);
+        if (!path.is_absolute()) return path.generic_string();
+        std::error_code error;
+        std::filesystem::path relative = std::filesystem::relative(
+            path, assetRoot, error);
+        return error ? path.generic_string() : relative.generic_string();
+    };
+    request.oldValue = request.kind == EditorUiRenameKind::LayoutAsset
+        ? projectAssetValue(oldValue) : oldValue;
+    request.newValue = request.kind == EditorUiRenameKind::LayoutAsset
+        ? projectAssetValue(newValue) : newValue;
+
+    EditorUiDesignerWorkflow workflow(assetRoot.string());
+    std::string error;
+    if (!workflow.refresh(&error)) {
+        result.message = std::move(error);
+        return result;
+    }
+    const EditorUiRenamePlan plan = workflow.planRename(request);
+    result.safe = plan.safe;
+    result.changedFiles = plan.edits.size();
+    for (const EditorUiFileEdit& edit : plan.edits) {
+        std::error_code relativeError;
+        const std::filesystem::path relative = std::filesystem::relative(
+            edit.path, assetRoot, relativeError);
+        const std::string shown = relativeError
+            ? edit.path : relative.generic_string();
+        result.details.push_back(ayt::ui::decodeUtf8Text(
+            shown + " — " + std::to_string(edit.replacementCount)
+            + " typed reference(s)"));
+    }
+    for (const std::string& diagnostic : plan.diagnostics) {
+        result.details.push_back(
+            L"ERROR — " + ayt::ui::decodeUtf8Text(diagnostic));
+    }
+    if (!apply) {
+        result.succeeded = true;
+        result.message = plan.safe
+            ? "Safe preview: " + std::to_string(plan.edits.size())
+                + " file(s) will change"
+            : "Rename preview contains blocking diagnostics";
+        return result;
+    }
+    if (!plan.safe) {
+        result.message = "Rename plan is not safe to apply";
+        return result;
+    }
+
+    if (_workspace != nullptr) {
+        for (const EditorUiFileEdit& edit : plan.edits) {
+            const std::string editKey =
+                EditorDocumentManager::normalizeResourceKey(edit.path);
+            for (const EditorDocumentRecord& record :
+                 _workspace->documents().records()) {
+                if (record.document == nullptr
+                    || EditorDocumentManager::normalizeResourceKey(
+                           record.document->path()) != editKey) {
+                    continue;
+                }
+                if (record.document->isDirty()) {
+                    result.message = "Save dirty document before refactoring: "
+                        + record.document->title();
+                    return result;
+                }
+            }
+        }
+    }
+
+    if (!workflow.applyRename(plan, &error)) {
+        result.message = std::move(error);
+        return result;
+    }
+    result.succeeded = true;
+    result.message = "Safely renamed typed references in "
+        + std::to_string(plan.edits.size()) + " file(s)";
+
+    if (_workspace != nullptr) {
+        for (const EditorDocumentRecord& record :
+             _workspace->documents().records()) {
+            if (record.document == nullptr || !record.document->canReload()) {
+                continue;
+            }
+            const std::string documentKey =
+                EditorDocumentManager::normalizeResourceKey(
+                    record.document->path());
+            const bool changed = std::any_of(
+                plan.edits.begin(), plan.edits.end(),
+                [&](const EditorUiFileEdit& edit) {
+                    return EditorDocumentManager::normalizeResourceKey(edit.path)
+                        == documentKey;
+                });
+            if (changed) {
+                std::string reloadError;
+                if (!record.document->reload(&reloadError)) {
+                    result.details.push_back(
+                        L"RELOAD — " + ayt::ui::decodeUtf8Text(reloadError));
+                }
+            }
+        }
+    }
+    return result;
 }
 
 bool EditorSession::openLayoutForFlowScreen(

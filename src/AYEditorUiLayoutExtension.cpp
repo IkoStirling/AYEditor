@@ -43,6 +43,8 @@ struct EditorUiLayoutController::Impl {
         session.setThemePathPicker(config.themePathPicker);
         session.setOpenOwningFlowAction(config.openOwningFlowAction);
         session.setCompleteFlowSignalsAction(config.completeFlowSignalsAction);
+        session.setProjectRefactorKinds(config.projectRefactorKinds);
+        session.setProjectRefactorAction(config.projectRefactorAction);
         session.setTextureResourceProvider(config.textureResourceProvider);
         session.setDocumentStateUpdater(
             [this](const std::string& path, bool dirty) {

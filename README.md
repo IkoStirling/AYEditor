@@ -40,7 +40,9 @@ Screen 补齐 `handler -> Signal` 映射；Flow Editor 选中 Screen 后可用 *
 `EditorUiDesignerWorkflow` 还提供 Layout asset、Flow signal、Widget handler 和 Widget ID 的类型化
 跨文档重命名计划。应用前会验证全部源文件仍与规划时一致，再以同目录临时文件和备份执行多文件
 事务；任何一步失败都会回滚，避免部分引用已改、部分未改。已打开且 dirty 的目标文档不会被磁盘
-工作流静默覆盖。
+工作流静默覆盖。该能力现已进入 Layout Designer 的 **Workflow -> Safe Rename References** 与右侧
+Project Safe Rename 面板：可以选择引用类型、预览文件级改动及诊断，再执行安全提交，不再要求开发者
+直接调用底层工作流 API。
 
 ## 公开接口
 

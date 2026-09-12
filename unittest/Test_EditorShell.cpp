@@ -575,7 +575,12 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     CHECK(designerMenu == nullptr || designerMenu->getMenu(2) == nullptr
           || designerMenu->getMenu(2)->getItemCount() == 3u);
     CHECK(designerMenu == nullptr || designerMenu->getMenu(3) == nullptr
-          || designerMenu->getMenu(3)->getItemCount() == 2u);
+          || designerMenu->getMenu(3)->getItemCount() == 3u);
+    CHECK(childUi->findById("project_refactor_kind") != nullptr);
+    CHECK(childUi->findById("project_refactor_old") != nullptr);
+    CHECK(childUi->findById("project_refactor_new") != nullptr);
+    CHECK(childUi->findById("project_refactor_preview") != nullptr);
+    CHECK(childUi->findById("btn_project_refactor_apply") != nullptr);
     CHECK(childUi->findById("preview_preset") != nullptr);
     CHECK(childUi->findById("texture_resource_list") != nullptr);
     CHECK(childUi->findById("structured_items") != nullptr);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorExtensionRegistry.h"
+#include "AYUI/LayoutEditor/LayoutEditorSession.h"
 #include "AYUI/LayoutEditor/LayoutResourceCatalog.h"
 
 #include <functional>
@@ -36,6 +37,8 @@ struct EditorUiLayoutExtensionConfig {
     std::function<bool(const std::string&, std::string&)> openOwningFlowAction;
     std::function<bool(const std::string&, std::string&)>
         completeFlowSignalsAction;
+    std::vector<ayt::ui::LayoutProjectRefactorKind> projectRefactorKinds;
+    ayt::ui::LayoutEditorSession::ProjectRefactorAction projectRefactorAction;
 };
 
 // Shared UI-layout authoring controller used by both the AYEditor tool-window

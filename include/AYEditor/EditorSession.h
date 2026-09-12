@@ -63,6 +63,7 @@ class ModalDialog;
 class CheckBox;
 class ListView;
 class UILayoutLoader;
+struct LayoutProjectRefactorResult;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
@@ -301,6 +302,10 @@ private:
                                  std::string& message);
     bool completeFlowSignalsForLayout(const std::string& layoutPath,
                                       std::string& message);
+    ayt::ui::LayoutProjectRefactorResult refactorUiProjectReferences(
+        const std::string& layoutPath, const std::string& kind,
+        const std::string& oldValue, const std::string& newValue,
+        bool apply);
     bool openLayoutForFlowScreen(const std::string& layoutAsset,
                                  std::string& message);
     void syncUiFlowDesignerLifetime();
