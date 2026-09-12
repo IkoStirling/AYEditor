@@ -4,10 +4,13 @@
 #include "AYEditor/EditorAssetOperations.h"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <string_view>
 
 namespace ayt::editor {
 namespace {
@@ -31,6 +34,48 @@ bool copyReplacing(const fs::path& from, const fs::path& to,
     if (error) return false;
     fs::copy_file(from, to, fs::copy_options::overwrite_existing, error);
     return !error;
+}
+
+bool endsWithCaseInsensitive(std::string_view value, std::string_view suffix)
+{
+    if (value.size() < suffix.size()) return false;
+    const std::string_view tail = value.substr(value.size() - suffix.size());
+    return std::equal(tail.begin(), tail.end(), suffix.begin(),
+        [](unsigned char left, unsigned char right) {
+            return std::tolower(left) == std::tolower(right);
+        });
+}
+
+std::string documentRecoverySuffix(const IEditorDocument& document)
+{
+    static constexpr std::array<std::string_view, 3> compoundSuffixes = {
+        ".gameflow.json", ".uiflow.json", ".ui.json",
+    };
+
+    const fs::path sourcePath(document.path());
+    const std::string fileName = sourcePath.filename().string();
+    for (const std::string_view suffix : compoundSuffixes) {
+        if (endsWithCaseInsensitive(fileName, suffix)) {
+            // Keep the spelling authored on disk while retaining every suffix
+            // segment needed by asset/editor routing.
+            return fileName.substr(fileName.size() - suffix.size());
+        }
+    }
+    if (!document.path().empty()) return sourcePath.extension().string();
+
+    // Untitled documents have no source filename to inspect. Their stable
+    // editor document type supplies the canonical suffix so a restored copy is
+    // immediately discoverable by the asset database.
+    if (document.typeId() == "ayeditor.game-flow.document") {
+        return ".gameflow.json";
+    }
+    if (document.typeId() == "ayeditor.ui-flow.document") {
+        return ".uiflow.json";
+    }
+    if (document.typeId() == "ayeditor.ui-layout.document") {
+        return ".ui.json";
+    }
+    return {};
 }
 
 } // namespace
@@ -115,7 +160,7 @@ EditorRecoveryResult EditorRecoveryStore::autosave(
             ? document->typeId() + ":" + document->title()
             : document->path();
         const std::string name = std::to_string(stableHash(identity))
-            + std::filesystem::path(document->path()).extension().string();
+            + documentRecoverySuffix(*document);
         const fs::path destination = fs::path(_currentRoot)
             / "documents" / name;
         std::string saveError;

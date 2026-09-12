@@ -1,5 +1,6 @@
 #include "AYEditor/EditorGameFlowDocument.h"
 
+#include <AYApplication/GameFlowMigration.h>
 #include <AYIO/File.h>
 
 #include <algorithm>
@@ -260,7 +261,9 @@ bool EditorGameFlowDocument::loadFromPath(
     }
     GameFlowDocument loaded;
     std::vector<GameFlowDiagnostic> diagnostics;
-    if (!GameFlowSerializer::deserialize(source, loaded, &diagnostics)) {
+    GameFlowMigrationReport migration;
+    if (!GameFlowSerializer::deserialize(
+            source, loaded, &diagnostics, &migration)) {
         if (error != nullptr) {
             *error = firstDiagnostic(diagnostics, "GameFlow loading failed.");
         }
@@ -271,7 +274,9 @@ bool EditorGameFlowDocument::loadFromPath(
     _selection = {};
     _undo.clear();
     _redo.clear();
-    _dirty = false;
+    // Keep successful in-memory migration visible to the author. The normal
+    // save path serializes the current schema and clears this dirty state.
+    _dirty = migration.changed;
     ++_revision;
     updateTitle(displayPath);
     refreshDiagnostics();

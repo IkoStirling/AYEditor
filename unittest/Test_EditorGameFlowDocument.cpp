@@ -224,6 +224,45 @@ TEST_CASE(unknown_custom_types_roundtrip_without_losing_nested_arguments)
     CHECK_FALSE(diagnostics.empty());
 }
 
+TEST_CASE(schema_v1_asset_opens_dirty_and_normal_save_persists_schema_v2)
+{
+    editor_game_flow_document_test::TempFile legacy("schema_v1_migration");
+    const std::string source = R"JSON({
+  "schemaVersion": 1,
+  "id": "legacy-flow",
+  "initialState": "Boot",
+  "intents": [],
+  "states": [{"id": "Boot"}],
+  "transitions": []
+})JSON";
+    CHECK(ayt::io::File::atomicWrite(
+        legacy.path.string(), source.data(), source.size()));
+
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize(
+        legacy.path.string(), legacy.path.string(), &error));
+    CHECK(error.empty());
+    CHECK(document.isValid());
+    CHECK(document.isDirty());
+    CHECK(document.flow().schemaVersion == kGameFlowSchemaVersion);
+
+    CHECK(document.save(&error));
+    CHECK(error.empty());
+    CHECK_FALSE(document.isDirty());
+    const std::string saved = ayt::io::File::readAllText(legacy.path.string());
+    CHECK(saved.find("\"schemaVersion\": 2") != std::string::npos);
+    CHECK(saved.find("\"entryParameters\": []") != std::string::npos);
+    CHECK(saved.find("\"result\": []") != std::string::npos);
+    CHECK(saved.find("\"extensions\": {}") != std::string::npos);
+
+    EditorGameFlowDocument reopened;
+    CHECK(reopened.initialize(
+        legacy.path.string(), legacy.path.string(), &error));
+    CHECK(reopened.flow().schemaVersion == kGameFlowSchemaVersion);
+    CHECK_FALSE(reopened.isDirty());
+}
+
 TEST_CASE(save_recovery_and_reload_keep_document_identity_and_dirty_state)
 {
     editor_game_flow_document_test::TempFile saved("source");

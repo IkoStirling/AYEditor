@@ -112,6 +112,20 @@ if(MSVC)
 endif()
 ay_add_test(AYEditor_GameFlowTests LABELS "game-flow;ayeditor")
 
+# Crash recovery has a small standalone target so suffix/restore regressions
+# remain testable while unrelated editor integration surfaces are in flight.
+add_executable(AYEditor_RecoveryStoreTests EditorRecoveryStoreTestMain.cpp)
+set_property(SOURCE EditorRecoveryStoreTestMain.cpp APPEND PROPERTY
+    OBJECT_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/Test_EditorRecoveryAndTrash.cpp")
+target_link_libraries(AYEditor_RecoveryStoreTests PRIVATE AYEditor AYTest)
+target_include_directories(AYEditor_RecoveryStoreTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+if(MSVC)
+    target_link_options(AYEditor_RecoveryStoreTests PRIVATE "/OPT:NOREF")
+endif()
+ay_add_test(AYEditor_RecoveryStoreTests LABELS "recovery;ayeditor")
+
 # Keep default Editor module assembly isolated from the broad UI/editor suite.
 # The process-wide ComponentRegistry is sealed as part of the startup contract.
 add_executable(DefaultEditorModuleAssemblyTest

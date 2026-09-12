@@ -5,10 +5,12 @@
 #include "AYEditor/EditorExtension.h"
 #include "AYEditor/EditorRecoveryStore.h"
 
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <string_view>
 #include <thread>
 
 namespace {
@@ -47,9 +49,10 @@ std::string readRecoveryTrashFile(const std::filesystem::path& path)
 class SelectiveRecoveryDocument final : public ayt::editor::IEditorDocument {
 public:
     SelectiveRecoveryDocument(std::string path, std::string title,
-                              std::string recoveryText)
+                              std::string recoveryText,
+                              std::string type = "test.recovery")
         : _path(std::move(path)), _title(std::move(title)),
-          _recoveryText(std::move(recoveryText)) {}
+          _recoveryText(std::move(recoveryText)), _type(std::move(type)) {}
 
     const std::string& typeId() const noexcept override { return _type; }
     const std::string& path() const noexcept override { return _path; }
@@ -68,11 +71,19 @@ public:
     }
 
 private:
-    std::string _type = "test.recovery";
     std::string _path;
     std::string _title;
     std::string _recoveryText;
+    std::string _type;
 };
+
+bool pathEndsWith(const std::string& path, std::string_view suffix)
+{
+    const std::string fileName = std::filesystem::path(path).filename().string();
+    return fileName.size() >= suffix.size()
+        && fileName.compare(fileName.size() - suffix.size(),
+                            suffix.size(), suffix) == 0;
+}
 
 } // namespace
 
@@ -111,6 +122,84 @@ TEST_CASE(editor_recovery_restores_only_selected_documents)
     CHECK(restarted.restorePrevious().documents == 1u);
     CHECK(readRecoveryTrashFile(first) == "first-recovered");
     CHECK_FALSE(restarted.hasRecoverableSession());
+    restarted.markCleanShutdown();
+}
+
+TEST_CASE(editor_recovery_preserves_compound_suffixes_for_named_and_untitled_documents)
+{
+    using namespace ayt::editor;
+    RecoveryTrashCleanup cleanup{recoveryTrashRoot("compound_suffixes")};
+    const auto namedGameFlow = cleanup.root / "Assets/Named.gameflow.json";
+    const auto namedUiFlow = cleanup.root / "Assets/Named.uiflow.json";
+    const auto namedUi = cleanup.root / "Assets/Named.ui.json";
+
+    SelectiveRecoveryDocument namedGameFlowDocument(
+        namedGameFlow.string(), "Named GameFlow", "named-gameflow");
+    SelectiveRecoveryDocument namedUiFlowDocument(
+        namedUiFlow.string(), "Named UIFlow", "named-uiflow");
+    SelectiveRecoveryDocument namedUiDocument(
+        namedUi.string(), "Named UI", "named-ui");
+    SelectiveRecoveryDocument untitledGameFlowDocument(
+        {}, "Untitled GameFlow", "untitled-gameflow",
+        "ayeditor.game-flow.document");
+    SelectiveRecoveryDocument untitledUiFlowDocument(
+        {}, "Untitled UIFlow", "untitled-uiflow",
+        "ayeditor.ui-flow.document");
+    SelectiveRecoveryDocument untitledUiDocument(
+        {}, "Untitled UI", "untitled-ui",
+        "ayeditor.ui-layout.document");
+
+    {
+        EditorRecoveryStore crashed(cleanup.root.string());
+        std::string error;
+        CHECK(crashed.beginSession(&error));
+        const EditorRecoveryResult saved = crashed.autosave({
+            &namedGameFlowDocument, &namedUiFlowDocument, &namedUiDocument,
+            &untitledGameFlowDocument, &untitledUiFlowDocument,
+            &untitledUiDocument,
+        });
+        CHECK(saved);
+        CHECK(saved.documents == 6u);
+    }
+
+    EditorRecoveryStore restarted(cleanup.root.string());
+    std::string error;
+    CHECK(restarted.beginSession(&error));
+    const auto recoverable = restarted.recoverableDocuments();
+    CHECK(recoverable.size() == 6u);
+    const std::array<std::string_view, 6> expectedSuffixes = {
+        ".gameflow.json", ".uiflow.json", ".ui.json",
+        ".gameflow.json", ".uiflow.json", ".ui.json",
+    };
+    for (std::size_t index = 0;
+         index < recoverable.size() && index < expectedSuffixes.size(); ++index) {
+        CHECK(pathEndsWith(recoverable[index].recoveryPath,
+                           expectedSuffixes[index]));
+    }
+
+    const EditorRecoveryResult restored = restarted.restorePrevious();
+    CHECK(restored);
+    CHECK(restored.documents == 6u);
+    CHECK(readRecoveryTrashFile(namedGameFlow) == "named-gameflow");
+    CHECK(readRecoveryTrashFile(namedUiFlow) == "named-uiflow");
+    CHECK(readRecoveryTrashFile(namedUi) == "named-ui");
+
+    const auto recoveredRoot = cleanup.root / "Assets/Recovered";
+    std::size_t recoveredGameFlows = 0;
+    std::size_t recoveredUiFlows = 0;
+    std::size_t recoveredUiLayouts = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(recoveredRoot)) {
+        if (pathEndsWith(entry.path().string(), ".gameflow.json")) {
+            ++recoveredGameFlows;
+        } else if (pathEndsWith(entry.path().string(), ".uiflow.json")) {
+            ++recoveredUiFlows;
+        } else if (pathEndsWith(entry.path().string(), ".ui.json")) {
+            ++recoveredUiLayouts;
+        }
+    }
+    CHECK(recoveredGameFlows == 1u);
+    CHECK(recoveredUiFlows == 1u);
+    CHECK(recoveredUiLayouts == 1u);
     restarted.markCleanShutdown();
 }
 
