@@ -1,7 +1,9 @@
 #include "AYEditor/EditorProjectDescriptor.h"
 
+#include <AYIO/File.h>
 #include <nlohmann/json.hpp>
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <unordered_set>
@@ -16,9 +18,22 @@ bool isPortableRelativePath(const std::string& value) noexcept
 {
     if (value.empty()) return false;
     const fs::path path(value);
-    if (path.is_absolute()) return false;
+    if (path.is_absolute() || path.has_root_name()
+        || path.has_root_directory()) return false;
     for (const fs::path& part : path) {
         if (part == "..") return false;
+    }
+    return true;
+}
+
+bool endsWith(std::string_view value, std::string_view suffix) noexcept
+{
+    if (value.size() < suffix.size()) return false;
+    const std::size_t offset = value.size() - suffix.size();
+    for (std::size_t index = 0; index < suffix.size(); ++index) {
+        const auto actual = static_cast<unsigned char>(value[offset + index]);
+        const auto expected = static_cast<unsigned char>(suffix[index]);
+        if (std::tolower(actual) != std::tolower(expected)) return false;
     }
     return true;
 }
@@ -57,6 +72,159 @@ EditorProjectDescriptor::operator bool() const noexcept
 {
     return schemaVersion == kEditorProjectDescriptorSchemaVersion
         && !id.empty() && !assetRoot.empty() && !sourcePath.empty();
+}
+
+bool EditorProjectDescriptor::validate(std::string* error) const
+{
+    if (error != nullptr) error->clear();
+    const auto reject = [error](std::string message) {
+        if (error != nullptr) *error = std::move(message);
+        return false;
+    };
+    if (schemaVersion != kEditorProjectDescriptorSchemaVersion) {
+        return reject("Unsupported project descriptor schemaVersion: "
+            + std::to_string(schemaVersion));
+    }
+    if (id.empty()) {
+        return reject("Project descriptor requires a non-empty 'id' string.");
+    }
+    if (!isPortableRelativePath(assetRoot)
+        || (!gameAssembly.empty() && !isPortableRelativePath(gameAssembly))
+        || (!gameCodeRoot.empty() && !isPortableRelativePath(gameCodeRoot))) {
+        return reject(
+            "Project descriptor paths must stay inside the project root.");
+    }
+    if (defaultSceneView != "Auto" && defaultSceneView != "2D"
+        && defaultSceneView != "3D") {
+        return reject("editor.defaultSceneView must be Auto, 2D, or 3D.");
+    }
+    if ((!ui.flow.empty() && !isPortableRelativePath(ui.flow))
+        || (ui.flow.empty() && !ui.entry.empty())) {
+        return reject(ui.flow.empty()
+            ? "Project ui.entry requires ui.flow."
+            : "Project ui.flow must stay inside the asset root.");
+    }
+    if (!startupFlow.empty()
+        && (!isPortableRelativePath(startupFlow)
+            || !endsWith(startupFlow, ".gameflow.json"))) {
+        return reject("Project startupFlow must be a relative "
+            "*.gameflow.json path inside the asset root.");
+    }
+
+    std::unordered_set<std::string> worldIds;
+    for (const EditorProjectWorldDescriptor& world : worlds) {
+        if (world.id.empty()) {
+            return reject("Project World id must not be empty.");
+        }
+        if (!worldIds.insert(world.id).second) {
+            return reject("Duplicate project World id: " + world.id);
+        }
+        if (!isPortableRelativePath(world.scene)
+            || (!world.ui.empty() && !isPortableRelativePath(world.ui))) {
+            return reject(
+                "World content paths must stay inside the asset root.");
+        }
+        for (const std::string& tilemap : world.tilemaps) {
+            if (!isPortableRelativePath(tilemap)) {
+                return reject("World tilemap paths must be relative strings.");
+            }
+        }
+    }
+    if (!startupWorld.empty() && !worldIds.contains(startupWorld)) {
+        return reject("startupWorld is not present in worlds: "
+            + startupWorld);
+    }
+    return true;
+}
+
+bool EditorProjectDescriptor::serialize(
+    std::string& jsonText, std::string* error) const
+{
+    if (error != nullptr) error->clear();
+    if (!validate(error)) return false;
+    try {
+        nlohmann::json root = {
+            {"schemaVersion", schemaVersion},
+            {"id", id},
+            {"displayName", displayName},
+            {"engineProfile", engineProfile},
+            {"paths", {
+                {"assets", assetRoot},
+                {"gameAssembly", gameAssembly},
+                {"gameCode", gameCodeRoot},
+            }},
+            {"editor", {{"defaultSceneView", defaultSceneView}}},
+            {"worlds", nlohmann::json::array()},
+            {"run", {
+                {"executable", run.executable},
+                {"workingDirectory", run.workingDirectory},
+                {"arguments", run.arguments},
+            }},
+        };
+        if (!ui.flow.empty() || !ui.entry.empty()) {
+            root["ui"] = {{"flow", ui.flow}, {"entry", ui.entry}};
+        }
+        if (!startupFlow.empty()) root["startupFlow"] = startupFlow;
+        if (!startupWorld.empty()) root["startupWorld"] = startupWorld;
+        for (const EditorProjectWorldDescriptor& world : worlds) {
+            nlohmann::json value = {
+                {"id", world.id},
+                {"scene", world.scene},
+                {"tilemaps", world.tilemaps},
+            };
+            if (!world.ui.empty()) value["ui"] = world.ui;
+            if (!world.uiContext.empty()) {
+                value["uiContext"] = world.uiContext;
+            }
+            root["worlds"].push_back(std::move(value));
+        }
+        jsonText = root.dump(2);
+        jsonText.push_back('\n');
+        return true;
+    } catch (const std::exception& exception) {
+        if (error != nullptr) {
+            *error = std::string("Could not serialize project descriptor: ")
+                + exception.what();
+        }
+        return false;
+    }
+}
+
+bool EditorProjectDescriptor::save(
+    const std::string& projectRoot, std::string* error) const
+{
+    std::string encoded;
+    if (!serialize(encoded, error)) return false;
+    try {
+        const fs::path root = fs::absolute(projectRoot.empty()
+            ? fs::current_path() : fs::path(projectRoot)).lexically_normal();
+        std::error_code directoryError;
+        fs::create_directories(root, directoryError);
+        if (directoryError) {
+            if (error != nullptr) {
+                *error = "Could not create project directory: "
+                    + directoryError.message();
+            }
+            return false;
+        }
+        const fs::path path = root / kEditorProjectDescriptorFile;
+        if (!ayt::io::File::atomicWrite(
+                path.string(), encoded.data(), encoded.size())) {
+            if (error != nullptr) {
+                *error = "Atomic project descriptor save failed: "
+                    + path.string();
+            }
+            return false;
+        }
+        if (error != nullptr) error->clear();
+        return true;
+    } catch (const std::exception& exception) {
+        if (error != nullptr) {
+            *error = std::string("Could not save project descriptor: ")
+                + exception.what();
+        }
+        return false;
+    }
 }
 
 const EditorProjectWorldDescriptor* EditorProjectDescriptor::findWorld(
@@ -164,7 +332,22 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
             }
         }
 
-        result.startupWorld = json.value("startupWorld", std::string{});
+        if (!readOptionalString(
+                json, "startupWorld", result.startupWorld, parseError)
+            || !readOptionalString(
+                json, "startupFlow", result.startupFlow, parseError)) {
+            if (error != nullptr) *error = parseError;
+            return {};
+        }
+        if (!result.startupFlow.empty()
+            && (!isPortableRelativePath(result.startupFlow)
+                || !endsWith(result.startupFlow, ".gameflow.json"))) {
+            if (error != nullptr) {
+                *error = "Project startupFlow must be a relative "
+                    "*.gameflow.json path inside the asset root.";
+            }
+            return {};
+        }
         const nlohmann::json worlds = json.value(
             "worlds", nlohmann::json::array());
         if (!worlds.is_array()) {
@@ -247,6 +430,10 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
                 }
                 result.run.arguments.push_back(argument.get<std::string>());
             }
+        }
+        if (!result.validate(&parseError)) {
+            if (error != nullptr) *error = std::move(parseError);
+            return {};
         }
         result.sourcePath = path.string();
         return result;

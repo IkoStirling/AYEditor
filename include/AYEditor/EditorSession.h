@@ -252,6 +252,8 @@ public:
     std::size_t openUiLayoutDocumentCount() const noexcept;
     bool openUiFlowEditor(const std::string& path = {});
     std::size_t openUiFlowDocumentCount() const noexcept;
+    bool openGameFlowEditor(const std::string& path = {});
+    std::size_t openGameFlowDocumentCount() const noexcept;
     bool createProjectAsset(EditorAssetType type);
     bool restoreLastDeletedAssets();
     bool runCurrentProject();

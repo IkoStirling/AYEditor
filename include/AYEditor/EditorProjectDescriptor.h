@@ -56,8 +56,16 @@ struct EditorProjectDescriptor {
     std::vector<EditorProjectWorldDescriptor> worlds;
     EditorProjectRunDescriptor run;
     std::string sourcePath;
+    // Appended to preserve offsets of the established tool-facing fields.
+    // This is a portable asset-root-relative GameFlow reference.
+    std::string startupFlow;
 
     explicit operator bool() const noexcept;
+    bool validate(std::string* error = nullptr) const;
+    bool serialize(std::string& jsonText,
+                   std::string* error = nullptr) const;
+    bool save(const std::string& projectRoot,
+              std::string* error = nullptr) const;
     const EditorProjectWorldDescriptor* findWorld(
         std::string_view worldId) const noexcept;
 

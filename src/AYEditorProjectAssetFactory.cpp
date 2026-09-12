@@ -3,6 +3,7 @@
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorTilemapDocument.h"
 
+#include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
 #include <AYUI/UIFlow.h>
 
@@ -31,6 +32,9 @@ bool templateFor(EditorAssetType type, AssetTemplate& value)
         return true;
     case EditorAssetType::UiFlow:
         value = {"ui", "NewFlow", ".uiflow.json"};
+        return true;
+    case EditorAssetType::GameFlow:
+        value = {"flow", "NewGameFlow", ".gameflow.json"};
         return true;
     default:
         return false;
@@ -113,6 +117,23 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
                 destination.string(), encoded.data(), encoded.size());
         if (!saved) error = diagnostics.empty()
             ? "Atomic UI Flow save failed."
+            : diagnostics.front().message;
+    } else if (type == EditorAssetType::GameFlow) {
+        ayt::app::GameFlowDocument flow;
+        flow.id = "new-game-flow";
+        flow.initialState = "boot";
+        flow.intents = {{"app.start", {}}};
+        flow.states = {{"boot"}, {"main-menu"}};
+        flow.transitions = {{
+            "show-main-menu", "boot", "app.start", "main-menu"}};
+        std::string encoded;
+        std::vector<ayt::app::GameFlowDiagnostic> diagnostics;
+        saved = ayt::app::GameFlowSerializer::serialize(
+            flow, encoded, &diagnostics, true)
+            && ayt::io::File::atomicWrite(
+                destination.string(), encoded.data(), encoded.size());
+        if (!saved) error = diagnostics.empty()
+            ? "Atomic GameFlow save failed."
             : diagnostics.front().message;
     } else {
         static constexpr const char kUiLayout[] =

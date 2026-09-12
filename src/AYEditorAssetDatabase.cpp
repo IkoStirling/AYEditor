@@ -262,7 +262,7 @@ bool readIndex(const std::filesystem::path& path,
     while (input >> record.id >> std::quoted(record.logicalPath)
                  >> type >> origin >> importState
                  >> record.size >> record.lastModified) {
-        if (type > static_cast<unsigned>(EditorAssetType::UiFlow)
+        if (type > static_cast<unsigned>(EditorAssetType::GameFlow)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -325,6 +325,7 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::SourceModel: return "Source Model";
     case EditorAssetType::Tilemap: return "Tilemap";
     case EditorAssetType::UiFlow: return "UI Flow";
+    case EditorAssetType::GameFlow: return "Game Flow";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -344,6 +345,10 @@ const char* editorAssetImportStateName(EditorAssetImportState state) noexcept
 EditorAssetType classifyEditorAssetPath(const std::string& path)
 {
     const std::string lower = lowerAscii(slashNormalized(path));
+    if (lower.size() >= 14
+        && lower.compare(lower.size() - 14, 14, ".gameflow.json") == 0) {
+        return EditorAssetType::GameFlow;
+    }
     if (lower.size() >= 12
         && lower.compare(lower.size() - 12, 12, ".uiflow.json") == 0) {
         return EditorAssetType::UiFlow;

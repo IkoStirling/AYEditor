@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "custom-roundtrip",
+  "initialState": "Boot",
+  "intents": [
+    {
+      "id": "app.start"
+    },
+    {
+      "id": "play",
+      "payload": [
+        {
+          "id": "profile",
+          "type": "string",
+          "required": false,
+          "default": "default"
+        }
+      ]
+    }
+  ],
+  "states": [
+    {
+      "id": "Boot"
+    },
+    {
+      "id": "Playing"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "enter-game",
+      "from": "Boot",
+      "intent": "play",
+      "to": "Playing",
+      "guard": {
+        "id": "studio.entitled",
+        "arguments": {
+          "sku": "deluxe"
+        }
+      },
+      "actions": [
+        {
+          "id": "studio.telemetry",
+          "arguments": {
+            "event": "game_started",
+            "metadata": {
+              "campaign": "alpha",
+              "source": "menu"
+            },
+            "weights": [1, 2.5, true]
+          }
+        }
+      ]
+    }
+  ]
+}

@@ -31,6 +31,7 @@ enum class EditorAssetType : std::uint8_t {
     // Appended to preserve the numeric values of the public asset-type ABI.
     Tilemap,
     UiFlow,
+    GameFlow,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

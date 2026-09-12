@@ -37,6 +37,9 @@
 #include <AYEditor/EditorUiFlowDocument.h>
 #include <AYEditor/EditorUiFlowExtension.h>
 #include <AYEditor/EditorUiFlowPreview.h>
+#include <AYEditor/EditorGameFlowDocument.h>
+#include <AYEditor/EditorGameFlowExtension.h>
+#include <AYEditor/EditorGameFlowPreview.h>
 #include <AYEditor/Editor2DViewportModel.h>
 #include <AYEditor/EditorTilemapDocument.h>
 #include <AYEditor/ImportDialog.h>

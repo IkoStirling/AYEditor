@@ -25,6 +25,7 @@
 #include "AYEditor/EditorUiLayoutDocument.h"
 #include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorUiFlowDocument.h"
+#include "AYEditor/EditorGameFlowExtension.h"
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEntity.h"
@@ -61,6 +62,8 @@
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
 #include "AYDevice/DeviceManager.h"
+#include <AYApplication/GameFlowUIBridge.h>
+#include <AYApplication/GameFlowWorldActions.h>
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
 // AYScene 完整 include 因文档层需 SceneMode/Scene 完整类型；
@@ -1221,6 +1224,31 @@ EditorSession::EditorSession()
             "[EditorSession] UI Flow workspace registration failed: %s\n",
             error.c_str());
     }
+    EditorGameFlowExtensionConfig gameFlowConfig;
+    gameFlowConfig.configureRegistry = [](
+        ayt::app::GameFlowActionRegistry& registry) {
+        std::string registrationError;
+        if (!ayt::app::registerGameFlowWorldActionType(
+                registry, &registrationError)) {
+            std::fprintf(stderr,
+                "[EditorSession] GameFlow World metadata registration "
+                "failed: %s\n", registrationError.c_str());
+        }
+        registrationError.clear();
+        if (!ayt::app::registerGameFlowUIActionTypes(
+                registry, &registrationError)) {
+            std::fprintf(stderr,
+                "[EditorSession] GameFlow UI metadata registration "
+                "failed: %s\n", registrationError.c_str());
+        }
+    };
+    error.clear();
+    if (!registerEditorGameFlowExtension(
+            _workspace->registry(), std::move(gameFlowConfig), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] GameFlow workspace registration failed: %s\n",
+            error.c_str());
+    }
     error.clear();
     EditorBuiltInExtensionConfig builtIns;
     builtIns.openAudioMixer = [this]() { openAudioEditorWindow(); };
@@ -1271,6 +1299,12 @@ std::size_t EditorSession::openUiFlowDocumentCount() const noexcept
         if (record.editorId == kEditorUiFlowExtensionId) ++count;
     }
     return count;
+}
+
+std::size_t EditorSession::openGameFlowDocumentCount() const noexcept
+{
+    return _dockViewHost != nullptr
+        ? _dockViewHost->count(kEditorGameFlowExtensionId) : 0u;
 }
 
 bool EditorSession::initialize(const EditorSessionDesc& desc) {
@@ -2647,6 +2681,10 @@ bool EditorSession::onKeyDown(int keyCode)
                 && _workspace->commands().execute(command);
         }
         if (command == "file.save") {
+            if (commandTarget != nullptr && commandTarget != &_commands
+                && commandTarget->handlesCommand(command)) {
+                return _workspace->commands().execute(command);
+            }
             saveSceneDocument();
             return true;
         }
@@ -2656,6 +2694,10 @@ bool EditorSession::onKeyDown(int keyCode)
             && (focused == _assetTileView
                 || isDescendantOf(focused, _assetTileView))) {
             requestDeleteSelectedAssets();
+            return true;
+        }
+        if (_dockViewHost != nullptr
+            && _dockViewHost->routeKeyDown(keyCode)) {
             return true;
         }
         deleteSelectedEntity();
@@ -4814,6 +4856,8 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         return openUiLayoutEditor(record->absolutePath);
     case EditorAssetType::UiFlow:
         return openUiFlowEditor(record->absolutePath);
+    case EditorAssetType::GameFlow:
+        return openGameFlowEditor(record->absolutePath);
     case EditorAssetType::Animation:
     case EditorAssetType::Audio: {
         if (_dockViewHost == nullptr) return false;
@@ -7059,6 +7103,11 @@ void EditorSession::bindMenuBar() {
                 (void)createProjectAsset(EditorAssetType::UiFlow);
             });
         }
+        if (auto* item = fileMenu->addItem(L"New Game Flow")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::GameFlow);
+            });
+        }
         if (auto* item = fileMenu->addItem(L"New Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
@@ -7071,7 +7120,19 @@ void EditorSession::bindMenuBar() {
         if (auto* item = fileMenu->addItem(L"Save")) {
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("file.save"));
-            item->setOnActivate([this]() { saveSceneDocument(); });
+            item->setOnActivate([this]() {
+                if (_workspace != nullptr && _dockViewHost != nullptr) {
+                    _dockViewHost->syncCommandTargetFromFocus();
+                    IEditorCommandTarget* target =
+                        _workspace->commands().activeTarget();
+                    if (target != nullptr && target != &_commands
+                        && target->handlesCommand("file.save")) {
+                        (void)_workspace->commands().execute("file.save");
+                        return;
+                    }
+                }
+                saveSceneDocument();
+            });
         }
         if (auto* item = fileMenu->addItem(L"Save As...")) {
             item->setOnActivate([this]() { saveSceneDocumentAs(); });
@@ -7102,6 +7163,16 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() {
                 if (_gameView.mode() == EditorMode::Edit
                     && _workspace != nullptr) {
+                    if (_dockViewHost != nullptr) {
+                        _dockViewHost->syncCommandTargetFromFocus();
+                    }
+                    IEditorCommandTarget* target =
+                        _workspace->commands().activeTarget();
+                    if (target != nullptr && target != &_commands
+                        && target->handlesCommand("edit.undo")) {
+                        (void)_workspace->commands().execute("edit.undo");
+                        return;
+                    }
                     _workspace->commands().setActiveTarget(&_commands);
                     (void)_workspace->commands().execute("edit.undo");
                 }
@@ -7114,6 +7185,16 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() {
                 if (_gameView.mode() == EditorMode::Edit
                     && _workspace != nullptr) {
+                    if (_dockViewHost != nullptr) {
+                        _dockViewHost->syncCommandTargetFromFocus();
+                    }
+                    IEditorCommandTarget* target =
+                        _workspace->commands().activeTarget();
+                    if (target != nullptr && target != &_commands
+                        && target->handlesCommand("edit.redo")) {
+                        (void)_workspace->commands().execute("edit.redo");
+                        return;
+                    }
                     _workspace->commands().setActiveTarget(&_commands);
                     (void)_workspace->commands().execute("edit.redo");
                 }
@@ -7230,6 +7311,9 @@ void EditorSession::bindMenuBar() {
         }
         if (auto* item = toolsMenu->addItem(L"UI Flow Editor...")) {
             item->setOnActivate([this]() { (void)openUiFlowEditor(); });
+        }
+        if (auto* item = toolsMenu->addItem(L"Game Flow Editor...")) {
+            item->setOnActivate([this]() { (void)openGameFlowEditor(); });
         }
         if (auto* item = toolsMenu->addItem(L"2D Tilemap Editor...")) {
             item->setId("menu_tools_tilemap_editor");
@@ -7860,6 +7944,86 @@ bool EditorSession::openLayoutForFlowScreen(
         return false;
     }
     message = "Opened UI Layout " + path.filename().string();
+    return true;
+}
+
+bool EditorSession::openGameFlowEditor(const std::string& requestedPath)
+{
+    if (_dockViewHost == nullptr || _workspace == nullptr) {
+        setAssetBrowserStatus(
+            L"Game Flow Editor requires the main editor workspace", true);
+        return false;
+    }
+
+    std::string path = requestedPath;
+    if (path.empty() && !_projectRoot.empty()) {
+        const std::filesystem::path descriptorPath =
+            std::filesystem::path(_projectRoot)
+            / std::string(kEditorProjectDescriptorFile);
+        std::error_code descriptorExistsError;
+        const bool descriptorPresent = std::filesystem::is_regular_file(
+            descriptorPath, descriptorExistsError);
+        if (descriptorExistsError) {
+            setAssetBrowserStatus(L"Game Flow project descriptor check failed: "
+                + ayt::ui::decodeUtf8Text(
+                    descriptorExistsError.message()), true);
+            return false;
+        }
+        if (descriptorPresent) {
+            std::string descriptorError;
+            const EditorProjectDescriptor descriptor =
+                EditorProjectDescriptor::load(_projectRoot, &descriptorError);
+            if (!descriptor) {
+                setAssetBrowserStatus(L"Game Flow project descriptor is invalid: "
+                    + ayt::ui::decodeUtf8Text(descriptorError), true);
+                return false;
+            }
+            if (!descriptor.startupFlow.empty()) {
+                const std::filesystem::path configured =
+                    std::filesystem::path(_projectRoot)
+                    / (descriptor.assetRoot.empty() ? "Assets"
+                                                    : descriptor.assetRoot)
+                    / std::filesystem::path(descriptor.startupFlow);
+                std::error_code existsError;
+                if (std::filesystem::is_regular_file(configured, existsError)) {
+                    path = configured.lexically_normal().string();
+                } else {
+                    const std::string reason = existsError
+                        ? existsError.message() : "file does not exist";
+                    setAssetBrowserStatus(
+                        L"Configured startupFlow cannot be opened: "
+                        + ayt::ui::decodeUtf8Text(
+                            configured.lexically_normal().string() + " ("
+                            + reason + ")"), true);
+                    return false;
+                }
+            }
+        }
+    }
+
+    EditorOpenRequest request;
+    request.resourcePath = path;
+    request.resourceKey = path.empty()
+        ? "workspace:game-flow:untitled" : path;
+    request.displayPath = path.empty() ? "Untitled Game Flow" : path;
+    request.assetType = "game-flow";
+    request.preferredEditorId = kEditorGameFlowExtensionId;
+
+    EditorDockViewOptions options;
+    options.cardId = path.empty() ? "card_game_flow_untitled" : std::string{};
+    const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+    if (!opened) {
+        setAssetBrowserStatus(L"Game Flow Editor open failed: "
+            + ayt::ui::decodeUtf8Text(opened.error), true);
+        return false;
+    }
+    wirePromoteCallback();
+    _ui.invalidateLayout();
+    setAssetBrowserStatus(path.empty()
+        ? L"Opened an untitled Game Flow"
+        : L"Opened Game Flow: "
+            + ayt::ui::decodeUtf8Text(
+                std::filesystem::path(path).filename().string()));
     return true;
 }
 
