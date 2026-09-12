@@ -698,6 +698,17 @@ public:
             L"Rectangle (R)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::Rectangle);
             });
+        _terrain = addIconButton(
+            toolbar, "tilemap_tool_terrain", "world.svg", L"T",
+            L"Auto terrain brush (T)", [this]() {
+                if (_document->model().document().terrainDefinition(
+                        _document->model().selectedTerrainId()) == nullptr) {
+                    _host.setStatusText(
+                        L"Create or select an auto-tile terrain first.");
+                    return;
+                }
+                setTool(ayt::ay2d::editor::PaintTool::Terrain);
+            });
         _stamp = addIconButton(
             toolbar, "tilemap_tool_stamp", "rubber-stamp.svg", L"S",
             L"Stamp (S)", [this]() {
@@ -981,7 +992,7 @@ public:
                 _host.requestRepaint();
             }
         });
-        inspector->addWidget(_layerList, 0.0f);
+        inspector->addWidget(_layerList, 112.0f);
         auto* layerButtons = new ayt::ui::HBox();
         layerButtons->setSpacing(3.0f);
         addIconButton(
@@ -1051,6 +1062,147 @@ public:
             "rubber-stamp.svg", L"S", L"Save selection as a reusable Stamp",
             [this]() { saveSelectionAsStamp(); });
         inspector->addWidget(selectionButtons, 32.0f);
+        inspector->addWidget(makeLabel(L"Tile Animation", 14), 24.0f);
+        _animationFrameList = new ayt::ui::ListView();
+        _animationFrameList->setId("tilemap_animation_frames");
+        _animationFrameList->setItemHeight(24.0f);
+        _animationFrameList->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0) return;
+            const auto frames = selectedAnimationFrames();
+            if (index >= static_cast<int>(frames.size())) return;
+            _animationFrameIndex = index;
+            _animationTile->setText(std::to_wstring(
+                frames[static_cast<size_t>(index)].tileId));
+            _animationDuration->setText(std::to_wstring(
+                frames[static_cast<size_t>(index)].durationMs));
+        });
+        inspector->addWidget(_animationFrameList, 72.0f);
+        auto* animationButtons = new ayt::ui::HBox();
+        animationButtons->setSpacing(3.0f);
+        addButton(animationButtons, L"+", 34.0f,
+                  [this]() { addAnimationFrame(); });
+        addButton(animationButtons, L"−", 34.0f,
+                  [this]() { removeAnimationFrame(); });
+        addButton(animationButtons, L"↑", 34.0f,
+                  [this]() { moveAnimationFrame(-1); });
+        addButton(animationButtons, L"↓", 34.0f,
+                  [this]() { moveAnimationFrame(1); });
+        _animationPreview = addButton(
+            animationButtons, L"Pause", 72.0f, [this]() {
+                _canvas->setAnimationPreviewEnabled(
+                    !_canvas->animationPreviewEnabled());
+                refresh();
+                _host.requestRepaint();
+            });
+        inspector->addWidget(animationButtons, 30.0f);
+        auto* animationEdit = new ayt::ui::HBox();
+        animationEdit->setSpacing(3.0f);
+        _animationTile = new ayt::ui::TextInput();
+        _animationTile->setPlaceholder(L"Tile");
+        animationEdit->addWidget(_animationTile, 72.0f);
+        _animationDuration = new ayt::ui::TextInput();
+        _animationDuration->setPlaceholder(L"Duration ms");
+        animationEdit->addWidget(_animationDuration, 92.0f);
+        addButton(animationEdit, L"Apply", 62.0f,
+                  [this]() { applyAnimationFrame(); });
+        inspector->addWidget(animationEdit, 30.0f);
+
+        inspector->addWidget(makeLabel(L"Auto Tile Terrain", 14), 24.0f);
+        _terrainList = new ayt::ui::ListView();
+        _terrainList->setId("tilemap_terrain_list");
+        _terrainList->setItemHeight(24.0f);
+        _terrainList->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_terrainIds.size())) return;
+            const uint32_t id = _terrainIds[static_cast<size_t>(index)];
+            _document->model().setSelectedTerrainId(id);
+            _editingNewTerrain = false;
+            _terrainRuleIndex = -1;
+            if (const auto* terrain =
+                    _document->model().document().terrainDefinition(id)) {
+                _terrainRuleDraft = terrain->rules;
+                _terrainDraftSourceId = id;
+            }
+            refresh();
+        });
+        inspector->addWidget(_terrainList, 72.0f);
+        auto* terrainIdentity = new ayt::ui::HBox();
+        terrainIdentity->setSpacing(3.0f);
+        _terrainId = new ayt::ui::TextInput();
+        _terrainId->setPlaceholder(L"ID");
+        terrainIdentity->addWidget(_terrainId, 56.0f);
+        _terrainName = new ayt::ui::TextInput();
+        _terrainName->setPlaceholder(L"Terrain name");
+        terrainIdentity->addWidget(_terrainName, 0.0f);
+        inspector->addWidget(terrainIdentity, 30.0f);
+        _terrainFallback = new ayt::ui::TextInput();
+        _terrainFallback->setPlaceholder(L"Fallback tile ID");
+        inspector->addWidget(_terrainFallback, 28.0f);
+        _terrainRuleList = new ayt::ui::ListView();
+        _terrainRuleList->setId("tilemap_terrain_rule_list");
+        _terrainRuleList->setItemHeight(24.0f);
+        _terrainRuleList->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_terrainRuleDraft.size())) return;
+            _terrainRuleIndex = index;
+            const auto& rule =
+                _terrainRuleDraft[static_cast<size_t>(index)];
+            _terrainRuleMatchMask = rule.matchMask;
+            _terrainRuleNeighborMask = rule.neighborMask;
+            _terrainRuleTile->setText(std::to_wstring(rule.tileId));
+            syncTerrainNeighborButtons();
+        });
+        inspector->addWidget(_terrainRuleList, 72.0f);
+        auto addNeighbor = [this](ayt::ui::HBox* row,
+                                  const wchar_t* label, uint8_t bit) {
+            auto* button = addButton(row, label, 0.0f, [this, bit]() {
+                cycleTerrainNeighbor(bit);
+            });
+            _terrainNeighborButtons[bit] = button;
+        };
+        auto* terrainNorth = new ayt::ui::HBox();
+        terrainNorth->setSpacing(3.0f);
+        addNeighbor(terrainNorth, L"NW *", 7u);
+        addNeighbor(terrainNorth, L"N *", 0u);
+        addNeighbor(terrainNorth, L"NE *", 1u);
+        inspector->addWidget(terrainNorth, 29.0f);
+        auto* terrainMiddle = new ayt::ui::HBox();
+        terrainMiddle->setSpacing(3.0f);
+        addNeighbor(terrainMiddle, L"W *", 6u);
+        terrainMiddle->addWidget(makeLabel(L"CENTER", 10), 0.0f);
+        addNeighbor(terrainMiddle, L"E *", 2u);
+        inspector->addWidget(terrainMiddle, 29.0f);
+        auto* terrainSouth = new ayt::ui::HBox();
+        terrainSouth->setSpacing(3.0f);
+        addNeighbor(terrainSouth, L"SW *", 5u);
+        addNeighbor(terrainSouth, L"S *", 4u);
+        addNeighbor(terrainSouth, L"SE *", 3u);
+        inspector->addWidget(terrainSouth, 29.0f);
+        auto* terrainRuleEdit = new ayt::ui::HBox();
+        terrainRuleEdit->setSpacing(3.0f);
+        _terrainRuleTile = new ayt::ui::TextInput();
+        _terrainRuleTile->setPlaceholder(L"Output tile");
+        terrainRuleEdit->addWidget(_terrainRuleTile, 0.0f);
+        addButton(terrainRuleEdit, L"New", 48.0f,
+                  [this]() { beginTerrainRule(); });
+        addButton(terrainRuleEdit, L"Apply", 54.0f,
+                  [this]() { applyTerrainRule(); });
+        addButton(terrainRuleEdit, L"−", 34.0f,
+                  [this]() { removeTerrainRule(); });
+        inspector->addWidget(terrainRuleEdit, 30.0f);
+        auto* terrainActions = new ayt::ui::HBox();
+        terrainActions->setSpacing(3.0f);
+        addButton(terrainActions, L"New Terrain", 92.0f,
+                  [this]() { beginTerrain(); });
+        addButton(terrainActions, L"Save Terrain", 92.0f,
+                  [this]() { saveTerrain(); });
+        addButton(terrainActions, L"Delete", 58.0f,
+                  [this]() { deleteTerrain(); });
+        inspector->addWidget(terrainActions, 30.0f);
+        auto* terrainHint = makeLabel(
+            L"Neighbor button: * ignore → 1 same → 0 different", 10);
+        terrainHint->setWordWrap(true);
+        inspector->addWidget(terrainHint, 32.0f);
         inspector->addWidget(makeLabel(L"Map Shadow Color · #RRGGBBAA", 13),
                              23.0f);
         _shadowColor = new ayt::ui::TextInput();
@@ -1173,6 +1325,15 @@ public:
             _stampSelector->setOnSelectionChanged({});
         }
         if (_layerList != nullptr) _layerList->setOnSelectionChanged({});
+        if (_animationFrameList != nullptr) {
+            _animationFrameList->setOnSelectionChanged({});
+        }
+        if (_terrainList != nullptr) {
+            _terrainList->setOnSelectionChanged({});
+        }
+        if (_terrainRuleList != nullptr) {
+            _terrainRuleList->setOnSelectionChanged({});
+        }
         for (ayt::ui::Button* button : _buttons) {
             if (button != nullptr) button->setOnClicked({});
         }
@@ -1180,10 +1341,19 @@ public:
         _atlasPicker = nullptr;
         _tileList = nullptr;
         _layerList = nullptr;
+        _animationFrameList = nullptr;
+        _terrainList = nullptr;
+        _terrainRuleList = nullptr;
         _tileId = nullptr;
         _layerName = nullptr;
         _collisionFlags = nullptr;
         _shadowColor = nullptr;
+        _animationTile = nullptr;
+        _animationDuration = nullptr;
+        _terrainId = nullptr;
+        _terrainName = nullptr;
+        _terrainFallback = nullptr;
+        _terrainRuleTile = nullptr;
         _summary = nullptr;
         _documentPath = nullptr;
         _documentPathTooltip = nullptr;
@@ -1195,6 +1365,7 @@ public:
         _eraser = nullptr;
         _fill = nullptr;
         _rectangle = nullptr;
+        _terrain = nullptr;
         _stamp = nullptr;
         _shadow = nullptr;
         _shadowClear = nullptr;
@@ -1208,6 +1379,8 @@ public:
         _shadowVisibility = nullptr;
         _frame = nullptr;
         _layerVisibility = nullptr;
+        _animationPreview = nullptr;
+        _terrainNeighborButtons.fill(nullptr);
         _importPreview = nullptr;
         _importSourceLabel = nullptr;
         _importInfo = nullptr;
@@ -1311,6 +1484,15 @@ public:
             return true;
         case ayt::ui::UIKey_R:
             setTool(ayt::ay2d::editor::PaintTool::Rectangle);
+            return true;
+        case ayt::ui::UIKey_T:
+            if (_document->model().document().terrainDefinition(
+                    _document->model().selectedTerrainId()) != nullptr) {
+                setTool(ayt::ay2d::editor::PaintTool::Terrain);
+            } else {
+                _host.setStatusText(
+                    L"Create or select an auto-tile terrain first.");
+            }
             return true;
         case ayt::ui::UIKey_S:
             if (_document->model().selectedStampId() != 0u) {
@@ -2098,11 +2280,336 @@ private:
         }
     }
 
+    std::vector<ayt::ay2d::editor::TileAnimationFrame>
+    selectedAnimationFrames() const
+    {
+        const auto& animations = _document->model().document().animations();
+        const auto found = animations.find(
+            _document->model().selectedTileId());
+        return found == animations.end()
+            ? std::vector<ayt::ay2d::editor::TileAnimationFrame>{}
+            : found->second;
+    }
+
+    void addAnimationFrame()
+    {
+        auto frames = selectedAnimationFrames();
+        frames.push_back({_document->model().selectedTileId(), 100u});
+        _animationFrameIndex = static_cast<int>(frames.size() - 1u);
+        mutate(_document->model().setAnimation(
+            _document->model().selectedTileId(), std::move(frames)));
+    }
+
+    void removeAnimationFrame()
+    {
+        auto frames = selectedAnimationFrames();
+        if (_animationFrameIndex < 0
+            || _animationFrameIndex >= static_cast<int>(frames.size())) {
+            _host.setStatusText(L"Select an animation frame to remove.");
+            return;
+        }
+        frames.erase(frames.begin() + _animationFrameIndex);
+        if (_animationFrameIndex >= static_cast<int>(frames.size())) {
+            _animationFrameIndex = static_cast<int>(frames.size()) - 1;
+        }
+        mutate(_document->model().setAnimation(
+            _document->model().selectedTileId(), std::move(frames)));
+    }
+
+    void moveAnimationFrame(int direction)
+    {
+        auto frames = selectedAnimationFrames();
+        const int target = _animationFrameIndex + direction;
+        if (_animationFrameIndex < 0
+            || _animationFrameIndex >= static_cast<int>(frames.size())
+            || target < 0 || target >= static_cast<int>(frames.size())) return;
+        std::swap(frames[static_cast<size_t>(_animationFrameIndex)],
+                  frames[static_cast<size_t>(target)]);
+        _animationFrameIndex = target;
+        mutate(_document->model().setAnimation(
+            _document->model().selectedTileId(), std::move(frames)));
+    }
+
+    void applyAnimationFrame()
+    {
+        uint32_t tileId = 0u;
+        uint32_t duration = 0u;
+        if (!parseUint32(_animationTile->getText(), tileId)
+            || !parseUint32(_animationDuration->getText(), duration)
+            || duration == 0u) {
+            _host.setStatusText(
+                L"Animation frame needs a tile ID and non-zero duration.");
+            return;
+        }
+        auto frames = selectedAnimationFrames();
+        const ayt::ay2d::editor::TileAnimationFrame frame{tileId, duration};
+        if (_animationFrameIndex >= 0
+            && _animationFrameIndex < static_cast<int>(frames.size())) {
+            frames[static_cast<size_t>(_animationFrameIndex)] = frame;
+        } else {
+            frames.push_back(frame);
+            _animationFrameIndex = static_cast<int>(frames.size() - 1u);
+        }
+        mutate(_document->model().setAnimation(
+            _document->model().selectedTileId(), std::move(frames)));
+    }
+
+    void syncAnimationEditor()
+    {
+        const auto frames = selectedAnimationFrames();
+        if (_animationFrameIndex >= static_cast<int>(frames.size())) {
+            _animationFrameIndex = static_cast<int>(frames.size()) - 1;
+        }
+        std::vector<std::wstring> labels;
+        for (size_t index = 0u; index < frames.size(); ++index) {
+            labels.push_back(std::to_wstring(index + 1u) + L". Tile "
+                + std::to_wstring(frames[index].tileId) + L" · "
+                + std::to_wstring(frames[index].durationMs) + L" ms");
+        }
+        _animationFrameList->setItems(labels);
+        _animationFrameList->setSelectedIndex(_animationFrameIndex);
+        if (_animationFrameIndex >= 0) {
+            const auto& frame = frames[static_cast<size_t>(_animationFrameIndex)];
+            _animationTile->setText(std::to_wstring(frame.tileId));
+            _animationDuration->setText(std::to_wstring(frame.durationMs));
+        } else {
+            _animationTile->setText(std::to_wstring(
+                _document->model().selectedTileId()));
+            _animationDuration->setText(L"100");
+        }
+        _animationPreview->setText(
+            _canvas->animationPreviewEnabled() ? L"Pause" : L"Play");
+    }
+
+    void syncTerrainNeighborButtons()
+    {
+        constexpr std::array<const wchar_t*, 8> labels{
+            L"N", L"NE", L"E", L"SE", L"S", L"SW", L"W", L"NW"};
+        for (uint8_t bit = 0u; bit < 8u; ++bit) {
+            ayt::ui::Button* button = _terrainNeighborButtons[bit];
+            if (button == nullptr) continue;
+            const uint8_t value = static_cast<uint8_t>(1u << bit);
+            const wchar_t state = (_terrainRuleMatchMask & value) == 0u
+                ? L'*' : (_terrainRuleNeighborMask & value) != 0u
+                    ? L'1' : L'0';
+            button->setText(std::wstring(labels[bit]) + L" " + state);
+        }
+    }
+
+    void syncTerrainRuleList()
+    {
+        constexpr std::array<const wchar_t*, 8> names{
+            L"N", L"NE", L"E", L"SE", L"S", L"SW", L"W", L"NW"};
+        if (_terrainRuleIndex >= static_cast<int>(_terrainRuleDraft.size())) {
+            _terrainRuleIndex = static_cast<int>(_terrainRuleDraft.size()) - 1;
+        }
+        std::vector<std::wstring> items;
+        for (size_t index = 0u; index < _terrainRuleDraft.size(); ++index) {
+            std::wostringstream label;
+            label << index + 1u << L". ";
+            const auto& rule = _terrainRuleDraft[index];
+            for (size_t bit = 0u; bit < names.size(); ++bit) {
+                const uint8_t value = static_cast<uint8_t>(1u << bit);
+                const wchar_t state = (rule.matchMask & value) == 0u
+                    ? L'*' : (rule.neighborMask & value) != 0u ? L'1' : L'0';
+                if (bit > 0u) label << L' ';
+                label << names[bit] << state;
+            }
+            label << L" → " << rule.tileId;
+            items.push_back(label.str());
+        }
+        _terrainRuleList->setItems(items);
+        _terrainRuleList->setSelectedIndex(_terrainRuleIndex);
+        if (_terrainRuleIndex >= 0) {
+            const auto& rule =
+                _terrainRuleDraft[static_cast<size_t>(_terrainRuleIndex)];
+            _terrainRuleMatchMask = rule.matchMask;
+            _terrainRuleNeighborMask = rule.neighborMask;
+            _terrainRuleTile->setText(std::to_wstring(rule.tileId));
+        } else {
+            _terrainRuleMatchMask = 0u;
+            _terrainRuleNeighborMask = 0u;
+            _terrainRuleTile->setText(std::to_wstring(
+                _document->model().selectedTileId()));
+        }
+        syncTerrainNeighborButtons();
+    }
+
+    void syncTerrainEditor()
+    {
+        const auto& document = _document->model().document();
+        _terrainIds.clear();
+        std::vector<std::wstring> items;
+        int selectedIndex = -1;
+        for (const auto& [id, terrain] : document.terrains()) {
+            if (!_editingNewTerrain
+                && id == _document->model().selectedTerrainId()) {
+                selectedIndex = static_cast<int>(_terrainIds.size());
+            }
+            _terrainIds.push_back(id);
+            items.push_back(ayt::ui::decodeUtf8Text(terrain.name)
+                + L" · ID " + std::to_wstring(id));
+        }
+        _terrainList->setItems(items);
+        _terrainList->setSelectedIndex(selectedIndex);
+        const auto* selected = _editingNewTerrain ? nullptr
+            : document.terrainDefinition(
+                _document->model().selectedTerrainId());
+        if (selected != nullptr) {
+            _terrainId->setText(std::to_wstring(selected->terrainId));
+            _terrainName->setText(ayt::ui::decodeUtf8Text(selected->name));
+            _terrainFallback->setText(
+                std::to_wstring(selected->fallbackTileId));
+            if (_terrainDraftSourceId != selected->terrainId) {
+                _terrainRuleDraft = selected->rules;
+                _terrainRuleIndex = -1;
+                _terrainDraftSourceId = selected->terrainId;
+            }
+        } else if (!_editingNewTerrain) {
+            beginTerrain(false);
+        }
+        syncTerrainRuleList();
+    }
+
+    void beginTerrain(bool announce = true)
+    {
+        uint32_t nextId = 1u;
+        const auto& document = _document->model().document();
+        while (document.terrainDefinition(nextId) != nullptr) ++nextId;
+        _editingNewTerrain = true;
+        _terrainDraftSourceId = 0u;
+        _terrainRuleDraft.clear();
+        _terrainRuleIndex = -1;
+        _terrainId->setText(std::to_wstring(nextId));
+        _terrainName->setText(L"Terrain " + std::to_wstring(nextId));
+        _terrainFallback->setText(std::to_wstring(
+            _document->model().selectedTileId()));
+        syncTerrainRuleList();
+        if (announce) {
+            _host.setStatusText(
+                L"New terrain: add visual neighbor rules, then save.");
+        }
+    }
+
+    void beginTerrainRule()
+    {
+        _terrainRuleIndex = -1;
+        _terrainRuleMatchMask = 0u;
+        _terrainRuleNeighborMask = 0u;
+        _terrainRuleTile->setText(std::to_wstring(
+            _document->model().selectedTileId()));
+        _terrainRuleList->setSelectedIndex(-1);
+        syncTerrainNeighborButtons();
+    }
+
+    void cycleTerrainNeighbor(uint8_t bit)
+    {
+        const uint8_t value = static_cast<uint8_t>(1u << bit);
+        if ((_terrainRuleMatchMask & value) == 0u) {
+            _terrainRuleMatchMask = static_cast<uint8_t>(
+                _terrainRuleMatchMask | value);
+            _terrainRuleNeighborMask = static_cast<uint8_t>(
+                _terrainRuleNeighborMask | value);
+        } else if ((_terrainRuleNeighborMask & value) != 0u) {
+            _terrainRuleNeighborMask = static_cast<uint8_t>(
+                _terrainRuleNeighborMask & ~value);
+        } else {
+            _terrainRuleMatchMask = static_cast<uint8_t>(
+                _terrainRuleMatchMask & ~value);
+        }
+        syncTerrainNeighborButtons();
+    }
+
+    void applyTerrainRule()
+    {
+        uint32_t tileId = 0u;
+        if (!parseUint32(_terrainRuleTile->getText(), tileId)) {
+            _host.setStatusText(L"Terrain output tile must be a number.");
+            return;
+        }
+        ayt::ay2d::editor::AutoTileRule rule{
+            _terrainRuleMatchMask, _terrainRuleNeighborMask, tileId};
+        if (_terrainRuleIndex >= 0
+            && _terrainRuleIndex < static_cast<int>(_terrainRuleDraft.size())) {
+            _terrainRuleDraft[static_cast<size_t>(_terrainRuleIndex)] = rule;
+        } else {
+            _terrainRuleDraft.push_back(rule);
+            _terrainRuleIndex = static_cast<int>(_terrainRuleDraft.size() - 1u);
+        }
+        _syncing = true;
+        syncTerrainRuleList();
+        _syncing = false;
+    }
+
+    void removeTerrainRule()
+    {
+        if (_terrainRuleIndex < 0
+            || _terrainRuleIndex >= static_cast<int>(_terrainRuleDraft.size())) {
+            _host.setStatusText(L"Select a terrain rule to remove.");
+            return;
+        }
+        _terrainRuleDraft.erase(
+            _terrainRuleDraft.begin() + _terrainRuleIndex);
+        if (_terrainRuleIndex >= static_cast<int>(_terrainRuleDraft.size())) {
+            _terrainRuleIndex = static_cast<int>(_terrainRuleDraft.size()) - 1;
+        }
+        _syncing = true;
+        syncTerrainRuleList();
+        _syncing = false;
+    }
+
+    void saveTerrain()
+    {
+        uint32_t id = 0u;
+        uint32_t fallback = 0u;
+        if (!parseUint32(_terrainId->getText(), id) || id == 0u
+            || !parseUint32(_terrainFallback->getText(), fallback)) {
+            _host.setStatusText(
+                L"Terrain ID must be non-zero and fallback must be a tile ID.");
+            return;
+        }
+        ayt::ay2d::editor::TerrainDefinition terrain;
+        terrain.terrainId = id;
+        terrain.name = encodeUtf8(_terrainName->getText());
+        terrain.fallbackTileId = fallback;
+        terrain.rules = _terrainRuleDraft;
+        if (terrain.name.empty()) {
+            _host.setStatusText(L"Terrain needs a name.");
+            return;
+        }
+        const bool changed =
+            _document->model().setTerrainDefinition(std::move(terrain));
+        _document->model().setSelectedTerrainId(id);
+        _editingNewTerrain = false;
+        _terrainDraftSourceId = id;
+        mutate(changed);
+        setTool(ayt::ay2d::editor::PaintTool::Terrain);
+    }
+
+    void deleteTerrain()
+    {
+        const uint32_t id = _document->model().selectedTerrainId();
+        if (id == 0u || !_document->model().removeTerrainDefinition(id)) {
+            _host.setStatusText(L"Select a saved terrain to delete.");
+            return;
+        }
+        _editingNewTerrain = false;
+        _terrainDraftSourceId = 0u;
+        _terrainRuleDraft.clear();
+        _terrainRuleIndex = -1;
+        _document->changed();
+        refresh();
+        _host.requestRepaint();
+    }
+
     void selectTile(uint32_t tileId)
     {
         _selectingStamp = false;
         if (_atlasPicker != nullptr) {
             _atlasPicker->setRectangleSelectionEnabled(false);
+        }
+        if (_document->model().selectedTileId() != tileId) {
+            _animationFrameIndex = -1;
         }
         _document->model().setSelectedTileId(tileId);
         _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
@@ -2307,6 +2814,13 @@ private:
 
     void setTool(ayt::ay2d::editor::PaintTool tool) {
         if (_canvas != nullptr && _canvas->editingGestureActive()) return;
+        if (tool == ayt::ay2d::editor::PaintTool::Terrain
+            && _document->model().document().terrainDefinition(
+                _document->model().selectedTerrainId()) == nullptr) {
+            _host.setStatusText(
+                L"Create or select an auto-tile terrain first.");
+            return;
+        }
         if (tool == ayt::ay2d::editor::PaintTool::Shadow
             && _canvas != nullptr) {
             _canvas->setShowShadows(true);
@@ -2411,6 +2925,8 @@ private:
             == ayt::ay2d::editor::PaintTool::FloodFill;
         const bool rectangle = model.tool()
             == ayt::ay2d::editor::PaintTool::Rectangle;
+        const bool terrain = model.tool()
+            == ayt::ay2d::editor::PaintTool::Terrain;
         const bool stamp = model.tool()
             == ayt::ay2d::editor::PaintTool::Stamp;
         const bool shadow = model.tool()
@@ -2420,6 +2936,7 @@ private:
         setIconState(_eraser, eraser, L"Eraser (E)");
         setIconState(_fill, fill, L"Flood Fill (F)");
         setIconState(_rectangle, rectangle, L"Rectangle (R)");
+        setIconState(_terrain, terrain, L"Auto terrain brush (T)");
         setIconState(_stamp, stamp, L"Stamp (S)");
         const uint8_t shadowMask = model.selectedShadowMask();
         setIconState(
@@ -2501,6 +3018,8 @@ private:
         _collisionFlags->setText(std::to_wstring(
             document.collisionFlagsFor(model.selectedTileId())));
         _shadowColor->setText(rgbaText(document.shadowColor()));
+        syncAnimationEditor();
+        syncTerrainEditor();
         _syncing = false;
     }
 
@@ -2517,10 +3036,19 @@ private:
     EditorTileAtlasPicker* _atlasPicker = nullptr;
     ayt::ui::ListView* _tileList = nullptr;
     ayt::ui::ListView* _layerList = nullptr;
+    ayt::ui::ListView* _animationFrameList = nullptr;
+    ayt::ui::ListView* _terrainList = nullptr;
+    ayt::ui::ListView* _terrainRuleList = nullptr;
     ayt::ui::TextInput* _tileId = nullptr;
     ayt::ui::TextInput* _layerName = nullptr;
     ayt::ui::TextInput* _collisionFlags = nullptr;
     ayt::ui::TextInput* _shadowColor = nullptr;
+    ayt::ui::TextInput* _animationTile = nullptr;
+    ayt::ui::TextInput* _animationDuration = nullptr;
+    ayt::ui::TextInput* _terrainId = nullptr;
+    ayt::ui::TextInput* _terrainName = nullptr;
+    ayt::ui::TextInput* _terrainFallback = nullptr;
+    ayt::ui::TextInput* _terrainRuleTile = nullptr;
     ayt::ui::Button* _pencil = nullptr;
     ayt::ui::Button* _save = nullptr;
     ayt::ui::Button* _saveAs = nullptr;
@@ -2528,6 +3056,7 @@ private:
     ayt::ui::Button* _eraser = nullptr;
     ayt::ui::Button* _fill = nullptr;
     ayt::ui::Button* _rectangle = nullptr;
+    ayt::ui::Button* _terrain = nullptr;
     ayt::ui::Button* _stamp = nullptr;
     ayt::ui::Button* _shadow = nullptr;
     ayt::ui::Button* _shadowClear = nullptr;
@@ -2539,6 +3068,8 @@ private:
     ayt::ui::Button* _shadowVisibility = nullptr;
     ayt::ui::Button* _frame = nullptr;
     ayt::ui::Button* _layerVisibility = nullptr;
+    ayt::ui::Button* _animationPreview = nullptr;
+    std::array<ayt::ui::Button*, 8> _terrainNeighborButtons{};
     std::unique_ptr<ayt::ui::Modal> _shadowModal;
     std::array<ayt::ui::Button*, 4> _shadowQuadrantButtons{};
     ayt::ui::TextLabel* _shadowDialogStatus = nullptr;
@@ -2581,12 +3112,20 @@ private:
     std::vector<uint32_t> _tileIds;
     std::vector<uint32_t> _atlasIds;
     std::vector<uint32_t> _stampIds;
+    std::vector<uint32_t> _terrainIds;
+    std::vector<ayt::ay2d::editor::AutoTileRule> _terrainRuleDraft;
+    uint32_t _terrainDraftSourceId = 0u;
+    int _terrainRuleIndex = -1;
+    uint8_t _terrainRuleMatchMask = 0u;
+    uint8_t _terrainRuleNeighborMask = 0u;
+    int _animationFrameIndex = -1;
     float _zoomPercent = 100.0f;
     bool _syncing = false;
     bool _syncingImport = false;
     bool _importCommitPending = false;
     bool _skipTransparent = true;
     bool _selectingStamp = false;
+    bool _editingNewTerrain = false;
     bool _ctrlDown = false;
     bool _shiftDown = false;
 };

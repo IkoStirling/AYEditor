@@ -32,6 +32,13 @@ public:
     }
     void setShowShadows(bool show) { _showShadows = show; markDirty(); }
     [[nodiscard]] bool showShadows() const noexcept { return _showShadows; }
+    void setAnimationPreviewEnabled(bool enabled) {
+        _animationPreviewEnabled = enabled;
+        markDirty();
+    }
+    [[nodiscard]] bool animationPreviewEnabled() const noexcept {
+        return _animationPreviewEnabled;
+    }
     void setSpacePan(bool enabled);
     [[nodiscard]] bool spacePan() const noexcept { return _spacePan; }
     [[nodiscard]] bool editingGestureActive() const noexcept;
@@ -85,6 +92,8 @@ private:
     bool _showGrid = true;
     bool _showCollision = true;
     bool _showShadows = true;
+    bool _animationPreviewEnabled = true;
+    uint64_t _animationElapsedMs = 0u;
     bool _drawing = false;
     bool _panning = false;
     bool _spacePan = false;

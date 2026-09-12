@@ -472,6 +472,11 @@ ayt::ui::UiCursorHint EditorTilemapCanvas::getCursorHint() const
 void EditorTilemapCanvas::tick(float dt)
 {
     Widget::tick(dt);
+    if (_animationPreviewEnabled && !_model.document().animations().empty()
+        && dt > 0.0f) {
+        _animationElapsedMs += static_cast<uint64_t>(dt * 1000.0f);
+        markDirty();
+    }
     if (getParent() == nullptr) return;
     const ayt::math::FVector2 parentSize = getParent()->getSize();
     if (getPosition().x != 0.0f || getPosition().y != 0.0f) {
@@ -623,7 +628,10 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
                     layer, static_cast<uint32_t>(col),
                     static_cast<uint32_t>(row));
                 if (candidate == document.defaultTileId()) continue;
-                tileId = candidate;
+                tileId = _animationPreviewEnabled
+                    ? _model.animationPreviewTileId(
+                        candidate, _animationElapsedMs)
+                    : candidate;
                 ayt::ui::ImageTextureHandle texture;
                 ayt::math::FRectangle uv;
                 if (tileTextureVisual(tileId, texture, uv)) {
