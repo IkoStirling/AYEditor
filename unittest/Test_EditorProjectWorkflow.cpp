@@ -762,6 +762,10 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_import_sheet") != nullptr);
     CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_import_tiled") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_export_tiled") != nullptr);
+    CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_fit_sheet") != nullptr);
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_stamp_selector") != nullptr);

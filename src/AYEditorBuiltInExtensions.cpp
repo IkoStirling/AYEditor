@@ -384,6 +384,84 @@ std::string showTilemapSaveDialog(const std::string& projectRoot,
 #endif
 }
 
+std::filesystem::path tiledDialogDirectory(const std::string& projectRoot,
+                                           const std::string& currentPath)
+{
+    if (!currentPath.empty()) {
+        return std::filesystem::path(currentPath).parent_path();
+    }
+    if (!projectRoot.empty()) {
+        return std::filesystem::path(projectRoot) / "Assets" / "tilemaps";
+    }
+    return {};
+}
+
+std::string showTiledMapOpenDialog(const std::string& projectRoot,
+                                   const std::string& currentPath)
+{
+#if defined(_WIN32)
+    std::array<char, 4096> selected{};
+    const std::string initial = tiledDialogDirectory(
+        projectRoot, currentPath).string();
+    OPENFILENAMEA dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = ::GetActiveWindow();
+    if (dialog.hwndOwner == nullptr) dialog.hwndOwner = ::GetForegroundWindow();
+    dialog.lpstrFile = selected.data();
+    dialog.nMaxFile = static_cast<DWORD>(selected.size());
+    dialog.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
+    dialog.lpstrFilter =
+        "Tiled Maps (*.tmj;*.json)\0*.tmj;*.json\0"
+        "All files (*.*)\0*.*\0";
+    dialog.nFilterIndex = 1;
+    dialog.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST
+        | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!::GetOpenFileNameA(&dialog)) return {};
+    return std::filesystem::path(selected.data()).lexically_normal().string();
+#else
+    (void)projectRoot;
+    (void)currentPath;
+    return {};
+#endif
+}
+
+std::string showTiledMapSaveDialog(const std::string& projectRoot,
+                                   const std::string& currentPath)
+{
+#if defined(_WIN32)
+    std::array<char, 4096> selected{};
+    const std::string suggested = currentPath.empty()
+        ? "NewTilemap.tmj"
+        : std::filesystem::path(currentPath).stem().string() + ".tmj";
+    std::snprintf(selected.data(), selected.size(), "%s", suggested.c_str());
+    const std::string initial = tiledDialogDirectory(
+        projectRoot, currentPath).string();
+    OPENFILENAMEA dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = ::GetActiveWindow();
+    if (dialog.hwndOwner == nullptr) dialog.hwndOwner = ::GetForegroundWindow();
+    dialog.lpstrFile = selected.data();
+    dialog.nMaxFile = static_cast<DWORD>(selected.size());
+    dialog.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
+    dialog.lpstrFilter =
+        "Tiled JSON Map (*.tmj)\0*.tmj\0"
+        "JSON Map (*.json)\0*.json\0"
+        "All files (*.*)\0*.*\0";
+    dialog.nFilterIndex = 1;
+    dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT
+        | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    dialog.lpstrDefExt = "tmj";
+    if (!::GetSaveFileNameA(&dialog)) return {};
+    std::filesystem::path result(selected.data());
+    if (!result.has_extension()) result += ".tmj";
+    return result.lexically_normal().string();
+#else
+    (void)projectRoot;
+    (void)currentPath;
+    return {};
+#endif
+}
+
 class ToolDocument final : public IEditorDocument {
 public:
     ToolDocument(std::string type, std::string title)
@@ -716,6 +794,16 @@ public:
             toolbar, "tilemap_file_save_as", "file-export.svg", L"Save As",
             L"Save Tilemap As…", [this]() {
                 (void)saveDocument(true);
+            });
+        _importTiled = addIconButton(
+            toolbar, "tilemap_import_tiled", "file-import.svg", L"Tiled In",
+            L"Import a Tiled JSON map (.tmj or .json)", [this]() {
+                importTiledMap();
+            });
+        _exportTiled = addIconButton(
+            toolbar, "tilemap_export_tiled", "file-export.svg", L"Tiled Out",
+            L"Export the current map as Tiled JSON (.tmj)", [this]() {
+                exportTiledMap();
             });
         _selection = addIconButton(
             toolbar, "tilemap_tool_selection", "select.svg", L"M",
@@ -1437,6 +1525,8 @@ public:
         _atlasSelector = nullptr;
         _save = nullptr;
         _saveAs = nullptr;
+        _importTiled = nullptr;
+        _exportTiled = nullptr;
         _selection = nullptr;
         _pencil = nullptr;
         _eraser = nullptr;
@@ -3228,6 +3318,68 @@ private:
         return showTilemapSaveDialog(_host.projectRoot(), _document->path());
     }
 
+    static std::wstring exchangeWarningSuffix(
+        const std::vector<std::string>& warnings)
+    {
+        if (warnings.empty()) return {};
+        std::wstring result = L" Warning: "
+            + ayt::ui::decodeUtf8Text(warnings.front());
+        if (warnings.size() > 1u) {
+            result += L" (+" + std::to_wstring(warnings.size() - 1u)
+                + L" more)";
+        }
+        return result;
+    }
+
+    void importTiledMap()
+    {
+        const std::string selected = showTiledMapOpenDialog(
+            _host.projectRoot(), _document->path());
+        if (selected.empty()) return;
+        std::vector<std::string> warnings;
+        std::string error;
+        if (!_document->model().importTiledMap(
+                selected, &warnings, &error)) {
+            _host.setStatusText(L"Tiled import failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        _document->model().setTool(ayt::ay2d::editor::PaintTool::Pencil);
+        _shownAtlasId = _document->model().document().tileAtlases().empty()
+            ? 0u
+            : _document->model().document().tileAtlases().begin()->first;
+        _document->changed();
+        loadSavedAtlasImages();
+        refresh();
+        _canvas->frameDocument();
+        _host.requestRepaint();
+        const auto& imported = _document->model().document();
+        _host.setStatusText(L"Imported Tiled map: "
+            + ayt::ui::decodeUtf8Text(selected) + L" · "
+            + std::to_wstring(imported.cols()) + L" × "
+            + std::to_wstring(imported.rows()) + L" · "
+            + std::to_wstring(imported.layerCount()) + L" layers."
+            + exchangeWarningSuffix(warnings));
+    }
+
+    void exportTiledMap()
+    {
+        const std::string selected = showTiledMapSaveDialog(
+            _host.projectRoot(), _document->path());
+        if (selected.empty()) return;
+        std::vector<std::string> warnings;
+        std::string error;
+        if (!_document->model().exportTiledMap(
+                selected, &warnings, &error)) {
+            _host.setStatusText(L"Tiled export failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        _host.setStatusText(L"Exported Tiled map to "
+            + ayt::ui::decodeUtf8Text(selected) + L"."
+            + exchangeWarningSuffix(warnings));
+    }
+
     void refresh() {
         if (_summary == nullptr) return;
         _syncing = true;
@@ -3374,6 +3526,8 @@ private:
     ayt::ui::Button* _pencil = nullptr;
     ayt::ui::Button* _save = nullptr;
     ayt::ui::Button* _saveAs = nullptr;
+    ayt::ui::Button* _importTiled = nullptr;
+    ayt::ui::Button* _exportTiled = nullptr;
     ayt::ui::Button* _selection = nullptr;
     ayt::ui::Button* _eraser = nullptr;
     ayt::ui::Button* _fill = nullptr;
