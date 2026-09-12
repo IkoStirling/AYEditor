@@ -15,8 +15,8 @@ namespace fs = std::filesystem;
 
 struct ProjectRoot {
     explicit ProjectRoot(const char* name)
-        : path(fs::temp_directory_path()
-               / (std::string("ayeditor_ui_flow_") + name))
+        : path(ayt::test::testTmpDir()
+               / (std::string("uf_") + name))
     {
         std::error_code ignored;
         fs::remove_all(path, ignored);

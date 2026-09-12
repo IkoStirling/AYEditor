@@ -1973,8 +1973,12 @@ TEST_CASE(editor_space_button_click_recovers_lost_viewport_mouse_up)
     // Deliberately omit the viewport mouse-up. The next toolbar press must
     // recover both the viewport gesture and AYUI capture, then deliver its
     // own matching mouse-up to the World/Local button.
+    CHECK_FALSE(session.currentPreferences().localTransformSpace);
     CHECK(clickSessionButton(session, space));
-    CHECK(space->getText() == L"Local");
+    CHECK(session.currentPreferences().localTransformSpace);
+    CHECK_FALSE(space->getAccessibilityLabel().empty());
+    CHECK(space->getIconDocument() != nullptr
+          || !space->getText().empty());
     CHECK_FALSE(session.freecam().isLooking());
     CHECK_FALSE(session.ui().isCapturing());
 

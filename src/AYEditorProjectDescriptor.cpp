@@ -14,9 +14,18 @@ namespace {
 
 namespace fs = std::filesystem;
 
-bool isPortableRelativePath(const std::string& value) noexcept
+bool hasWindowsDrivePrefix(std::string_view value) noexcept
 {
-    if (value.empty()) return false;
+    if (value.size() < 2 || value[1] != ':') return false;
+    const char letter = value.front();
+    return (letter >= 'A' && letter <= 'Z')
+        || (letter >= 'a' && letter <= 'z');
+}
+
+bool isPortableRelativePath(const std::string& value)
+{
+    if (value.empty() || value.find('\\') != std::string::npos
+        || hasWindowsDrivePrefix(value)) return false;
     const fs::path path(value);
     if (path.is_absolute() || path.has_root_name()
         || path.has_root_directory()) return false;
@@ -110,6 +119,10 @@ bool EditorProjectDescriptor::validate(std::string* error) const
         return reject("Project startupFlow must be a relative "
             "*.gameflow.json path inside the asset root.");
     }
+    if (!gameFlowContract.empty()
+        && !isPortableRelativePath(gameFlowContract)) {
+        return reject("Project gameFlow.contract must stay inside the asset root.");
+    }
 
     std::unordered_set<std::string> worldIds;
     for (const EditorProjectWorldDescriptor& world : worlds) {
@@ -165,6 +178,9 @@ bool EditorProjectDescriptor::serialize(
             root["ui"] = {{"flow", ui.flow}, {"entry", ui.entry}};
         }
         if (!startupFlow.empty()) root["startupFlow"] = startupFlow;
+        if (!gameFlowContract.empty()) {
+            root["gameFlow"] = {{"contract", gameFlowContract}};
+        }
         if (!startupWorld.empty()) root["startupWorld"] = startupWorld;
         for (const EditorProjectWorldDescriptor& world : worlds) {
             nlohmann::json value = {
@@ -258,14 +274,27 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
             if (error != nullptr) *error = "Project descriptor root must be an object.";
             return {};
         }
-        result.schemaVersion = json.value("schemaVersion", 0u);
-        if (result.schemaVersion != kEditorProjectDescriptorSchemaVersion) {
+        const auto schemaVersion = json.find("schemaVersion");
+        bool supportedSchema = false;
+        if (schemaVersion != json.end()) {
+            if (schemaVersion->is_number_unsigned()) {
+                supportedSchema = schemaVersion->get<std::uint64_t>()
+                    == kEditorProjectDescriptorSchemaVersion;
+            } else if (schemaVersion->is_number_integer()) {
+                supportedSchema = schemaVersion->get<std::int64_t>()
+                    == static_cast<std::int64_t>(
+                        kEditorProjectDescriptorSchemaVersion);
+            }
+        }
+        if (!supportedSchema) {
             if (error != nullptr) {
-                *error = "Unsupported project descriptor schemaVersion: "
-                    + std::to_string(result.schemaVersion);
+                *error = "Project descriptor requires integer schemaVersion "
+                    + std::to_string(kEditorProjectDescriptorSchemaVersion)
+                    + ".";
             }
             return {};
         }
+        result.schemaVersion = kEditorProjectDescriptorSchemaVersion;
         std::string parseError;
         if (!readRequiredString(json, "id", result.id, parseError)) {
             if (error != nullptr) *error = parseError;
@@ -347,6 +376,27 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
                     "*.gameflow.json path inside the asset root.";
             }
             return {};
+        }
+        if (const auto gameFlow = json.find("gameFlow");
+            gameFlow != json.end()) {
+            if (!gameFlow->is_object()
+                || !readOptionalString(*gameFlow, "contract",
+                    result.gameFlowContract, parseError)) {
+                if (error != nullptr) {
+                    *error = parseError.empty()
+                        ? "Project gameFlow settings must be an object."
+                        : parseError;
+                }
+                return {};
+            }
+            if (!result.gameFlowContract.empty()
+                && !isPortableRelativePath(result.gameFlowContract)) {
+                if (error != nullptr) {
+                    *error = "Project gameFlow.contract must stay inside "
+                        "the asset root.";
+                }
+                return {};
+            }
         }
         const nlohmann::json worlds = json.value(
             "worlds", nlohmann::json::array());

@@ -59,6 +59,9 @@ struct EditorProjectDescriptor {
     // Appended to preserve offsets of the established tool-facing fields.
     // This is a portable asset-root-relative GameFlow reference.
     std::string startupFlow;
+    // Optional typed action/guard contract used by editor and CI validation
+    // when project-owned C++ handlers are not loaded.
+    std::string gameFlowContract;
 
     explicit operator bool() const noexcept;
     bool validate(std::string* error = nullptr) const;

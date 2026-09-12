@@ -4,10 +4,13 @@
 #include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
 #include "AYEditor/EditorProjectDescriptor.h"
+#include "AYEditor/EditorProjectRuntimeValidator.h"
 
 #include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -24,8 +27,8 @@ struct GameFlowAssetTestRoot {
     {
         const auto nonce = std::chrono::steady_clock::now()
             .time_since_epoch().count();
-        path = std::filesystem::temp_directory_path()
-            / (std::string("ayeditor_gameflow_") + suffix + "_"
+        path = ayt::test::testTmpDir()
+            / (std::string("gfa_") + suffix + "_"
                + std::to_string(nonce));
     }
 
@@ -45,6 +48,15 @@ void writeGameFlowAssetTestFile(
     output << contents;
 }
 
+bool hasRuntimeValidationIssue(const EditorRuntimeValidationResult& result,
+                               std::string_view text)
+{
+    return std::any_of(result.issues.begin(), result.issues.end(),
+        [text](const EditorRuntimeValidationIssue& issue) {
+            return issue.message.find(text) != std::string::npos;
+        });
+}
+
 EditorProjectDescriptor makeGameFlowProjectDescriptor()
 {
     EditorProjectDescriptor descriptor;
@@ -61,6 +73,7 @@ EditorProjectDescriptor makeGameFlowProjectDescriptor()
         "main-menu", "worlds/main-menu.ayscene", {}, {}, {}}};
     descriptor.run.executable = "out/Sample.exe";
     descriptor.startupFlow = "flow/application.gameflow.json";
+    descriptor.gameFlowContract = "flow/gameflow.contract.json";
     return descriptor;
 }
 
@@ -158,18 +171,41 @@ TEST_CASE(project_descriptor_round_trips_startup_flow_and_stable_world_ids)
     CHECK(authored.serialize(encoded, &error));
     CHECK(encoded.find("\"startupFlow\": \"flow/application.gameflow.json\"")
           != std::string::npos);
+    CHECK(encoded.find("\"contract\": \"flow/gameflow.contract.json\"")
+          != std::string::npos);
     CHECK(authored.save(root.path.string(), &error));
     const EditorProjectDescriptor loaded =
         EditorProjectDescriptor::load(root.path.string(), &error);
     CHECK(loaded);
     CHECK(error.empty());
     CHECK(loaded.startupFlow == "flow/application.gameflow.json");
+    CHECK(loaded.gameFlowContract == "flow/gameflow.contract.json");
     CHECK(loaded.startupWorld == "main-menu");
     const EditorProjectWorldDescriptor* mainMenu =
         loaded.findWorld("main-menu");
     CHECK(mainMenu != nullptr);
     CHECK(mainMenu != nullptr
           && mainMenu->scene == "worlds/main-menu.ayscene");
+}
+
+TEST_CASE(project_descriptor_requires_an_exact_integer_schema_version)
+{
+    const std::array<std::string_view, 3> invalidVersions = {
+        "true", "1.5", "4294967297"};
+    std::size_t index = 0;
+    for (const std::string_view version : invalidVersions) {
+        const std::string suffix = "descriptor_schema_"
+            + std::to_string(index++);
+        GameFlowAssetTestRoot root(suffix.c_str());
+        writeGameFlowAssetTestFile(root.path / kEditorProjectDescriptorFile,
+            "{\"schemaVersion\":" + std::string(version)
+                + ",\"id\":\"sample\"}");
+        std::string error;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(root.path.string(), &error);
+        CHECK_FALSE(static_cast<bool>(descriptor));
+        CHECK(error.find("integer schemaVersion 1") != std::string::npos);
+    }
 }
 
 TEST_CASE(project_descriptor_rejects_unstable_flow_and_world_references)
@@ -190,6 +226,25 @@ TEST_CASE(project_descriptor_rejects_unstable_flow_and_world_references)
     CHECK_FALSE(descriptor.validate(&error));
     CHECK(error.find("inside the asset root") != std::string::npos);
 
+    constexpr std::string_view nonPortablePaths[] = {
+        "flow\\application.gameflow.json",
+        "..\\outside.gameflow.json",
+        "C:\\outside.gameflow.json",
+        "C:/outside.gameflow.json",
+        "C:outside.gameflow.json",
+    };
+    for (const std::string_view path : nonPortablePaths) {
+        descriptor = makeGameFlowProjectDescriptor();
+        descriptor.startupFlow = path;
+        CHECK_FALSE(descriptor.validate(&error));
+        CHECK(error.find("inside the asset root") != std::string::npos);
+    }
+
+    descriptor = makeGameFlowProjectDescriptor();
+    descriptor.gameFlowContract = "../outside.contract.json";
+    CHECK_FALSE(descriptor.validate(&error));
+    CHECK(error.find("gameFlow.contract") != std::string::npos);
+
     descriptor = makeGameFlowProjectDescriptor();
     descriptor.startupWorld = "missing";
     CHECK_FALSE(descriptor.validate(&error));
@@ -199,6 +254,124 @@ TEST_CASE(project_descriptor_rejects_unstable_flow_and_world_references)
     descriptor.worlds.push_back(descriptor.worlds.front());
     CHECK_FALSE(descriptor.validate(&error));
     CHECK(error.find("Duplicate project World id") != std::string::npos);
+}
+
+TEST_CASE(editor_runtime_validation_reports_the_gameflow_asset_closure)
+{
+    GameFlowAssetTestRoot root("runtime_validation");
+    EditorProjectDescriptor descriptor;
+    descriptor.schemaVersion = kEditorProjectDescriptorSchemaVersion;
+    descriptor.id = "flow-validation";
+    descriptor.assetRoot = "Assets";
+    descriptor.startupFlow = "flow/root.gameflow.json";
+    std::string error;
+    CHECK(descriptor.save(root.path.string(), &error));
+    writeGameFlowAssetTestFile(root.path / "Assets/flow/root.gameflow.json",
+        R"json({
+          "schemaVersion":2,"id":"root","initialState":"idle",
+          "entryParameters":[],"result":[],"extensions":{},
+          "intents":[{"id":"app.start"}],
+          "states":[{"id":"idle"},{"id":"done"}],
+          "transitions":[{
+            "id":"go","from":"idle","intent":"app.start","to":"done",
+            "actions":[{"id":"flow.enter","arguments":{
+              "subflowId":"child"
+            }}]
+          }]
+        })json");
+    writeGameFlowAssetTestFile(root.path / "Assets/flow/child.gameflow.json",
+        R"json({
+          "schemaVersion":2,"id":"child","initialState":"idle",
+          "entryParameters":[],"result":[],"extensions":{},
+          "intents":[],"states":[{"id":"idle"}],"transitions":[]
+        })json");
+
+    const EditorRuntimeValidationResult result =
+        EditorProjectRuntimeValidator::validate(
+            root.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK(static_cast<bool>(result));
+    CHECK(result.gameFlows == 2u);
+    CHECK(std::any_of(result.gameFlowDependencies.begin(),
+        result.gameFlowDependencies.end(), [](const auto& dependency) {
+            return dependency.kind == "gameflow"
+                && dependency.source
+                    == "root::go::flow.enter.subflowId"
+                && dependency.target == "flow/child.gameflow.json";
+        }));
+}
+
+TEST_CASE(editor_runtime_validation_reports_editor_descriptor_errors)
+{
+    GameFlowAssetTestRoot root("invalid_descriptor");
+    writeGameFlowAssetTestFile(root.path / "Assets/placeholder.txt", "ok");
+    writeGameFlowAssetTestFile(root.path / kEditorProjectDescriptorFile,
+        R"json({
+          "schemaVersion": 1,
+          "id": "invalid-editor-settings",
+          "paths": { "assets": "Assets" },
+          "editor": { "defaultSceneView": "Diagonal" },
+          "worlds": []
+        })json");
+
+    const EditorRuntimeValidationResult result =
+        EditorProjectRuntimeValidator::validate(
+            root.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(result));
+    CHECK(hasRuntimeValidationIssue(
+        result, "editor.defaultSceneView must be Auto, 2D, or 3D"));
+}
+
+TEST_CASE(editor_runtime_validation_does_not_follow_uiflow_outside_assets)
+{
+    GameFlowAssetTestRoot root("uiflow_symlink_escape");
+    EditorProjectDescriptor descriptor;
+    descriptor.schemaVersion = kEditorProjectDescriptorSchemaVersion;
+    descriptor.id = "uiflow-symlink";
+    descriptor.assetRoot = "Assets";
+    descriptor.ui.flow = "ui/main.uiflow.json";
+    std::string error;
+    CHECK(descriptor.save(root.path.string(), &error));
+    writeGameFlowAssetTestFile(root.path / "outside.uiflow.json", R"json({
+      "schemaVersion": 1,
+      "id": "outside-ui",
+      "defaultEntry": "",
+      "entries": [], "contexts": [], "signals": []
+    })json");
+    std::error_code linkError;
+    std::filesystem::create_directories(root.path / "Assets/ui", linkError);
+    CHECK(!linkError);
+    std::filesystem::create_symlink(root.path / "outside.uiflow.json",
+        root.path / "Assets/ui/main.uiflow.json", linkError);
+    if (linkError) return;
+
+    const EditorRuntimeValidationResult result =
+        EditorProjectRuntimeValidator::validate(
+            root.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(result));
+    CHECK(hasRuntimeValidationIssue(
+        result, "Path resolves outside its content root"));
+}
+
+TEST_CASE(editor_runtime_validation_requires_a_regular_uiflow_asset)
+{
+    GameFlowAssetTestRoot root("uiflow_regular_file");
+    EditorProjectDescriptor descriptor;
+    descriptor.schemaVersion = kEditorProjectDescriptorSchemaVersion;
+    descriptor.id = "uiflow-directory";
+    descriptor.assetRoot = "Assets";
+    descriptor.ui.flow = "ui/main.uiflow.json";
+    std::string error;
+    CHECK(descriptor.save(root.path.string(), &error));
+    std::error_code filesystemError;
+    std::filesystem::create_directories(
+        root.path / "Assets/ui/main.uiflow.json", filesystemError);
+    CHECK(!filesystemError);
+
+    const EditorRuntimeValidationResult result =
+        EditorProjectRuntimeValidator::validate(
+            root.path.string(), EditorRuntimeValidationProfile::Headless);
+    CHECK_FALSE(static_cast<bool>(result));
+    CHECK(hasRuntimeValidationIssue(result, "must be a regular file"));
 }
 
 TEST_SUITE_END

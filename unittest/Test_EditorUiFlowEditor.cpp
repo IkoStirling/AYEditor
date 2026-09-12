@@ -38,8 +38,8 @@ namespace fs = std::filesystem;
 
 struct TempFlow {
     explicit TempFlow(const char* name)
-        : path(fs::temp_directory_path()
-               / (std::string("ayeditor_flow_authoring_") + name
+        : path(ayt::test::testTmpDir()
+               / (std::string("uf_") + name
                   + ".uiflow.json"))
     {
         std::error_code ignored;
@@ -256,8 +256,8 @@ TEST_CASE(state_transition_authoring_is_reference_safe_and_undoable)
 TEST_CASE(project_factory_and_asset_database_expose_ui_flow_assets)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path()
-        / "ayeditor_flow_authoring_factory";
+    const fs::path root = ayt::test::testTmpDir()
+        / "uf_factory";
     std::error_code ignored;
     fs::remove_all(root, ignored);
     fs::create_directories(root);
@@ -380,8 +380,8 @@ TEST_CASE(preview_debugger_pauses_before_mock_node_and_exposes_inputs)
 TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path()
-        / "ayeditor_flow_visual_preview";
+    const fs::path root = ayt::test::testTmpDir()
+        / "uf_preview";
     std::error_code ignored;
     fs::remove_all(root, ignored);
     fs::create_directories(root / "ui", ignored);
@@ -440,8 +440,8 @@ TEST_CASE(preview_can_mount_real_layouts_into_an_editor_owned_viewport)
 TEST_CASE(flow_editor_surfaces_asset_closure_diagnostics_per_revision)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path()
-        / "ayeditor_flow_asset_diagnostics";
+    const fs::path root = ayt::test::testTmpDir()
+        / "uf_diagnostics";
     std::error_code ignored;
     fs::remove_all(root, ignored);
     fs::create_directories(root / "ui", ignored);

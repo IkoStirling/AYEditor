@@ -25,8 +25,8 @@ struct RecoveryTrashCleanup {
 
 std::filesystem::path recoveryTrashRoot(const char* suffix)
 {
-    return std::filesystem::temp_directory_path()
-        / (std::string("ayeditor_recovery_trash_") + suffix + "_"
+    return ayt::test::testTmpDir()
+        / (std::string("rt_") + suffix + "_"
            + std::to_string(std::chrono::steady_clock::now()
                .time_since_epoch().count()));
 }

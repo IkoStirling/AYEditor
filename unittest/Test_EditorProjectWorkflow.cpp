@@ -50,8 +50,8 @@ struct ProjectWorkflowCleanup {
 
 std::filesystem::path projectWorkflowRoot(const char* suffix)
 {
-    return std::filesystem::temp_directory_path()
-        / (std::string("ayeditor_project_workflow_") + suffix);
+    return ayt::test::testTmpDir()
+        / (std::string("pw_") + suffix);
 }
 
 void writeWorkflowFile(const std::filesystem::path& path,
@@ -164,7 +164,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 13u);
+    CHECK(kEditorSourceAbiVersion == 14u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 

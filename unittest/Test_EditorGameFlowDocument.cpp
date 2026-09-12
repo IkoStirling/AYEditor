@@ -19,8 +19,8 @@ namespace fs = std::filesystem;
 struct TempFile
 {
     explicit TempFile(const char* stem)
-        : path(fs::temp_directory_path()
-               / (std::string("ayeditor_gameflow_") + stem
+        : path(ayt::test::testTmpDir()
+               / (std::string("gf_") + stem
                   + ".gameflow.json"))
     {
         std::error_code ignored;

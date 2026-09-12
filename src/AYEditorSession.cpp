@@ -62,8 +62,7 @@
 #include "AYAudio/AudioSubSystem.h"
 #include "AYUI/UIKeyCode.h"
 #include "AYDevice/DeviceManager.h"
-#include <AYApplication/GameFlowUIBridge.h>
-#include <AYApplication/GameFlowWorldActions.h>
+#include <AYApplication/GameFlowStandardActions.h>
 #include <AYLocalization.h>
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）

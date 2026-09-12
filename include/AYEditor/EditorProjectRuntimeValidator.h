@@ -1,5 +1,7 @@
 #pragma once
 
+#include <AYEditor/EditorVersion.h>
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -22,6 +24,12 @@ struct EditorRuntimeUiFlowDependency {
     std::vector<std::string> screens;
 };
 
+struct EditorRuntimeGameFlowDependency {
+    std::string kind;
+    std::string source;
+    std::string target;
+};
+
 struct EditorRuntimeValidationResult {
     EditorRuntimeValidationProfile profile =
         EditorRuntimeValidationProfile::Headless;
@@ -29,12 +37,14 @@ struct EditorRuntimeValidationResult {
     std::size_t uiLayouts = 0;
     std::size_t uiFlows = 0;
     std::size_t tilemaps = 0;
+    std::size_t gameFlows = 0;
     std::vector<EditorRuntimeValidationIssue> issues;
     std::vector<EditorRuntimeUiFlowDependency> uiFlowDependencies;
+    std::vector<EditorRuntimeGameFlowDependency> gameFlowDependencies;
 
     explicit operator bool() const noexcept { return issues.empty(); }
     std::size_t checked() const noexcept {
-        return scenes + uiLayouts + uiFlows + tilemaps;
+        return scenes + uiLayouts + uiFlows + tilemaps + gameFlows;
     }
 };
 
