@@ -328,6 +328,8 @@ private:
     void bindNetworkPanelStub();
     void bindRenderSettingsPanel();
     std::wstring localizedText(const char* key, const char* fallback) const;
+    std::wstring localizedText(std::string_view key,
+                               std::wstring_view fallback) const;
     std::wstring localizedText(const char* key, const char* fallback,
                                const std::string& argument) const;
     void setLocalizedValueLabel(const char* widgetId, const char* key,

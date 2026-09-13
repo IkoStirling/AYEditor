@@ -61,6 +61,7 @@ public:
     void detach();
     bool isAttached() const noexcept;
     void pumpDeferred(float deltaSeconds = 0.0f);
+    void onLanguageChanged();
 
     bool openDocument(const std::string& path);
     bool saveDocument(std::string* error = nullptr);

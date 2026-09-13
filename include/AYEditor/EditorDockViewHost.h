@@ -83,6 +83,7 @@ public:
     }
     void syncCommandTargetFromFocus();
     void refreshPresentations();
+    void notifyLanguageChanged(const std::string& language);
     void tick(float dt);
 
     bool routePointerDown(float physicalX, float physicalY, int button);
@@ -118,6 +119,13 @@ public:
     void requestRepaint() override;
     void setStatusText(const std::wstring& text) override {
         _outerHost.setStatusText(text);
+    }
+    std::wstring localizedText(
+        std::string_view key, std::wstring_view fallback) const override {
+        return _outerHost.localizedText(key, fallback);
+    }
+    std::string currentLanguage() const override {
+        return _outerHost.currentLanguage();
     }
 
 private:

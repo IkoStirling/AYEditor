@@ -121,8 +121,26 @@ namespace ayt::editor {
 
 namespace {
 
-std::unordered_map<const EditorSession*, std::vector<ayt::ui::Tooltip*>>
+struct EditorTooltipBinding {
+    ayt::ui::Tooltip* tooltip = nullptr;
+    ayt::ui::Widget* target = nullptr;
+    std::string key;
+    std::wstring fallback;
+    std::wstring suffix;
+};
+
+struct EditorMenuTextBinding {
+    ayt::ui::MenuItem* item = nullptr;
+    ayt::ui::MenuBar* menuBar = nullptr;
+    std::size_t menuIndex = 0u;
+    std::string key;
+    std::wstring fallback;
+};
+
+std::unordered_map<const EditorSession*, std::vector<EditorTooltipBinding>>
     gEditorTooltips;
+std::unordered_map<const EditorSession*, std::vector<EditorMenuTextBinding>>
+    gEditorMenuTexts;
 
 // Read-only project HUD preview layered over the native Scene View. It clips
 // authored layouts to the viewport and deliberately yields pointer input to
@@ -361,20 +379,34 @@ void setEditorMenuToggleIcon(ayt::ui::MenuItem* item,
 }
 
 void attachEditorTooltip(const EditorSession* session, ayt::ui::Widget* target,
-                         const std::wstring& text)
+                         std::string key, std::wstring fallback,
+                         const std::wstring& text,
+                         std::wstring suffix = {})
 {
     if (session == nullptr || target == nullptr || text.empty()) return;
+    auto& bindings = gEditorTooltips[session];
+    for (EditorTooltipBinding& binding : bindings) {
+        if (binding.target != target || binding.tooltip == nullptr) continue;
+        binding.key = std::move(key);
+        binding.fallback = std::move(fallback);
+        binding.suffix = std::move(suffix);
+        binding.tooltip->setText(text);
+        return;
+    }
     if (auto* tooltip = ayt::ui::Tooltip::attachTo(target)) {
         tooltip->setText(text);
-        gEditorTooltips[session].push_back(tooltip);
+        bindings.push_back({tooltip, target, std::move(key),
+                            std::move(fallback), std::move(suffix)});
     }
 }
 
 void clearEditorTooltips(const EditorSession* session)
 {
+    gEditorMenuTexts.erase(session);
     const auto found = gEditorTooltips.find(session);
     if (found == gEditorTooltips.end()) return;
-    for (ayt::ui::Tooltip* tooltip : found->second) {
+    for (const EditorTooltipBinding& binding : found->second) {
+        ayt::ui::Tooltip* tooltip = binding.tooltip;
         if (tooltip == nullptr) continue;
         tooltip->detach();
         ayt::ui::destroyWidgetTree(tooltip);
@@ -391,11 +423,16 @@ public:
         EditorAssetPreviewCache* imageCache,
         void* ownerWindow,
         std::function<void()> repaint,
-        std::function<void(const std::wstring&)> setStatus)
+        std::function<void(const std::wstring&)> setStatus,
+        std::function<std::wstring(std::string_view, std::wstring_view)>
+            localize,
+        std::function<std::string()> currentLanguage)
         : _workspace(workspace), _ui(ui),
           _projectRoot(std::move(projectRoot)),
           _imageCache(imageCache), _ownerWindow(ownerWindow),
-          _repaint(std::move(repaint)), _setStatus(std::move(setStatus)) {}
+          _repaint(std::move(repaint)), _setStatus(std::move(setStatus)),
+          _localize(std::move(localize)),
+          _currentLanguage(std::move(currentLanguage)) {}
 
     EditorWorkspace& workspace() noexcept override { return _workspace; }
     const std::string& projectRoot() const noexcept override {
@@ -421,6 +458,13 @@ public:
     void setStatusText(const std::wstring& text) override {
         if (_setStatus) _setStatus(text);
     }
+    std::wstring localizedText(
+        std::string_view key, std::wstring_view fallback) const override {
+        return _localize ? _localize(key, fallback) : std::wstring(fallback);
+    }
+    std::string currentLanguage() const override {
+        return _currentLanguage ? _currentLanguage() : std::string{};
+    }
 
 private:
     EditorWorkspace& _workspace;
@@ -430,6 +474,8 @@ private:
     void* _ownerWindow = nullptr;
     std::function<void()> _repaint;
     std::function<void(const std::wstring&)> _setStatus;
+    std::function<std::wstring(std::string_view, std::wstring_view)> _localize;
+    std::function<std::string()> _currentLanguage;
 };
 
 // DeviceInputBridge converts wheel notches to AYUI logical pixels before it
@@ -1512,6 +1558,17 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             },
             [this](const std::wstring& text) {
                 setAssetBrowserStatus(text);
+            },
+            [this](std::string_view key, std::wstring_view fallback) {
+                const std::string fallbackUtf8 =
+                    wideToUtf8(std::wstring(fallback));
+                const std::string text = _localization != nullptr
+                    ? _localization->get(std::string(key), fallbackUtf8)
+                    : fallbackUtf8;
+                return ayt::ui::decodeUtf8Text(text);
+            },
+            [this]() {
+                return currentLanguage();
             });
         _dockViewHost = std::make_unique<EditorDockViewHost>(
             *_workspace, *_mainDock, *_editorHostServices, &_ui);
@@ -2869,21 +2926,25 @@ void EditorSession::bindToolbar() {
     auto* viewportOptions = new ayt::ui::Menu();
     viewportOptions->setId("viewport_options_menu");
     if (ayt::ui::Widget* root = _ui.root()) root->addChild(viewportOptions);
-    if (auto* item = viewportOptions->addItem(L"2D Scene View")) {
+    if (auto* item = viewportOptions->addItem(localizedText(
+            "ui.editor.viewport.menu_2d", "2D Scene View"))) {
         item->setId("menu_scene_view_2d");
         item->setOnActivate([this]() { toggleSceneViewMode(); });
         _sceneViewModeMenuItem = item;
     }
-    if (auto* item = viewportOptions->addItem(L"Perspective Projection")) {
+    if (auto* item = viewportOptions->addItem(localizedText(
+            "ui.editor.viewport.menu_projection", "Perspective Projection"))) {
         item->setId("menu_view_projection");
         item->setOnActivate([this]() { toggleViewportProjection(); });
     }
-    if (auto* item = viewportOptions->addItem(L"Shaded Rendering")) {
+    if (auto* item = viewportOptions->addItem(localizedText(
+            "ui.editor.viewport.menu_wireframe", "Wireframe Rendering"))) {
         item->setId("menu_view_shading");
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
     viewportOptions->addSeparator();
-    if (auto* item = viewportOptions->addItem(L"Orientation Axis")) {
+    if (auto* item = viewportOptions->addItem(localizedText(
+            "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"))) {
         item->setId("menu_view_orientation_axis");
         item->setOnActivate([this]() {
             setViewportOrientationAxisVisible(
@@ -2980,19 +3041,24 @@ void EditorSession::bindToolbar() {
             ayt::ui::TextLabel::VAlignment::Center);
     }
 
-    attachEditorTooltip(this, _ui.findById("btn_view_camera"),
+    const auto attachLocalizedTip = [this](const char* id, const char* key,
+                                            const wchar_t* fallback) {
+        const std::wstring text = localizedText(key, fallback);
+        attachEditorTooltip(this, _ui.findById(id), key, fallback, text);
+    };
+    attachLocalizedTip("btn_view_camera", "ui.editor.tooltip.projection",
         L"Toggle Perspective / Orthographic projection");
-    attachEditorTooltip(this, _ui.findById("btn_view_mode"),
+    attachLocalizedTip("btn_view_mode", "ui.editor.tooltip.scene_view",
         L"Switch between 2D and 3D Scene View");
-    attachEditorTooltip(this, _ui.findById("btn_view_shading"),
+    attachLocalizedTip("btn_view_shading", "ui.editor.tooltip.shading",
         L"Toggle Shaded / Wireframe rendering");
-    attachEditorTooltip(this, _ui.findById("btn_view_meshes"),
+    attachLocalizedTip("btn_view_meshes", "ui.editor.tooltip.meshes",
         L"Show or hide 3D meshes");
-    attachEditorTooltip(this, _ui.findById("btn_view_world_lit_2d"),
+    attachLocalizedTip("btn_view_world_lit_2d", "ui.editor.tooltip.world_lit_2d",
         L"Show or hide world-lit 2D content");
-    attachEditorTooltip(this, _ui.findById("btn_view_camera_overlay_2d"),
+    attachLocalizedTip("btn_view_camera_overlay_2d", "ui.editor.tooltip.camera_overlay_2d",
         L"Show or hide camera-overlay 2D content");
-    attachEditorTooltip(this, _ui.findById("btn_view_ui"),
+    attachLocalizedTip("btn_view_ui", "ui.editor.tooltip.ui_preview",
         L"Show or hide the UI preview");
 }
 
@@ -3005,6 +3071,7 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
     struct IconBinding {
         const char* buttonId;
         const char* relativePath;
+        const char* localizationKey;
         const wchar_t* accessibleLabel;
         float iconSize;
         float horizontalPadding;
@@ -3014,31 +3081,31 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
     // Keep this mapping semantic and editor-owned. AYUI owns SVG parsing and
     // drawing; AYEditor decides which visual communicates each command.
     static constexpr IconBinding bindings[] = {
-        {"btn_minimize",    "outline/minus.svg",             L"Minimize",            13.0f, 5.0f, 3.0f},
-        {"btn_maximize",    "outline/maximize.svg",          L"Maximize or restore",  13.0f, 5.0f, 3.0f},
-        {"btn_close",       "outline/x.svg",                 L"Close editor",         13.0f, 5.0f, 3.0f},
-        {"btn_play",        "filled/player-play.svg",        L"Play",                  16.0f, 8.0f, 4.0f},
-        {"btn_pause",       "filled/player-pause.svg",       L"Pause",                 16.0f, 8.0f, 4.0f},
-        {"btn_step",        "filled/player-track-next.svg",  L"Step one frame",        16.0f, 8.0f, 4.0f},
-        {"btn_stop",        "filled/player-stop.svg",        L"Stop",                  16.0f, 8.0f, 4.0f},
-        {"btn_tool_ui_layout", "outline/layout.svg",         L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
-        {"btn_tool_2d",     "outline/grid.svg",              L"Open 2D Tilemap Editor", 20.0f, 7.0f, 7.0f},
-        {"btn_tool_audio",  "outline/music-cog.svg",         L"Open Audio Editor",     20.0f, 7.0f, 7.0f},
-        {"btn_run_project", "outline/rocket.svg",            L"Run current project",   20.0f, 7.0f, 7.0f},
-        {"btn_tool_space",  "outline/world.svg",             L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
-        {"btn_view_mode",   "outline/box.svg",               L"3D Scene View",        16.0f, 6.0f, 4.0f},
-        {"btn_view_meshes", "outline/box.svg",               L"Show 3D meshes",       15.0f, 5.0f, 4.0f},
-        {"btn_view_world_lit_2d", "outline/world.svg",       L"Show world-lit 2D content", 15.0f, 5.0f, 4.0f},
-        {"btn_view_camera_overlay_2d", "outline/frame.svg",  L"Show camera-overlay 2D content", 15.0f, 5.0f, 4.0f},
-        {"btn_view_ui",     "outline/layout.svg",            L"Show UI preview",      15.0f, 5.0f, 4.0f},
-        {"btn_view_options", "outline/dots.svg",             L"Viewport options",      14.0f, 6.0f, 4.0f},
-        {"btn_assets_add",   "outline/file-import.svg",      L"Import asset",          15.0f, 5.0f, 4.0f},
-        {"btn_assets_up",    "outline/folder-up.svg",        L"Go to parent folder",   15.0f, 5.0f, 4.0f},
-        {"btn_assets_refresh", "outline/refresh.svg",        L"Refresh assets",        15.0f, 5.0f, 4.0f},
-        {"btn_assets_rename", "outline/edit.svg",            L"Rename selected asset", 15.0f, 5.0f, 4.0f},
-        {"btn_assets_move", "outline/folder-symlink.svg",    L"Move selected assets",  15.0f, 5.0f, 4.0f},
-        {"btn_assets_copy", "outline/copy.svg",              L"Copy selected assets",  15.0f, 5.0f, 4.0f},
-        {"btn_assets_delete", "outline/trash.svg",           L"Delete selected assets", 15.0f, 5.0f, 4.0f},
+        {"btn_minimize", "outline/minus.svg", "ui.editor.tooltip.minimize", L"Minimize", 13.0f, 5.0f, 3.0f},
+        {"btn_maximize", "outline/maximize.svg", "ui.editor.tooltip.maximize", L"Maximize or restore", 13.0f, 5.0f, 3.0f},
+        {"btn_close", "outline/x.svg", "ui.editor.tooltip.close", L"Close editor", 13.0f, 5.0f, 3.0f},
+        {"btn_play", "filled/player-play.svg", "ui.editor.tooltip.play", L"Play", 16.0f, 8.0f, 4.0f},
+        {"btn_pause", "filled/player-pause.svg", "ui.editor.tooltip.pause", L"Pause", 16.0f, 8.0f, 4.0f},
+        {"btn_step", "filled/player-track-next.svg", "ui.editor.tooltip.step", L"Step one frame", 16.0f, 8.0f, 4.0f},
+        {"btn_stop", "filled/player-stop.svg", "ui.editor.tooltip.stop", L"Stop", 16.0f, 8.0f, 4.0f},
+        {"btn_tool_ui_layout", "outline/layout.svg", "ui.editor.tooltip.open_ui_layout", L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_2d", "outline/grid.svg", "ui.editor.tooltip.open_tilemap", L"Open 2D Tilemap Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_audio", "outline/music-cog.svg", "ui.editor.tooltip.open_audio", L"Open Audio Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_run_project", "outline/rocket.svg", "ui.editor.tooltip.run_project", L"Run current project", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_space", "outline/world.svg", "ui.editor.tooltip.transform_world", L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
+        {"btn_view_mode", "outline/box.svg", "ui.editor.tooltip.view_3d", L"3D Scene View", 16.0f, 6.0f, 4.0f},
+        {"btn_view_meshes", "outline/box.svg", "ui.editor.tooltip.show_meshes", L"Show 3D meshes", 15.0f, 5.0f, 4.0f},
+        {"btn_view_world_lit_2d", "outline/world.svg", "ui.editor.tooltip.show_world_lit_2d", L"Show world-lit 2D content", 15.0f, 5.0f, 4.0f},
+        {"btn_view_camera_overlay_2d", "outline/frame.svg", "ui.editor.tooltip.show_camera_overlay_2d", L"Show camera-overlay 2D content", 15.0f, 5.0f, 4.0f},
+        {"btn_view_ui", "outline/layout.svg", "ui.editor.tooltip.show_ui", L"Show UI preview", 15.0f, 5.0f, 4.0f},
+        {"btn_view_options", "outline/dots.svg", "ui.editor.tooltip.viewport_options", L"Viewport options", 14.0f, 6.0f, 4.0f},
+        {"btn_assets_add", "outline/file-import.svg", "ui.editor.tooltip.import_asset", L"Import asset", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_up", "outline/folder-up.svg", "ui.editor.tooltip.parent_folder", L"Go to parent folder", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_refresh", "outline/refresh.svg", "ui.editor.tooltip.refresh_assets", L"Refresh assets", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_rename", "outline/edit.svg", "ui.editor.tooltip.rename_asset", L"Rename selected asset", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_move", "outline/folder-symlink.svg", "ui.editor.tooltip.move_assets", L"Move selected assets", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_copy", "outline/copy.svg", "ui.editor.tooltip.copy_assets", L"Copy selected assets", 15.0f, 5.0f, 4.0f},
+        {"btn_assets_delete", "outline/trash.svg", "ui.editor.tooltip.delete_assets", L"Delete selected assets", 15.0f, 5.0f, 4.0f},
     };
 
     const std::filesystem::path root(iconRootPath);
@@ -3063,14 +3130,16 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
 
         // Clear the visible placeholder only after parsing succeeds. Explicit
         // accessibility metadata preserves the command name for icon-only UI.
-        button->setAccessibilityLabel(binding.accessibleLabel);
+        const std::wstring accessibleText = localizedText(
+            binding.localizationKey, binding.accessibleLabel);
+        button->setAccessibilityLabel(accessibleText);
         button->setText(L"");
         button->setIconDocument(std::move(document));
         button->setIconSize(binding.iconSize);
         button->setIconColor(iconColor);
         button->setPadding(binding.horizontalPadding, binding.verticalPadding,
                            binding.horizontalPadding, binding.verticalPadding);
-        std::wstring tooltipText(binding.accessibleLabel);
+        std::wstring tooltipText(accessibleText);
         const char* shortcutId = nullptr;
         if (std::strcmp(binding.buttonId, "btn_play") == 0) shortcutId = "play.toggle";
         else if (std::strcmp(binding.buttonId, "btn_pause") == 0) shortcutId = "play.pause";
@@ -3081,7 +3150,9 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
                 EditorShortcutRegistry::instance().shortcutFor(shortcutId);
             if (!shortcut.empty()) tooltipText += L" (" + shortcut + L")";
         }
-        attachEditorTooltip(this, button, tooltipText);
+        const std::wstring suffix = tooltipText.substr(accessibleText.size());
+        attachEditorTooltip(this, button, binding.localizationKey,
+                            binding.accessibleLabel, tooltipText, suffix);
         ++loadedCount;
     }
 
@@ -5508,6 +5579,16 @@ std::wstring EditorSession::localizedText(const char* key,
     return ayt::ui::decodeUtf8Text(text);
 }
 
+std::wstring EditorSession::localizedText(
+    std::string_view key, std::wstring_view fallback) const
+{
+    const std::wstring fallbackText(fallback);
+    const std::string text = _localization != nullptr
+        ? _localization->get(std::string(key), wideToUtf8(fallbackText))
+        : wideToUtf8(fallbackText);
+    return ayt::ui::decodeUtf8Text(text);
+}
+
 std::wstring EditorSession::localizedText(const char* key,
                                           const char* fallback,
                                           const std::string& argument) const
@@ -6231,7 +6312,8 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _viewportOrientationAxisVisible =
         preferences.viewportOrientationAxisVisible;
     if (_viewportOrientationAxisMenuItem != nullptr) {
-        _viewportOrientationAxisMenuItem->setText(L"Viewport Orientation Axis");
+        _viewportOrientationAxisMenuItem->setText(localizedText(
+            "ui.editor.menu.view.orientation_axis", "Viewport Orientation Axis"));
         setEditorMenuToggleIcon(_viewportOrientationAxisMenuItem,
                                 _engineAssetsRoot,
                                 _viewportOrientationAxisVisible);
@@ -6258,13 +6340,15 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
-        item->setText(L"Wireframe Rendering");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_wireframe", "Wireframe Rendering"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
     }
     syncSceneViewToolbar();
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
-        item->setText(L"Orientation Axis");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot,
                                 _viewportOrientationAxisVisible);
     }
@@ -6460,6 +6544,35 @@ bool EditorSession::setLanguage(const std::string& language)
     _localization->setLanguage(locale);
     _preferences.language = requested;
     _ui.loader().retranslate(_ui.root());
+    if (const auto found = gEditorMenuTexts.find(this);
+        found != gEditorMenuTexts.end()) {
+        for (const EditorMenuTextBinding& binding : found->second) {
+            const std::wstring text = localizedText(
+                binding.key, binding.fallback);
+            if (binding.item != nullptr) binding.item->setText(text);
+            if (binding.menuBar != nullptr) {
+                binding.menuBar->setMenuTitle(binding.menuIndex, text);
+            }
+        }
+    }
+    if (const auto found = gEditorTooltips.find(this);
+        found != gEditorTooltips.end()) {
+        for (const EditorTooltipBinding& binding : found->second) {
+            if (binding.tooltip != nullptr) {
+                binding.tooltip->setText(localizedText(
+                    binding.key, binding.fallback) + binding.suffix);
+            }
+        }
+    }
+    if (_dockViewHost != nullptr) {
+        _dockViewHost->notifyLanguageChanged(resolved);
+    }
+    if (_tilemapDockViewHost != nullptr) {
+        _tilemapDockViewHost->notifyLanguageChanged(resolved);
+    }
+    if (_uiDesigner != nullptr) {
+        _uiDesigner->onLanguageChanged();
+    }
     if (_childWindows != nullptr) {
         for (const EditorChildWindowManager::Entry& entry
              : _childWindows->entries()) {
@@ -6491,6 +6604,7 @@ bool EditorSession::setLanguage(const std::string& language)
     refreshUnsavedIndicator();
     refreshOutliner();
     refreshLocalizedValueLabels();
+    syncSceneViewToolbar();
     _ui.invalidateLayout();
     _ui.layout();
     if (_repaintCallback) _repaintCallback();
@@ -6647,7 +6761,9 @@ void EditorSession::syncSceneViewToolbar()
 
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_mode"))) {
-        const std::wstring label = twoD ? L"2D Scene View" : L"3D Scene View";
+        const std::wstring label = twoD
+            ? localizedText("ui.editor.viewport.view_2d", "2D Scene View")
+            : localizedText("ui.editor.viewport.view_3d", "3D Scene View");
         button->setAccessibilityLabel(label);
         if (button->getIconDocument() != nullptr && !_engineAssetsRoot.empty()) {
             const std::filesystem::path iconPath =
@@ -6678,23 +6794,27 @@ void EditorSession::syncSceneViewToolbar()
         button->setEnabled(!twoD);
     }
     if (_sceneViewModeMenuItem != nullptr) {
-        _sceneViewModeMenuItem->setText(L"2D Scene View");
+        _sceneViewModeMenuItem->setText(localizedText(
+            "ui.editor.viewport.menu_2d", "2D Scene View"));
         setEditorMenuToggleIcon(_sceneViewModeMenuItem, _engineAssetsRoot, twoD);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_projection"))) {
-        item->setText(L"Orthographic Projection");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_projection", "Orthographic Projection"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot, orthographic);
         item->setEnabled(!twoD);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
-        item->setText(L"Wireframe Rendering");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_wireframe", "Wireframe Rendering"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
-        item->setText(L"Orientation Axis");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot,
                                 _viewportOrientationAxisVisible);
     }
@@ -7020,7 +7140,8 @@ void EditorSession::toggleViewportShading()
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_shading"))) {
-        item->setText(L"Wireframe Rendering");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_wireframe", "Wireframe Rendering"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot, _wireframeView);
     }
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
@@ -7034,14 +7155,15 @@ void EditorSession::setViewportOrientationAxisVisible(bool visible)
     const bool changed = _viewportOrientationAxisVisible != visible;
     _viewportOrientationAxisVisible = visible;
     if (_viewportOrientationAxisMenuItem != nullptr) {
-        _viewportOrientationAxisMenuItem->setText(
-            L"Viewport Orientation Axis");
+        _viewportOrientationAxisMenuItem->setText(localizedText(
+            "ui.editor.menu.view.orientation_axis", "Viewport Orientation Axis"));
         setEditorMenuToggleIcon(_viewportOrientationAxisMenuItem,
                                 _engineAssetsRoot, visible);
     }
     if (auto* item = dynamic_cast<ayt::ui::MenuItem*>(
             _ui.findById("menu_view_orientation_axis"))) {
-        item->setText(L"Orientation Axis");
+        item->setText(localizedText(
+            "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"));
         setEditorMenuToggleIcon(item, _engineAssetsRoot, visible);
     }
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
@@ -7257,43 +7379,63 @@ void EditorSession::bindMenuBar() {
     // geometry inside the slot.
     menuBar->setAnchorAutoWidth(true);
 
-    ayt::ui::Menu* fileMenu = menuBar->addMenu(L"File");
+    const auto addLocalizedMenu = [this, menuBar](
+        const char* key, const wchar_t* fallback) {
+        const std::size_t index = menuBar->getMenuCount();
+        ayt::ui::Menu* menu = menuBar->addMenu(localizedText(key, fallback));
+        gEditorMenuTexts[this].push_back(
+            {nullptr, menuBar, index, key, fallback});
+        return menu;
+    };
+    const auto addLocalizedItem = [this](ayt::ui::Menu* menu,
+                                          const char* key,
+                                          const wchar_t* fallback) {
+        if (menu == nullptr) return static_cast<ayt::ui::MenuItem*>(nullptr);
+        ayt::ui::MenuItem* item = menu->addItem(localizedText(key, fallback));
+        if (item != nullptr) {
+            gEditorMenuTexts[this].push_back(
+                {item, nullptr, 0u, key, fallback});
+        }
+        return item;
+    };
+
+    ayt::ui::Menu* fileMenu = addLocalizedMenu("ui.editor.menu.file._label", L"File");
     if (fileMenu != nullptr) {
-        if (auto* item = fileMenu->addItem(L"New Empty Scene")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_empty_scene", L"New Empty Scene")) {
             item->setOnActivate([this]() {
                 (void)newSceneFromTemplate(EditorSceneTemplate::Empty);
             });
         }
-        if (auto* item = fileMenu->addItem(L"New 2D Scene")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_2d_scene", L"New 2D Scene")) {
             item->setOnActivate([this]() {
                 (void)newSceneFromTemplate(EditorSceneTemplate::TwoD);
             });
         }
-        if (auto* item = fileMenu->addItem(L"New UI Layout")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_ui_layout", L"New UI Layout")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::UiLayout);
             });
         }
-        if (auto* item = fileMenu->addItem(L"New UI Flow")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_ui_flow", L"New UI Flow")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::UiFlow);
             });
         }
-        if (auto* item = fileMenu->addItem(L"New Game Flow")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_game_flow", L"New Game Flow")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::GameFlow);
             });
         }
-        if (auto* item = fileMenu->addItem(L"New Tilemap")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_tilemap", L"New Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
             });
         }
         fileMenu->addSeparator();
-        if (auto* item = fileMenu->addItem(L"Open Scene...")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.open_scene", L"Open Scene...")) {
             item->setOnActivate([this]() { openSceneDocument(); });
         }
-        if (auto* item = fileMenu->addItem(L"Save")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.save", L"Save")) {
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("file.save"));
             item->setOnActivate([this]() {
@@ -7310,29 +7452,29 @@ void EditorSession::bindMenuBar() {
                 saveSceneDocument();
             });
         }
-        if (auto* item = fileMenu->addItem(L"Save As...")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.save_as", L"Save As...")) {
             item->setOnActivate([this]() { saveSceneDocumentAs(); });
         }
-        if (auto* item = fileMenu->addItem(L"Autosave Now")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.autosave", L"Autosave Now")) {
             item->setOnActivate([this]() { (void)autosaveNow(); });
         }
-        if (auto* item = fileMenu->addItem(L"Restore Crash Recovery")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.restore_recovery", L"Restore Crash Recovery")) {
             _restoreRecoveryMenuItem = item;
             item->setEnabled(hasCrashRecovery());
             item->setOnActivate([this]() { showCrashRecoveryDialog(); });
         }
-        if (auto* item = fileMenu->addItem(L"Import...")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.import", L"Import...")) {
             item->setOnActivate([this]() { importCharacterFromDialog(); });
         }
         fileMenu->addSeparator();
-        if (auto* item = fileMenu->addItem(L"Exit")) {
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.exit", L"Exit")) {
             item->setOnActivate([this]() { requestHostClose(); });
         }
     }
 
-    ayt::ui::Menu* editMenu = menuBar->addMenu(L"Edit");
+    ayt::ui::Menu* editMenu = addLocalizedMenu("ui.editor.menu.edit._label", L"Edit");
     if (editMenu != nullptr) {
-        if (auto* item = editMenu->addItem(L"Undo")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.undo", L"Undo")) {
             _undoMenuItem = item;
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("edit.undo"));
@@ -7354,7 +7496,7 @@ void EditorSession::bindMenuBar() {
                 }
             });
         }
-        if (auto* item = editMenu->addItem(L"Redo")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.redo", L"Redo")) {
             _redoMenuItem = item;
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("edit.redo"));
@@ -7376,7 +7518,7 @@ void EditorSession::bindMenuBar() {
                 }
             });
         }
-        if (auto* item = editMenu->addItem(L"Restore Last Deleted Assets")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.restore_deleted", L"Restore Last Deleted Assets")) {
             _restoreDeletedMenuItem = item;
             item->setEnabled(_assetTrash != nullptr
                 && _assetTrash->canRestoreLast());
@@ -7384,129 +7526,131 @@ void EditorSession::bindMenuBar() {
                 (void)restoreLastDeletedAssets();
             });
         }
-        if (auto* item = editMenu->addItem(L"Project Trash...")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.project_trash", L"Project Trash...")) {
             item->setOnActivate([this]() { showAssetTrashDialog(); });
         }
-        if (auto* item = editMenu->addItem(L"Resource Operation History...")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.operation_history", L"Resource Operation History...")) {
             item->setOnActivate([this]() { showAssetHistoryDialog(); });
         }
         editMenu->addSeparator();
-        if (auto* item = editMenu->addItem(L"Create Empty Entity")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_entity", L"Create Empty Entity")) {
             item->setOnActivate([this]() { createEmptyEntity(); });
         }
-        if (auto* item = editMenu->addItem(L"Create Sprite")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_sprite", L"Create Sprite")) {
             item->setOnActivate([this]() {
                 (void)createTwoDEntity(Editor2DEntityKind::Sprite);
             });
         }
-        if (auto* item = editMenu->addItem(L"Create Tilemap")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_tilemap", L"Create Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createTwoDEntity(Editor2DEntityKind::Tilemap);
             });
         }
-        if (auto* item = editMenu->addItem(L"Create 2D Camera")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_2d_camera", L"Create 2D Camera")) {
             item->setOnActivate([this]() {
                 (void)createTwoDEntity(Editor2DEntityKind::Camera);
             });
         }
-        if (auto* item = editMenu->addItem(L"Delete Selected")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.delete_selected", L"Delete Selected")) {
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("edit.delete"));
             item->setOnActivate([this]() { deleteSelectedEntity(); });
         }
     }
 
-    ayt::ui::Menu* viewMenu = menuBar->addMenu(L"View");
+    ayt::ui::Menu* viewMenu = addLocalizedMenu("ui.editor.menu.view._label", L"View");
     if (viewMenu != nullptr) {
-        if (auto* item = viewMenu->addItem(L"Viewport Orientation Axis")) {
+        if (auto* item = addLocalizedItem(viewMenu, "ui.editor.menu.view.orientation_axis", L"Viewport Orientation Axis")) {
             _viewportOrientationAxisMenuItem = item;
             item->setOnActivate([this]() {
                 setViewportOrientationAxisVisible(
                     !_viewportOrientationAxisVisible);
             });
-            item->setText(_viewportOrientationAxisVisible
-                              ? L"[x] Viewport Orientation Axis"
-                              : L"[ ] Viewport Orientation Axis");
+            item->setText(localizedText(
+                "ui.editor.menu.view.orientation_axis",
+                "Viewport Orientation Axis"));
+            setEditorMenuToggleIcon(item, _engineAssetsRoot,
+                                    _viewportOrientationAxisVisible);
         }
     }
 
-    ayt::ui::Menu* windowMenu = menuBar->addMenu(L"Window");
+    ayt::ui::Menu* windowMenu = addLocalizedMenu("ui.editor.menu.window._label", L"Window");
     if (windowMenu != nullptr) {
-        if (auto* item = windowMenu->addItem(L"Render Settings")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.render_settings", L"Render Settings")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_render", _panelRenderVisible);
             });
         }
-        if (auto* item = windowMenu->addItem(L"Inspector")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.inspector", L"Inspector")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_inspector", _panelInspectorVisible);
             });
         }
         // v0.3+ PR-5 — Hierarchy panel toggle (design §4.3.y)
-        if (auto* item = windowMenu->addItem(L"Hierarchy")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.hierarchy", L"Hierarchy")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_outliner", _panelOutlinerVisible);
             });
         }
-        if (auto* item = windowMenu->addItem(L"Network")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.network", L"Network")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_network", _panelNetworkVisible);
             });
         }
-        if (auto* item = windowMenu->addItem(L"Console")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.console", L"Console")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_console", _panelConsoleVisible);
             });
         }
-        if (auto* item = windowMenu->addItem(L"Assets")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.assets", L"Assets")) {
             item->setOnActivate([this]() {
                 toggleDockCard("card_assets", _panelAssetsVisible);
             });
         }
         windowMenu->addSeparator();
-        if (auto* item = windowMenu->addItem(L"Save Workspace")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.save_workspace", L"Save Workspace")) {
             item->setOnActivate([this]() { savePreferencesNow(); });
         }
-        if (auto* item = windowMenu->addItem(L"Reset Workspace Layout")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.reset_workspace", L"Reset Workspace Layout")) {
             item->setOnActivate([this]() { resetWorkspacePreferences(); });
         }
         windowMenu->addSeparator();
-        if (auto* item = windowMenu->addItem(L"Select Character")) {
+        if (auto* item = addLocalizedItem(windowMenu, "ui.editor.menu.window.select_character", L"Select Character")) {
             item->setOnActivate([this]() { selectCharacter(); });
         }
     }
 
-    ayt::ui::Menu* toolsMenu = menuBar->addMenu(L"Tools");
+    ayt::ui::Menu* toolsMenu = addLocalizedMenu("ui.editor.menu.tools._label", L"Tools");
     if (toolsMenu != nullptr) {
-        if (auto* item = toolsMenu->addItem(L"Run Current Project")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.run_project", L"Run Current Project")) {
             item->setOnActivate([this]() { (void)runCurrentProject(); });
         }
         toolsMenu->addSeparator();
-        if (auto* item = toolsMenu->addItem(L"UI Layout Editor...")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.ui_layout", L"UI Layout Editor...")) {
             item->setOnActivate([this]() { (void)openUiLayoutEditor(); });
         }
-        if (auto* item = toolsMenu->addItem(L"UI Flow Editor...")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.ui_flow", L"UI Flow Editor...")) {
             item->setOnActivate([this]() { (void)openUiFlowEditor(); });
         }
-        if (auto* item = toolsMenu->addItem(L"Game Flow Editor...")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.game_flow", L"Game Flow Editor...")) {
             item->setOnActivate([this]() { (void)openGameFlowEditor(); });
         }
-        if (auto* item = toolsMenu->addItem(L"2D Tilemap Editor...")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.tilemap", L"2D Tilemap Editor...")) {
             item->setId("menu_tools_tilemap_editor");
             item->setOnActivate([this]() { (void)openTilemapEditor(); });
         }
-        if (auto* item = toolsMenu->addItem(L"Audio Editor...")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.audio", L"Audio Editor...")) {
             item->setOnActivate([this]() {
                 (void)openRegisteredTool(kEditorAudioToolExtensionId);
             });
         }
-        if (auto* item = toolsMenu->addItem(L"Timeline")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.timeline", L"Timeline")) {
             item->setOnActivate([this]() {
                 (void)openRegisteredTool(kEditorTimelineToolExtensionId);
             });
         }
         toolsMenu->addSeparator();
-        if (auto* item = toolsMenu->addItem(L"Reimport Changed Source Assets")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.reimport_changed", L"Reimport Changed Source Assets")) {
             item->setOnActivate([this]() {
                 if (_assetImportQueue == nullptr) return;
                 const std::size_t count =
@@ -7517,14 +7661,14 @@ void EditorSession::bindMenuBar() {
                         + L" changed source asset(s).", true);
             });
         }
-        if (auto* item = toolsMenu->addItem(L"Validate Project Content")) {
+        if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.validate_project", L"Validate Project Content")) {
             item->setOnActivate([this]() { validateProjectContent(); });
         }
     }
 
-    ayt::ui::Menu* helpMenu = menuBar->addMenu(L"Help");
+    ayt::ui::Menu* helpMenu = addLocalizedMenu("ui.editor.menu.help._label", L"Help");
     if (helpMenu != nullptr) {
-        if (auto* item = helpMenu->addItem(L"About AYEditor")) {
+        if (auto* item = addLocalizedItem(helpMenu, "ui.editor.menu.help.about", L"About AYEditor")) {
             item->setOnActivate([]() {});
         }
     }

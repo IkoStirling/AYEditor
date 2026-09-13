@@ -159,6 +159,9 @@ EditorDockOpenResult EditorDockViewHost::open(
 
     _dockArea.addCard(toUiSlot(descriptor->defaultDockSlot), std::move(card));
     activateHosted(_hosted.back(), true);
+    if (_hosted.back().view != nullptr) {
+        _hosted.back().view->onLanguageChanged(currentLanguage());
+    }
     result.card = cardPointer;
     requestRepaint();
     return result;
@@ -369,6 +372,17 @@ void EditorDockViewHost::refreshPresentations()
         hosted.presentedDirty = dirty;
         hosted.presentedTitle = title;
     }
+}
+
+void EditorDockViewHost::notifyLanguageChanged(const std::string& language)
+{
+    for (EditorHostedView& hosted : _hosted) {
+        if (hosted.view != nullptr) {
+            hosted.view->onLanguageChanged(language);
+        }
+    }
+    refreshPresentations();
+    requestRepaint();
 }
 
 void EditorDockViewHost::tick(float dt)

@@ -174,6 +174,11 @@ void EditorUiLayoutController::pumpDeferred(float deltaSeconds)
     if (isAttached()) _impl->session.pumpDeferred(deltaSeconds);
 }
 
+void EditorUiLayoutController::onLanguageChanged()
+{
+    if (isAttached()) _impl->session.retranslateChrome();
+}
+
 bool EditorUiLayoutController::openDocument(const std::string& path)
 {
     return isAttached() && _impl->session.open(path);
@@ -323,6 +328,12 @@ public:
         } else {
             _host.setStatusText(L"UI Layout Editor ready");
         }
+        _host.requestRepaint();
+    }
+
+    void onLanguageChanged(const std::string&) override
+    {
+        if (_controller != nullptr) _controller->onLanguageChanged();
         _host.requestRepaint();
     }
 

@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ayt::ui {
@@ -138,6 +139,14 @@ public:
     }
     virtual void requestRepaint() = 0;
     virtual void setStatusText(const std::wstring& text) = 0;
+    // Editor-owned localization stays centralized in the host. Module views
+    // own their keys and ask the host to resolve them, avoiding a second
+    // Localization instance that could conflict with project/game language.
+    virtual std::wstring localizedText(
+        std::string_view /*key*/, std::wstring_view fallback) const {
+        return std::wstring(fallback);
+    }
+    virtual std::string currentLanguage() const { return {}; }
 };
 
 // Optional logical-coordinate input surface for complex visual editors. The
@@ -173,6 +182,9 @@ public:
 
     virtual void onActivated() {}
     virtual void onDeactivated() {}
+    // Dynamic/programmatic editor chrome cannot be retranslatable by the
+    // layout loader. Module views refresh that text from their own keys here.
+    virtual void onLanguageChanged(const std::string& /*language*/) {}
     // Called while the hosted widget tree is still alive. Views that keep
     // widget callbacks/raw aliases detach them here before DockCard teardown.
     virtual void prepareForUiShutdown() {}

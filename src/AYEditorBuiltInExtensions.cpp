@@ -46,6 +46,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <initializer_list>
 #include <limits>
 #include <memory>
 #include <map>
@@ -786,52 +787,62 @@ public:
         auto* toolbar = new ayt::ui::ToolBar();
         toolbar->setId("tilemap_workspace_toolbar");
         _save = addIconButton(
-            toolbar, "tilemap_file_save", "device-floppy.svg", L"Save",
+            toolbar, "tilemap_file_save", "ui.editor.tilemap.save_tooltip",
+            "device-floppy.svg", L"Save",
             L"Save, cook and hot-reload Tilemap (Ctrl+S)", [this]() {
                 (void)saveDocument(false);
             });
         _saveAs = addIconButton(
-            toolbar, "tilemap_file_save_as", "file-export.svg", L"Save As",
+            toolbar, "tilemap_file_save_as", "ui.editor.tilemap.save_as_tooltip",
+            "file-export.svg", L"Save As",
             L"Save Tilemap As…", [this]() {
                 (void)saveDocument(true);
             });
         _importTiled = addIconButton(
-            toolbar, "tilemap_import_tiled", "file-import.svg", L"Tiled In",
+            toolbar, "tilemap_import_tiled", "ui.editor.tilemap.import_tiled_tooltip",
+            "file-import.svg", L"Tiled In",
             L"Import a Tiled JSON map (.tmj or .json)", [this]() {
                 importTiledMap();
             });
         _exportTiled = addIconButton(
-            toolbar, "tilemap_export_tiled", "file-export.svg", L"Tiled Out",
+            toolbar, "tilemap_export_tiled", "ui.editor.tilemap.export_tiled_tooltip",
+            "file-export.svg", L"Tiled Out",
             L"Export the current map as Tiled JSON (.tmj)", [this]() {
                 exportTiledMap();
             });
         _selection = addIconButton(
-            toolbar, "tilemap_tool_selection", "select.svg", L"M",
+            toolbar, "tilemap_tool_selection", "ui.editor.tilemap.selection_tooltip",
+            "select.svg", L"M",
             L"Select and move a map region (M)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::Selection);
             });
         _pencil = addIconButton(
-            toolbar, "tilemap_tool_pencil", "pencil.svg", L"P",
+            toolbar, "tilemap_tool_pencil", "ui.editor.tilemap.pencil_tooltip",
+            "pencil.svg", L"P",
             L"Pencil (P)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::Pencil);
             });
         _eraser = addIconButton(
-            toolbar, "tilemap_tool_eraser", "eraser.svg", L"E",
+            toolbar, "tilemap_tool_eraser", "ui.editor.tilemap.eraser_tooltip",
+            "eraser.svg", L"E",
             L"Eraser (E)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::Eraser);
             });
         _fill = addIconButton(
-            toolbar, "tilemap_tool_fill", "bucket.svg", L"F",
+            toolbar, "tilemap_tool_fill", "ui.editor.tilemap.fill_tooltip",
+            "bucket.svg", L"F",
             L"Flood Fill (F)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::FloodFill);
             });
         _rectangle = addIconButton(
-            toolbar, "tilemap_tool_rectangle", "rectangle.svg", L"R",
+            toolbar, "tilemap_tool_rectangle", "ui.editor.tilemap.rectangle_tooltip",
+            "rectangle.svg", L"R",
             L"Rectangle (R)", [this]() {
                 setTool(ayt::ay2d::editor::PaintTool::Rectangle);
             });
         _terrain = addIconButton(
-            toolbar, "tilemap_tool_terrain", "world.svg", L"T",
+            toolbar, "tilemap_tool_terrain", "ui.editor.tilemap.terrain_tooltip",
+            "world.svg", L"T",
             L"Auto terrain brush (T)", [this]() {
                 if (_document->model().document().terrainDefinition(
                         _document->model().selectedTerrainId()) == nullptr) {
@@ -842,7 +853,8 @@ public:
                 setTool(ayt::ay2d::editor::PaintTool::Terrain);
             });
         _stamp = addIconButton(
-            toolbar, "tilemap_tool_stamp", "rubber-stamp.svg", L"S",
+            toolbar, "tilemap_tool_stamp", "ui.editor.tilemap.stamp_tooltip",
+            "rubber-stamp.svg", L"S",
             L"Stamp (S)", [this]() {
                 if (_document->model().selectedStampId() == 0u) {
                     _host.setStatusText(
@@ -852,43 +864,52 @@ public:
                 setTool(ayt::ay2d::editor::PaintTool::Stamp);
             });
         _shadow = addIconButton(
-            toolbar, "tilemap_tool_shadow", "shadow.svg", L"H",
+            toolbar, "tilemap_tool_shadow", "ui.editor.tilemap.shadow_tooltip",
+            "shadow.svg", L"H",
             L"Full shadow (H)", [this]() {
                 setShadowBrush(ayt::ay2d::editor::ShadowMask_All);
             });
         _shadowClear = addIconButton(
-            toolbar, "tilemap_tool_shadow_clear", "shadow-off.svg", L"0",
+            toolbar, "tilemap_tool_shadow_clear", "ui.editor.tilemap.shadow_clear_tooltip",
+            "shadow-off.svg", L"0",
             L"Clear shadow", [this]() {
                 setShadowBrush(ayt::ay2d::editor::ShadowMask_None);
             });
         _shadowAdvanced = addIconButton(
-            toolbar, "tilemap_tool_shadow_advanced", "layout-grid.svg", L"4",
+            toolbar, "tilemap_tool_shadow_advanced",
+            "ui.editor.tilemap.shadow_advanced_tooltip",
+            "layout-grid.svg", L"4",
             L"Advanced shadow quadrants…", [this]() {
                 openShadowBrushDialog();
             });
         _grid = addIconButton(
-            toolbar, "tilemap_tool_grid", "grid.svg", L"G",
+            toolbar, "tilemap_tool_grid", "ui.editor.tilemap.grid_tooltip",
+            "grid.svg", L"G",
             L"Show or hide grid", [this]() {
                 _canvas->setShowGrid(!_canvas->showGrid());
                 refresh();
                 _host.requestRepaint();
             });
         _collision = addIconButton(
-            toolbar, "tilemap_tool_collision", "shield.svg", L"C",
+            toolbar, "tilemap_tool_collision", "ui.editor.tilemap.collision_tooltip",
+            "shield.svg", L"C",
             L"Show or hide collision overlay", [this]() {
                 _canvas->setShowCollision(!_canvas->showCollision());
                 refresh();
                 _host.requestRepaint();
             });
         _shadowVisibility = addIconButton(
-            toolbar, "tilemap_tool_shadow_visibility", "eye.svg", L"V",
+            toolbar, "tilemap_tool_shadow_visibility",
+            "ui.editor.tilemap.shadow_visibility_tooltip",
+            "eye.svg", L"V",
             L"Show or hide shadow overlay", [this]() {
                 _canvas->setShowShadows(!_canvas->showShadows());
                 refresh();
                 _host.requestRepaint();
             });
         _frame = addIconButton(
-            toolbar, "tilemap_tool_frame", "frame.svg", L"Home",
+            toolbar, "tilemap_tool_frame", "ui.editor.tilemap.frame_tooltip",
+            "frame.svg", L"Home",
             L"Fit entire map in canvas (Home)", [this]() {
                 _canvas->frameDocument();
                 _host.requestRepaint();
@@ -941,10 +962,12 @@ public:
         assets->setId("tilemap_workspace_assets");
         assets->setSpacing(5.0f);
         assets->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
-        assets->addWidget(makeLabel(L"Source Sheet", 14), 24.0f);
+        assets->addWidget(makeLabel("ui.editor.tilemap.source_sheet",
+            L"Source Sheet", 14), 24.0f);
         _atlasSelector = new ayt::ui::ComboBox();
         _atlasSelector->setId("tilemap_workspace_atlas_selector");
-        _atlasSelector->setItems({L"No tile sheet imported"});
+        _atlasSelector->setItems({tr(
+            "ui.editor.tilemap.no_sheet", L"No tile sheet imported")});
         _atlasSelector->setSelectedIndex(0);
         _atlasSelector->setOnSelectionChanged([this](int index) {
             if (_syncing || index < 0
@@ -963,7 +986,8 @@ public:
             _host.requestRepaint();
         });
         assets->addWidget(_atlasSelector, 28.0f);
-        _atlasHealth = makeLabel(L"Source: no atlas selected", 10);
+        _atlasHealth = makeLabel("ui.editor.tilemap.no_atlas_source",
+            L"Source: no atlas selected", 10);
         _atlasHealth->setId("tilemap_workspace_atlas_health");
         _atlasHealth->setWordWrap(true);
         assets->addWidget(_atlasHealth, 30.0f);
@@ -985,23 +1009,28 @@ public:
         assets->addWidget(pickerPanel, 0.0f);
         auto* sourceButtons = new ayt::ui::HBox();
         sourceButtons->setSpacing(4.0f);
-        addButton(sourceButtons, L"Import Sheet…", 142.0f, [this]() {
+        addButton(sourceButtons, "ui.editor.tilemap.import_sheet",
+            L"Import Sheet…", 142.0f, [this]() {
             openAtlasImport();
         })->setId("tilemap_workspace_import_sheet");
-        addButton(sourceButtons, L"Fit Sheet", 80.0f, [this]() {
+        addButton(sourceButtons, "ui.editor.tilemap.fit_sheet",
+            L"Fit Sheet", 80.0f, [this]() {
             if (_atlasPicker != nullptr) _atlasPicker->frameAtlas();
             _host.requestRepaint();
         })->setId("tilemap_workspace_fit_sheet");
         assets->addWidget(sourceButtons, 29.0f);
         auto* sourceMaintenance = new ayt::ui::HBox();
         sourceMaintenance->setSpacing(4.0f);
-        addButton(sourceMaintenance, L"Refresh", 72.0f, [this]() {
+        addButton(sourceMaintenance, "ui.editor.tilemap.refresh_source",
+            L"Refresh", 72.0f, [this]() {
             refreshSelectedAtlasSource();
         })->setId("tilemap_workspace_refresh_atlas");
-        addButton(sourceMaintenance, L"Locate…", 72.0f, [this]() {
+        addButton(sourceMaintenance, "ui.editor.tilemap.locate_source",
+            L"Locate…", 72.0f, [this]() {
             locateSelectedAtlasSource(false);
         })->setId("tilemap_workspace_locate_atlas");
-        addButton(sourceMaintenance, L"Relink siblings…", 0.0f, [this]() {
+        addButton(sourceMaintenance, "ui.editor.tilemap.relink_siblings",
+            L"Relink siblings…", 0.0f, [this]() {
             locateSelectedAtlasSource(true);
         })->setId("tilemap_workspace_relink_atlases");
         assets->addWidget(sourceMaintenance, 29.0f);
@@ -1009,7 +1038,8 @@ public:
         stampRow->setSpacing(4.0f);
         _stampSelector = new ayt::ui::ComboBox();
         _stampSelector->setId("tilemap_workspace_stamp_selector");
-        _stampSelector->setItems({L"Single tile"});
+        _stampSelector->setItems({tr(
+            "ui.editor.tilemap.single_tile", L"Single tile")});
         _stampSelector->setSelectedIndex(0);
         _stampSelector->setOnSelectionChanged([this](int index) {
             if (_syncing || index < 0
@@ -1034,7 +1064,10 @@ public:
         stampRow->addWidget(_stampSelector, 0.0f);
         _stampSelect = new ayt::ui::Button();
         _stampSelect->setId("tilemap_workspace_stamp_select");
-        _stampSelect->setText(L"Select");
+        bindLocalized("ui.editor.tilemap.select", L"Select",
+            [this](const std::wstring& text) {
+                if (_stampSelect != nullptr) _stampSelect->setText(text);
+            });
         _stampSelect->setPadding(7.0f, 2.0f, 7.0f, 2.0f);
         _stampSelect->setOnClicked([this]() { toggleStampSelection(); });
         stampRow->addWidget(_stampSelect, 58.0f);
@@ -1044,7 +1077,8 @@ public:
         _stampDelete->setOnClicked([this]() { deleteSelectedStamp(); });
         stampRow->addWidget(_stampDelete, 34.0f);
         assets->addWidget(stampRow, 29.0f);
-        assets->addWidget(makeLabel(L"Tile Assets", 13), 22.0f);
+        assets->addWidget(makeLabel("ui.editor.tilemap.tile_assets",
+            L"Tile Assets", 13), 22.0f);
         _tileList = new ayt::ui::ListView();
         _tileList->setId("tilemap_workspace_tile_list");
         _tileList->setItemHeight(25.0f);
@@ -1061,9 +1095,11 @@ public:
         assets->addWidget(_tileList, 132.0f);
         _tileId = new ayt::ui::TextInput();
         _tileId->setId("tilemap_workspace_tile_id");
-        _tileId->setPlaceholder(L"Tile ID (decimal or 0x...)");
+        bindPlaceholder(_tileId, "ui.editor.tilemap.tile_id_placeholder",
+                        L"Tile ID (decimal or 0x...)");
         assets->addWidget(_tileId, 27.0f);
-        addButton(assets, L"Select / add tile", 30.0f, [this]() {
+        addButton(assets, "ui.editor.tilemap.select_add_tile",
+            L"Select / add tile", 30.0f, [this]() {
             uint32_t tileId = 0u;
             if (!parseUint32(_tileId->getText(), tileId)) {
                 _host.setStatusText(L"Tile ID must be a 32-bit number.");
@@ -1133,7 +1169,8 @@ public:
         inspector->setId("tilemap_workspace_inspector");
         inspector->setSpacing(5.0f);
         inspector->setPadding(5.0f, 5.0f, 5.0f, 5.0f);
-        inspector->addWidget(makeLabel(L"Render Layers", 14), 24.0f);
+        inspector->addWidget(makeLabel("ui.editor.tilemap.render_layers",
+            L"Render Layers", 14), 24.0f);
         _layerList = new ayt::ui::ListView();
         _layerList->setId("tilemap_workspace_layer_list");
         _layerList->setItemHeight(25.0f);
@@ -1149,7 +1186,8 @@ public:
         auto* layerButtons = new ayt::ui::HBox();
         layerButtons->setSpacing(3.0f);
         addIconButton(
-            layerButtons, "tilemap_layer_add", "plus.svg", L"+",
+            layerButtons, "tilemap_layer_add", "ui.editor.tilemap.layer_add_tooltip",
+            "plus.svg", L"+",
             L"Add render layer", [this]() {
                 const size_t number =
                     _document->model().document().layerCount() + 1u;
@@ -1157,22 +1195,26 @@ public:
                     "Layer " + std::to_string(number)));
             });
         addIconButton(
-            layerButtons, "tilemap_layer_remove", "minus.svg", L"−",
+            layerButtons, "tilemap_layer_remove", "ui.editor.tilemap.layer_remove_tooltip",
+            "minus.svg", L"−",
             L"Remove active render layer", [this]() {
                 mutate(_document->model().removeLayer(activeLayer()));
             });
         addIconButton(
-            layerButtons, "tilemap_layer_up", "arrow-up.svg", L"↑",
+            layerButtons, "tilemap_layer_up", "ui.editor.tilemap.layer_up_tooltip",
+            "arrow-up.svg", L"↑",
             L"Move active layer up", [this]() {
                 mutate(_document->model().moveLayer(activeLayer(), 1));
             });
         addIconButton(
-            layerButtons, "tilemap_layer_down", "arrow-down.svg", L"↓",
+            layerButtons, "tilemap_layer_down", "ui.editor.tilemap.layer_down_tooltip",
+            "arrow-down.svg", L"↓",
             L"Move active layer down", [this]() {
                 mutate(_document->model().moveLayer(activeLayer(), -1));
             });
         _layerVisibility = addIconButton(
-            layerButtons, "tilemap_layer_visibility", "eye.svg", L"V",
+            layerButtons, "tilemap_layer_visibility",
+            "ui.editor.tilemap.layer_visibility_tooltip", "eye.svg", L"V",
             L"Show or hide active layer", [this]() {
                 const size_t layer = activeLayer();
                 const auto& layers = _document->model().document().layers();
@@ -1184,38 +1226,47 @@ public:
         inspector->addWidget(layerButtons, 32.0f);
         _layerName = new ayt::ui::TextInput();
         _layerName->setId("tilemap_workspace_layer_name");
-        _layerName->setPlaceholder(L"Active layer name");
+        bindPlaceholder(_layerName,
+            "ui.editor.tilemap.active_layer_name_placeholder",
+            L"Active layer name");
         auto* layerNameRow = new ayt::ui::HBox();
         layerNameRow->setSpacing(3.0f);
         layerNameRow->addWidget(_layerName, 0.0f);
         addIconButton(
-            layerNameRow, "tilemap_layer_rename", "edit.svg", L"R",
+            layerNameRow, "tilemap_layer_rename",
+            "ui.editor.tilemap.layer_rename_tooltip", "edit.svg", L"R",
             L"Rename active layer", [this]() {
                 mutate(_document->model().renameLayer(
                     activeLayer(), encodeUtf8(_layerName->getText())));
             });
         inspector->addWidget(layerNameRow, 32.0f);
-        inspector->addWidget(makeLabel(L"Selection", 14), 24.0f);
+        inspector->addWidget(makeLabel("ui.editor.tilemap.selection",
+            L"Selection", 14), 24.0f);
         auto* selectionButtons = new ayt::ui::HBox();
         selectionButtons->setSpacing(3.0f);
         addIconButton(
             selectionButtons, "tilemap_selection_flip_h",
+            "ui.editor.tilemap.flip_horizontal_tooltip",
             "flip-horizontal.svg", L"H", L"Flip selection horizontally",
             [this]() { mutate(_document->model().flipSelectionHorizontal()); });
         addIconButton(
             selectionButtons, "tilemap_selection_flip_v",
+            "ui.editor.tilemap.flip_vertical_tooltip",
             "flip-vertical.svg", L"V", L"Flip selection vertically",
             [this]() { mutate(_document->model().flipSelectionVertical()); });
         addIconButton(
             selectionButtons, "tilemap_selection_rotate",
+            "ui.editor.tilemap.rotate_tooltip",
             "rotate-clockwise.svg", L"R", L"Rotate selection clockwise",
             [this]() { mutate(_document->model().rotateSelectionClockwise()); });
         addIconButton(
             selectionButtons, "tilemap_selection_stamp",
+            "ui.editor.tilemap.save_stamp_tooltip",
             "rubber-stamp.svg", L"S", L"Save selection as a reusable Stamp",
             [this]() { saveSelectionAsStamp(); });
         inspector->addWidget(selectionButtons, 32.0f);
-        inspector->addWidget(makeLabel(L"Tile Animation", 14), 24.0f);
+        inspector->addWidget(makeLabel("ui.editor.tilemap.tile_animation",
+            L"Tile Animation", 14), 24.0f);
         _animationFrameList = new ayt::ui::ListView();
         _animationFrameList->setId("tilemap_animation_frames");
         _animationFrameList->setItemHeight(24.0f);
@@ -1251,16 +1302,20 @@ public:
         auto* animationEdit = new ayt::ui::HBox();
         animationEdit->setSpacing(3.0f);
         _animationTile = new ayt::ui::TextInput();
-        _animationTile->setPlaceholder(L"Tile");
+        bindPlaceholder(_animationTile,
+            "ui.editor.tilemap.animation_tile_placeholder", L"Tile");
         animationEdit->addWidget(_animationTile, 72.0f);
         _animationDuration = new ayt::ui::TextInput();
-        _animationDuration->setPlaceholder(L"Duration ms");
+        bindPlaceholder(_animationDuration,
+            "ui.editor.tilemap.animation_duration_placeholder",
+            L"Duration ms");
         animationEdit->addWidget(_animationDuration, 92.0f);
-        addButton(animationEdit, L"Apply", 62.0f,
+        addButton(animationEdit, "ui.editor.tilemap.apply", L"Apply", 62.0f,
                   [this]() { applyAnimationFrame(); });
         inspector->addWidget(animationEdit, 30.0f);
 
-        inspector->addWidget(makeLabel(L"Auto Tile Terrain", 14), 24.0f);
+        inspector->addWidget(makeLabel("ui.editor.tilemap.auto_tile_terrain",
+            L"Auto Tile Terrain", 14), 24.0f);
         _terrainList = new ayt::ui::ListView();
         _terrainList->setId("tilemap_terrain_list");
         _terrainList->setItemHeight(24.0f);
@@ -1285,11 +1340,14 @@ public:
         _terrainId->setPlaceholder(L"ID");
         terrainIdentity->addWidget(_terrainId, 56.0f);
         _terrainName = new ayt::ui::TextInput();
-        _terrainName->setPlaceholder(L"Terrain name");
+        bindPlaceholder(_terrainName,
+            "ui.editor.tilemap.terrain_name_placeholder", L"Terrain name");
         terrainIdentity->addWidget(_terrainName, 0.0f);
         inspector->addWidget(terrainIdentity, 30.0f);
         _terrainFallback = new ayt::ui::TextInput();
-        _terrainFallback->setPlaceholder(L"Fallback tile ID");
+        bindPlaceholder(_terrainFallback,
+            "ui.editor.tilemap.fallback_tile_placeholder",
+            L"Fallback tile ID");
         inspector->addWidget(_terrainFallback, 28.0f);
         _terrainRuleList = new ayt::ui::ListView();
         _terrainRuleList->setId("tilemap_terrain_rule_list");
@@ -1322,7 +1380,8 @@ public:
         auto* terrainMiddle = new ayt::ui::HBox();
         terrainMiddle->setSpacing(3.0f);
         addNeighbor(terrainMiddle, L"W *", 6u);
-        terrainMiddle->addWidget(makeLabel(L"CENTER", 10), 0.0f);
+        terrainMiddle->addWidget(makeLabel("ui.editor.tilemap.center",
+            L"CENTER", 10), 0.0f);
         addNeighbor(terrainMiddle, L"E *", 2u);
         inspector->addWidget(terrainMiddle, 29.0f);
         auto* terrainSouth = new ayt::ui::HBox();
@@ -1334,35 +1393,41 @@ public:
         auto* terrainRuleEdit = new ayt::ui::HBox();
         terrainRuleEdit->setSpacing(3.0f);
         _terrainRuleTile = new ayt::ui::TextInput();
-        _terrainRuleTile->setPlaceholder(L"Output tile");
+        bindPlaceholder(_terrainRuleTile,
+            "ui.editor.tilemap.output_tile_placeholder", L"Output tile");
         terrainRuleEdit->addWidget(_terrainRuleTile, 0.0f);
-        addButton(terrainRuleEdit, L"New", 48.0f,
+        addButton(terrainRuleEdit, "ui.editor.tilemap.new_rule", L"New", 48.0f,
                   [this]() { beginTerrainRule(); });
-        addButton(terrainRuleEdit, L"Apply", 54.0f,
+        addButton(terrainRuleEdit, "ui.editor.tilemap.apply_rule", L"Apply", 54.0f,
                   [this]() { applyTerrainRule(); });
         addButton(terrainRuleEdit, L"−", 34.0f,
                   [this]() { removeTerrainRule(); });
         inspector->addWidget(terrainRuleEdit, 30.0f);
         auto* terrainActions = new ayt::ui::HBox();
         terrainActions->setSpacing(3.0f);
-        addButton(terrainActions, L"New Terrain", 92.0f,
+        addButton(terrainActions, "ui.editor.tilemap.new_terrain",
+                  L"New Terrain", 92.0f,
                   [this]() { beginTerrain(); });
-        addButton(terrainActions, L"Save Terrain", 92.0f,
+        addButton(terrainActions, "ui.editor.tilemap.save_terrain",
+                  L"Save Terrain", 92.0f,
                   [this]() { saveTerrain(); });
-        addButton(terrainActions, L"Delete", 58.0f,
+        addButton(terrainActions, "ui.editor.tilemap.delete_terrain",
+                  L"Delete", 58.0f,
                   [this]() { deleteTerrain(); });
         inspector->addWidget(terrainActions, 30.0f);
         auto* terrainHint = makeLabel(
             L"Neighbor button: * ignore → 1 same → 0 different", 10);
         terrainHint->setWordWrap(true);
         inspector->addWidget(terrainHint, 32.0f);
-        inspector->addWidget(makeLabel(L"Map Shadow Color · #RRGGBBAA", 13),
+        inspector->addWidget(makeLabel("ui.editor.tilemap.map_shadow_color",
+            L"Map Shadow Color · #RRGGBBAA", 13),
                              23.0f);
         _shadowColor = new ayt::ui::TextInput();
         _shadowColor->setId("tilemap_workspace_shadow_color");
         _shadowColor->setPlaceholder(L"0x00000080");
         inspector->addWidget(_shadowColor, 27.0f);
-        addButton(inspector, L"Apply shadow color", 29.0f, [this]() {
+        addButton(inspector, "ui.editor.tilemap.apply_shadow_color",
+            L"Apply shadow color", 29.0f, [this]() {
             uint32_t rgba = 0u;
             if (!parseRgba(_shadowColor->getText(), rgba)) {
                 _host.setStatusText(
@@ -1371,12 +1436,17 @@ public:
             }
             mutate(_document->model().setShadowColor(rgba));
         })->setId("tilemap_workspace_shadow_color_apply");
-        inspector->addWidget(makeLabel(L"Selected Tile Collision", 13), 23.0f);
+        inspector->addWidget(makeLabel(
+            "ui.editor.tilemap.selected_tile_collision",
+            L"Selected Tile Collision", 13), 23.0f);
         _collisionFlags = new ayt::ui::TextInput();
         _collisionFlags->setId("tilemap_workspace_collision_flags");
-        _collisionFlags->setPlaceholder(L"Flags: 0 or 0x...");
+        bindPlaceholder(_collisionFlags,
+            "ui.editor.tilemap.collision_flags_placeholder",
+            L"Flags: 0 or 0x...");
         inspector->addWidget(_collisionFlags, 27.0f);
-        addButton(inspector, L"Apply collision flags", 29.0f, [this]() {
+        addButton(inspector, "ui.editor.tilemap.apply_collision_flags",
+            L"Apply collision flags", 29.0f, [this]() {
             uint32_t flags = 0u;
             if (!parseUint32(_collisionFlags->getText(), flags)) {
                 _host.setStatusText(
@@ -1386,7 +1456,7 @@ public:
             mutate(_document->model().setCollisionFlags(
                 _document->model().selectedTileId(), flags));
         });
-        auto* help = makeLabel(
+        auto* help = makeLabel("ui.editor.tilemap.canvas_help",
             L"Wheel: zoom\nMiddle drag or Space + left drag: pan\n"
             L"Right click: pick visible tile", 11);
         help->setWordWrap(true);
@@ -1417,6 +1487,13 @@ public:
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     IEditorViewInputTarget* inputTarget() noexcept override { return this; }
+    void onLanguageChanged(const std::string&) override {
+        retranslateStaticText();
+        refresh();
+        if (_shadowModal != nullptr) refreshShadowBrushDialog();
+        if (_importModal != nullptr) refreshImportPlan();
+        _host.requestRepaint();
+    }
     void tick(float dt) override {
         if (_importCommitPending) {
             auto activeScope = ayt::ui::UIManager::pushActive(
@@ -1721,6 +1798,62 @@ public:
     }
 
 private:
+    struct LocalizedBinding {
+        std::string key;
+        std::wstring fallback;
+        std::function<void(const std::wstring&)> apply;
+    };
+
+    std::wstring tr(const char* key, std::wstring_view fallback) const
+    {
+        return _host.localizedText(key, fallback);
+    }
+
+    std::wstring trf(const char* key, std::wstring_view fallback,
+                     std::initializer_list<std::wstring> arguments) const
+    {
+        std::wstring result = tr(key, fallback);
+        size_t index = 0u;
+        for (const std::wstring& argument : arguments) {
+            const std::wstring marker = L"{" + std::to_wstring(index++) + L"}";
+            size_t position = 0u;
+            while ((position = result.find(marker, position))
+                   != std::wstring::npos) {
+                result.replace(position, marker.size(), argument);
+                position += argument.size();
+            }
+        }
+        return result;
+    }
+
+    template <typename Apply>
+    void bindLocalized(const char* key, std::wstring fallback, Apply apply)
+    {
+        LocalizedBinding binding{
+            key, std::move(fallback),
+            std::function<void(const std::wstring&)>(std::move(apply))};
+        binding.apply(tr(binding.key.c_str(), binding.fallback));
+        _localizedBindings.push_back(std::move(binding));
+    }
+
+    void retranslateStaticText()
+    {
+        for (const LocalizedBinding& binding : _localizedBindings) {
+            binding.apply(tr(binding.key.c_str(), binding.fallback));
+        }
+    }
+
+    ayt::ui::TextLabel* makeLabel(const char* key,
+                                  const std::wstring& fallback, int size)
+    {
+        auto* label = new ayt::ui::TextLabel();
+        label->setFontSize(size);
+        bindLocalized(key, fallback, [label](const std::wstring& text) {
+            label->setText(text);
+        });
+        return label;
+    }
+
     static ayt::ui::TextLabel* makeLabel(const std::wstring& text,
                                          int size)
     {
@@ -1728,6 +1861,38 @@ private:
         label->setText(text);
         label->setFontSize(size);
         return label;
+    }
+
+    void bindPlaceholder(ayt::ui::TextInput* input, const char* key,
+                         const std::wstring& fallback)
+    {
+        bindLocalized(key, fallback, [input](const std::wstring& text) {
+            input->setPlaceholder(text);
+        });
+    }
+
+    ayt::ui::Button* addButton(ayt::ui::HBox* parent, const char* key,
+                               const std::wstring& fallback, float width,
+                               std::function<void()> clicked)
+    {
+        ayt::ui::Button* button = addButton(
+            parent, fallback, width, std::move(clicked));
+        bindLocalized(key, fallback, [button](const std::wstring& text) {
+            button->setText(text);
+        });
+        return button;
+    }
+
+    ayt::ui::Button* addButton(ayt::ui::VBox* parent, const char* key,
+                               const std::wstring& fallback, float height,
+                               std::function<void()> clicked)
+    {
+        ayt::ui::Button* button = addButton(
+            parent, fallback, height, std::move(clicked));
+        bindLocalized(key, fallback, [button](const std::wstring& text) {
+            button->setText(text);
+        });
+        return button;
     }
 
     ayt::ui::Button* addButton(ayt::ui::HBox* parent,
@@ -1757,7 +1922,7 @@ private:
     }
 
     ayt::ui::Button* addIconButton(
-        ayt::ui::ToolBar* parent, const char* id,
+        ayt::ui::ToolBar* parent, const char* id, const char* localizationKey,
         const std::filesystem::path& iconName,
         const std::wstring& fallbackText,
         const std::wstring& accessibleLabel,
@@ -1781,12 +1946,22 @@ private:
         if (auto* tooltip = ayt::ui::Tooltip::attachTo(button)) {
             tooltip->setText(accessibleLabel);
             _tooltips.push_back(tooltip);
+            bindLocalized(localizationKey, accessibleLabel,
+                [button, tooltip](const std::wstring& text) {
+                    button->setAccessibilityLabel(text);
+                    tooltip->setText(text);
+                });
+        } else {
+            bindLocalized(localizationKey, accessibleLabel,
+                [button](const std::wstring& text) {
+                    button->setAccessibilityLabel(text);
+                });
         }
         return button;
     }
 
     ayt::ui::Button* addIconButton(
-        ayt::ui::HBox* parent, const char* id,
+        ayt::ui::HBox* parent, const char* id, const char* localizationKey,
         const std::filesystem::path& iconName,
         const std::wstring& fallbackText,
         const std::wstring& accessibleLabel,
@@ -1812,6 +1987,16 @@ private:
         if (auto* tooltip = ayt::ui::Tooltip::attachTo(button)) {
             tooltip->setText(accessibleLabel);
             _tooltips.push_back(tooltip);
+            bindLocalized(localizationKey, accessibleLabel,
+                [button, tooltip](const std::wstring& text) {
+                    button->setAccessibilityLabel(text);
+                    tooltip->setText(text);
+                });
+        } else {
+            bindLocalized(localizationKey, accessibleLabel,
+                [button](const std::wstring& text) {
+                    button->setAccessibilityLabel(text);
+                });
         }
         return button;
     }
@@ -1824,14 +2009,16 @@ private:
         return {0.28f, 0.66f, 1.0f, 1.0f};
     }
 
-    static void setIconState(ayt::ui::Button* button, bool active,
-                             const std::wstring& label)
+    void setIconState(ayt::ui::Button* button, bool active,
+                      const char* key, const std::wstring& fallback)
     {
         if (button == nullptr) return;
+        const std::wstring label = tr(key, fallback);
         button->setIconColor(
             active ? activeIconColor() : inactiveIconColor());
         button->setAccessibilityLabel(
-            active ? label + L", active" : label);
+            active ? label + tr("ui.editor.tilemap.active_suffix", L", active")
+                   : label);
     }
 
     void clearTooltips() noexcept {
@@ -3218,11 +3405,12 @@ private:
     void updateSummary() {
         if (_summary == nullptr) return;
         const auto& document = _document->model().document();
-        _summary->setText(std::to_wstring(document.cols()) + L" × "
-            + std::to_wstring(document.rows()) + L" cells  ·  "
-            + std::to_wstring(document.layerCount()) + L" layers  ·  "
-            + std::to_wstring(static_cast<int>(std::round(_zoomPercent)))
-            + L"%");
+        _summary->setText(trf("ui.editor.tilemap.summary",
+            L"{0} × {1} cells  ·  {2} layers  ·  {3}%",
+            {std::to_wstring(document.cols()),
+             std::to_wstring(document.rows()),
+             std::to_wstring(document.layerCount()),
+             std::to_wstring(static_cast<int>(std::round(_zoomPercent)))}));
         updateDocumentPath();
         updateRuntimeStatus();
     }
@@ -3231,13 +3419,16 @@ private:
         if (_documentPath == nullptr) return;
         const bool unsaved = _document->path().empty();
         const std::wstring text = unsaved
-            ? L"File: Not saved yet — Ctrl+S to choose a location"
-            : L"File: " + ayt::ui::decodeUtf8Text(_document->path());
+            ? tr("ui.editor.tilemap.file_unsaved",
+                 L"File: Not saved yet — Ctrl+S to choose a location")
+            : trf("ui.editor.tilemap.file_path", L"File: {0}",
+                  {ayt::ui::decodeUtf8Text(_document->path())});
         _documentPath->setText(text);
         if (_documentPathTooltip != nullptr) {
             _documentPathTooltip->setText(unsaved
-                ? L"This tilemap has no file yet. Save chooses a location; "
-                  L"the default folder is Assets/tilemaps."
+                ? tr("ui.editor.tilemap.file_unsaved_tooltip",
+                     L"This tilemap has no file yet. Save chooses a location; "
+                     L"the default folder is Assets/tilemaps.")
                 : text);
         }
     }
@@ -3246,30 +3437,41 @@ private:
         if (_runtimeStatus == nullptr) return;
         if (_document->path().empty()) {
             _runtimeStatus->setText(
-                L"Runtime: Not cooked — save inside project Assets");
+                tr("ui.editor.tilemap.runtime_not_cooked",
+                   L"Runtime: Not cooked — save inside project Assets"));
             return;
         }
         if (_document->model().dirty()) {
             _runtimeStatus->setText(
-                L"Runtime: Source changed — Ctrl+S to cook and reload");
+                tr("ui.editor.tilemap.runtime_source_changed",
+                   L"Runtime: Source changed — Ctrl+S to cook and reload"));
             return;
         }
         const auto& result = _document->lastSaveResult();
         if (!result.sourceSaved) {
             _runtimeStatus->setText(
-                L"Runtime: Save to validate the cooked asset");
+                tr("ui.editor.tilemap.runtime_save_to_validate",
+                   L"Runtime: Save to validate the cooked asset"));
             return;
         }
         if (!result.cooked) {
-            _runtimeStatus->setText(L"Runtime: Cook skipped or failed");
+            _runtimeStatus->setText(tr(
+                "ui.editor.tilemap.runtime_cook_failed",
+                L"Runtime: Cook skipped or failed"));
             return;
         }
         std::wstring text = result.runtimeFileValidated
-            ? L"Runtime: Ready" : L"Runtime: Cooked but validation failed";
-        text += L"  ·  " + std::to_wstring(result.cookedBytes) + L" bytes";
-        text += L"  ·  " + std::to_wstring(result.dependencyCount)
-            + L" dependencies";
-        if (result.hotReloadRequested) text += L"  ·  Hot reloaded";
+            ? tr("ui.editor.tilemap.runtime_ready", L"Runtime: Ready")
+            : tr("ui.editor.tilemap.runtime_validation_failed",
+                 L"Runtime: Cooked but validation failed");
+        text += L"  ·  " + trf("ui.editor.tilemap.byte_count",
+            L"{0} bytes", {std::to_wstring(result.cookedBytes)});
+        text += L"  ·  " + trf("ui.editor.tilemap.dependency_count",
+            L"{0} dependencies", {std::to_wstring(result.dependencyCount)});
+        if (result.hotReloadRequested) {
+            text += L"  ·  " + tr(
+                "ui.editor.tilemap.hot_reloaded", L"Hot reloaded");
+        }
         _runtimeStatus->setText(text);
     }
 
@@ -3403,32 +3605,41 @@ private:
             == ayt::ay2d::editor::PaintTool::Stamp;
         const bool shadow = model.tool()
             == ayt::ay2d::editor::PaintTool::Shadow;
-        setIconState(_selection, selection, L"Selection (M)");
-        setIconState(_pencil, pencil, L"Pencil (P)");
-        setIconState(_eraser, eraser, L"Eraser (E)");
-        setIconState(_fill, fill, L"Flood Fill (F)");
-        setIconState(_rectangle, rectangle, L"Rectangle (R)");
-        setIconState(_terrain, terrain, L"Auto terrain brush (T)");
-        setIconState(_stamp, stamp, L"Stamp (S)");
+        setIconState(_selection, selection,
+            "ui.editor.tilemap.selection_tooltip", L"Selection (M)");
+        setIconState(_pencil, pencil,
+            "ui.editor.tilemap.pencil_tooltip", L"Pencil (P)");
+        setIconState(_eraser, eraser,
+            "ui.editor.tilemap.eraser_tooltip", L"Eraser (E)");
+        setIconState(_fill, fill,
+            "ui.editor.tilemap.fill_tooltip", L"Flood Fill (F)");
+        setIconState(_rectangle, rectangle,
+            "ui.editor.tilemap.rectangle_tooltip", L"Rectangle (R)");
+        setIconState(_terrain, terrain,
+            "ui.editor.tilemap.terrain_tooltip", L"Auto terrain brush (T)");
+        setIconState(_stamp, stamp,
+            "ui.editor.tilemap.stamp_tooltip", L"Stamp (S)");
         const uint8_t shadowMask = model.selectedShadowMask();
         setIconState(
             _shadow,
             shadow && shadowMask == ayt::ay2d::editor::ShadowMask_All,
-            L"Full shadow (H)");
+            "ui.editor.tilemap.shadow_tooltip", L"Full shadow (H)");
         setIconState(
             _shadowClear,
             shadow && shadowMask == ayt::ay2d::editor::ShadowMask_None,
-            L"Clear shadow");
+            "ui.editor.tilemap.shadow_clear_tooltip", L"Clear shadow");
         setIconState(
             _shadowAdvanced,
             shadow && shadowMask != ayt::ay2d::editor::ShadowMask_All
                 && shadowMask != ayt::ay2d::editor::ShadowMask_None,
+            "ui.editor.tilemap.shadow_advanced_tooltip",
             L"Advanced shadow quadrants");
-        setIconState(_grid, _canvas->showGrid(), L"Grid overlay");
+        setIconState(_grid, _canvas->showGrid(),
+            "ui.editor.tilemap.grid_overlay", L"Grid overlay");
         setIconState(_collision, _canvas->showCollision(),
-                     L"Collision overlay");
+            "ui.editor.tilemap.collision_overlay", L"Collision overlay");
         setIconState(_shadowVisibility, _canvas->showShadows(),
-                     L"Shadow overlay");
+            "ui.editor.tilemap.shadow_overlay", L"Shadow overlay");
 
         _tileIds.clear();
         std::vector<std::wstring> tileLabels;
@@ -3448,13 +3659,14 @@ private:
 
         _stampIds.clear();
         _stampIds.push_back(0u);
-        std::vector<std::wstring> stampLabels{L"Single tile"};
+        std::vector<std::wstring> stampLabels{tr(
+            "ui.editor.tilemap.single_tile", L"Single tile")};
         int selectedStampIndex = 0;
         for (const auto& [stampId, definition] : document.tileStamps()) {
             _stampIds.push_back(stampId);
             stampLabels.push_back(ayt::ui::decodeUtf8Text(definition.name)
-                + L"  ·  " + std::to_wstring(definition.cells.size())
-                + L" cells");
+                + L"  ·  " + trf("ui.editor.tilemap.cell_count",
+                    L"{0} cells", {std::to_wstring(definition.cells.size())}));
             if (stampId == model.selectedStampId()) {
                 selectedStampIndex = static_cast<int>(_stampIds.size() - 1u);
             }
@@ -3466,13 +3678,17 @@ private:
         _stampSelect->setEnabled(shownSource != nullptr
             && shownSource->layout
                 == ayt::ay2d::editor::TileAtlasLayout::Grid);
-        _stampSelect->setText(_selectingStamp ? L"Cancel" : L"Select");
+        _stampSelect->setText(_selectingStamp
+            ? tr("ui.editor.tilemap.cancel", L"Cancel")
+            : tr("ui.editor.tilemap.select", L"Select"));
 
         std::vector<std::wstring> layerLabels;
         for (size_t index = 0u; index < document.layerCount(); ++index) {
             const auto& layer = document.layers()[index];
             layerLabels.push_back(
-                (layer.visible ? L"[on]  " : L"[off] ")
+                (layer.visible
+                    ? tr("ui.editor.tilemap.layer_on_prefix", L"[on]  ")
+                    : tr("ui.editor.tilemap.layer_off_prefix", L"[off] "))
                 + std::to_wstring(index + 1u) + L"   "
                 + ayt::ui::decodeUtf8Text(layer.name));
         }
@@ -3485,6 +3701,7 @@ private:
             setIconState(
                 _layerVisibility,
                 document.layers()[document.activeLayerIndex()].visible,
+                "ui.editor.tilemap.layer_visibility_tooltip",
                 L"Active layer visibility");
         }
         _collisionFlags->setText(std::to_wstring(
@@ -3588,6 +3805,7 @@ private:
     uint32_t _shownAtlasId = 0u;
     std::vector<ayt::ui::Button*> _buttons;
     std::vector<ayt::ui::Tooltip*> _tooltips;
+    std::vector<LocalizedBinding> _localizedBindings;
     std::vector<uint32_t> _tileIds;
     std::vector<uint32_t> _atlasIds;
     std::vector<uint32_t> _stampIds;
