@@ -7383,6 +7383,12 @@ void EditorSession::bindMenuBar() {
         const char* key, const wchar_t* fallback) {
         const std::size_t index = menuBar->getMenuCount();
         ayt::ui::Menu* menu = menuBar->addMenu(localizedText(key, fallback));
+        if (menu != nullptr) {
+            // Runtime-created menus must retain the same stable identity as
+            // menus loaded from UI JSON. Display text changes when the editor
+            // language changes and is not a safe lookup key.
+            menu->setLocalizationKey("title", key);
+        }
         gEditorMenuTexts[this].push_back(
             {nullptr, menuBar, index, key, fallback});
         return menu;
@@ -7393,6 +7399,7 @@ void EditorSession::bindMenuBar() {
         if (menu == nullptr) return static_cast<ayt::ui::MenuItem*>(nullptr);
         ayt::ui::MenuItem* item = menu->addItem(localizedText(key, fallback));
         if (item != nullptr) {
+            item->setLocalizationKey("text", key);
             gEditorMenuTexts[this].push_back(
                 {item, nullptr, 0u, key, fallback});
         }

@@ -43,6 +43,7 @@
 #include <filesystem>
 #include <sys/stat.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #if defined(_WIN32)
@@ -112,6 +113,30 @@ Widget* findWidgetInTree(Widget* root, const std::string& id)
     if (root->getId() == id) return root;
     for (Widget* child : root->getChildren()) {
         if (Widget* found = findWidgetInTree(child, id)) return found;
+    }
+    return nullptr;
+}
+
+Menu* findMenuByLocalizationKey(MenuBar* menuBar, std::string_view key)
+{
+    if (menuBar == nullptr) return nullptr;
+    for (size_t index = 0; index < menuBar->getMenuCount(); ++index) {
+        Menu* menu = menuBar->getMenu(index);
+        if (menu != nullptr && menu->getLocalizationKey("title") == key) {
+            return menu;
+        }
+    }
+    return nullptr;
+}
+
+MenuItem* findMenuItemByLocalizationKey(Menu* menu, std::string_view key)
+{
+    if (menu == nullptr) return nullptr;
+    for (size_t index = 0; index < menu->getItemCount(); ++index) {
+        MenuItem* item = menu->getItem(index);
+        if (item != nullptr && item->getLocalizationKey("text") == key) {
+            return item;
+        }
     }
     return nullptr;
 }
@@ -282,24 +307,10 @@ TEST_CASE(tilemap_tool_launcher_opens_and_refocuses_one_untitled_workspace)
         == (active != nullptr ? active->documentId : std::string{}));
 
     auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
-    MenuItem* menuEntry = nullptr;
-    if (menuBar != nullptr) {
-        for (size_t menuIndex = 0u;
-             menuIndex < menuBar->getMenuCount(); ++menuIndex) {
-            if (menuBar->getMenuTitle(menuIndex) != L"Tools") continue;
-            Menu* tools = menuBar->getMenu(menuIndex);
-            if (tools == nullptr) break;
-            for (size_t itemIndex = 0u;
-                 itemIndex < tools->getItemCount(); ++itemIndex) {
-                MenuItem* item = tools->getItem(itemIndex);
-                if (item != nullptr
-                    && item->getText() == L"2D Tilemap Editor...") {
-                    menuEntry = item;
-                    break;
-                }
-            }
-        }
-    }
+    Menu* toolsMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.tools._label");
+    MenuItem* menuEntry = findMenuItemByLocalizationKey(
+        toolsMenu, "ui.editor.menu.tools.tilemap");
     CHECK(menuEntry != nullptr);
     CHECK(menuEntry != nullptr && menuEntry->handleClick());
     CHECK(session.workspace().documents().size() == openedCount);
@@ -1137,19 +1148,14 @@ TEST_CASE(renderer_settings_close_and_window_menu_reopen_keeps_live_card) {
     CHECK(session.ui().findById("card_render") == render);
     CHECK(render->getContent() == renderContent);
 
-    Menu* windowMenu = nullptr;
-    for (size_t i = 0; i < menuBar->getMenuCount(); ++i) {
-        if (menuBar->getMenuTitle(i) == L"Window") {
-            windowMenu = menuBar->getMenu(i);
-            break;
-        }
-    }
+    Menu* windowMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.window._label");
     CHECK_NOT_NULL(windowMenu);
     if (windowMenu != nullptr) {
-        MenuItem* reopen = windowMenu->getItem(0);
+        MenuItem* reopen = findMenuItemByLocalizationKey(
+            windowMenu, "ui.editor.menu.window.render_settings");
         CHECK_NOT_NULL(reopen);
         if (reopen != nullptr) {
-            CHECK(reopen->getText() == L"Render Settings");
             CHECK(reopen->handleClick());
         }
     }
@@ -1260,18 +1266,13 @@ TEST_CASE(detached_renderer_settings_close_then_window_menu_reopens_live_card) {
     CHECK(panel->getContent() == content);
     CHECK_FALSE(panel->isVisible());
 
-    Menu* windowMenu = nullptr;
-    for (size_t i = 0; i < menuBar->getMenuCount(); ++i) {
-        if (menuBar->getMenuTitle(i) == L"Window") {
-            windowMenu = menuBar->getMenu(i);
-            break;
-        }
-    }
+    Menu* windowMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.window._label");
     CHECK_NOT_NULL(windowMenu);
-    MenuItem* reopen = windowMenu != nullptr ? windowMenu->getItem(0) : nullptr;
+    MenuItem* reopen = findMenuItemByLocalizationKey(
+        windowMenu, "ui.editor.menu.window.render_settings");
     CHECK_NOT_NULL(reopen);
     if (reopen != nullptr) {
-        CHECK(reopen->getText() == L"Render Settings");
         CHECK(reopen->handleClick());
     }
 
@@ -1637,20 +1638,12 @@ TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
 
     auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
     CHECK(menuBar != nullptr);
-    MenuItem* undo = nullptr;
-    MenuItem* redo = nullptr;
-    if (menuBar != nullptr) {
-        for (size_t menuIndex = 0; menuIndex < menuBar->getMenuCount(); ++menuIndex) {
-            Menu* menu = menuBar->getMenu(menuIndex);
-            if (menu == nullptr) continue;
-            for (size_t itemIndex = 0; itemIndex < menu->getItemCount(); ++itemIndex) {
-                MenuItem* item = menu->getItem(itemIndex);
-                if (item == nullptr) continue;
-                if (item->getText() == L"Undo") undo = item;
-                if (item->getText() == L"Redo") redo = item;
-            }
-        }
-    }
+    Menu* editMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.edit._label");
+    MenuItem* undo = findMenuItemByLocalizationKey(
+        editMenu, "ui.editor.menu.edit.undo");
+    MenuItem* redo = findMenuItemByLocalizationKey(
+        editMenu, "ui.editor.menu.edit.redo");
     CHECK(undo != nullptr);
     CHECK(redo != nullptr);
     if (undo == nullptr || redo == nullptr) {
@@ -1695,27 +1688,18 @@ TEST_CASE(editor_view_menu_toggles_viewport_orientation_axis)
 
     auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
     CHECK(menuBar != nullptr);
-    MenuItem* axisItem = nullptr;
-    if (menuBar != nullptr) {
-        for (size_t menuIndex = 0; menuIndex < menuBar->getMenuCount(); ++menuIndex) {
-            if (menuBar->getMenuTitle(menuIndex) != L"View") continue;
-            Menu* viewMenu = menuBar->getMenu(menuIndex);
-            if (viewMenu != nullptr && viewMenu->getItemCount() != 0) {
-                axisItem = viewMenu->getItem(0);
-            }
-            break;
-        }
-    }
+    Menu* viewMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.view._label");
+    MenuItem* axisItem = findMenuItemByLocalizationKey(
+        viewMenu, "ui.editor.menu.view.orientation_axis");
 
     CHECK(axisItem != nullptr);
     CHECK(session.viewportOrientationAxisVisible());
     if (axisItem != nullptr) {
-        CHECK(axisItem->getText() == L"Viewport Orientation Axis");
         CHECK(axisItem->handleClick());
         CHECK_FALSE(session.viewportOrientationAxisVisible());
         CHECK_FALSE(persistedVisible);
         CHECK(persistenceCalls == 1);
-        CHECK(axisItem->getText() == L"Viewport Orientation Axis");
         CHECK(axisItem->handleClick());
         CHECK(session.viewportOrientationAxisVisible());
         CHECK(persistedVisible);
