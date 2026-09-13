@@ -2045,7 +2045,14 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
             if (_devices != nullptr) {
                 if (const ayt::device::KeyboardDevice* keyboard =
                         _devices->keyboard()) {
+                    const ayt::math::FVector3 eyeBefore =
+                        _sceneCamera.threeD().eye();
                     _sceneCamera.threeD().updateMovement(dt, *keyboard);
+                    if ((_sceneCamera.threeD().eye() - eyeBefore).lengthSq()
+                            > 1.0e-12f) {
+                        _sceneViewWorkspaceDirty = true;
+                        _sceneViewWorkspaceSaveCountdown = 0.5f;
+                    }
                 }
             }
         }
@@ -6995,6 +7002,16 @@ void EditorSession::rememberCurrentSceneView()
 void EditorSession::pollSceneViewWorkspace(float dtSeconds)
 {
     if (!_sceneViewWorkspaceDirty) return;
+    // RMB free-look can run for minutes and continuously changes the camera.
+    // Keep persistence outside active editor gestures and use mouse-up as the
+    // commit boundary; Windows Error Reporting placed the observed failure in
+    // the JSON lookup that was reached by this autosave path.
+    if (_sceneCamera.threeD().isLooking()
+        || _sceneCamera.isTwoDPanning()
+        || _transformGizmo.active()) {
+        _sceneViewWorkspaceSaveCountdown = 0.5f;
+        return;
+    }
     _sceneViewWorkspaceSaveCountdown -= std::max(0.0f, dtSeconds);
     if (_sceneViewWorkspaceSaveCountdown > 0.0f) return;
     if (_document != nullptr && !_document->path().empty()) {

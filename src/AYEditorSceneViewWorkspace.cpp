@@ -141,37 +141,44 @@ bool EditorSceneViewWorkspace::save(std::string* error) const
     if (error != nullptr) error->clear();
     if (_path.empty()) return true;
     try {
-        nlohmann::json root;
-        root["schemaVersion"] = kWorkspaceSchemaVersion;
-        root["scenes"] = nlohmann::json::object();
+        nlohmann::json scenes = nlohmann::json::object();
         for (const auto& [key, state] : _states) {
-            nlohmann::json entry;
-            entry["mode"] = modeName(state.mode);
-            entry["threeDProjection"] = projectionName(
-                state.threeDProjection);
-            entry["twoDPlane"] = "XY";
-            entry["twoDCenter"] = {
-                state.twoDCenter.x, state.twoDCenter.y};
-            entry["twoDViewHeight"] = state.twoDViewHeight;
-            entry["threeDOrthoHeight"] = state.threeDOrthoHeight;
-            entry["threeDEye"] = {
-                state.threeDEye.x, state.threeDEye.y, state.threeDEye.z};
-            entry["threeDYawRadians"] = state.threeDYawRadians;
-            entry["threeDPitchRadians"] = state.threeDPitchRadians;
-            entry["threeDMoveSpeed"] = state.threeDMoveSpeed;
             const EditorSceneVisibility visibility = [&]() {
                 const auto found = _visibility.find(key);
                 return found != _visibility.end()
                     ? found->second : EditorSceneVisibility{};
             }();
-            entry["visibility"] = {
-                {"meshes", visibility.meshes},
-                {"worldLit2D", visibility.worldLit2D},
-                {"cameraOverlay2D", visibility.cameraOverlay2D},
-                {"ui", visibility.ui},
+            // Windows Error Reporting placed the freecam persistence failure
+            // inside nlohmann's char-array object lookup; twoDViewHeight was
+            // the only matching workspace field. Build a complete local value
+            // before publishing it into the scene table, avoiding repeated
+            // keyed mutation while the camera state is being committed.
+            nlohmann::json entry = {
+                {"mode", modeName(state.mode)},
+                {"threeDProjection", projectionName(state.threeDProjection)},
+                {"twoDPlane", "XY"},
+                {"twoDCenter", {
+                    state.twoDCenter.x, state.twoDCenter.y}},
+                {"twoDViewHeight", state.twoDViewHeight},
+                {"threeDOrthoHeight", state.threeDOrthoHeight},
+                {"threeDEye", {
+                    state.threeDEye.x, state.threeDEye.y, state.threeDEye.z}},
+                {"threeDYawRadians", state.threeDYawRadians},
+                {"threeDPitchRadians", state.threeDPitchRadians},
+                {"threeDMoveSpeed", state.threeDMoveSpeed},
+                {"visibility", {
+                    {"meshes", visibility.meshes},
+                    {"worldLit2D", visibility.worldLit2D},
+                    {"cameraOverlay2D", visibility.cameraOverlay2D},
+                    {"ui", visibility.ui},
+                }},
             };
-            root["scenes"][key] = std::move(entry);
+            scenes[key] = std::move(entry);
         }
+        const nlohmann::json root = {
+            {"schemaVersion", kWorkspaceSchemaVersion},
+            {"scenes", std::move(scenes)},
+        };
         const fs::path path(_path);
         std::error_code directoryError;
         fs::create_directories(path.parent_path(), directoryError);

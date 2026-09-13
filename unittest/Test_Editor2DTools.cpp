@@ -123,6 +123,15 @@ TEST_CASE(SceneViewWorkspaceRoundTripsBothCameraPoses)
     written.setVisibility(
         (root / "Assets/worlds/main.ayscene").string(), visibility);
     CHECK_TRUE(written.save(&error));
+    // Freecam persistence rewrites this record repeatedly as the camera
+    // settles. Exercise the same path under /RTC1 so object/stack lifetime
+    // regressions fail here instead of escaping a Win32 input callback.
+    for (int step = 0; step < 16; ++step) {
+        state.twoDViewHeight = 321.0f + static_cast<float>(step);
+        state.threeDEye.x = 9.0f + static_cast<float>(step);
+        written.set((root / "Assets/worlds/main.ayscene").string(), state);
+        CHECK_TRUE(written.save(&error));
+    }
 
     EditorSceneViewWorkspace loaded;
     CHECK_TRUE(loaded.open(root.string(), &error));
@@ -134,7 +143,8 @@ TEST_CASE(SceneViewWorkspaceRoundTripsBothCameraPoses)
           && restored->threeDProjection == ProjectionMode::Orthographic);
     if (restored != nullptr) {
         CHECK_FLOAT_EQ(restored->twoDCenter.x, 123.0f, 1e-5f);
-        CHECK_FLOAT_EQ(restored->twoDViewHeight, 321.0f, 1e-5f);
+        CHECK_FLOAT_EQ(restored->twoDViewHeight, 336.0f, 1e-5f);
+        CHECK_FLOAT_EQ(restored->threeDEye.x, 24.0f, 1e-5f);
         CHECK_FLOAT_EQ(restored->threeDEye.z, 7.0f, 1e-5f);
     }
     const EditorSceneVisibility* restoredVisibility = loaded.findVisibility(
