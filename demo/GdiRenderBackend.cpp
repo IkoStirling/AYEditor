@@ -37,10 +37,11 @@ GdiRenderBackend::~GdiRenderBackend() {
     }
     _textures.clear();
     releaseBackbuffer();
-    if (_font != nullptr) {
-        DeleteObject(_font);
-        _font = nullptr;
+    for (const auto& [size, font] : _fonts) {
+        (void)size;
+        if (font != nullptr) DeleteObject(font);
     }
+    _fonts.clear();
 }
 
 void GdiRenderBackend::releaseBackbuffer() {
@@ -148,19 +149,14 @@ HFONT GdiRenderBackend::fontForSize(int fontSize) {
     if (fontSize < 1) {
         fontSize = 12;
     }
-    if (_font != nullptr && _fontSize == fontSize) {
-        return _font;
-    }
-    if (_font != nullptr) {
-        DeleteObject(_font);
-        _font = nullptr;
-    }
-    _font = CreateFontW(
+    const auto cached = _fonts.find(fontSize);
+    if (cached != _fonts.end()) return cached->second;
+    HFONT font = CreateFontW(
         fontSize, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    _fontSize = fontSize;
-    return _font;
+    _fonts.emplace(fontSize, font);
+    return font;
 }
 
 void GdiRenderBackend::drawRect(const math::FRectangle& bounds, const math::FVector4& color) {

@@ -104,8 +104,7 @@ private:
     HDC _memDc = nullptr;
     HBITMAP _bitmap = nullptr;
     HBITMAP _oldBitmap = nullptr;
-    HFONT _font = nullptr;
-    int _fontSize = 0;
+    std::unordered_map<int, HFONT> _fonts;
     int _width = 0;
     int _height = 0;
     int _bbWidth = 0;

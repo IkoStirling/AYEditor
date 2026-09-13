@@ -49,6 +49,10 @@ struct ChildWindowConfig {
     // this false so their inner document tabs never move the OS window or
     // redock the whole tool into the Scene workspace.
     bool redockable = true;
+    // Dedicated tools may finish attaching controllers and loading their
+    // document before exposing the HWND. This prevents a visible, blocked
+    // first frame while expensive authoring chrome is still being built.
+    bool showOnOpen = true;
     // Optional hooks for UI Layout Editor.
     // before*: return true to consume (skip UIManager).
     std::function<bool(ayt::ui::UIManager& ui, float x, float y,
@@ -117,6 +121,7 @@ public:
 
     ayt::ui::UIManager* uiForHandle(Handle h) noexcept;
     const ayt::ui::UIManager* uiForHandle(Handle h) const noexcept;
+    bool showChildWindow(Handle h);
     bool activateChildWindow(Handle h);
     bool setChildWindowTitle(Handle h, const std::string& title);
 
@@ -151,6 +156,7 @@ public:
         // Live promoted card (null for config-file children).
         ayt::ui::DockCard*                card = nullptr;
         bool                              redockable = false;
+        bool                              visible = false;
         std::function<void(ayt::ui::UIManager& ui)> beforeClose;
         std::function<bool(ayt::ui::UIManager& ui)> beforeCloseRequested;
         bool                              needsDraw = false;

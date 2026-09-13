@@ -230,6 +230,34 @@ const ayt::ui::UIManager* EditorChildWindowManager::uiForHandle(
     return nullptr;
 }
 
+bool EditorChildWindowManager::showChildWindow(Handle h) {
+    Entry* entry = findEntryByHandle(h);
+    if (entry == nullptr || entry->ui == nullptr) return false;
+#if defined(_WIN32)
+    // Present the fully initialized tree before publishing the HWND. In the
+    // deferred-show path this replaces the old chrome-only frame that was
+    // rendered before a tool controller had attached.
+    if (entry->backend != nullptr && entry->handle != nullptr) {
+        if (HDC hdc = ::GetDC(static_cast<HWND>(entry->handle))) {
+            ayt::ui::UIManager::ActiveScope guard(entry->ui.get());
+            const int width = static_cast<int>(entry->ui->getClientSize().x);
+            const int height = static_cast<int>(entry->ui->getClientSize().y);
+            auto* gdi = static_cast<GdiRenderBackend*>(entry->backend.get());
+            gdi->setDrawTarget(hdc, width, height);
+            entry->ui->render();
+            ::ReleaseDC(static_cast<HWND>(entry->handle), hdc);
+        }
+    }
+#endif
+    // ShowWindow reports the previous visibility state rather than a simple
+    // success flag and an owned child remains effectively hidden when its
+    // owner is hidden (as in unit tests). The existence check above is the
+    // operation contract; remember the requested state independently.
+    (void)_wm.setTopLevelVisible(h, true);
+    entry->visible = true;
+    return true;
+}
+
 bool EditorChildWindowManager::activateChildWindow(Handle h) {
     return findEntryByHandle(h) != nullptr && _wm.activateTopLevelWindow(h);
 }
@@ -506,25 +534,14 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         }
         return ayt::ui::systemCursorFromUi(hint);
     };
-#if defined(_WIN32)
-    if (e.backend && e.handle != nullptr) {
-        if (HDC hdc = ::GetDC(static_cast<HWND>(e.handle))) {
-            ayt::ui::UIManager::ActiveScope guard(e.ui.get());
-            const int cw = static_cast<int>(e.ui->getClientSize().x);
-            const int ch = static_cast<int>(e.ui->getClientSize().y);
-            auto* gdi = static_cast<GdiRenderBackend*>(e.backend.get());
-            gdi->setDrawTarget(hdc, cw, ch);
-            e.ui->render();
-            ::ReleaseDC(static_cast<HWND>(e.handle), hdc);
-        }
-    }
-#endif
     // Publish the entry before callbacks/visibility. ShowWindow can
     // synchronously dispatch messages; every callback must be able to
     // find its entry even during the first show.
     _entries.push_back(std::move(e));
     _wm.setTopLevelCallbacks(h, cbs);
-    _wm.setTopLevelVisible(h, true);
+    if (cfg.showOnOpen) {
+        (void)showChildWindow(h);
+    }
 
     outHandle = h;
     return true;
@@ -816,6 +833,7 @@ void EditorChildWindowManager::teardownEntry(
     Entry& entry, bool returnPromotedCard) {
     const Handle handle = entry.handle;
     entry.handle = nullptr;
+    entry.visible = false;
 
     // Stop new platform dispatch first. TopLevelWndProc may still hold its
     // current local callback copy, so the UI is explicitly shut down while

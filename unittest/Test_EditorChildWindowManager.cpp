@@ -166,7 +166,20 @@ TEST_CASE(test_open_close_lifecycle) {
     CHECK(mgr.count() == 1);
     CHECK(mgr.entries()[0].ui != nullptr);
     CHECK(mgr.entries()[0].ui->getClientSize().x == 320.0f);
+    CHECK(mgr.entries()[0].visible);
 
+    mgr.closeChildWindow(h);
+    CHECK(mgr.count() == 0);
+
+    cfg.title = "Deferred child";
+    cfg.showOnOpen = false;
+    h = nullptr;
+    CHECK(mgr.openChildWindow(cfg, h));
+    CHECK(h != nullptr);
+    CHECK(mgr.count() == 1);
+    CHECK_FALSE(mgr.entries()[0].visible);
+    CHECK(mgr.showChildWindow(h));
+    CHECK(mgr.entries()[0].visible);
     mgr.closeChildWindow(h);
     CHECK(mgr.count() == 0);
 

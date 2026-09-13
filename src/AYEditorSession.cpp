@@ -7805,6 +7805,7 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
     cfg.y = 72;
     cfg.width = 1360;
     cfg.height = 820;
+    cfg.showOnOpen = false;
     cfg.beforeMouseButton = [this](
         ayt::ui::UIManager& ui, float x, float y,
         int button, bool pressed) {
@@ -7875,6 +7876,11 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
     }
 
     refreshUiDesignerTitle();
+    if (!_childWindows->showChildWindow(handle)) {
+        _childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"UI Designer window show failed", true);
+        return false;
+    }
     setAssetBrowserStatus(L"UI Designer opened in a dedicated window");
     return true;
 }
