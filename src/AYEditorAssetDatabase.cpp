@@ -446,11 +446,26 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
 void EditorAssetDatabase::close()
 {
     if (_watchState) {
+        // Stop the directory watcher first so it cannot enqueue new
+        // requests against _records / _folders while we tear them down.
         _watchState->watcher.stop();
         _watchState.reset();
     }
     if (_scanPending && _scanFuture.valid()) {
-        try { (void)_scanFuture.get(); } catch (...) {}
+        // B-3/B-4 (ayeditor audit 2026-09-14): bound the join so a slow
+        // scan over a huge project tree cannot stretch the visible
+        // shutdown path. After the budget expires we drop the future;
+        // the worker keeps running in the background and its result is
+        // discarded at process exit. (std::async cannot be forcibly
+        // aborted — the std::future destructor will still block — but
+        // only after the editor UI is gone.)
+        constexpr auto kShutdownDrainBudget = std::chrono::milliseconds(250);
+        if (_scanFuture.wait_for(kShutdownDrainBudget)
+                != std::future_status::ready) {
+            _scanFuture = {};
+        } else {
+            try { (void)_scanFuture.get(); } catch (...) {}
+        }
     }
     _scanPending = false;
     _projectRoot.clear();
