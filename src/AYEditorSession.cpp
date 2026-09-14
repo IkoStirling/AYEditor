@@ -1228,22 +1228,22 @@ EditorSession::EditorSession()
         return resolveLayoutEditorChromePath(_engineAssetsRoot);
     };
     layoutConfig.openPathPicker = [this]() {
-        return showUiJsonOpenDialog(_hostWindow,
+        return showUiJsonOpenDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     layoutConfig.savePathPicker = [this]() {
-        return showUiJsonSaveDialog(_hostWindow,
+        return showUiJsonSaveDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     layoutConfig.texturePathPicker = [this]() {
-        return showUiTextureOpenDialog(_hostWindow,
+        return showUiTextureOpenDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "textures").string());
     };
     layoutConfig.themePathPicker = [this]() {
-        return showUiJsonOpenDialog(_hostWindow,
+        return showUiJsonOpenDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui" / "themes").string());
     };
@@ -1285,12 +1285,12 @@ EditorSession::EditorSession()
         return resolveUiFlowEditorChromePath(_engineAssetsRoot);
     };
     flowConfig.openPathPicker = [this]() {
-        return showUiFlowOpenDialog(_hostWindow,
+        return showUiFlowOpenDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     flowConfig.savePathPicker = [this]() {
-        return showUiFlowSaveDialog(_hostWindow,
+        return showUiFlowSaveDialog(static_cast<HWND>(_hostWindow),
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
@@ -1473,7 +1473,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _onViewportOrientationAxisVisibilityChanged =
         desc.onViewportOrientationAxisVisibilityChanged;
     _onPreferencesChanged = desc.onPreferencesChanged;
-    _playRuntime.setHostWindow(_hostWindow);
+    _playRuntime.setHostWindow(static_cast<HWND>(_hostWindow));
     _playRuntime.setEngineAssetsRoot(_engineAssetsRoot);
     _playRuntime.setProjectAssetRoot(projectStartup.assetRootPath);
     // ED-02: forward the imported character (if any) to the
@@ -1505,9 +1505,9 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     reportStartup(0.12f, L"Loading editor layout...");
     _gameView.setModeChangedCallback([this](EditorMode mode) { onModeChanged(mode); });
 
-    if (_hostWindow != nullptr) {
+    if (static_cast<HWND>(_hostWindow) != nullptr) {
         RECT clientRect{};
-        if (GetClientRect(_hostWindow, &clientRect) != 0) {
+        if (GetClientRect(static_cast<HWND>(_hostWindow), &clientRect) != 0) {
             const float width  = static_cast<float>(clientRect.right - clientRect.left);
             const float height = static_cast<float>(clientRect.bottom - clientRect.top);
             if (width > 0.0f && height > 0.0f) {
@@ -1577,7 +1577,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     if (_mainDock != nullptr) {
         _editorHostServices = std::make_unique<EditorSessionHostServices>(
             *_workspace, _ui, desc.projectRoot,
-            _assetPreviewCache.get(), _hostWindow,
+            _assetPreviewCache.get(), static_cast<HWND>(_hostWindow),
             [this]() {
                 if (_repaintCallback) _repaintCallback();
             },
@@ -1599,14 +1599,14 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             *_workspace, *_mainDock, *_editorHostServices, &_ui);
         _dockViewHost->setCloseActionProvider(
             [this](const EditorHostedView& hosted) {
-                if (_hostWindow == nullptr) {
+                if (static_cast<HWND>(_hostWindow) == nullptr) {
                     return EditorDocumentCloseAction::Discard;
                 }
                 const std::wstring prompt =
                     ayt::ui::decodeUtf8Text(hosted.document->title())
                     + L" has unsaved changes.\n\nSave before closing?";
                 const int choice = ::MessageBoxW(
-                    _hostWindow, prompt.c_str(), L"AY Editor Document",
+                    static_cast<HWND>(_hostWindow), prompt.c_str(), L"AY Editor Document",
                     MB_YESNOCANCEL | MB_ICONWARNING);
                 if (choice == IDYES) {
                     return EditorDocumentCloseAction::Save;
@@ -3291,7 +3291,7 @@ void EditorSession::beginOrResumePlay()
         // Save/Discard/Cancel prompt (PR-3 requireSaveBeforePlay 意图 getter)
         if (_document != nullptr && _document->isDirty()) {
             int choice = ::MessageBoxW(
-                _hostWindow,
+                static_cast<HWND>(_hostWindow),
                 L"Scene has unsaved changes.\n\nSave before Play?",
                 L"AYEditor",
                 MB_YESNOCANCEL | MB_ICONWARNING);
@@ -4257,7 +4257,7 @@ bool EditorSession::rescanAssetsNow()
 
 void EditorSession::importAssetFromDialog()
 {
-    const std::string source = ImportDialog::showOpenAssetFileDialog(_hostWindow);
+    const std::string source = ImportDialog::showOpenAssetFileDialog(static_cast<HWND>(_hostWindow));
     if (source.empty()) return;
     if (!Importer::isSupportedExtension(source)) {
         setAssetBrowserStatus(L"Unsupported import type: "
@@ -4686,7 +4686,7 @@ bool EditorSession::runCurrentProject()
         const std::wstring message = L"Run project: "
             + ayt::ui::decodeUtf8Text(error);
         setProjectRunStatus(L"Project: Not runnable", message, true);
-        ::MessageBoxW(_hostWindow, message.c_str(), L"Run Project Failed",
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(), L"Run Project Failed",
                       MB_OK | MB_ICONERROR);
         return false;
     }
@@ -4701,7 +4701,7 @@ bool EditorSession::runCurrentProject()
         const std::wstring message = L"Run project failed: "
             + ayt::ui::decodeUtf8Text(launched.error);
         setProjectRunStatus(L"Project: Failed", message, true);
-        ::MessageBoxW(_hostWindow, message.c_str(), L"Run Project Failed",
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(), L"Run Project Failed",
                       MB_OK | MB_ICONERROR);
         return false;
     }
@@ -4784,7 +4784,7 @@ void EditorSession::showAssetTrashDialog()
         const auto selected = _assetTrashList->getSelectedIndices();
         if (selected.empty()) return;
 #if defined(_WIN32)
-        if (::MessageBoxW(_hostWindow,
+        if (::MessageBoxW(static_cast<HWND>(_hostWindow),
                 L"Permanently delete the selected trash transactions? This cannot be undone.",
                 L"Clear Project Trash", MB_YESNO | MB_ICONWARNING)
             != IDYES) return;
@@ -5019,7 +5019,7 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         }
         if (_document->isDirty()) {
             const int choice = ::MessageBoxW(
-                _hostWindow,
+                static_cast<HWND>(_hostWindow),
                 L"The current scene has unsaved changes.\n\nDiscard them and open another scene?",
                 L"AYEditor", MB_YESNO | MB_ICONWARNING);
             if (choice != IDYES) return false;
@@ -5213,7 +5213,7 @@ bool EditorSession::ensureTilemapWindow()
                 return EditorDocumentCloseAction::Discard;
             }
             HWND owner = _tilemapWindowHandle != nullptr
-                ? static_cast<HWND>(_tilemapWindowHandle) : _hostWindow;
+                ? static_cast<HWND>(_tilemapWindowHandle) : static_cast<HWND>(_hostWindow);
             if (owner == nullptr) return EditorDocumentCloseAction::Discard;
             const std::wstring prompt = ayt::ui::decodeUtf8Text(
                 hosted.document->title())
@@ -5283,7 +5283,7 @@ bool EditorSession::confirmTilemapWindowClose()
         PendingClose close{record.documentId, record.document, false};
         if (record.document != nullptr && record.document->isDirty()) {
             HWND owner = _tilemapWindowHandle != nullptr
-                ? static_cast<HWND>(_tilemapWindowHandle) : _hostWindow;
+                ? static_cast<HWND>(_tilemapWindowHandle) : static_cast<HWND>(_hostWindow);
             if (owner != nullptr) {
                 const std::wstring prompt = ayt::ui::decodeUtf8Text(
                     record.document->title())
@@ -7277,7 +7277,7 @@ bool EditorSession::newSceneFromTemplate(EditorSceneTemplate sceneTemplate)
     }
     if (_document->isDirty()) {
         const int choice = ::MessageBoxW(
-            _hostWindow,
+            static_cast<HWND>(_hostWindow),
             L"The current scene has unsaved changes.\n\nDiscard them and create a new scene?",
             L"AYEditor", MB_YESNO | MB_ICONWARNING);
         if (choice != IDYES) return false;
@@ -7300,12 +7300,12 @@ void EditorSession::openSceneDocument()
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
     if (_document->isDirty()) {
         const int choice = ::MessageBoxW(
-            _hostWindow,
+            static_cast<HWND>(_hostWindow),
             L"The current scene has unsaved changes.\n\nDiscard them and open another scene?",
             L"AYEditor", MB_YESNO | MB_ICONWARNING);
         if (choice != IDYES) return;
     }
-    const std::string path = showSceneOpenDialog(_hostWindow,
+    const std::string path = showSceneOpenDialog(static_cast<HWND>(_hostWindow),
         (std::filesystem::path(_assetDatabase.projectRoot())
             / "Assets" / "worlds").string());
     if (path.empty()) return;
@@ -7314,7 +7314,7 @@ void EditorSession::openSceneDocument()
     std::string error;
     if (!_document->open(path, &error)) {
         const std::wstring message(error.begin(), error.end());
-        ::MessageBoxW(_hostWindow, message.c_str(), L"Open Scene Failed",
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(), L"Open Scene Failed",
                       MB_OK | MB_ICONERROR);
         return;
     }
@@ -7331,7 +7331,7 @@ void EditorSession::saveSceneDocument()
     std::string error;
     if (!_document->save(&error)) {
         const std::wstring message(error.begin(), error.end());
-        ::MessageBoxW(_hostWindow, message.c_str(), L"Save Scene Failed",
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(), L"Save Scene Failed",
                       MB_OK | MB_ICONERROR);
         return;
     }
@@ -7341,14 +7341,14 @@ void EditorSession::saveSceneDocument()
 void EditorSession::saveSceneDocumentAs()
 {
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
-    const std::string path = showSceneSaveDialog(_hostWindow,
+    const std::string path = showSceneSaveDialog(static_cast<HWND>(_hostWindow),
         (std::filesystem::path(_assetDatabase.projectRoot())
             / "Assets" / "worlds").string());
     if (path.empty()) return;
     std::string error;
     if (!_document->saveAs(path, &error)) {
         const std::wstring message(error.begin(), error.end());
-        ::MessageBoxW(_hostWindow, message.c_str(), L"Save Scene Failed",
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(), L"Save Scene Failed",
                       MB_OK | MB_ICONERROR);
         return;
     }
@@ -7842,28 +7842,28 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
     EditorUiLayoutExtensionConfig controllerConfig;
     controllerConfig.openPathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiJsonOpenDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     controllerConfig.savePathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiJsonSaveDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     controllerConfig.texturePathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiTextureOpenDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "textures").string());
     };
     controllerConfig.themePathPicker = [this]() {
         HWND owner = _uiDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiJsonOpenDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui" / "themes").string());
@@ -7999,14 +7999,14 @@ bool EditorSession::confirmUiDesignerClose()
     if (_uiDesignerDocument == nullptr || _workspace == nullptr) return true;
     EditorDocumentCloseAction action = EditorDocumentCloseAction::Discard;
     if (_uiDesignerDocument->isDirty()) {
-        if (_hostWindow == nullptr) {
+        if (static_cast<HWND>(_hostWindow) == nullptr) {
             action = EditorDocumentCloseAction::Discard;
         } else {
             const std::wstring prompt =
                 ayt::ui::decodeUtf8Text(_uiDesignerDocument->title())
                 + L" has unsaved changes.\n\nSave before closing?";
             HWND owner = _uiDesignerHandle != nullptr
-                ? static_cast<HWND>(_uiDesignerHandle) : _hostWindow;
+                ? static_cast<HWND>(_uiDesignerHandle) : static_cast<HWND>(_hostWindow);
             const int choice = ::MessageBoxW(
                 owner, prompt.c_str(), L"AYUI Designer",
                 MB_YESNOCANCEL | MB_ICONWARNING);
@@ -8530,14 +8530,14 @@ bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
         _assetDatabase.projectRoot());
     controllerConfig.openPathPicker = [this]() {
         HWND owner = _uiFlowDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiFlowDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiFlowOpenDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
     };
     controllerConfig.savePathPicker = [this]() {
         HWND owner = _uiFlowDesignerHandle != nullptr
-            ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+            ? static_cast<HWND>(_uiFlowDesignerHandle) : static_cast<HWND>(_hostWindow);
         return showUiFlowSaveDialog(owner,
             (std::filesystem::path(_assetDatabase.projectRoot())
                 / "Assets" / "ui").string());
@@ -8599,12 +8599,12 @@ bool EditorSession::confirmUiFlowDesignerClose()
     if (_uiFlowDesignerDocument == nullptr || _workspace == nullptr) return true;
     EditorDocumentCloseAction action = EditorDocumentCloseAction::Discard;
     if (_uiFlowDesignerDocument->isDirty()) {
-        if (_hostWindow != nullptr) {
+        if (static_cast<HWND>(_hostWindow) != nullptr) {
             const std::wstring prompt =
                 ayt::ui::decodeUtf8Text(_uiFlowDesignerDocument->title())
                 + L" has unsaved changes.\n\nSave before closing?";
             HWND owner = _uiFlowDesignerHandle != nullptr
-                ? static_cast<HWND>(_uiFlowDesignerHandle) : _hostWindow;
+                ? static_cast<HWND>(_uiFlowDesignerHandle) : static_cast<HWND>(_hostWindow);
             const int choice = ::MessageBoxW(
                 owner, prompt.c_str(), L"AYUI Flow Editor",
                 MB_YESNOCANCEL | MB_ICONWARNING);
@@ -8759,7 +8759,7 @@ void EditorSession::openAudioEditorWindow() {
         }
     }
     session->setAudio(audioSub);
-    HWND owner = _hostWindow;
+    HWND owner = static_cast<HWND>(_hostWindow);
     session->setPathPicker([owner]() { return showOpenAudioFileDialog(owner); });
     if (!session->attach(*childUi)) {
         std::fprintf(stderr,
@@ -8773,25 +8773,25 @@ void EditorSession::openAudioEditorWindow() {
 }
 
 void EditorSession::requestHostClose() {
-    if (_hostWindow != nullptr) {
-        ::PostMessageW(_hostWindow, WM_CLOSE, 0, 0);
+    if (static_cast<HWND>(_hostWindow) != nullptr) {
+        ::PostMessageW(static_cast<HWND>(_hostWindow), WM_CLOSE, 0, 0);
     }
 }
 
 void EditorSession::requestHostMinimize() {
-    if (_hostWindow != nullptr) {
-        ::ShowWindow(_hostWindow, SW_MINIMIZE);
+    if (static_cast<HWND>(_hostWindow) != nullptr) {
+        ::ShowWindow(static_cast<HWND>(_hostWindow), SW_MINIMIZE);
     }
 }
 
 void EditorSession::requestHostMaximizeToggle() {
-    if (_hostWindow == nullptr) {
+    if (static_cast<HWND>(_hostWindow) == nullptr) {
         return;
     }
-    if (::IsZoomed(_hostWindow)) {
-        ::ShowWindow(_hostWindow, SW_RESTORE);
+    if (::IsZoomed(static_cast<HWND>(_hostWindow))) {
+        ::ShowWindow(static_cast<HWND>(_hostWindow), SW_RESTORE);
     } else {
-        ::ShowWindow(_hostWindow, SW_MAXIMIZE);
+        ::ShowWindow(static_cast<HWND>(_hostWindow), SW_MAXIMIZE);
     }
 }
 
@@ -8823,7 +8823,7 @@ std::string joinTypeNames(const std::vector<std::string>& names)
 void EditorSession::importCharacterFromDialog()
 {
     const std::string sourcePath =
-        ImportDialog::showOpenFileDialog(_hostWindow);
+        ImportDialog::showOpenFileDialog(static_cast<HWND>(_hostWindow));
     if (sourcePath.empty()) {
         // User cancelled (or non-Windows stub returned empty).
         // Silent no-op; do not pollute stderr with a "no path"
@@ -9612,7 +9612,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             browse->setOnClicked(
                 [this, componentTypeName, fieldName, input]() {
                     const std::string selected = showAssetReferenceDialog(
-                        _hostWindow, _assetDatabase.projectRoot());
+                        static_cast<HWND>(_hostWindow), _assetDatabase.projectRoot());
                     if (selected.empty()) return;
                     std::string reference =
                         _assetDatabase.portableAssetPath(selected);

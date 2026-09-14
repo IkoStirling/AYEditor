@@ -30,9 +30,11 @@
 #include <string>
 #include <vector>
 
-struct HWND__;
-using HWND = HWND__*;
-
+// PS-1 (ayeditor audit 2026-09-14): avoid pulling <Windows.h> into every
+// TU that includes EditorSession.h. We use EditorChildWindowManager::Handle
+// (a void* opaque alias defined in EditorChildWindowManager.h) for any
+// window handle stored in this header. The .cpp side is free to cast back
+// to HWND where the Windows SDK is available.
 namespace ayt::device { class DeviceManager; class WindowManager; }
 
 // v0.3 PR-4 — forward decl Scene（design §4.2.x）
@@ -102,7 +104,7 @@ struct EditorSessionDesc {
     // folders. Empty keeps the JSON text placeholders, which makes embedded
     // and headless hosts independent from editor-only visual assets.
     std::string iconRootPath;
-    HWND hostWindow = nullptr;
+    EditorChildWindowManager::Handle hostWindow = nullptr;  // PS-1: opaque; cast in .cpp
     ImportedCharacter importedCharacter;  // empty = fall back to cube
     // Test/demo-only authoring content. False is the generic editor default;
     // AYEditorShell_Demo opts in explicitly at its composition root.
@@ -571,7 +573,7 @@ private:
     std::unique_ptr<ayt::audio::AudioEditorSession> _audioEditor;
     EditorChildWindowManager::Handle _audioEditorHandle = nullptr;
 
-    HWND _hostWindow = nullptr;
+    EditorChildWindowManager::Handle _hostWindow = nullptr;  // PS-1: cast to HWND in .cpp
     ayt::device::DeviceManager* _devices = nullptr;
     bool _hostFocused = false;
     std::string _layoutPath;
