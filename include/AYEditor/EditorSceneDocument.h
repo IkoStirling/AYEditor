@@ -10,8 +10,11 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <unordered_map>
+#include <vector>
 
 namespace ayt::scene { class Scene; }
+namespace ayt::entity { class Entity; class IComponent; }
 
 namespace ayt::editor {
 
@@ -51,6 +54,20 @@ public:
                           const EditorTransformState& after,
                           std::string label = "Transform",
                           std::string mergeKey = {});
+    bool createEntity(
+        std::string label,
+        const std::function<bool(ayt::entity::Entity&)>& configure,
+        uint32_t* entityId = nullptr);
+    bool deleteEntity(uint32_t entityId, std::string label = "Delete Entity");
+    bool addComponent(uint32_t entityId, const std::string& componentType,
+                      std::vector<std::string>* added = nullptr,
+                      std::string* error = nullptr);
+    bool removeComponent(uint32_t entityId, const std::string& componentType,
+                         std::string* error = nullptr);
+    bool mutateComponent(
+        uint32_t entityId, const std::string& componentType,
+        std::string label, std::string mergeKey,
+        const std::function<bool(ayt::entity::IComponent&)>& mutation);
     bool undo();
     bool redo();
     bool canUndo() const noexcept { return _history.canUndo(); }
@@ -75,10 +92,33 @@ public:
 
 private:
     class TransformCommand;
+    class EntityCreateCommand;
+    class EntityDeleteCommand;
+    class AddComponentCommand;
+    class RemoveComponentCommand;
+    class ComponentMutationCommand;
     friend class TransformCommand;
+    friend class EntityCreateCommand;
+    friend class EntityDeleteCommand;
+    friend class AddComponentCommand;
+    friend class RemoveComponentCommand;
+    friend class ComponentMutationCommand;
+
+    struct ComponentSnapshot;
+    struct EntitySnapshot;
 
     bool applyTransform(uint64_t generation, uint32_t entityId,
                         const EditorTransformState& state);
+    bool snapshotComponent(ayt::entity::IComponent& component,
+                           ComponentSnapshot& snapshot) const;
+    bool restoreComponent(ayt::entity::Entity& entity,
+                          const ComponentSnapshot& snapshot) const;
+    bool snapshotEntity(ayt::entity::Entity& entity,
+                        EntitySnapshot& snapshot) const;
+    ayt::entity::Entity* restoreEntity(const EntitySnapshot& snapshot);
+    uint32_t logicalEntityId(uint32_t currentId) const noexcept;
+    ayt::entity::Entity* findCommandEntity(uint32_t logicalId);
+    void remapEntity(uint32_t logicalId, uint32_t currentId);
 
     std::unique_ptr<ayt::scene::Scene> _scene;
     std::string _typeId = "ayeditor.scene.document";
@@ -87,6 +127,7 @@ private:
     bool _dirty = false;
     uint64_t _revision = 0;
     uint64_t _contentGeneration = 1;
+    std::unordered_map<uint32_t, uint32_t> _commandEntityIds;
     EditorCommandHistory _history;
     HistoryChangedCallback _historyChanged;
 };

@@ -659,6 +659,7 @@ private:
     EditorSelection       _selection;
     ayt::entity::World*    _selectionWorld = nullptr;
     bool                  _outlinerRefreshPending = false;
+    bool                  _inspectorRefreshPending = false;
     bool                  _outlinerRootExpanded = true;
     bool                  _updatingOutlinerSelection = false;
 

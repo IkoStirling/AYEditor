@@ -1,9 +1,11 @@
 #include "AYTest.h"
 
 #include "AYEditor/EditorSceneDocument.h"
+#include "AYEditor/EditorComponentPolicy.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEntity.h"
 #include "AYEntity/components/TransformComponent.h"
+#include "AYEntity/components/SpriteComponent.h"
 #include "AYScene.h"
 
 #include <chrono>
@@ -121,6 +123,96 @@ TEST_CASE(editor_scene_history_tracks_save_cursor_and_reload_boundary)
 
     std::error_code removeError;
     std::filesystem::remove(path, removeError);
+}
+
+TEST_CASE(editor_scene_entity_commands_restore_serializable_components)
+{
+    EditorSceneDocument document;
+    ayt::entity::World& world = document.scene().world();
+    uint32_t entityId = 0;
+    CHECK(document.createEntity(
+        "Create Sprite",
+        [](ayt::entity::Entity& entity) {
+            entity.setName("Undo Sprite");
+            auto* transform = entity.addComponent<ayt::entity::Transform>();
+            auto* sprite = entity.addComponent<ayt::entity::SpriteComponent>();
+            if (transform == nullptr || sprite == nullptr) return false;
+            transform->setPosition(3.0f, 4.0f, 5.0f);
+            sprite->texturePath = "textures/undo.aytex";
+            return true;
+        },
+        &entityId));
+    CHECK(world.findEntity(entityId) != nullptr);
+    CHECK(document.undo());
+    CHECK(world.findEntity(entityId) == nullptr);
+    CHECK(document.redo());
+    ayt::entity::Entity* restored = world.findEntity("Undo Sprite");
+    CHECK(restored != nullptr);
+    auto* restoredTransform = restored != nullptr
+        ? restored->getComponent<ayt::entity::Transform>() : nullptr;
+    auto* restoredSprite = restored != nullptr
+        ? restored->getComponent<ayt::entity::SpriteComponent>() : nullptr;
+    CHECK(restoredTransform != nullptr && restoredTransform->position.y == 4.0f);
+    CHECK(restoredSprite != nullptr
+        && restoredSprite->texturePath == "textures/undo.aytex");
+
+    CHECK(restored != nullptr && document.mutateComponent(
+        restored->getId(), "SpriteComponent", "Change Texture", {},
+        [](ayt::entity::IComponent& component) {
+            static_cast<ayt::entity::SpriteComponent&>(component).texturePath =
+                "textures/changed.aytex";
+            return true;
+        }));
+
+    CHECK(restored != nullptr && document.deleteEntity(restored->getId()));
+    CHECK(world.findEntity("Undo Sprite") == nullptr);
+    CHECK(document.undo());
+    restored = world.findEntity("Undo Sprite");
+    CHECK(restored != nullptr);
+    CHECK(document.undo());
+    restoredSprite = restored != nullptr
+        ? restored->getComponent<ayt::entity::SpriteComponent>() : nullptr;
+    CHECK(restoredSprite != nullptr
+        && restoredSprite->texturePath == "textures/undo.aytex");
+}
+
+TEST_CASE(editor_scene_component_and_property_commands_share_history)
+{
+    EditorComponentPolicyRegistry::instance().installDefaults();
+    EditorSceneDocument document;
+    ayt::entity::World& world = document.scene().world();
+    ayt::entity::Entity* entity = world.createEntity();
+    CHECK(entity != nullptr);
+    entity->setName("Component History");
+
+    std::vector<std::string> added;
+    std::string error;
+    CHECK(document.addComponent(
+        entity->getId(), "SpriteComponent", &added, &error));
+    CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+    auto* sprite = entity->getComponent<ayt::entity::SpriteComponent>();
+    CHECK(sprite != nullptr);
+
+    CHECK(document.mutateComponent(
+        entity->getId(), "SpriteComponent", "Set Texture", {},
+        [](ayt::entity::IComponent& component) {
+            auto& sprite = static_cast<ayt::entity::SpriteComponent&>(component);
+            sprite.texturePath = "textures/history.aytex";
+            return true;
+        }));
+    CHECK(sprite->texturePath == "textures/history.aytex");
+    CHECK(document.undo());
+    CHECK(sprite->texturePath.empty());
+    CHECK(document.redo());
+    CHECK(sprite->texturePath == "textures/history.aytex");
+
+    CHECK(document.removeComponent(
+        entity->getId(), "SpriteComponent", &error));
+    CHECK(entity->getComponent<ayt::entity::SpriteComponent>() == nullptr);
+    CHECK(document.undo());
+    sprite = entity->getComponent<ayt::entity::SpriteComponent>();
+    CHECK(sprite != nullptr
+        && sprite->texturePath == "textures/history.aytex");
 }
 
 TEST_SUITE_END

@@ -1707,7 +1707,12 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     (void)_workspace->selections().activate("scene.main");
     _workspace->commands().setActiveTarget(_document.get());
     _document->setHistoryChangedCallback([this]() {
+        ayt::entity::World* world = hierarchyWorldMutable();
+        if (!_selection.empty() && _selection.resolve(world) == nullptr) {
+            clearSelectedEntity(false);
+        }
         _outlinerRefreshPending = true;
+        _inspectorRefreshPending = true;
         refreshTransformInspector();
         refreshUnsavedIndicator();
         if (_repaintCallback) _repaintCallback();
@@ -1889,6 +1894,7 @@ void EditorSession::shutdown() {
     _recoveryStore.reset();
     clearSelectedEntity(false);
     _outlinerRefreshPending = false;
+    _inspectorRefreshPending = false;
     _outlinerRootExpanded = true;
     _updatingOutlinerSelection = false;
     if (_workspace != nullptr && _dockViewHost == nullptr) {
@@ -2001,6 +2007,11 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     if (_outlinerRefreshPending) {
         _outlinerRefreshPending = false;
         refreshOutliner();
+    }
+    if (_inspectorRefreshPending) {
+        _inspectorRefreshPending = false;
+        refreshInspectorLabels();
+        refreshTransformInspector();
     }
     const bool completedAssetScan = _assetDatabase.pollScan();
     const bool changedAssets = _assetDatabase.pollFileChanges();
@@ -5583,32 +5594,52 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
         }
     }
 
-    ayt::entity::Entity* entity = world->createEntity();
-    if (entity == nullptr) return false;
     const std::string stem = std::filesystem::path(record->name).stem().string();
     const char* fallbackName = isMesh ? "Mesh" : (isTexture ? "Sprite" : "Tilemap");
-    const std::string name = (stem.empty() ? std::string(fallbackName) : stem)
-        + " " + std::to_string(static_cast<unsigned>(entity->getId()));
-    entity->setName(name.c_str());
-    auto* transform = entity->addComponent<ayt::entity::Transform>();
-    transform->setPosition(position.x, position.y, position.z);
-    transform->setScale(initialScale.x, initialScale.y, initialScale.z);
-    if (isMesh) {
-        auto* mesh = entity->addComponent<ayt::entity::MeshComponent>();
-        mesh->meshPath = componentAssetPath;
-        mesh->materialPath = _assetDatabase.portableAssetPath(materialPath);
-    } else if (isTexture) {
-        auto* sprite = entity->addComponent<ayt::entity::SpriteComponent>();
-        sprite->texturePath = componentAssetPath;
-    } else {
-        auto* tilemap = entity->addComponent<ayt::entity::TilemapComponent>();
-        tilemap->tilemapPath = componentAssetPath;
+    uint32_t entityId = 0;
+    if (!_document->createEntity(
+            std::string("Create ") + fallbackName,
+            [&](ayt::entity::Entity& candidate) {
+                const std::string name =
+                    (stem.empty() ? std::string(fallbackName) : stem)
+                    + " " + std::to_string(
+                        static_cast<unsigned>(candidate.getId()));
+                candidate.setName(name.c_str());
+                auto* transform =
+                    candidate.addComponent<ayt::entity::Transform>();
+                if (transform == nullptr) return false;
+                transform->setPosition(position.x, position.y, position.z);
+                transform->setScale(
+                    initialScale.x, initialScale.y, initialScale.z);
+                if (isMesh) {
+                    auto* mesh =
+                        candidate.addComponent<ayt::entity::MeshComponent>();
+                    if (mesh == nullptr) return false;
+                    mesh->meshPath = componentAssetPath;
+                    mesh->materialPath =
+                        _assetDatabase.portableAssetPath(materialPath);
+                } else if (isTexture) {
+                    auto* sprite = candidate.addComponent<
+                        ayt::entity::SpriteComponent>();
+                    if (sprite == nullptr) return false;
+                    sprite->texturePath = componentAssetPath;
+                } else {
+                    auto* tilemap = candidate.addComponent<
+                        ayt::entity::TilemapComponent>();
+                    if (tilemap == nullptr) return false;
+                    tilemap->tilemapPath = componentAssetPath;
+                }
+                return true;
+            },
+            &entityId)) {
+        return false;
     }
+    ayt::entity::Entity* entity = world->findEntity(entityId);
+    if (entity == nullptr) return false;
 
     setSelectedEntity(world, entity);
     _inspectedComponentTypeName = isMesh ? "MeshComponent"
         : (isTexture ? "SpriteComponent" : "TilemapComponent");
-    _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -7374,14 +7405,23 @@ void EditorSession::createEmptyEntity()
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
     ayt::entity::World* world = hierarchyWorldMutable();
     if (world == nullptr) return;
-    ayt::entity::Entity* entity = world->createEntity();
-    if (entity == nullptr) return;
     const std::string name = "Entity "
-        + std::to_string(static_cast<unsigned>(world->getAllEntities().size()));
-    entity->setName(name.c_str());
-    entity->addComponent<ayt::entity::Transform>();
+        + std::to_string(static_cast<unsigned>(
+            world->getAllEntities().size() + 1u));
+    uint32_t entityId = 0;
+    if (!_document->createEntity(
+            "Create Entity",
+            [&name](ayt::entity::Entity& candidate) {
+                candidate.setName(name.c_str());
+                return candidate.addComponent<ayt::entity::Transform>()
+                    != nullptr;
+            },
+            &entityId)) {
+        return;
+    }
+    ayt::entity::Entity* entity = world->findEntity(entityId);
+    if (entity == nullptr) return;
     setSelectedEntity(world, entity);
-    _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -7396,39 +7436,58 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
     if (world == nullptr) return 0u;
     if (!_sceneCamera.isTwoD()) setSceneViewMode(SceneViewMode::TwoD);
 
-    ayt::entity::Entity* entity = world->createEntity();
-    if (entity == nullptr) return 0u;
-    const uint32_t entityId = entity->getId();
     const ayt::math::FVector2 center = _sceneCamera.twoDCenter();
-    auto* transform = entity->addComponent<ayt::entity::Transform>();
-    transform->setPosition(center.x, center.y, 0.0f);
-
     const char* typeName = "Sprite";
-    if (kind == Editor2DEntityKind::Sprite) {
-        entity->addComponent<ayt::entity::SpriteComponent>();
-        transform->setScale(100.0f, 100.0f, 1.0f);
-        _inspectedComponentTypeName = "SpriteComponent";
-    } else if (kind == Editor2DEntityKind::Tilemap) {
-        entity->addComponent<ayt::entity::TilemapComponent>();
-        transform->setPosition(center.x - 16.0f, center.y - 16.0f, 0.0f);
+    const char* inspectedTypeName = "SpriteComponent";
+    if (kind == Editor2DEntityKind::Tilemap) {
         typeName = "Tilemap";
-        _inspectedComponentTypeName = "TilemapComponent";
-    } else {
-        auto* camera = entity->addComponent<ayt::entity::OrthoCameraComponent>();
-        camera->viewSize = std::max(_sceneCamera.twoDViewHeight(), 1.0f);
-        camera->zoom = 1.0f;
-        camera->designWidth = camera->viewSize * 1.6f;
-        camera->designHeight = camera->viewSize;
-        camera->viewportAspect = 1.6f;
-        camera->active = true;
+        inspectedTypeName = "TilemapComponent";
+    } else if (kind == Editor2DEntityKind::Camera) {
         typeName = "2D Camera";
-        _inspectedComponentTypeName = "OrthoCameraComponent";
+        inspectedTypeName = "OrthoCameraComponent";
     }
-    entity->setName((std::string(typeName) + " "
-        + std::to_string(static_cast<unsigned>(entityId))).c_str());
+    uint32_t entityId = 0;
+    if (!_document->createEntity(
+            std::string("Create ") + typeName,
+            [&, typeName](ayt::entity::Entity& candidate) {
+                auto* transform =
+                    candidate.addComponent<ayt::entity::Transform>();
+                if (transform == nullptr) return false;
+                transform->setPosition(center.x, center.y, 0.0f);
+                if (kind == Editor2DEntityKind::Sprite) {
+                    if (candidate.addComponent<ayt::entity::SpriteComponent>()
+                        == nullptr) return false;
+                    transform->setScale(100.0f, 100.0f, 1.0f);
+                } else if (kind == Editor2DEntityKind::Tilemap) {
+                    if (candidate.addComponent<ayt::entity::TilemapComponent>()
+                        == nullptr) return false;
+                    transform->setPosition(
+                        center.x - 16.0f, center.y - 16.0f, 0.0f);
+                } else {
+                    auto* camera = candidate.addComponent<
+                        ayt::entity::OrthoCameraComponent>();
+                    if (camera == nullptr) return false;
+                    camera->viewSize =
+                        std::max(_sceneCamera.twoDViewHeight(), 1.0f);
+                    camera->zoom = 1.0f;
+                    camera->designWidth = camera->viewSize * 1.6f;
+                    camera->designHeight = camera->viewSize;
+                    camera->viewportAspect = 1.6f;
+                    camera->active = true;
+                }
+                candidate.setName((std::string(typeName) + " "
+                    + std::to_string(static_cast<unsigned>(candidate.getId())))
+                    .c_str());
+                return true;
+            },
+            &entityId)) {
+        return 0u;
+    }
+    ayt::entity::Entity* entity = world->findEntity(entityId);
+    if (entity == nullptr) return 0u;
 
+    _inspectedComponentTypeName = inspectedTypeName;
     setSelectedEntity(world, entity);
-    _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -7443,9 +7502,8 @@ void EditorSession::deleteSelectedEntity()
     ayt::entity::World* world = hierarchyWorldMutable();
     ayt::entity::Entity* entity = _selection.resolve(world);
     if (world == nullptr || entity == nullptr) return;
-    clearSelectedEntity();
-    world->destroyEntity(entity);
-    _document->markDirty();
+    if (!_document->deleteEntity(entity->getId())) return;
+    clearSelectedEntity(false);
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -9099,15 +9157,14 @@ void EditorSession::addSelectedComponent()
         static_cast<std::size_t>(selected)];
     std::vector<std::string> added;
     std::string error;
-    if (!EditorComponentPolicyRegistry::instance().addWithRequirements(
-            *entity, typeName, &added, &error)) {
+    if (!_document->addComponent(
+            entity->getId(), typeName, &added, &error)) {
         if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
         refreshComponentBrowser();
         return;
     }
 
     _inspectedComponentTypeName = typeName;
-    _document->markDirty();
     refreshInspectorLabels();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
@@ -9139,9 +9196,14 @@ void EditorSession::removeSelectedComponent()
     if (_inspectedComponentTypeName == "Transform") {
         finishTransformGizmoDrag(false);
     }
-    descriptor->remove(*entity);
+    std::string error;
+    if (!_document->removeComponent(
+            entity->getId(), _inspectedComponentTypeName, &error)) {
+        if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+        refreshComponentBrowser();
+        return;
+    }
     _inspectedComponentTypeName.clear();
-    _document->markDirty();
     refreshInspectorLabels();
     refreshUnsavedIndicator();
     syncTransformGizmoToRenderer();
@@ -9668,10 +9730,17 @@ void EditorSession::commitInspectorColorField(
     }
     auto* current = static_cast<ayt::math::FVector4*>(field->get(component));
     if (current == nullptr || *current == next) return;
-    *current = next;
-    _document->markDirty();
-    refreshUnsavedIndicator();
-    if (_repaintCallback) _repaintCallback();
+    (void)_document->mutateComponent(
+        entity->getId(), componentType, "Edit " + fieldName,
+        "property:" + std::to_string(entity->getId()) + ":"
+            + componentType + ":" + fieldName,
+        [field, next](ayt::entity::IComponent& editable) {
+            auto* target = static_cast<ayt::math::FVector4*>(
+                field->get(&editable));
+            if (target == nullptr || *target == next) return false;
+            *target = next;
+            return true;
+        });
 }
 
 void EditorSession::commitInspectorTextField(
@@ -9758,84 +9827,96 @@ void EditorSession::commitInspectorTextField(
         }
     }
 
-    bool changed = false;
-    if (stringField) {
-        auto& target = *static_cast<std::string*>(value);
-        const std::string next = wideToUtf8(text);
-        changed = target != next;
-        if (changed) target = next;
-    } else if (isReflectedType<float>(fieldType)) {
-        auto& target = *static_cast<float*>(value);
-        const float next = static_cast<float>(parsed);
-        changed = target != next;
-        if (changed) target = next;
-    } else if (isReflectedType<double>(fieldType)) {
-        auto& target = *static_cast<double*>(value);
-        changed = target != parsed;
-        if (changed) target = parsed;
-    } else if (isReflectedType<ayt::math::FVector2>(fieldType)
-               && elementIndex >= 0 && elementIndex < 2) {
-        auto& target = *static_cast<ayt::math::FVector2*>(value);
-        const float next = static_cast<float>(parsed);
-        changed = target[elementIndex] != next;
-        if (changed) target[elementIndex] = next;
-    } else if (isReflectedType<ayt::math::FVector3>(fieldType)
-               && elementIndex >= 0 && elementIndex < 3) {
-        auto& target = *static_cast<ayt::math::FVector3*>(value);
-        const float next = static_cast<float>(parsed);
-        changed = target[elementIndex] != next;
-        if (changed) target[elementIndex] = next;
-    } else if (isReflectedType<ayt::math::FVector4>(fieldType)
-               && elementIndex >= 0 && elementIndex < 4) {
-        auto& target = *static_cast<ayt::math::FVector4*>(value);
-        const float next = static_cast<float>(parsed);
-        changed = target[elementIndex] != next;
-        if (changed) target[elementIndex] = next;
-    } else if (isReflectedType<ayt::math::FQuaternion>(fieldType)
-               && elementIndex >= 0 && elementIndex < 3) {
-        constexpr float degreesToRadians = 0.017453292519943295f;
-        auto& target = *static_cast<ayt::math::FQuaternion*>(value);
-        auto euler = target.toEulerAngles();
-        euler[elementIndex] = static_cast<float>(parsed) * degreesToRadians;
-        target = ayt::math::FQuaternion::fromEulerAngles(euler);
-        changed = true;
-    } else if (isReflectedType<std::int8_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::int8_t>(value, parsed)
-            : assignIntegralText<std::int8_t>(value, text);
-    } else if (isReflectedType<std::uint8_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::uint8_t>(value, parsed)
-            : assignIntegralText<std::uint8_t>(value, text);
-    } else if (isReflectedType<std::int16_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::int16_t>(value, parsed)
-            : assignIntegralText<std::int16_t>(value, text);
-    } else if (isReflectedType<std::uint16_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::uint16_t>(value, parsed)
-            : assignIntegralText<std::uint16_t>(value, text);
-    } else if (isReflectedType<std::int32_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::int32_t>(value, parsed)
-            : assignIntegralText<std::int32_t>(value, text);
-    } else if (isReflectedType<std::uint32_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::uint32_t>(value, parsed)
-            : assignIntegralText<std::uint32_t>(value, text);
-    } else if (isReflectedType<std::int64_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::int64_t>(value, parsed)
-            : assignIntegralText<std::int64_t>(value, text);
-    } else if (isReflectedType<std::uint64_t>(fieldType)) {
-        changed = constrainedIntegral
-            ? assignIntegralValue<std::uint64_t>(value, parsed)
-            : assignIntegralText<std::uint64_t>(value, text);
-    }
+    const bool changed = _document->mutateComponent(
+        entity->getId(), componentType, "Edit " + fieldName,
+        "property:" + std::to_string(entity->getId()) + ":"
+            + componentType + ":" + fieldName + ":"
+            + std::to_string(elementIndex),
+        [&](ayt::entity::IComponent& editable) {
+            void* targetValue = field->get(&editable);
+            if (targetValue == nullptr) return false;
+            bool assigned = false;
+            if (stringField) {
+                auto& target = *static_cast<std::string*>(targetValue);
+                const std::string next = wideToUtf8(text);
+                assigned = target != next;
+                if (assigned) target = next;
+            } else if (isReflectedType<float>(fieldType)) {
+                auto& target = *static_cast<float*>(targetValue);
+                const float next = static_cast<float>(parsed);
+                assigned = target != next;
+                if (assigned) target = next;
+            } else if (isReflectedType<double>(fieldType)) {
+                auto& target = *static_cast<double*>(targetValue);
+                assigned = target != parsed;
+                if (assigned) target = parsed;
+            } else if (isReflectedType<ayt::math::FVector2>(fieldType)
+                       && elementIndex >= 0 && elementIndex < 2) {
+                auto& target =
+                    *static_cast<ayt::math::FVector2*>(targetValue);
+                const float next = static_cast<float>(parsed);
+                assigned = target[elementIndex] != next;
+                if (assigned) target[elementIndex] = next;
+            } else if (isReflectedType<ayt::math::FVector3>(fieldType)
+                       && elementIndex >= 0 && elementIndex < 3) {
+                auto& target =
+                    *static_cast<ayt::math::FVector3*>(targetValue);
+                const float next = static_cast<float>(parsed);
+                assigned = target[elementIndex] != next;
+                if (assigned) target[elementIndex] = next;
+            } else if (isReflectedType<ayt::math::FVector4>(fieldType)
+                       && elementIndex >= 0 && elementIndex < 4) {
+                auto& target =
+                    *static_cast<ayt::math::FVector4*>(targetValue);
+                const float next = static_cast<float>(parsed);
+                assigned = target[elementIndex] != next;
+                if (assigned) target[elementIndex] = next;
+            } else if (isReflectedType<ayt::math::FQuaternion>(fieldType)
+                       && elementIndex >= 0 && elementIndex < 3) {
+                constexpr float degreesToRadians = 0.017453292519943295f;
+                auto& target =
+                    *static_cast<ayt::math::FQuaternion*>(targetValue);
+                auto euler = target.toEulerAngles();
+                euler[elementIndex] =
+                    static_cast<float>(parsed) * degreesToRadians;
+                target = ayt::math::FQuaternion::fromEulerAngles(euler);
+                assigned = true;
+            } else if (isReflectedType<std::int8_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::int8_t>(targetValue, parsed)
+                    : assignIntegralText<std::int8_t>(targetValue, text);
+            } else if (isReflectedType<std::uint8_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::uint8_t>(targetValue, parsed)
+                    : assignIntegralText<std::uint8_t>(targetValue, text);
+            } else if (isReflectedType<std::int16_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::int16_t>(targetValue, parsed)
+                    : assignIntegralText<std::int16_t>(targetValue, text);
+            } else if (isReflectedType<std::uint16_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::uint16_t>(targetValue, parsed)
+                    : assignIntegralText<std::uint16_t>(targetValue, text);
+            } else if (isReflectedType<std::int32_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::int32_t>(targetValue, parsed)
+                    : assignIntegralText<std::int32_t>(targetValue, text);
+            } else if (isReflectedType<std::uint32_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::uint32_t>(targetValue, parsed)
+                    : assignIntegralText<std::uint32_t>(targetValue, text);
+            } else if (isReflectedType<std::int64_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::int64_t>(targetValue, parsed)
+                    : assignIntegralText<std::int64_t>(targetValue, text);
+            } else if (isReflectedType<std::uint64_t>(fieldType)) {
+                assigned = constrainedIntegral
+                    ? assignIntegralValue<std::uint64_t>(targetValue, parsed)
+                    : assignIntegralText<std::uint64_t>(targetValue, text);
+            }
+            return assigned;
+        });
     if (!changed) return;
-    _document->markDirty();
-    refreshUnsavedIndicator();
-    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::commitInspectorBoolField(
@@ -9863,10 +9944,16 @@ void EditorSession::commitInspectorBoolField(
     }
     auto* target = static_cast<bool*>(field->get(component));
     if (target == nullptr || *target == checked) return;
-    *target = checked;
-    _document->markDirty();
-    refreshUnsavedIndicator();
-    if (_repaintCallback) _repaintCallback();
+    (void)_document->mutateComponent(
+        entity->getId(), componentType, "Edit " + fieldName,
+        "property:" + std::to_string(entity->getId()) + ":"
+            + componentType + ":" + fieldName,
+        [field, checked](ayt::entity::IComponent& editable) {
+            auto* value = static_cast<bool*>(field->get(&editable));
+            if (value == nullptr || *value == checked) return false;
+            *value = checked;
+            return true;
+        });
 }
 
 void EditorSession::refreshTransformInspector()
