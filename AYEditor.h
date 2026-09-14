@@ -6,7 +6,6 @@
 #include <AYEditor/EditorSceneDocument.h>
 #include <AYEditor/EditorSelection.h>
 #include <AYEditor/EditorSelectionContext.h>
-#include <AYEditor/EditorCommandStack.h>
 #include <AYEditor/EditorCommandSystem.h>
 #include <AYEditor/EditorComponentModule.h>
 #include <AYEditor/EditorDocumentManager.h>

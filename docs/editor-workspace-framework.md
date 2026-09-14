@@ -72,10 +72,12 @@ migrate; `EditorCommandRouter` stays in the AYEditor product layer.
 
 The editor integrations have not reached the final target yet:
 
-- `EditorCommandStack` is still the production Scene path. `EditorSession`
-  owns it directly and uses it for Transform commands and history resets.
-- The general `EditorCommandHistory` is ready for production adoption, but no
-  production document owns an instance yet.
+- `EditorSceneDocument` now owns the production Scene history and is the
+  active command target. Transform edits, the save cursor, reload boundaries,
+  and World-generation invalidation use the shared mechanism.
+- `EditorCommandStack` has been removed. Entity, component, and reflected
+  property edits are the remaining Scene paths to convert from direct mutation
+  plus history invalidation into document commands.
 - GameFlow, UIFlow, UI Layout, and some built-in editor surfaces retain their
   own snapshot or command stacks. B-8 therefore tracks command-history
   fragmentation across editors, rather than only two competing classes.
@@ -88,10 +90,11 @@ Migration order and status:
    an expired owner through `isAlive`, and history faults safely without moving
    its cursor. Retention defaults to 256 entries and preserves or invalidates
    the save cursor according to the retained boundary.
-2. Move Scene history ownership from `EditorSession` into the Scene document.
-   Migrate Transform first, followed by entity add/delete, component
-   add/remove, and reflected property changes. A continuous drag remains one
-   undo step; cancelling it restores the value from before the gesture.
+2. **In progress:** Scene history ownership and Transform have moved from
+   `EditorSession` into `EditorSceneDocument`; `EditorCommandStack` is gone.
+   Next migrate entity add/delete, component add/remove, and reflected property
+   changes. A continuous drag remains one undo step; cancelling it restores the
+   value from before the gesture.
 3. Adapt GameFlow, UIFlow, and UI Layout to the shared history. Full-document
    snapshot commands are acceptable as an intermediate adapter; frequently
    edited operations should later become smaller domain commands with merge
@@ -105,11 +108,10 @@ workspace/project command target, but ordinary edits must remain in the
 document that owns the changed resource. Switching tabs must preserve each
 document's history, and Ctrl+Z/Ctrl+Y must affect only the active target.
 
-Replacing the `EditorCommandStack` member currently embedded in
-`EditorSession` changes the public class layout. The Scene cutover must either
-hide this state behind a private implementation boundary or deliberately bump
-the AYEditor source ABI. The migration must also verify Foundation, headless,
-and full-client configurations without creating separate dependency installs.
+Removing the `EditorCommandStack` member changed the public class layout, so
+the Scene cutover deliberately bumped the AYEditor source ABI to 16. The
+migration must also verify Foundation, headless, and full-client configurations
+without creating separate dependency installs.
 
 B-8 is complete when save/dirty state follows the per-document history cursor,
 closing/reloading a Scene or replacing its World cannot leave executable stale

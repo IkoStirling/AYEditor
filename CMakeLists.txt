@@ -81,7 +81,6 @@ set(SRC_FILES
     src/AYEditorFreecam.cpp
     src/AYEditorSceneDocument.cpp
     src/AYEditorSelection.cpp
-    src/AYEditorCommandStack.cpp
     src/AYEditorCommandSystem.cpp
     src/AYEditorDocumentManager.cpp
     src/AYEditorDockViewHost.cpp
@@ -153,7 +152,6 @@ set(HEAD_FILES
     include/AYEditor/EditorFreecam.h
     include/AYEditor/EditorSceneDocument.h
     include/AYEditor/EditorSelection.h
-    include/AYEditor/EditorCommandStack.h
     include/AYEditor/EditorCommandSystem.h
     include/AYEditor/EditorDocumentManager.h
     include/AYEditor/EditorDockViewHost.h
@@ -209,7 +207,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=15)
+    AYEDITOR_SOURCE_ABI_VERSION=16)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

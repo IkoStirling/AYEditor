@@ -7,7 +7,6 @@
 #include "AYEditor/EditorSceneViewWorkspace.h"
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
-#include "AYEditor/EditorCommandStack.h"
 #include "AYEditor/EditorTransformGizmo.h"
 #include "AYEditor/EditorPreferences.h"
 #include "AYEditor/EditorAssetDatabase.h"
@@ -712,7 +711,6 @@ private:
     std::unique_ptr<IEditorHostServices> _editorHostServices;
     std::unique_ptr<EditorDockViewHost> _dockViewHost;
 
-    EditorCommandStack _commands;
     ayt::ui::ComboBox* _componentPicker = nullptr;
     std::vector<std::string> _componentPickerTypeNames;
     ayt::ui::ComboBox* _attachedComponentPicker = nullptr;

@@ -1705,9 +1705,9 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
         _workspace->selections().contextFor("scene.main");
     _selection.bind(&sceneSelection);
     (void)_workspace->selections().activate("scene.main");
-    _workspace->commands().setActiveTarget(&_commands);
-    _commands.setChangedCallback([this]() {
-        if (_document) _document->markDirty();
+    _workspace->commands().setActiveTarget(_document.get());
+    _document->setHistoryChangedCallback([this]() {
+        _outlinerRefreshPending = true;
         refreshTransformInspector();
         refreshUnsavedIndicator();
         if (_repaintCallback) _repaintCallback();
@@ -1891,7 +1891,6 @@ void EditorSession::shutdown() {
     _outlinerRefreshPending = false;
     _outlinerRootExpanded = true;
     _updatingOutlinerSelection = false;
-    _commands.clear();
     if (_workspace != nullptr && _dockViewHost == nullptr) {
         _workspace->commands().setActiveTarget(nullptr);
         while (!_workspace->documents().records().empty()) {
@@ -2779,7 +2778,7 @@ bool EditorSession::onKeyDown(int keyCode)
     }
     if (_workspace != nullptr
         && _workspace->commands().activeTarget() == nullptr) {
-        _workspace->commands().setActiveTarget(&_commands);
+        _workspace->commands().setActiveTarget(_document.get());
     }
     IEditorCommandTarget* commandTarget = _workspace != nullptr
         ? _workspace->commands().activeTarget() : nullptr;
@@ -2805,7 +2804,7 @@ bool EditorSession::onKeyDown(int keyCode)
                 && _workspace->commands().execute(command);
         }
         if (command == "file.save") {
-            if (commandTarget != nullptr && commandTarget != &_commands
+            if (commandTarget != nullptr && commandTarget != _document.get()
                 && commandTarget->handlesCommand(command)) {
                 return _workspace->commands().execute(command);
             }
@@ -5609,7 +5608,6 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     setSelectedEntity(world, entity);
     _inspectedComponentTypeName = isMesh ? "MeshComponent"
         : (isTexture ? "SpriteComponent" : "TilemapComponent");
-    _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -7363,7 +7361,6 @@ void EditorSession::afterDocumentReload()
 {
     clearSelectedEntity(false);
     _playRuntime.forgetEditScenePreview();
-    _commands.clear();
     refreshOutliner();
     refreshInspectorLabels();
     refreshTransformInspector();
@@ -7384,7 +7381,6 @@ void EditorSession::createEmptyEntity()
     entity->setName(name.c_str());
     entity->addComponent<ayt::entity::Transform>();
     setSelectedEntity(world, entity);
-    _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -7432,7 +7428,6 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
         + std::to_string(static_cast<unsigned>(entityId))).c_str());
 
     setSelectedEntity(world, entity);
-    _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -7450,7 +7445,6 @@ void EditorSession::deleteSelectedEntity()
     if (world == nullptr || entity == nullptr) return;
     clearSelectedEntity();
     world->destroyEntity(entity);
-    _commands.clear();
     _document->markDirty();
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -7545,7 +7539,7 @@ void EditorSession::bindMenuBar() {
                     _dockViewHost->syncCommandTargetFromFocus();
                     IEditorCommandTarget* target =
                         _workspace->commands().activeTarget();
-                    if (target != nullptr && target != &_commands
+                    if (target != nullptr && target != _document.get()
                         && target->handlesCommand("file.save")) {
                         (void)_workspace->commands().execute("file.save");
                         return;
@@ -7588,12 +7582,12 @@ void EditorSession::bindMenuBar() {
                     }
                     IEditorCommandTarget* target =
                         _workspace->commands().activeTarget();
-                    if (target != nullptr && target != &_commands
+                    if (target != nullptr && target != _document.get()
                         && target->handlesCommand("edit.undo")) {
                         (void)_workspace->commands().execute("edit.undo");
                         return;
                     }
-                    _workspace->commands().setActiveTarget(&_commands);
+                    _workspace->commands().setActiveTarget(_document.get());
                     (void)_workspace->commands().execute("edit.undo");
                 }
             });
@@ -7610,12 +7604,12 @@ void EditorSession::bindMenuBar() {
                     }
                     IEditorCommandTarget* target =
                         _workspace->commands().activeTarget();
-                    if (target != nullptr && target != &_commands
+                    if (target != nullptr && target != _document.get()
                         && target->handlesCommand("edit.redo")) {
                         (void)_workspace->commands().execute("edit.redo");
                         return;
                     }
-                    _workspace->commands().setActiveTarget(&_commands);
+                    _workspace->commands().setActiveTarget(_document.get());
                     (void)_workspace->commands().execute("edit.redo");
                 }
             });
@@ -9113,7 +9107,6 @@ void EditorSession::addSelectedComponent()
     }
 
     _inspectedComponentTypeName = typeName;
-    _commands.clear();
     _document->markDirty();
     refreshInspectorLabels();
     refreshUnsavedIndicator();
@@ -9148,7 +9141,6 @@ void EditorSession::removeSelectedComponent()
     }
     descriptor->remove(*entity);
     _inspectedComponentTypeName.clear();
-    _commands.clear();
     _document->markDirty();
     refreshInspectorLabels();
     refreshUnsavedIndicator();
@@ -9677,7 +9669,6 @@ void EditorSession::commitInspectorColorField(
     auto* current = static_cast<ayt::math::FVector4*>(field->get(component));
     if (current == nullptr || *current == next) return;
     *current = next;
-    _commands.clear();
     _document->markDirty();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
@@ -9756,8 +9747,11 @@ void EditorSession::commitInspectorTextField(
             }
             if (handled) {
                 _updatingComponentPropertyCommit = true;
-                (void)_commands.executeTransform(
-                    *world, entity->getId(), state);
+                (void)_document->executeTransform(
+                    entity->getId(), state, "Edit Transform",
+                    "transform:" + std::to_string(entity->getId())
+                        + ":" + fieldName + ":"
+                        + std::to_string(elementIndex));
                 _updatingComponentPropertyCommit = false;
                 return;
             }
@@ -9839,7 +9833,6 @@ void EditorSession::commitInspectorTextField(
             : assignIntegralText<std::uint64_t>(value, text);
     }
     if (!changed) return;
-    _commands.clear();
     _document->markDirty();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
@@ -9871,7 +9864,6 @@ void EditorSession::commitInspectorBoolField(
     auto* target = static_cast<bool*>(field->get(component));
     if (target == nullptr || *target == checked) return;
     *target = checked;
-    _commands.clear();
     _document->markDirty();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
@@ -10208,7 +10200,7 @@ void EditorSession::finishTransformGizmoDrag(bool commit)
     _gizmoDragEntityId = 0;
     _gizmoHoverHandle = EditorGizmoHandle::None;
     if (commit && transform != nullptr) {
-        _commands.executeTransform(*world, entityId, after);
+        _document->executeTransform(entityId, after, "Transform Entity");
     } else {
         refreshTransformInspector();
     }
@@ -10420,12 +10412,8 @@ void EditorSession::onModeChanged(EditorMode mode) {
 
     ayt::entity::World* activeWorld = hierarchyWorldMutable();
     if (mode == EditorMode::Edit) {
-        // B-2 (ayeditor audit 2026-09-14): enterEdit() has already
-        // destroyed the Play scene. Transform commands captured while in
-        // Play mode hold a raw World* into the now-defunct Play world;
-        // any later undo()/redo() would dereference freed memory. Drop
-        // the transform history alongside the entity selection.
-        _commands.clear();
+        // Scene history belongs to the persistent Edit document and never
+        // targets the transient Play World. Only the Play selection expires.
         clearSelectedEntity(false);
     } else if (_selectionWorld != activeWorld) {
         // Entering Play swaps from the persistent Edit world to its clone.

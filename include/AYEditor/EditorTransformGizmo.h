@@ -1,6 +1,6 @@
 #pragma once
 
-#include "AYEditor/EditorCommandStack.h"
+#include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorPreferences.h"
 #include "AYMath/MathTypes.h"
 

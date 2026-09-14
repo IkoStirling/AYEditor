@@ -1,6 +1,5 @@
 #include "AYTest.h"
 
-#include "AYEditor/EditorCommandStack.h"
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEntity.h"
@@ -64,28 +63,64 @@ TEST_CASE(editor_transform_command_executes_undoes_and_redoes)
     CHECK(selection.select(entity->getId()));
     CHECK(selection.resolve(&world) == entity);
 
-    EditorCommandStack commands;
     int changeCount = 0;
-    commands.setChangedCallback([&changeCount]() { ++changeCount; });
+    document.setHistoryChangedCallback(
+        [&changeCount]() { ++changeCount; });
 
     EditorTransformState after;
     after.position = {4.0f, 5.0f, 6.0f};
     after.rotation = ayt::math::FQuaternion::identity();
     after.scale = {2.0f, 3.0f, 4.0f};
-    CHECK(commands.executeTransform(world, entity->getId(), after));
+    CHECK(document.executeTransform(entity->getId(), after));
     CHECK(transform->position.x == 4.0f);
     CHECK(transform->scale.z == 4.0f);
-    CHECK(commands.canUndo());
+    CHECK(document.canUndo());
 
-    CHECK(commands.undo());
+    CHECK(document.undo());
     CHECK(transform->position.x == 0.0f);
     CHECK(transform->scale.z == 1.0f);
-    CHECK(commands.canRedo());
+    CHECK(document.canRedo());
 
-    CHECK(commands.redo());
+    CHECK(document.redo());
     CHECK(transform->position.x == 4.0f);
     CHECK(transform->scale.z == 4.0f);
     CHECK(changeCount == 3);
+}
+
+TEST_CASE(editor_scene_history_tracks_save_cursor_and_reload_boundary)
+{
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path path = std::filesystem::temp_directory_path()
+        / ("ayeditor_history_" + std::to_string(nonce) + ".ayscene");
+
+    EditorSceneDocument document;
+    ayt::entity::World& world = document.scene().world();
+    ayt::entity::Entity* entity = world.createEntity();
+    CHECK(entity != nullptr);
+    auto* transform = entity->addComponent<ayt::entity::Transform>();
+    CHECK(transform != nullptr);
+    document.markDirty();
+
+    std::string error;
+    CHECK(document.saveAs(path.string(), &error));
+    CHECK(!document.isDirty());
+
+    EditorTransformState after;
+    after.position = {8.0f, 0.0f, 0.0f};
+    CHECK(document.executeTransform(entity->getId(), after));
+    CHECK(document.isDirty());
+    CHECK(document.undo());
+    CHECK(!document.isDirty());
+    CHECK(document.redo());
+    CHECK(document.isDirty());
+
+    CHECK(document.open(path.string(), &error));
+    CHECK(!document.isDirty());
+    CHECK(!document.canUndo());
+    CHECK(!document.canRedo());
+
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
 }
 
 TEST_SUITE_END
