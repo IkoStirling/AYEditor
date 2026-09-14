@@ -249,9 +249,39 @@ EditorAssetTrashResult EditorAssetTrash::purge(
     const auto timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const auto entries = transaction->entries;
+    // B-10 (ayeditor audit 2026-09-14): re-resolve the transaction path
+    // through weakly_canonical and confirm it is still inside the project
+    // root before invoking remove_all. Without this guard a symlink that
+    // escaped `_projectRoot` (or a hostile project descriptor pointing at
+    // an arbitrary tree) could make purge() delete files outside the
+    // project. The transactionId itself is loaded from disk in reload(),
+    // so we cannot trust it by string alone.
+    std::error_code canonicalError;
+    const std::filesystem::path transactionPath =
+        std::filesystem::weakly_canonical(
+            std::filesystem::path(_projectRoot) / ".ayeditor" / "trash"
+                / transactionId,
+            canonicalError);
+    if (canonicalError) {
+        result.error = "Could not resolve trash transaction path: "
+            + canonicalError.message();
+        return result;
+    }
+    const std::filesystem::path canonicalRoot =
+        std::filesystem::weakly_canonical(
+            std::filesystem::path(_projectRoot), canonicalError);
+    if (canonicalError) {
+        result.error = "Could not resolve project root: "
+            + canonicalError.message();
+        return result;
+    }
+    if (!isInside(transactionPath, canonicalRoot)) {
+        result.error = "Refusing to purge a trash transaction outside the "
+            "project root: " + transactionPath.string();
+        return result;
+    }
     std::error_code error;
-    std::filesystem::remove_all(std::filesystem::path(_projectRoot)
-        / ".ayeditor" / "trash" / transactionId, error);
+    std::filesystem::remove_all(transactionPath, error);
     if (error) {
         result.error = "Could not permanently clear trash: " + error.message();
         return result;
