@@ -1,6 +1,8 @@
 #include "AYEditor/EditorSession.h"
 
+#if defined(_DEBUG) && defined(_MSC_VER)
 #include "AYEditor/EditorHeapDebug.h"
+#endif
 #include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorAssetTilePresenter.h"

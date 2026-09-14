@@ -6,7 +6,9 @@
 //   level 3: + ensurePresentationReady + UIRenderBackend init, no frames
 //   level 4: + renderCompositeFrame for --frames N (default 1)
 
+#if defined(_DEBUG) && defined(_MSC_VER)
 #include "AYEditor/EditorHeapDebug.h"
+#endif
 #include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEntity/EntityModule.h"
