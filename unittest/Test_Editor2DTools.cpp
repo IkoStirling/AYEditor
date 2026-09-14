@@ -800,4 +800,31 @@ TEST_CASE(TilemapDocumentRejectsInvalidDimensionsAndOutOfBoundsPaint)
     CHECK_INT_EQ(document.floodFill(99u, 99u, 1u), 0u);
 }
 
+TEST_CASE(TilemapDocumentPaintRectReportsChangedCount)
+{
+    // H-13 (ayeditor audit 2026-09-14): expose the AY2D paintRect API through
+    // EditorTilemapDocument so a brush stroke can be wrapped in a single
+    // EditorCommandHistory transaction. Verify the wrapper returns a
+    // positive count on a fresh paint, mutates every cell in the rect,
+    // marks the document dirty, and reports 0 changes when the rect is
+    // already filled with the requested tileId (no-op stroke).
+    EditorTilemapDocument document;
+    CHECK_TRUE(document.create(4u, 4u, 16u, 16u, 0u));
+    const uint32_t changed = document.paintRect(1u, 1u, 2u, 2u, 7u);
+    CHECK_TRUE(changed >= 4u);
+    CHECK_INT_EQ(document.tileAt(0u, 0u), 0u);
+    CHECK_INT_EQ(document.tileAt(1u, 1u), 7u);
+    CHECK_INT_EQ(document.tileAt(2u, 1u), 7u);
+    CHECK_INT_EQ(document.tileAt(1u, 2u), 7u);
+    CHECK_INT_EQ(document.tileAt(2u, 2u), 7u);
+    CHECK_INT_EQ(document.tileAt(3u, 3u), 0u);
+    CHECK_TRUE(document.dirty());
+
+    // Painting the same rect with the same id should report 0 changes
+    // (every cell already matches the requested tileId) so callers can
+    // skip building an undo entry for a no-op stroke.
+    const uint32_t noop = document.paintRect(1u, 1u, 2u, 2u, 7u);
+    CHECK_INT_EQ(noop, 0u);
+}
+
 TEST_SUITE_END

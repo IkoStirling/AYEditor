@@ -73,6 +73,14 @@ bool EditorTilemapDocument::paint(
     return _document.paint(col, row, tileId);
 }
 
+uint32_t EditorTilemapDocument::paintRect(
+    uint32_t firstCol, uint32_t firstRow,
+    uint32_t lastCol, uint32_t lastRow,
+    uint32_t tileId) noexcept
+{
+    return _document.paintRect(firstCol, firstRow, lastCol, lastRow, tileId);
+}
+
 uint32_t EditorTilemapDocument::floodFill(
     uint32_t col, uint32_t row, uint32_t tileId)
 {

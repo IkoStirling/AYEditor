@@ -30,6 +30,13 @@ public:
 
     [[nodiscard]] uint32_t tileAt(uint32_t col, uint32_t row) const noexcept;
     bool paint(uint32_t col, uint32_t row, uint32_t tileId) noexcept;
+    // H-13 (ayeditor audit 2026-09-14): expose the AY2D paintRect API so a
+    // brush stroke that paints many tiles can be wrapped in a single undo
+    // transaction by the editor (see EditorCommandHistory). Returns the
+    // number of tiles that actually changed.
+    uint32_t paintRect(uint32_t firstCol, uint32_t firstRow,
+                       uint32_t lastCol, uint32_t lastRow,
+                       uint32_t tileId) noexcept;
     uint32_t floodFill(uint32_t col, uint32_t row, uint32_t tileId);
     void setCollisionFlags(uint32_t tileId, uint32_t flags);
     void setAnimation(uint32_t sourceTileId,
