@@ -251,7 +251,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
     PRIVATE AYDeviceSubSystem)
 
 # Phase 2a: toolbar Import button uses the Win32 file picker
-# (AYImportDialog::showOpenFileDialog -> GetOpenFileNameA from
+# (AYImportDialog::showOpenFileDialog -> GetOpenFileNameW from
 # <commdlg.h>), which lives in the comdlg32.lib Windows SDK library.
 # Linux/macOS builds of AYEditor don't import this header (the
 # non-Windows branch returns empty), so the link is gated. The demo
