@@ -139,7 +139,7 @@ public:
 
     const std::string& label() const noexcept override { return _label; }
     bool execute() override { _value = _after; return true; }
-    void undo() override { _value = _before; }
+    bool undo() override { _value = _before; return true; }
     std::string mergeKey() const override { return _mergeKey; }
     bool mergeFrom(const IEditorCommand& newer) override {
         const auto* command = dynamic_cast<const SetIntegerCommand*>(&newer);

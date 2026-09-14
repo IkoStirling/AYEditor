@@ -52,6 +52,70 @@ state and must not contain Widget, HWND, renderer, or input objects.
   policy, ticking, document-local pointer/key routing, cursor hints, and
   two-phase UI-safe shutdown.
 
+## Command-history consolidation (B-8, foundation complete)
+
+**Decision:** AYEditor will keep one shared undo/redo mechanism, with one
+`EditorCommandHistory` instance per open document. The history is not a global
+singleton. Built-in editors own their domain commands and document-local
+history instance, but must not implement another history container or separate
+undo/redo algorithm. `EditorCommandRouter` continues to route the global menu
+and shortcut commands to the active document.
+
+The dependency-light foundation is now implemented as the independent
+`AYEditorCommandCore` CMake target under `command/`. It owns
+`IEditorCommand`, `EditorCommandHistory`, transactions, merge behavior, the
+save cursor, bounded retention, failure/lifetime checks, and explicit history
+discard semantics. It has no AYUI, World, window, renderer, or AYEditor product
+dependency and has its own unit-test executable. The compatibility
+`AYEditor/EditorCommandSystem.h` include remains while existing consumers
+migrate; `EditorCommandRouter` stays in the AYEditor product layer.
+
+The editor integrations have not reached the final target yet:
+
+- `EditorCommandStack` is still the production Scene path. `EditorSession`
+  owns it directly and uses it for Transform commands and history resets.
+- The general `EditorCommandHistory` is ready for production adoption, but no
+  production document owns an instance yet.
+- GameFlow, UIFlow, UI Layout, and some built-in editor surfaces retain their
+  own snapshot or command stacks. B-8 therefore tracks command-history
+  fragmentation across editors, rather than only two competing classes.
+
+Migration order and status:
+
+1. **Complete:** extract and harden `EditorCommandHistory`. Cancelling a
+   transaction restores its edits, while `discardHistory` never touches the
+   document model. Commands report execute/undo failure atomically, may expose
+   an expired owner through `isAlive`, and history faults safely without moving
+   its cursor. Retention defaults to 256 entries and preserves or invalidates
+   the save cursor according to the retained boundary.
+2. Move Scene history ownership from `EditorSession` into the Scene document.
+   Migrate Transform first, followed by entity add/delete, component
+   add/remove, and reflected property changes. A continuous drag remains one
+   undo step; cancelling it restores the value from before the gesture.
+3. Adapt GameFlow, UIFlow, and UI Layout to the shared history. Full-document
+   snapshot commands are acceptable as an intermediate adapter; frequently
+   edited operations should later become smaller domain commands with merge
+   rules.
+4. Use the shared save cursor, dirty state, labels, menu state, and active
+   document routing everywhere. Then remove `EditorCommandStack` and the
+   remaining private `_undo`/`_redo` history containers.
+
+Truly cross-document reversible operations may use a separate
+workspace/project command target, but ordinary edits must remain in the
+document that owns the changed resource. Switching tabs must preserve each
+document's history, and Ctrl+Z/Ctrl+Y must affect only the active target.
+
+Replacing the `EditorCommandStack` member currently embedded in
+`EditorSession` changes the public class layout. The Scene cutover must either
+hide this state behind a private implementation boundary or deliberately bump
+the AYEditor source ABI. The migration must also verify Foundation, headless,
+and full-client configurations without creating separate dependency installs.
+
+B-8 is complete when save/dirty state follows the per-document history cursor,
+closing/reloading a Scene or replacing its World cannot leave executable stale
+commands, routine edits no longer clear unrelated history, and no built-in
+editor maintains an independent undo/redo algorithm.
+
 ## First production integration: DSL
 
 The Phoskia/Logia editor is the first real consumer of the framework:

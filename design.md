@@ -1327,6 +1327,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-12 | UI Designer 工作流建立 Layout/Flow 双向项目索引、一键导航、handler-to-Signal 补全及 schema-aware 多文件重命名事务；dirty 打开文档禁止被磁盘操作覆盖。 |
 | 2026-09-12 | Layout Designer 增加可视化 Project Safe Rename；AYUI 只承载中性预览/提交表单，AYEditor 负责引用类型映射、原子磁盘事务与干净文档重载。 |
 | 2026-09-12 | UI Designer 项目索引改为带文件指纹/revision 的长生命周期服务；仅 authoring 文件变化时重解析，并自动同步干净的 Workspace 文档，dirty 冲突只告警不覆盖。 |
+| 2026-09-14 | B-8 公共命令历史抽为无 AYUI/World/Renderer 依赖的 `AYEditorCommandCore`；统一原子 execute/undo 失败契约、事务取消与无副作用丢弃、256 条默认容量、保存游标和过期 owner 熔断。全局路由保留在 AYEditor，各文档各自持有一份历史；公共接口变化使 AYEditor Source ABI 升至 15。 |
 
 ---
 
