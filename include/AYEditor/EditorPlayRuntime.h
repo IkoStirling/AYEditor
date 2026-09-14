@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AYEditor/EditorChildWindowManager.h"
 #include "AYEditor/InspectorOverrides.h"
 #include "AYMath/MathTypes.h"
 
@@ -9,8 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
-struct HWND__;
-using HWND = HWND__*;
+// PS-2 (ayeditor audit 2026-09-14): avoid pulling <Windows.h> into every
+// TU that includes EditorPlayRuntime.h. We use EditorChildWindowManager::Handle
+// (a void* opaque alias defined in EditorChildWindowManager.h) for the host
+// window stored in this header. The .cpp side is free to cast back to HWND
+// where the Windows SDK is available.
 
 namespace ayt::entity {
 class Entity;
@@ -68,7 +72,7 @@ public:
     EditorPlayRuntime(const EditorPlayRuntime&) = delete;
     EditorPlayRuntime& operator=(const EditorPlayRuntime&) = delete;
 
-    void setHostWindow(HWND hostWindow);
+    void setHostWindow(EditorChildWindowManager::Handle hostWindow);
     void setEngineAssetsRoot(std::string root) {
         _engineAssetsRoot = std::move(root);
     }
@@ -237,7 +241,7 @@ private:
     void clearClientReplicatedEntities() noexcept;
     ayt::entity::Entity* spawnVisualCubeEntity(uint32_t netId);
 
-    HWND _hostWindow = nullptr;
+    EditorChildWindowManager::Handle _hostWindow = nullptr;
     EditorWorldContext* _worldContext = nullptr;
     uint32_t _clientWidth = 1280;
     uint32_t _clientHeight = 720;

@@ -341,7 +341,8 @@ std::string EditorPlayRuntime::resolvePersistentCacheRoot()
     return root;
 }
 
-void EditorPlayRuntime::setHostWindow(HWND hostWindow)
+void EditorPlayRuntime::setHostWindow(
+    EditorChildWindowManager::Handle hostWindow)
 {
     _hostWindow = hostWindow;
 }
@@ -1250,7 +1251,8 @@ void EditorPlayRuntime::syncRendererBootstrap()
         return;
     }
 
-    ayt::render::RendererSubSystem::setBootstrapWindow(_hostWindow, _clientWidth, _clientHeight);
+    ayt::render::RendererSubSystem::setBootstrapWindow(
+        static_cast<HWND>(_hostWindow), _clientWidth, _clientHeight);
 
     uint16_t vx = 0;
     uint16_t vy = 0;
