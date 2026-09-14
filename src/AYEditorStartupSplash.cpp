@@ -180,8 +180,16 @@ struct EditorStartupSplash::Impl {
                 hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
         }
 
+        // B-9 (ayeditor audit 2026-09-14): a window can receive messages
+        // before WM_NCCREATE finishes — for example, if the OS dispatches a
+        // pending WM_PAINT or WM_DESTROY while the CREATESTRUCT has not yet
+        // been stored. Guard every handler that dereferences `self` and fall
+        // back to a safe return so a null self cannot crash the message
+        // thread. Paint and destroy were the two paths that already locked
+        // `self->mutex`; both now also gate on self != nullptr.
         switch (message) {
         case kUpdateMessage:
+            if (self == nullptr) return 0;
             ::InvalidateRect(hwnd, nullptr, FALSE);
             ::UpdateWindow(hwnd);
             return 0;
