@@ -475,12 +475,16 @@ bool EditorUiFlowDocument::redo()
 bool EditorUiFlowDocument::handlesCommand(
     const std::string& commandId) const
 {
-    return commandId == "edit.undo" || commandId == "edit.redo";
+    return commandId == "file.save" || commandId == "edit.undo"
+        || commandId == "edit.redo";
 }
 
 bool EditorUiFlowDocument::canExecuteCommand(
     const std::string& commandId) const
 {
+    if (commandId == "file.save") {
+        return isDirty() && !_path.empty();
+    }
     if (commandId == "edit.undo") return canUndo();
     if (commandId == "edit.redo") return canRedo();
     return false;
@@ -488,6 +492,10 @@ bool EditorUiFlowDocument::canExecuteCommand(
 
 bool EditorUiFlowDocument::executeCommand(const std::string& commandId)
 {
+    if (commandId == "file.save") {
+        std::string error;
+        return save(&error);
+    }
     if (commandId == "edit.undo") return undo();
     if (commandId == "edit.redo") return redo();
     return false;

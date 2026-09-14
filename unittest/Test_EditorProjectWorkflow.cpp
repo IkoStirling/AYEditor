@@ -164,7 +164,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 18u);
+    CHECK(kEditorSourceAbiVersion == 19u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -686,6 +686,10 @@ TEST_CASE(audio_timeline_edits_waveform_clips_and_keyframes_with_undo_save)
     CHECK(timeline->timelineClips().size() == 2u);
     CHECK(document->save(&error));
     CHECK(error.empty());
+    CHECK(!document->isDirty());
+    CHECK(timeline->timelineUndo());
+    CHECK(document->isDirty());
+    CHECK(timeline->timelineRedo());
     CHECK(!document->isDirty());
     CHECK(std::filesystem::is_regular_file(
         audioPath.string() + ".timeline.json"));

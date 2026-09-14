@@ -372,6 +372,7 @@ public:
         if (!_attached) return false;
         if (commandId == "edit.undo") return _controller->canUndo();
         if (commandId == "edit.redo") return _controller->canRedo();
+        if (commandId == "file.save") return _document->isDirty();
         return handlesCommand(commandId);
     }
 

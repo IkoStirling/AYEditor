@@ -87,6 +87,11 @@ The main document editor integrations now share the same history core:
   `EditorCommandHistory`. Snapshot gestures and typed property edits coexist
   in one history, and the obsolete `LayoutCommandStack` is removed. This
   covers both AYEditor and the standalone AYUI Designer.
+- Timeline documents now use the same history and save cursor for keyframe and
+  clip edits. They no longer keep private undo, redo, or dirty containers.
+- The main Save, Save As, Undo, and Redo menu items query the active document
+  command target every frame. Their enabled state and execution therefore
+  follow the focused document instead of falling back to an unrelated Scene.
 
 Migration order and status:
 
@@ -102,15 +107,23 @@ Migration order and status:
    snapshots reuse the Scene serializer format, and logical entity identities
    keep older commands valid when undo restores an entity with a new runtime
    ID. A continuous gizmo drag remains one undo step.
-3. **Complete:** GameFlow, UIFlow, and UI Layout use the shared history.
+3. **Complete:** GameFlow, UIFlow, UI Layout, and Timeline use the shared history.
    Full-document snapshots remain as an intermediate adapter for structural
    operations, while UI Layout property edits keep their smaller typed
    commands.
 4. **Complete for these production document editors:** save cursors, dirty
    state, labels, menu state, and active document routing use the shared
    history; `LayoutCommandStack` and the flow `_undo`/`_redo` containers are
-   removed. Any later built-in authoring surface must integrate the same core
-   rather than introduce another history algorithm.
+   removed. Scene no longer mirrors history with a second document dirty flag.
+   Any later built-in authoring surface must integrate the same core rather
+   than introduce another document-history algorithm.
+
+AY2D's `TilemapEditorModel` retains its memory-budgeted incremental history as
+part of the reusable domain model. The AYEditor adapter exposes that history
+only through `IEditorCommandTarget`, so the common menu and shortcut routing
+still has a single active target. Text-input controls likewise keep their
+private caret/text histories; these are widget editing state rather than
+workspace document histories.
 
 Truly cross-document reversible operations may use a separate
 workspace/project command target, but ordinary edits must remain in the
@@ -118,17 +131,18 @@ document that owns the changed resource. Switching tabs must preserve each
 document's history, and Ctrl+Z/Ctrl+Y must affect only the active target.
 
 The Scene cutover bumped the AYEditor source ABI to 17. Migrating the public
-GameFlow/UIFlow document layouts and UI Layout controller API bumps AYEditor to
-18; replacing the public `LayoutEditorSession` history member bumps AYUI to
-128. The superproject configures `AYEditorCommandCore` before AYUI and
+GameFlow/UIFlow document layouts and UI Layout controller API bumped AYEditor to
+18; completing Timeline and main-menu state consolidation bumps AYEditor to 19.
+Replacing the public `LayoutEditorSession` history member bumped AYUI to 128.
+The superproject configures `AYEditorCommandCore` before AYUI and
 AYEditor, allowing both consumers to reuse the dependency-light target without
 a reverse AYUI-to-AYEditor product dependency.
 
 B-8 now meets its completion criteria: save/dirty state follows each document's
 history cursor; closing/reloading a Scene or replacing its World cannot leave
 executable stale commands; routine edits no longer clear unrelated history;
-and the migrated built-in document editors no longer maintain independent
-undo/redo algorithms.
+the active menu state follows the focused document; and the migrated built-in
+document editors no longer maintain independent undo/redo algorithms.
 
 ## First production integration: DSL
 

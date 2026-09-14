@@ -369,7 +369,6 @@ void EditorSceneDocument::newScene()
     _commandEntityIds.clear();
     _path.clear();
     _title = "Untitled";
-    _dirty = true;
     _history.discardHistory(EditorHistoryDiscardState::KeepDirty);
 }
 
@@ -397,7 +396,6 @@ bool EditorSceneDocument::open(const std::string& path, std::string* error)
 
     _path = path;
     _title = titleForPath(path);
-    _dirty = false;
     ++_contentGeneration;
     _commandEntityIds.clear();
     _history.discardHistory(EditorHistoryDiscardState::MarkClean);
@@ -426,7 +424,6 @@ bool EditorSceneDocument::saveAs(const std::string& path, std::string* error)
 
     _path = path;
     _title = titleForPath(path);
-    _dirty = false;
     (void)_history.markSaved();
     return true;
 }
@@ -729,14 +726,13 @@ void EditorSceneDocument::remapEntity(uint32_t logicalId, uint32_t currentId)
 
 void EditorSceneDocument::markDirty() noexcept
 {
-    _dirty = true;
     _commandEntityIds.clear();
     _history.discardHistory(EditorHistoryDiscardState::KeepDirty);
 }
 
 bool EditorSceneDocument::isDirty() const noexcept
 {
-    return _dirty || _history.isDirty() || _scene->isDirty();
+    return _history.isDirty() || _scene->isDirty();
 }
 
 } // namespace ayt::editor

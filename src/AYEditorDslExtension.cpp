@@ -248,6 +248,9 @@ public:
         if (commandId == "edit.redo") {
             return _source != nullptr && _source->canRedo();
         }
+        if (commandId == "file.save") {
+            return _document != nullptr && _document->isDirty();
+        }
         return handlesCommand(commandId) && _document != nullptr;
     }
 

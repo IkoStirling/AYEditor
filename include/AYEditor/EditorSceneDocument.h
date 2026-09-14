@@ -124,7 +124,6 @@ private:
     std::string _typeId = "ayeditor.scene.document";
     std::string _path;
     std::string _title;
-    bool _dirty = false;
     uint64_t _revision = 0;
     uint64_t _contentGeneration = 1;
     std::unordered_map<uint32_t, uint32_t> _commandEntityIds;

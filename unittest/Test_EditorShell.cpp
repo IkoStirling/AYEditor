@@ -1667,7 +1667,7 @@ TEST_CASE(editor_viewport_click_selects_entity_in_play_world)
     session.shutdown();
 }
 
-TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
+TEST_CASE(editor_document_menu_items_follow_active_dirty_and_history_state)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());
@@ -1679,28 +1679,57 @@ TEST_CASE(editor_undo_redo_menu_items_follow_edit_mode)
 
     auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
     CHECK(menuBar != nullptr);
+    Menu* fileMenu = findMenuByLocalizationKey(
+        menuBar, "ui.editor.menu.file._label");
     Menu* editMenu = findMenuByLocalizationKey(
         menuBar, "ui.editor.menu.edit._label");
+    MenuItem* save = findMenuItemByLocalizationKey(
+        fileMenu, "ui.editor.menu.file.save");
+    MenuItem* saveAs = findMenuItemByLocalizationKey(
+        fileMenu, "ui.editor.menu.file.save_as");
     MenuItem* undo = findMenuItemByLocalizationKey(
         editMenu, "ui.editor.menu.edit.undo");
     MenuItem* redo = findMenuItemByLocalizationKey(
         editMenu, "ui.editor.menu.edit.redo");
+    CHECK(save != nullptr);
+    CHECK(saveAs != nullptr);
     CHECK(undo != nullptr);
     CHECK(redo != nullptr);
-    if (undo == nullptr || redo == nullptr) {
+    if (save == nullptr || saveAs == nullptr
+        || undo == nullptr || redo == nullptr) {
         session.shutdown();
         return;
     }
 
+    CHECK_FALSE(save->isEnabled());
+    CHECK(saveAs->isEnabled());
+    CHECK_FALSE(undo->isEnabled());
+    CHECK_FALSE(redo->isEnabled());
+
+    EditorSceneDocument* document = session.document();
+    CHECK(document != nullptr);
+    CHECK(document != nullptr && document->createEntity("Create Entity", {}));
+    session.update(0.0f);
+    CHECK(save->isEnabled());
     CHECK(undo->isEnabled());
+    CHECK_FALSE(redo->isEnabled());
+    CHECK(undo->handleClick());
+    session.update(0.0f);
+    CHECK_FALSE(save->isEnabled());
+    CHECK_FALSE(undo->isEnabled());
     CHECK(redo->isEnabled());
+
     EditorGameViewTestAccess::forceModeAndNotify(
         session.gameView(), EditorMode::Play);
+    CHECK_FALSE(save->isEnabled());
+    CHECK_FALSE(saveAs->isEnabled());
     CHECK(!undo->isEnabled());
     CHECK(!redo->isEnabled());
     EditorGameViewTestAccess::forceModeAndNotify(
         session.gameView(), EditorMode::Edit);
-    CHECK(undo->isEnabled());
+    CHECK_FALSE(save->isEnabled());
+    CHECK(saveAs->isEnabled());
+    CHECK_FALSE(undo->isEnabled());
     CHECK(redo->isEnabled());
 
     session.shutdown();

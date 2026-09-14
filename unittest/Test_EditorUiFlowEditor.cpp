@@ -294,9 +294,12 @@ TEST_CASE(document_save_load_roundtrip_preserves_authoring_model)
     CHECK_FALSE(source.isDirty());
     CHECK(source.addObject(EditorUiFlowObjectKind::Signal, {}, &error));
     CHECK(source.isDirty());
+    CHECK(source.handlesCommand("file.save"));
+    CHECK(source.canExecuteCommand("file.save"));
     CHECK(source.handlesCommand("edit.undo"));
     CHECK(source.executeCommand("edit.undo"));
     CHECK_FALSE(source.isDirty());
+    CHECK_FALSE(source.canExecuteCommand("file.save"));
     CHECK(source.executeCommand("edit.redo"));
     CHECK(source.isDirty());
     CHECK(source.executeCommand("edit.undo"));

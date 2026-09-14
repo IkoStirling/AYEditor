@@ -356,6 +356,10 @@ private:
     void openSceneDocument();
     void saveSceneDocument();
     void saveSceneDocumentAs();
+    IEditorCommandTarget* activeDocumentCommandTarget() const noexcept;
+    bool canExecuteDocumentCommand(const std::string& commandId) const;
+    bool executeDocumentCommand(const std::string& commandId);
+    void syncDocumentCommandMenu();
     void afterDocumentReload();
     void createEmptyEntity();
     void deleteSelectedEntity();
@@ -721,6 +725,8 @@ private:
     bool _updatingComponentPicker = false;
     bool _updatingComponentPropertyCommit = false;
     bool _controlDown = false;
+    ayt::ui::MenuItem* _saveMenuItem = nullptr;
+    ayt::ui::MenuItem* _saveAsMenuItem = nullptr;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;
     ayt::ui::MenuItem* _redoMenuItem = nullptr;
     ayt::ui::MenuItem* _restoreDeletedMenuItem = nullptr;

@@ -861,7 +861,7 @@ rendering primitives:
 - `EditorTransformGizmo` 是无 UI/GPU 依赖的 CPU 状态机，负责射线拾取、轴/平面
   约束、圆环角度和缩放计算；`EditorSession` 负责选择、鼠标捕获和 Renderer 状态同步。
 - 拖动期间直接预览实体 Transform；释放时先恢复起始值，再通过
-  `EditorCommandStack::executeTransform` 提交最终值，因此一次连续拖动只产生一条
+  `EditorSceneDocument::executeTransform` 提交最终值，因此一次连续拖动只产生一条
   Undo/Redo 命令并统一更新 document dirty。失焦、离开视口、切空间或切模式
   会回滚未提交拖动。
 - World/Local 对 Move 与 Rotate 生效。Scale 固定使用局部轴，因为当前 TRS 组件无法
@@ -1329,6 +1329,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-12 | UI Designer 项目索引改为带文件指纹/revision 的长生命周期服务；仅 authoring 文件变化时重解析，并自动同步干净的 Workspace 文档，dirty 冲突只告警不覆盖。 |
 | 2026-09-14 | B-8 公共命令历史抽为无 AYUI/World/Renderer 依赖的 `AYEditorCommandCore`；统一原子 execute/undo 失败契约、事务取消与无副作用丢弃、256 条默认容量、保存游标和过期 owner 熔断。全局路由保留在 AYEditor，各文档各自持有一份历史；公共接口变化使 AYEditor Source ABI 升至 15。 |
 | 2026-09-14 | B-8 生产迁移完成：Scene、GameFlow、UIFlow 与 UI Layout 均改用文档级 `EditorCommandHistory`，删除 `EditorCommandStack`、`LayoutCommandStack` 及 Flow 私有 undo/redo 容器；保存游标统一驱动 dirty，活动文档统一接入命令路由。公共布局变化使 AYEditor Source ABI 升至 18、AYUI Source ABI 升至 128。 |
+| 2026-09-14 | B-8 收口：Timeline 的关键帧/clip 编辑迁入公共历史，Scene 删除重复 dirty 标志；主菜单 Save/Save As/Undo/Redo 每帧读取活动文档命令目标并统一执行。Tilemap 保留 AY2D 领域模型内带内存预算的增量历史，文本控件保留局部输入历史，两者均不构成 Workspace 文档第二套命令栈。AYEditor Source ABI 升至 19。 |
 
 ---
 

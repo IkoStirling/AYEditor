@@ -736,6 +736,7 @@ public:
     {
         if (commandId == "edit.undo") return _document->canUndo();
         if (commandId == "edit.redo") return _document->canRedo();
+        if (commandId == "file.save") return _document->isDirty();
         if (commandId == kEditorGameFlowDeleteCommand) {
             return _document->selection().kind
                 != EditorGameFlowObjectKind::Document;

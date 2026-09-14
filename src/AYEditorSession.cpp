@@ -1706,6 +1706,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _selection.bind(&sceneSelection);
     (void)_workspace->selections().activate("scene.main");
     _workspace->commands().setActiveTarget(_document.get());
+    syncDocumentCommandMenu();
     _document->setHistoryChangedCallback([this]() {
         ayt::entity::World* world = hierarchyWorldMutable();
         if (!_selection.empty() && _selection.resolve(world) == nullptr) {
@@ -1715,6 +1716,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
         _inspectorRefreshPending = true;
         refreshTransformInspector();
         refreshUnsavedIndicator();
+        syncDocumentCommandMenu();
         if (_repaintCallback) _repaintCallback();
     });
     if (auto* sm = _worldContext.sceneManager()) {
@@ -1874,6 +1876,8 @@ void EditorSession::shutdown() {
     _attachedComponentTypeNames.clear();
     _inspectedComponentTypeName.clear();
     _pendingAssetOpenId = 0;
+    _saveMenuItem = nullptr;
+    _saveAsMenuItem = nullptr;
     _undoMenuItem = nullptr;
     _redoMenuItem = nullptr;
     _restoreDeletedMenuItem = nullptr;
@@ -1996,6 +2000,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     // without going through an EditorSession command. Reconcile the document
     // indicator once per host frame so it cannot remain visually stale.
     refreshUnsavedIndicator();
+    syncDocumentCommandMenu();
     _autosaveCountdown -= std::max(0.0f, dt);
     if (_autosaveCountdown <= 0.0f) {
         _autosaveCountdown = 30.0f;
@@ -2801,7 +2806,7 @@ bool EditorSession::onKeyDown(int keyCode)
     if (textEditing) {
         if (commandTarget != nullptr && !command.empty()) {
             if (command == "file.save") {
-                return _workspace->commands().execute("file.save");
+                return executeDocumentCommand("file.save");
             }
             if (command == "dsl.compile") {
                 return _workspace->commands().execute(
@@ -2811,16 +2816,10 @@ bool EditorSession::onKeyDown(int keyCode)
     }
     if (!textEditing && _gameView.mode() == EditorMode::Edit) {
         if (command == "edit.undo" || command == "edit.redo") {
-            return _workspace != nullptr
-                && _workspace->commands().execute(command);
+            return executeDocumentCommand(command);
         }
         if (command == "file.save") {
-            if (commandTarget != nullptr && commandTarget != _document.get()
-                && commandTarget->handlesCommand(command)) {
-                return _workspace->commands().execute(command);
-            }
-            saveSceneDocument();
-            return true;
+            return executeDocumentCommand(command);
         }
     }
     if (!textEditing && command == "edit.delete") {
@@ -7388,6 +7387,65 @@ void EditorSession::saveSceneDocumentAs()
     rememberCurrentSceneView();
 }
 
+IEditorCommandTarget* EditorSession::activeDocumentCommandTarget() const noexcept
+{
+    if (_workspace == nullptr) return _document.get();
+    IEditorCommandTarget* target = _workspace->commands().activeTarget();
+    return target != nullptr ? target : _document.get();
+}
+
+bool EditorSession::canExecuteDocumentCommand(
+    const std::string& commandId) const
+{
+    if (_gameView.mode() != EditorMode::Edit) return false;
+    IEditorCommandTarget* target = activeDocumentCommandTarget();
+    if (target != nullptr && target->handlesCommand(commandId)) {
+        return target->canExecuteCommand(commandId);
+    }
+    if (target != _document.get() || _document == nullptr) return false;
+    if (commandId == "file.save") return _document->isDirty();
+    if (commandId == "file.save_as") return _document->canSaveAs();
+    return false;
+}
+
+bool EditorSession::executeDocumentCommand(const std::string& commandId)
+{
+    if (!canExecuteDocumentCommand(commandId)) return false;
+    IEditorCommandTarget* target = activeDocumentCommandTarget();
+    if (target != nullptr && target->handlesCommand(commandId)) {
+        if (_workspace == nullptr) return false;
+        _workspace->commands().setActiveTarget(target);
+        return _workspace->commands().execute(commandId);
+    }
+    if (target != _document.get()) return false;
+    if (commandId == "file.save") {
+        saveSceneDocument();
+        return true;
+    }
+    if (commandId == "file.save_as") {
+        saveSceneDocumentAs();
+        return true;
+    }
+    return false;
+}
+
+void EditorSession::syncDocumentCommandMenu()
+{
+    if (_saveMenuItem != nullptr) {
+        _saveMenuItem->setEnabled(canExecuteDocumentCommand("file.save"));
+    }
+    if (_saveAsMenuItem != nullptr) {
+        _saveAsMenuItem->setEnabled(
+            canExecuteDocumentCommand("file.save_as"));
+    }
+    if (_undoMenuItem != nullptr) {
+        _undoMenuItem->setEnabled(canExecuteDocumentCommand("edit.undo"));
+    }
+    if (_redoMenuItem != nullptr) {
+        _redoMenuItem->setEnabled(canExecuteDocumentCommand("edit.redo"));
+    }
+}
+
 void EditorSession::afterDocumentReload()
 {
     clearSelectedEntity(false);
@@ -7590,24 +7648,18 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { openSceneDocument(); });
         }
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.save", L"Save")) {
+            _saveMenuItem = item;
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("file.save"));
             item->setOnActivate([this]() {
-                if (_workspace != nullptr && _dockViewHost != nullptr) {
-                    _dockViewHost->syncCommandTargetFromFocus();
-                    IEditorCommandTarget* target =
-                        _workspace->commands().activeTarget();
-                    if (target != nullptr && target != _document.get()
-                        && target->handlesCommand("file.save")) {
-                        (void)_workspace->commands().execute("file.save");
-                        return;
-                    }
-                }
-                saveSceneDocument();
+                (void)executeDocumentCommand("file.save");
             });
         }
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.save_as", L"Save As...")) {
-            item->setOnActivate([this]() { saveSceneDocumentAs(); });
+            _saveAsMenuItem = item;
+            item->setOnActivate([this]() {
+                (void)executeDocumentCommand("file.save_as");
+            });
         }
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.autosave", L"Autosave Now")) {
             item->setOnActivate([this]() { (void)autosaveNow(); });
@@ -7633,21 +7685,7 @@ void EditorSession::bindMenuBar() {
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("edit.undo"));
             item->setOnActivate([this]() {
-                if (_gameView.mode() == EditorMode::Edit
-                    && _workspace != nullptr) {
-                    if (_dockViewHost != nullptr) {
-                        _dockViewHost->syncCommandTargetFromFocus();
-                    }
-                    IEditorCommandTarget* target =
-                        _workspace->commands().activeTarget();
-                    if (target != nullptr && target != _document.get()
-                        && target->handlesCommand("edit.undo")) {
-                        (void)_workspace->commands().execute("edit.undo");
-                        return;
-                    }
-                    _workspace->commands().setActiveTarget(_document.get());
-                    (void)_workspace->commands().execute("edit.undo");
-                }
+                (void)executeDocumentCommand("edit.undo");
             });
         }
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.redo", L"Redo")) {
@@ -7655,21 +7693,7 @@ void EditorSession::bindMenuBar() {
             item->setShortcut(
                 EditorShortcutRegistry::instance().shortcutFor("edit.redo"));
             item->setOnActivate([this]() {
-                if (_gameView.mode() == EditorMode::Edit
-                    && _workspace != nullptr) {
-                    if (_dockViewHost != nullptr) {
-                        _dockViewHost->syncCommandTargetFromFocus();
-                    }
-                    IEditorCommandTarget* target =
-                        _workspace->commands().activeTarget();
-                    if (target != nullptr && target != _document.get()
-                        && target->handlesCommand("edit.redo")) {
-                        (void)_workspace->commands().execute("edit.redo");
-                        return;
-                    }
-                    _workspace->commands().setActiveTarget(_document.get());
-                    (void)_workspace->commands().execute("edit.redo");
-                }
+                (void)executeDocumentCommand("edit.redo");
             });
         }
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.restore_deleted", L"Restore Last Deleted Assets")) {
@@ -7833,6 +7857,7 @@ void EditorSession::bindMenuBar() {
             anchor->setPadding(8.0f, 1.0f, 8.0f, 1.0f);
         }
     }
+    syncDocumentCommandMenu();
 }
 
 bool EditorSession::openUiLayoutEditor(const std::string& path) {
@@ -10531,9 +10556,7 @@ void EditorSession::onModeChanged(EditorMode mode) {
         break;
     }
 
-    const bool editCommandsEnabled = mode == EditorMode::Edit;
-    if (_undoMenuItem != nullptr) _undoMenuItem->setEnabled(editCommandsEnabled);
-    if (_redoMenuItem != nullptr) _redoMenuItem->setEnabled(editCommandsEnabled);
+    syncDocumentCommandMenu();
     syncSceneVisibilityMenu();
 
     // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）。

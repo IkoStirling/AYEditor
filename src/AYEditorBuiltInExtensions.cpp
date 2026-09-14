@@ -80,6 +80,28 @@ struct TilemapSaveResult {
     std::string notice;
 };
 
+class AppliedCallbackCommand final : public IEditorCommand {
+public:
+    AppliedCallbackCommand(std::function<bool()> redoAction,
+                           std::function<bool()> undoAction,
+                           std::string label)
+        : _redoAction(std::move(redoAction)),
+          _undoAction(std::move(undoAction)), _label(std::move(label)) {}
+
+    const std::string& label() const noexcept override { return _label; }
+    bool execute() override {
+        return _redoAction != nullptr && _redoAction();
+    }
+    bool undo() override {
+        return _undoAction != nullptr && _undoAction();
+    }
+
+private:
+    std::function<bool()> _redoAction;
+    std::function<bool()> _undoAction;
+    std::string _label;
+};
+
 std::wstring rgbaText(uint32_t rgba)
 {
     wchar_t buffer[11]{};
@@ -1661,8 +1683,11 @@ public:
         if (id == "edit.delete") {
             return _document->model().selection().valid;
         }
-        return (id == "file.save" || id == "file.save_as")
-            && _document->hasSavePathProvider();
+        if (id == "file.save") {
+            return _document->isDirty()
+                && _document->hasSavePathProvider();
+        }
+        return id == "file.save_as" && _document->hasSavePathProvider();
     }
     bool executeCommand(const std::string& id) override {
         if (!canExecuteCommand(id)) return false;
@@ -3831,6 +3856,9 @@ private:
 class TimedAssetDocument final
     : public IEditorDocument, public IEditorTimelineSource {
 public:
+    TimedAssetDocument() : _history(128u) {
+        _history.setChangedCallback([this]() { ++_revision; });
+    }
     ~TimedAssetDocument() override { releaseAudio(); }
 
     bool initialize(const EditorOpenRequest& request, bool audio,
@@ -3899,17 +3927,17 @@ public:
         }
         if (std::filesystem::is_regular_file(_sidecarPath)
             && !loadSidecar(error)) return false;
-        _dirty = false;
+        _history.discardHistory(EditorHistoryDiscardState::MarkClean);
         return true;
     }
     const std::string& typeId() const noexcept override { return _type; }
     const std::string& path() const noexcept override { return _path; }
     const std::string& title() const noexcept override { return _title; }
-    bool isDirty() const noexcept override { return _dirty; }
+    bool isDirty() const noexcept override { return _history.isDirty(); }
     uint64_t revision() const noexcept override { return _revision; }
     bool save(std::string* error) override {
         if (!writeSequence(_sidecarPath, error)) return false;
-        _dirty = false;
+        (void)_history.markSaved();
         return true;
     }
     double timelineDurationSeconds() const noexcept override { return _duration; }
@@ -3974,32 +4002,35 @@ public:
     bool timelineAddKeyframe(const std::string& trackId, double time,
                              double value) override {
         if (!hasTrack(trackId)) return false;
-        beginEdit();
+        State before = snapshot();
         _keyframes.push_back({"key." + std::to_string(++_nextItemId), trackId,
             std::clamp(time, 0.0, _duration), value});
         sortItems();
+        commitEdit(std::move(before), "Add timeline keyframe");
         return true;
     }
     bool timelineMoveKeyframe(const std::string& id, double time) override {
         auto it = std::find_if(_keyframes.begin(), _keyframes.end(),
             [&id](const auto& key) { return key.id == id; });
         if (it == _keyframes.end()) return false;
-        beginEdit();
+        State before = snapshot();
         it->timeSeconds = std::clamp(time, 0.0, _duration);
         sortItems();
+        commitEdit(std::move(before), "Move timeline keyframe");
         return true;
     }
     bool timelineRemoveKeyframe(const std::string& id) override {
         const auto it = std::find_if(_keyframes.begin(), _keyframes.end(),
             [&id](const auto& key) { return key.id == id; });
         if (it == _keyframes.end()) return false;
-        beginEdit();
+        State before = snapshot();
         _keyframes.erase(it);
+        commitEdit(std::move(before), "Remove timeline keyframe");
         return true;
     }
     bool timelineAddClip(const EditorTimelineClip& value) override {
         if (!hasTrack(value.trackId) || value.durationSeconds <= 0.0) return false;
-        beginEdit();
+        State before = snapshot();
         EditorTimelineClip clip = value;
         if (clip.id.empty()) clip.id = "clip." + std::to_string(++_nextItemId);
         clip.startSeconds = std::max(0.0, clip.startSeconds);
@@ -4009,45 +4040,34 @@ public:
             clip.startSeconds + clip.durationSeconds);
         _clips.push_back(std::move(clip));
         sortItems();
+        commitEdit(std::move(before), "Add timeline clip");
         return true;
     }
     bool timelineMoveClip(const std::string& id, double start) override {
         auto it = std::find_if(_clips.begin(), _clips.end(),
             [&id](const auto& clip) { return clip.id == id; });
         if (it == _clips.end()) return false;
-        beginEdit();
+        State before = snapshot();
         it->startSeconds = std::max(0.0, start);
         _duration = std::max(_duration,
             it->startSeconds + it->durationSeconds);
         sortItems();
+        commitEdit(std::move(before), "Move timeline clip");
         return true;
     }
     bool timelineRemoveClip(const std::string& id) override {
         const auto it = std::find_if(_clips.begin(), _clips.end(),
             [&id](const auto& clip) { return clip.id == id; });
         if (it == _clips.end()) return false;
-        beginEdit();
+        State before = snapshot();
         _clips.erase(it);
+        commitEdit(std::move(before), "Remove timeline clip");
         return true;
     }
-    bool timelineCanUndo() const noexcept override { return !_undo.empty(); }
-    bool timelineCanRedo() const noexcept override { return !_redo.empty(); }
-    bool timelineUndo() override {
-        if (_undo.empty()) return false;
-        _redo.push_back(snapshot());
-        restore(_undo.back());
-        _undo.pop_back();
-        markChanged();
-        return true;
-    }
-    bool timelineRedo() override {
-        if (_redo.empty()) return false;
-        _undo.push_back(snapshot());
-        restore(_redo.back());
-        _redo.pop_back();
-        markChanged();
-        return true;
-    }
+    bool timelineCanUndo() const noexcept override { return _history.canUndo(); }
+    bool timelineCanRedo() const noexcept override { return _history.canRedo(); }
+    bool timelineUndo() override { return _history.undo(); }
+    bool timelineRedo() override { return _history.redo(); }
 private:
     struct State {
         double duration = 0.0;
@@ -4066,13 +4086,19 @@ private:
         _clips = value.clips;
         _position = std::min(_position, _duration);
     }
-    void beginEdit() {
-        _undo.push_back(snapshot());
-        if (_undo.size() > 128u) _undo.erase(_undo.begin());
-        _redo.clear();
-        markChanged();
+    void commitEdit(State before, std::string label) {
+        State after = snapshot();
+        (void)_history.recordApplied(std::make_unique<AppliedCallbackCommand>(
+            [this, after]() {
+                restore(after);
+                return true;
+            },
+            [this, before = std::move(before)]() {
+                restore(before);
+                return true;
+            },
+            std::move(label)));
     }
-    void markChanged() { _dirty = true; ++_revision; }
     void sortItems() {
         std::stable_sort(_keyframes.begin(), _keyframes.end(),
             [](const auto& a, const auto& b) {
@@ -4291,15 +4317,13 @@ private:
     double _position = 0.0;
     bool _playing = false;
     bool _isAudio = false;
-    bool _dirty = false;
     std::uint64_t _revision = 1u;
     std::uint64_t _nextItemId = 0u;
     std::vector<EditorTimelineTrack> _tracks;
     std::vector<EditorTimelineKeyframe> _keyframes;
     std::vector<EditorTimelineClip> _clips;
     std::vector<float> _waveform;
-    std::vector<State> _undo;
-    std::vector<State> _redo;
+    EditorCommandHistory _history;
     std::unique_ptr<ayt::resource::Audio> _audioResource;
     ayt::audio::AudioSubSystem* _audioSubsystem = nullptr;
     ayt::audio::AudioEngine* _audioEngine = nullptr;
