@@ -87,22 +87,45 @@ const EditorAssetImportJob* EditorAssetImportQueue::find(
     return it == _jobs.end() ? nullptr : &*it;
 }
 
+EditorAssetImportJob* EditorAssetImportQueue::findMutable(
+    EditorAssetImportJobId id) noexcept
+{
+    const auto it = std::find_if(_jobs.begin(), _jobs.end(),
+        [id](const EditorAssetImportJob& job) { return job.id == id; });
+    return it == _jobs.end() ? nullptr : &*it;
+}
+
 void EditorAssetImportQueue::startNext()
 {
     if (_running.has_value()) return;
-    const auto it = std::find_if(_jobs.begin(), _jobs.end(),
-        [](const EditorAssetImportJob& job) {
-            return job.state == EditorAssetImportJobState::Queued;
-        });
-    if (it == _jobs.end()) return;
-    const std::size_t index = static_cast<std::size_t>(it - _jobs.begin());
-    _running = index;
-    EditorAssetImportJob& job = _jobs[index];
-    job.state = EditorAssetImportJobState::Running;
-    job.progress = 0.05f;
-    const std::string source = job.sourcePath;
-    const std::string destination = job.destinationDirectory;
-    const bool force = job.force;
+    // B-1 (ayeditor audit 2026-09-14): grab the id + payload by-value first,
+    // then re-resolve through findMutable() to flip state. Holding the
+    // std::find_if iterator across the std::async launch below would be a
+    // UAF trap: if a concurrent enqueue() reallocates _jobs before the
+    // future returns, the iterator is invalidated and the state mutation
+    // writes to freed storage. Copying by-value first and re-finding by id
+    // keeps every mutation bounded to the freshly-resolved element.
+    EditorAssetImportJobId queuedId = 0;
+    std::string source;
+    std::string destination;
+    bool force = false;
+    for (const EditorAssetImportJob& job : _jobs) {
+        if (job.state == EditorAssetImportJobState::Queued) {
+            queuedId = job.id;
+            source = job.sourcePath;
+            destination = job.destinationDirectory;
+            force = job.force;
+            break;
+        }
+    }
+    if (queuedId == 0) return;
+    if (EditorAssetImportJob* job = findMutable(queuedId)) {
+        job->state = EditorAssetImportJobState::Running;
+        job->progress = 0.05f;
+    } else {
+        return;
+    }
+    _running = queuedId;
     _future = std::async(std::launch::async,
         [source, destination, force]() {
             return Importer::importAssetFile(source, destination, {}, force);
@@ -117,32 +140,47 @@ bool EditorAssetImportQueue::poll()
     }
     if (_future.wait_for(std::chrono::seconds(0))
         != std::future_status::ready) return false;
-    EditorAssetImportJob& job = _jobs[*_running];
+    // B-1 (ayeditor audit 2026-09-14): _running now holds a job id, not a
+    // vector index. Re-resolve through findMutable() right before the
+    // mutation in case a concurrent enqueue() reallocated _jobs while the
+    // worker future was in flight. The id lives on every element, so this
+    // lookup is stable across reallocations.
+    EditorAssetImportJob* job = findMutable(*_running);
+    if (job == nullptr) {
+        // The running job vanished from _jobs between launch and finish.
+        // This should not occur because enqueue() never removes elements
+        // mid-flight, but guard against it so a future regression cannot
+        // crash the editor on a stale id.
+        _running.reset();
+        _future = {};
+        startNext();
+        return false;
+    }
     try {
         const Importer::Result result = _future.get();
-        job.progress = 1.0f;
+        job->progress = 1.0f;
         if (!result.success) {
-            job.state = EditorAssetImportJobState::Failed;
-            job.message = result.errorMessage.empty()
+            job->state = EditorAssetImportJobState::Failed;
+            job->message = result.errorMessage.empty()
                 ? "Importer returned no failure reason." : result.errorMessage;
         } else {
-            job.state = result.usedCache
+            job->state = result.usedCache
                 ? EditorAssetImportJobState::CacheHit
                 : EditorAssetImportJobState::Succeeded;
-            job.message = result.usedCache ? "Existing import cache reused."
+            job->message = result.usedCache ? "Existing import cache reused."
                                            : "Import complete.";
             for (const auto& resource : result.conversion.resources) {
-                if (!resource.path.empty()) job.outputPaths.push_back(resource.path);
+                if (!resource.path.empty()) job->outputPaths.push_back(resource.path);
             }
         }
     } catch (const std::exception& error) {
-        job.progress = 1.0f;
-        job.state = EditorAssetImportJobState::Failed;
-        job.message = error.what();
+        job->progress = 1.0f;
+        job->state = EditorAssetImportJobState::Failed;
+        job->message = error.what();
     } catch (...) {
-        job.progress = 1.0f;
-        job.state = EditorAssetImportJobState::Failed;
-        job.message = "Importer failed with an unknown error.";
+        job->progress = 1.0f;
+        job->state = EditorAssetImportJobState::Failed;
+        job->message = "Importer failed with an unknown error.";
     }
     _running.reset();
     startNext();

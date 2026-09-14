@@ -71,9 +71,17 @@ public:
 
 private:
     void startNext();
+    EditorAssetImportJob* findMutable(EditorAssetImportJobId id) noexcept;
 
     std::vector<EditorAssetImportJob> _jobs;
-    std::optional<std::size_t> _running;
+    // B-1 (ayeditor audit 2026-09-14): previously a std::size_t index into
+    // _jobs. Holding the index was a UAF trap: concurrent enqueue() calls
+    // (driven by the asset DB scan thread) can reallocate _jobs while the
+    // worker future is still in flight, which left _jobs[*_running] pointing
+    // at freed storage. The id is stable across reallocations because it is
+    // stored on every element of _jobs, so the consumer re-resolves it
+    // through findMutable() right before it touches the element.
+    std::optional<EditorAssetImportJobId> _running;
     std::future<Importer::Result> _future;
     EditorAssetImportJobId _nextId = 1;
 };
