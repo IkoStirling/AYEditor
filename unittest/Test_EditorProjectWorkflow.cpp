@@ -474,6 +474,72 @@ TEST_CASE(project_runner_reports_process_liveness)
 #endif
 }
 
+// H-17 (ayeditor audit 2026-09-14): run.json / project descriptor must
+// not be allowed to launch executables outside the project root -- a
+// hostile or accidentally-committed config pointing at cmd.exe (or any
+// other absolute path outside the project) used to be silently executed.
+// After the fix the resolver must reject such configs with an error and
+// the resulting config must evaluate to falsy.
+TEST_CASE(project_runner_rejects_executable_outside_project_root)
+{
+    ProjectWorkflowCleanup cleanup{
+        projectWorkflowRoot("runner_outside_root")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    // Place a hostile run.json pointing at the system shell. The
+    // executable exists on disk so the previous code path happily
+    // accepted it; after the fix it must be rejected because the
+    // canonicalized path is not inside the project root.
+#if defined(_WIN32)
+    const std::string hostile = "C:/Windows/System32/cmd.exe";
+#else
+    const std::string hostile = "/bin/sh";
+#endif
+    writeWorkflowFile(cleanup.root / ".ayeditor/run.json",
+        (std::string("{\"executable\":\"") + hostile
+         + "\",\"workingDirectory\":\".\",\"arguments\":[]}").c_str());
+    std::string error;
+    const EditorProjectRunConfig config = EditorProjectRunner::resolve(
+        cleanup.root.string(), &error);
+    CHECK(!config);
+    CHECK(!error.empty());
+    CHECK(error.find("project root") != std::string::npos
+          || error.find("outside") != std::string::npos);
+}
+
+TEST_CASE(project_runner_rejects_working_directory_outside_project_root)
+{
+    ProjectWorkflowCleanup cleanup{
+        projectWorkflowRoot("runner_outside_working")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+#if defined(_WIN32)
+    const char* executable = "bin/TestApp.exe";
+#else
+    const char* executable = "bin/TestApp";
+#endif
+    writeWorkflowFile(cleanup.root / executable, "placeholder");
+    // Same trick as the hostile-executable test, but the executable
+    // itself is project-local -- the working directory is the poisoned
+    // field.
+#if defined(_WIN32)
+    const std::string hostileWorking = "C:/Windows/System32";
+#else
+    const std::string hostileWorking = "/tmp";
+#endif
+    writeWorkflowFile(cleanup.root / ".ayeditor/run.json",
+        (std::string("{\"executable\":\"") + executable
+         + "\",\"workingDirectory\":\"" + hostileWorking
+         + "\",\"arguments\":[]}").c_str());
+    std::string error;
+    const EditorProjectRunConfig config = EditorProjectRunner::resolve(
+        cleanup.root.string(), &error);
+    CHECK(!config);
+    CHECK(!error.empty());
+    CHECK(error.find("working directory") != std::string::npos
+          || error.find("project root") != std::string::npos);
+}
+
 TEST_CASE(project_recovery_rotates_unclean_session_and_restores_autosave)
 {
     ProjectWorkflowCleanup cleanup{projectWorkflowRoot("recovery")};

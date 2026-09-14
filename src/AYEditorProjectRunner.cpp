@@ -28,6 +28,71 @@ std::string normalized(const fs::path& path)
     return result.string();
 }
 
+// True when `child` resolves to a path that lives inside `parent` after
+// both have been canonicalized. We use weakly_canonical (not canonical)
+// because a symlink whose target does not yet exist should still be
+// rejected -- weakly_canonical collapses the existing prefix and leaves
+// the trailing non-existent segment alone, which is enough for the
+// isInside prefix test. This is the same guard used by
+// EditorAssetTrash::purge (B-10).
+bool isInsidePath(const fs::path& child, const fs::path& parent)
+{
+    const auto relative = child.lexically_relative(parent);
+    return !relative.empty() && !relative.is_absolute()
+        && *relative.begin() != "..";
+}
+
+// H-17 (ayeditor audit 2026-09-14): run.json and project descriptors
+// are loaded from inside the project root, but the "executable" path
+// was previously only canonicalized -- a hostile or accidental entry
+// pointing at C:\Windows\System32\cmd.exe would be silently executed
+// with arbitrary "arguments". Reject any executable / workingDirectory
+// that resolves to a path outside `root` after canonicalization.
+bool isRunConfigContained(const fs::path& root,
+                          const std::string& executable,
+                          const std::string& workingDirectory,
+                          std::string* error)
+{
+    std::error_code canonicalError;
+    const fs::path canonicalRoot = fs::weakly_canonical(root, canonicalError);
+    if (canonicalError) {
+        if (error != nullptr) *error = "Could not resolve project root: "
+            + canonicalError.message();
+        return false;
+    }
+    std::error_code executableError;
+    const fs::path canonicalExecutable = fs::weakly_canonical(
+        fs::path(executable), executableError);
+    if (executableError) {
+        if (error != nullptr) *error = "Could not resolve run.json "
+            "executable path: " + executableError.message();
+        return false;
+    }
+    if (!isInsidePath(canonicalExecutable, canonicalRoot)) {
+        if (error != nullptr) *error =
+            "Refusing to run executable outside the project root: "
+            + canonicalExecutable.string();
+        return false;
+    }
+    if (!workingDirectory.empty()) {
+        std::error_code workingError;
+        const fs::path canonicalWorking = fs::weakly_canonical(
+            fs::path(workingDirectory), workingError);
+        if (workingError) {
+            if (error != nullptr) *error = "Could not resolve run.json "
+                "working directory: " + workingError.message();
+            return false;
+        }
+        if (!isInsidePath(canonicalWorking, canonicalRoot)) {
+            if (error != nullptr) *error =
+                "Refusing to use a working directory outside the project "
+                "root: " + canonicalWorking.string();
+            return false;
+        }
+    }
+    return true;
+}
+
 EditorProjectRunConfig loadRunOverride(const fs::path& root,
                                        std::string* error)
 {
@@ -53,6 +118,10 @@ EditorProjectRunConfig loadRunOverride(const fs::path& root,
             }
         }
         result.source = path.string();
+        if (!isRunConfigContained(root, result.executable,
+                                  result.workingDirectory, error)) {
+            return {};
+        }
         if (!fs::is_regular_file(result.executable)) {
             if (error != nullptr) *error =
                 "Configured executable does not exist: " + result.executable;
@@ -89,6 +158,10 @@ EditorProjectRunConfig loadProjectDescriptor(const fs::path& root,
     result.workingDirectory = normalized(working);
     result.arguments = descriptor.run.arguments;
     result.source = descriptor.sourcePath;
+    if (!isRunConfigContained(root, result.executable,
+                              result.workingDirectory, error)) {
+        return {};
+    }
     if (!fs::is_regular_file(result.executable)) {
         if (error != nullptr) {
             *error = "Configured executable does not exist: " + result.executable;
