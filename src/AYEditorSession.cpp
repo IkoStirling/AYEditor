@@ -10418,7 +10418,12 @@ void EditorSession::onModeChanged(EditorMode mode) {
 
     ayt::entity::World* activeWorld = hierarchyWorldMutable();
     if (mode == EditorMode::Edit) {
-        // enterEdit() has already destroyed the Play scene.
+        // B-2 (ayeditor audit 2026-09-14): enterEdit() has already
+        // destroyed the Play scene. Transform commands captured while in
+        // Play mode hold a raw World* into the now-defunct Play world;
+        // any later undo()/redo() would dereference freed memory. Drop
+        // the transform history alongside the entity selection.
+        _commands.clear();
         clearSelectedEntity(false);
     } else if (_selectionWorld != activeWorld) {
         // Entering Play swaps from the persistent Edit world to its clone.
