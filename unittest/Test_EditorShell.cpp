@@ -23,6 +23,7 @@
 #include "AYUI/ScrollView.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Style.h"
+#include "AYUI/SvgIcon.h"
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
 #include "AYUI/ToolBar.h"
@@ -190,10 +191,44 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     if (layoutPath.empty()) return;
 
     MockRenderer backend;
+    EditorSessionDesc desc{};
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = resolveEditorEngineAssetsRoot();
+    int logoTextureToken = 0;
+    int uploadedTextureCount = 0;
+    int releasedTextureCount = 0;
+    desc.createAssetPreviewTexture =
+        [&](std::uint16_t width, std::uint16_t height,
+            const void* bgraPixels) -> void* {
+            CHECK(width == 24u);
+            CHECK(height == 24u);
+            CHECK(bgraPixels != nullptr);
+            ++uploadedTextureCount;
+            return &logoTextureToken;
+        };
+    desc.releaseAssetPreviewTexture = [&](void* handle) {
+        CHECK(handle == &logoTextureToken);
+        ++releasedTextureCount;
+    };
+
     EditorSession session;
-    CHECK(session.initialize(&backend, layoutPath));
+    CHECK(session.initialize(desc));
     CHECK(session.ui().findById("menubar") != nullptr);
-    CHECK(session.ui().findById("app_logo") != nullptr);
+    auto* appLogo = dynamic_cast<Panel*>(
+        session.ui().findById("app_logo"));
+    CHECK(appLogo != nullptr);
+    CHECK(appLogo != nullptr && !appLogo->isBackgroundEnabled());
+    CHECK(appLogo != nullptr && !appLogo->isBorderEnabled());
+    auto* appLogoImage = appLogo != nullptr && !appLogo->getChildren().empty()
+        ? dynamic_cast<Image*>(appLogo->getChildren().front()) : nullptr;
+    CHECK(appLogoImage != nullptr);
+    CHECK(appLogoImage != nullptr && appLogoImage->hasTexture());
+    CHECK(appLogoImage != nullptr
+          && appLogoImage->getTexture().width == 24);
+    CHECK(appLogoImage != nullptr
+          && appLogoImage->getTexture().height == 24);
+    CHECK(uploadedTextureCount == 1);
     CHECK(session.ui().findById("btn_play") != nullptr);
     CHECK(session.ui().findById("btn_close") != nullptr);
     CHECK(session.ui().findById("panel_viewport") != nullptr);
@@ -234,6 +269,7 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<VBox*>(
         session.ui().findById("inspector_component_properties")) != nullptr);
     session.shutdown();
+    CHECK(releasedTextureCount == 1);
 }
 
 TEST_CASE(editor_session_loads_packaged_zh_cn_localization) {
@@ -250,6 +286,11 @@ TEST_CASE(editor_session_loads_packaged_zh_cn_localization) {
 
     EditorSession session;
     CHECK(session.initialize(desc));
+    auto* fallbackLogo = dynamic_cast<SvgIcon*>(
+        session.ui().findById("app_logo_icon"));
+    CHECK(fallbackLogo != nullptr);
+    CHECK(fallbackLogo != nullptr
+          && fallbackLogo->getDocument() != nullptr);
     auto* hierarchy = dynamic_cast<DockCard*>(
         session.ui().findById("card_outliner"));
     auto* workspace = dynamic_cast<TextLabel*>(

@@ -40,6 +40,7 @@
 #include "AYUI/Menu.h"
 #include "AYUI/MenuItem.h"
 #include "AYUI/ModalDialog.h"
+#include "AYUI/Panel.h"
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYUI/Slider.h"
 #include "AYUI/SvgIcon.h"
@@ -120,6 +121,30 @@
 namespace ayt::editor {
 
 namespace {
+
+// EditorAssetPreviewCache owns and releases this texture. Image normally owns
+// anonymous handles, so keep the borrowed handle out of Image's release path
+// while retaining its normal textured-quad rendering behavior.
+class EditorBorrowedImage final : public ayt::ui::Image {
+public:
+    ~EditorBorrowedImage() override
+    {
+        _tex = {};
+    }
+
+    void setBorrowedTexture(const ayt::ui::ImageTextureHandle& texture)
+    {
+        _tex = texture;
+        markDirty();
+    }
+
+    void clearBorrowedTexture()
+    {
+        if (_tex.handle == nullptr && _tex.name.empty()) return;
+        _tex = {};
+        markDirty();
+    }
+};
 
 struct EditorTooltipBinding {
     ayt::ui::Tooltip* tooltip = nullptr;
@@ -1811,6 +1836,13 @@ void EditorSession::shutdown() {
     _assetTrashDialog.reset();
     _assetTrashList = nullptr;
     _assetHistoryDialog.reset();
+    // The application logo borrows its uploaded texture from the shared
+    // preview cache. Clear the widget before the cache releases that handle
+    // so UI teardown never retains a stale backend resource.
+    if (auto* appLogoImage = dynamic_cast<EditorBorrowedImage*>(
+            _ui.findById("app_logo_image"))) {
+        appLogoImage->clearBorrowedTexture();
+    }
     if (_assetInspectorPreview != nullptr) {
         _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
     }
@@ -3037,17 +3069,6 @@ void EditorSession::bindToolbar() {
             label->setBackgroundColor(ayt::math::FVector4(0.10f, 0.29f, 0.50f, 1.0f));
         }
     }
-    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
-            _ui.findById("app_logo"))) {
-        label->setTextColor(ayt::math::FVector4(0.96f, 0.98f, 1.0f, 1.0f));
-        label->setBackgroundColor(accent);
-        label->setFontSize(10);
-        label->setHorizontalAlignment(
-            ayt::ui::TextLabel::HAlignment::Center);
-        label->setVerticalAlignment(
-            ayt::ui::TextLabel::VAlignment::Center);
-    }
-
     const auto attachLocalizedTip = [this](const char* id, const char* key,
                                             const wchar_t* fallback) {
         const std::wstring text = localizedText(key, fallback);
@@ -3071,6 +3092,61 @@ void EditorSession::bindToolbar() {
 
 void EditorSession::bindShellIcons(const std::string& iconRootPath)
 {
+    // The product mark belongs to EngineAssets/AYLogo rather than the
+    // third-party command icon set. Bind it independently so every host that
+    // consumes the shared editor shell (including AYEditorShell_Demo) gets
+    // the same brand treatment.
+    if (auto* logo = dynamic_cast<ayt::ui::Panel*>(
+            _ui.findById("app_logo"))) {
+        bool rasterBound = false;
+        if (!_engineAssetsRoot.empty() && _assetPreviewCache != nullptr) {
+            const std::filesystem::path rasterPath =
+                std::filesystem::path(_engineAssetsRoot)
+                / "AYLogo" / "symbol" / "symbol-dark-bg_24px.png";
+            std::string error;
+            const EditorAuthoringImage image =
+                _assetPreviewCache->loadAuthoringImage(
+                    rasterPath.string(), &error);
+            if (image) {
+                auto* raster = new EditorBorrowedImage();
+                raster->setId("app_logo_image");
+                raster->setBorrowedTexture(image.texture);
+                raster->setPosition(ayt::math::FVector2(0.0f, 0.0f));
+                raster->setSize(ayt::math::FVector2(24.0f, 24.0f));
+                raster->setLayoutPositionManaged(false);
+                raster->setLayoutSizeManaged(false);
+                raster->setAccessibilityHidden(true);
+                logo->addChild(raster);
+                rasterBound = true;
+            }
+        }
+        if (!rasterBound && !_engineAssetsRoot.empty()) {
+            const std::filesystem::path vectorPath =
+                std::filesystem::path(_engineAssetsRoot)
+                / "AYLogo" / "symbol" / "symbol-dark-bg_24px.svg";
+            std::string error;
+            auto document = ayt::ui::SvgDocument::loadFromFile(
+                vectorPath, &error);
+            if (document != nullptr) {
+                auto* vector = new ayt::ui::SvgIcon();
+                vector->setId("app_logo_icon");
+                vector->setDocument(std::move(document));
+                vector->setColor(ayt::math::FVector4(
+                    1.0f, 1.0f, 1.0f, 1.0f));
+                vector->setPosition(ayt::math::FVector2(0.0f, 0.0f));
+                vector->setSize(ayt::math::FVector2(24.0f, 24.0f));
+                vector->setLayoutPositionManaged(false);
+                vector->setLayoutSizeManaged(false);
+                vector->setAccessibilityHidden(true);
+                logo->addChild(vector);
+            } else {
+                std::fprintf(stderr,
+                    "[EditorSession] application logo unavailable: %s (%s)\n",
+                    vectorPath.string().c_str(), error.c_str());
+            }
+        }
+    }
+
     if (iconRootPath.empty()) {
         return;
     }

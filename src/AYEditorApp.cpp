@@ -5,6 +5,7 @@
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorStartupSplash.h"
 #include "AYEditor/RegisterDefaultEditorModules.h"
+#include "resources/AYEditorResourceIds.h"
 #include "AYGameLoop.h"
 #include "AYDevice/DeviceManager.h"
 #include "AYDevice/DeviceInputProvider.h"
@@ -54,6 +55,41 @@ constexpr int kEditorChromeHeight = 24;
 constexpr int kEditorChromeDragLeft = 360;
 constexpr int kEditorChromeButtonsWidth = 92;
 constexpr int kEditorResizeBorder = 6;
+
+void installEditorWindowIcon(HWND hwnd)
+{
+    if (hwnd == nullptr) {
+        return;
+    }
+
+    HINSTANCE instance = ::GetModuleHandleW(nullptr);
+    if (instance == nullptr) {
+        return;
+    }
+
+    const auto loadIcon = [instance](int width, int height) -> HICON {
+        return static_cast<HICON>(::LoadImageW(
+            instance,
+            MAKEINTRESOURCEW(IDI_AYEDITOR_APP),
+            IMAGE_ICON,
+            width,
+            height,
+            LR_DEFAULTCOLOR | LR_SHARED));
+    };
+
+    if (HICON largeIcon = loadIcon(
+            ::GetSystemMetrics(SM_CXICON),
+            ::GetSystemMetrics(SM_CYICON))) {
+        ::SendMessageW(hwnd, WM_SETICON, ICON_BIG,
+                       reinterpret_cast<LPARAM>(largeIcon));
+    }
+    if (HICON smallIcon = loadIcon(
+            ::GetSystemMetrics(SM_CXSMICON),
+            ::GetSystemMetrics(SM_CYSMICON))) {
+        ::SendMessageW(hwnd, WM_SETICON, ICON_SMALL,
+                       reinterpret_cast<LPARAM>(smallIcon));
+    }
+}
 
 void renderEditorWarmupFrame(EditorSession& session,
                              ayt::render::RendererSubSystem& rendererSub,
@@ -718,6 +754,8 @@ void EditorApp::run()
         _devices.reset();
         return;
     }
+
+    installEditorWindowIcon(hwnd);
 
     if (!installEditorBorderlessChrome(
             window, hwnd, static_cast<int>(_desc.width),

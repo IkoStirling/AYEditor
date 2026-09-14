@@ -247,8 +247,6 @@ void applyEditorVisualStyle(ayt::ui::UIManager& ui, EditorDensity density)
     }
     setLabelFont(ui, "lbl_workspace", metrics.secondaryFontSize);
     setLabelFont(ui, "lbl_mode", metrics.secondaryFontSize);
-    setLabelFont(ui, "app_logo", 10);
-
     if (auto* menuBar = dynamic_cast<ayt::ui::MenuBar*>(
             ui.findById("menubar"))) {
         for (ayt::ui::Widget* child : menuBar->getChildren()) {

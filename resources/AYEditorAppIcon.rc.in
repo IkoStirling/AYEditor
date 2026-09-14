@@ -1,0 +1,3 @@
+#include "AYEditorResourceIds.h"
+
+IDI_AYEDITOR_APP ICON "@AY_EDITOR_APP_ICON_SOURCE_RC@"

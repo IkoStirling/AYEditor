@@ -808,6 +808,10 @@ TEST_CASE(editor_asset_browser_decodes_png_preview_once_off_the_ui_thread)
     desc.uiBackend = &renderer;
     desc.layoutPath = layout;
     desc.projectRoot = cleanup.root.string();
+    // Keep this case focused on the asynchronous Content Browser upload.
+    // Shell-logo upload and lifetime are covered by Test_EditorShell.
+    desc.engineAssetsRoot =
+        (cleanup.root / "EngineAssetsWithoutChrome").string();
     desc.createAssetPreviewTexture =
         [&](std::uint16_t width, std::uint16_t height, const void* pixels) {
             ++uploadCount;

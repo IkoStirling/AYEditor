@@ -31,6 +31,41 @@ if(AY_EDITOR_ENABLE_PRODUCT_INSTALL AND
         "AYEditor product install requires ${AY_ENGINE_ASSETS_SOURCE_DIR}")
 endif()
 
+# Keep the native executable, taskbar, and main-window branding sourced from
+# one versioned AYLogo derivative. The generated .rc uses an absolute path so
+# rc.exe resolves the icon identically from every build tree and generator.
+set(AY_EDITOR_WIN32_RESOURCE "")
+if(WIN32)
+    set(AY_EDITOR_APP_ICON_SOURCE
+        "${AY_ENGINE_ASSETS_SOURCE_DIR}/AYLogo/app/app-editor_multi.ico")
+    if(EXISTS "${AY_EDITOR_APP_ICON_SOURCE}")
+        enable_language(RC)
+        file(TO_CMAKE_PATH "${AY_EDITOR_APP_ICON_SOURCE}"
+            AY_EDITOR_APP_ICON_SOURCE_RC)
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/AYEditorResourceIds.h"
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/AYEditorResourceIds.h"
+            COPYONLY)
+        configure_file(
+            "${CMAKE_CURRENT_SOURCE_DIR}/resources/AYEditorAppIcon.rc.in"
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/AYEditorAppIcon.rc"
+            @ONLY)
+        set(AY_EDITOR_WIN32_RESOURCE
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/AYEditorAppIcon.rc")
+        # rc.exe does not emit a dependable include list for an ICON payload.
+        # Declare the packaged ICO explicitly so regenerating any frame rebuilds
+        # both editor executables instead of leaving a stale resource in the EXE.
+        set_property(SOURCE "${AY_EDITOR_WIN32_RESOURCE}" APPEND PROPERTY
+            OBJECT_DEPENDS "${AY_EDITOR_APP_ICON_SOURCE}")
+    elseif(AY_EDITOR_ENABLE_PRODUCT_INSTALL)
+        message(FATAL_ERROR
+            "AYEditor Windows icon is missing: ${AY_EDITOR_APP_ICON_SOURCE}")
+    else()
+        message(STATUS
+            "AYEditor Windows icon unavailable; building unbranded executables")
+    endif()
+endif()
+
 set(SRC_FILES
     src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
@@ -222,7 +257,8 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYUI AYGameLoop AYDevice AYApplicati
 # non-Windows branch returns empty), so the link is gated. The demo
 # and shutdown-repro targets inherit the link transitively.
 if(WIN32)
-    target_link_libraries(${MODULE_NAME} PRIVATE comdlg32 user32 gdi32 msimg32)
+    target_link_libraries(${MODULE_NAME} PRIVATE
+        comdlg32 user32 gdi32 msimg32 ole32 windowscodecs)
 endif()
 
 add_executable(AYEditorProjectValidator
@@ -237,6 +273,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 add_executable(AYEditorShell_Demo WIN32
     demo/AYEditorDebugHeapEarly.cpp
     demo/EditorShellDemo.cpp
+    ${AY_EDITOR_WIN32_RESOURCE}
 )
 
 target_include_directories(AYEditorShell_Demo PRIVATE
@@ -280,7 +317,9 @@ if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
     # The root launcher has no third-party imports.  It starts the real host
     # from AYRuntime, where Windows can resolve every app-local DLL before the
     # host reaches WinMain.
-    add_executable(AYEditorLauncher WIN32 demo/AYEditorLauncher.cpp)
+    add_executable(AYEditorLauncher WIN32
+        demo/AYEditorLauncher.cpp
+        ${AY_EDITOR_WIN32_RESOURCE})
     set_target_properties(AYEditorLauncher PROPERTIES OUTPUT_NAME AYEditor)
     target_link_libraries(AYEditorLauncher PRIVATE user32 shell32)
 endif()

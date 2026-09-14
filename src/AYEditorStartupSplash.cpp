@@ -1,12 +1,15 @@
 #include "AYEditor/EditorStartupSplash.h"
+#include "AYEditor/EditorProductPaths.h"
 
 #include <algorithm>
 #include <condition_variable>
 #include <cstdio>
 #include <cwchar>
+#include <filesystem>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #if defined(_WIN32)
 #  ifndef WIN32_LEAN_AND_MEAN
@@ -16,6 +19,8 @@
 #    define NOMINMAX
 #  endif
 #  include <Windows.h>
+#  include <objbase.h>
+#  include <wincodec.h>
 #endif
 
 namespace ayt::editor {
@@ -29,6 +34,7 @@ struct EditorStartupSplash::Impl {
         L"Aliyat.Editor.StartupSplash.v1";
     static constexpr int kWidth = 560;
     static constexpr int kHeight = 260;
+    static constexpr int kLogoSize = 88;
 
     struct PaintState {
         float progress = 0.0f;
@@ -41,6 +47,126 @@ struct EditorStartupSplash::Impl {
     HWND window = nullptr;
     bool ready = false;
     PaintState paintState;
+    std::filesystem::path logoPath;
+    HBITMAP logoBitmap = nullptr;
+    UINT logoWidth = 0;
+    UINT logoHeight = 0;
+
+    Impl()
+        : logoPath(EditorProductPaths::detect().engineAsset(
+              std::filesystem::path("AYLogo") / "splash"
+              / "splash-symbol_88px.png"))
+    {
+    }
+
+    ~Impl()
+    {
+        releaseLogoBitmap();
+    }
+
+    void releaseLogoBitmap()
+    {
+        if (logoBitmap != nullptr) {
+            ::DeleteObject(logoBitmap);
+            logoBitmap = nullptr;
+        }
+        logoWidth = 0;
+        logoHeight = 0;
+    }
+
+    bool loadLogoBitmap()
+    {
+        releaseLogoBitmap();
+        if (logoPath.empty()) return false;
+
+        IWICImagingFactory* factory = nullptr;
+        IWICBitmapDecoder* decoder = nullptr;
+        IWICBitmapFrameDecode* frame = nullptr;
+        IWICFormatConverter* converter = nullptr;
+        const auto releaseInterfaces = [&]() {
+            if (converter != nullptr) converter->Release();
+            if (frame != nullptr) frame->Release();
+            if (decoder != nullptr) decoder->Release();
+            if (factory != nullptr) factory->Release();
+        };
+
+        HRESULT result = ::CoCreateInstance(
+            CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(&factory));
+        if (SUCCEEDED(result)) {
+            result = factory->CreateDecoderFromFilename(
+                logoPath.c_str(), nullptr, GENERIC_READ,
+                WICDecodeMetadataCacheOnLoad, &decoder);
+        }
+        if (SUCCEEDED(result)) result = decoder->GetFrame(0, &frame);
+        if (SUCCEEDED(result)) result = frame->GetSize(&logoWidth, &logoHeight);
+        if (SUCCEEDED(result)
+            && (logoWidth == 0 || logoHeight == 0
+                || logoWidth > 4096 || logoHeight > 4096)) {
+            result = E_INVALIDARG;
+        }
+        if (SUCCEEDED(result)) result = factory->CreateFormatConverter(&converter);
+        if (SUCCEEDED(result)) {
+            // GDI AlphaBlend expects premultiplied BGRA for AC_SRC_ALPHA.
+            result = converter->Initialize(
+                frame, GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone, nullptr, 0.0,
+                WICBitmapPaletteTypeCustom);
+        }
+
+        void* pixels = nullptr;
+        if (SUCCEEDED(result)) {
+            BITMAPINFO info{};
+            info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            info.bmiHeader.biWidth = static_cast<LONG>(logoWidth);
+            // A negative height creates a top-down DIB matching WIC rows.
+            info.bmiHeader.biHeight = -static_cast<LONG>(logoHeight);
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            logoBitmap = ::CreateDIBSection(
+                nullptr, &info, DIB_RGB_COLORS, &pixels, nullptr, 0);
+            if (logoBitmap == nullptr || pixels == nullptr) {
+                result = E_OUTOFMEMORY;
+            }
+        }
+        if (SUCCEEDED(result)) {
+            const UINT stride = logoWidth * 4u;
+            result = converter->CopyPixels(
+                nullptr, stride, stride * logoHeight,
+                static_cast<BYTE*>(pixels));
+        }
+
+        releaseInterfaces();
+        if (FAILED(result)) {
+            releaseLogoBitmap();
+            std::fwprintf(stderr,
+                L"[EditorStartupSplash] logo unavailable: %ls (0x%08lx)\n",
+                logoPath.c_str(), static_cast<unsigned long>(result));
+            return false;
+        }
+        return true;
+    }
+
+    bool drawLogo(HDC target) const
+    {
+        if (target == nullptr || logoBitmap == nullptr
+            || logoWidth == 0 || logoHeight == 0) {
+            return false;
+        }
+        HDC source = ::CreateCompatibleDC(target);
+        if (source == nullptr) return false;
+        HGDIOBJ oldBitmap = ::SelectObject(source, logoBitmap);
+        const BLENDFUNCTION blend{
+            AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        const BOOL drawn = ::AlphaBlend(
+            target, 52, 40, kLogoSize, kLogoSize,
+            source, 0, 0,
+            static_cast<int>(logoWidth), static_cast<int>(logoHeight), blend);
+        ::SelectObject(source, oldBitmap);
+        ::DeleteDC(source);
+        return drawn != FALSE;
+    }
 
     static LRESULT CALLBACK windowProc(HWND hwnd, UINT message,
                                        WPARAM wParam, LPARAM lParam)
@@ -137,13 +263,15 @@ struct EditorStartupSplash::Impl {
         HFONT statusFont = createFont(14, FW_NORMAL);
         HFONT percentFont = createFont(12, FW_SEMIBOLD);
 
-        RECT eyebrow{52, 42, width - 52, 64};
+        const bool hasLogo = drawLogo(buffer);
+        const LONG brandTextLeft = hasLogo ? 154 : 52;
+        RECT eyebrow{brandTextLeft, 42, width - 52, 64};
         HGDIOBJ oldFont = ::SelectObject(buffer, eyebrowFont);
         ::SetTextColor(buffer, RGB(105, 164, 235));
         ::DrawTextW(buffer, L"ALIYAT ENGINE", -1, &eyebrow,
                     DT_LEFT | DT_SINGLELINE | DT_VCENTER);
 
-        RECT title{50, 66, width - 50, 112};
+        RECT title{brandTextLeft - 2, 66, width - 50, 112};
         ::SelectObject(buffer, titleFont);
         ::SetTextColor(buffer, RGB(235, 238, 244));
         ::DrawTextW(buffer, L"AY Editor", -1, &title,
@@ -202,6 +330,26 @@ struct EditorStartupSplash::Impl {
 
     void runMessageThread()
     {
+        const HRESULT comResult = ::CoInitializeEx(
+            nullptr, COINIT_APARTMENTTHREADED);
+        const bool uninitializeCom = SUCCEEDED(comResult);
+        if (SUCCEEDED(comResult)) {
+            (void)loadLogoBitmap();
+        } else if (!logoPath.empty()) {
+            std::fwprintf(stderr,
+                L"[EditorStartupSplash] WIC unavailable for logo: 0x%08lx\n",
+                static_cast<unsigned long>(comResult));
+        }
+        struct ThreadCleanup {
+            Impl* impl = nullptr;
+            bool uninitializeCom = false;
+            ~ThreadCleanup()
+            {
+                if (impl != nullptr) impl->releaseLogoBitmap();
+                if (uninitializeCom) ::CoUninitialize();
+            }
+        } cleanup{this, uninitializeCom};
+
         const HINSTANCE instance = ::GetModuleHandleW(nullptr);
         WNDCLASSEXW windowClass{};
         windowClass.cbSize = sizeof(windowClass);
