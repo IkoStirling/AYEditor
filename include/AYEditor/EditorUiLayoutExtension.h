@@ -67,6 +67,8 @@ public:
     bool saveDocument(std::string* error = nullptr);
     void undo();
     void redo();
+    bool canUndo() const;
+    bool canRedo() const;
 
     bool onPointerDown(float x, float y, int button);
     bool onPointerMove(float x, float y);

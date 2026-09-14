@@ -203,6 +203,16 @@ void EditorUiLayoutController::redo()
     if (isAttached()) _impl->session.redo();
 }
 
+bool EditorUiLayoutController::canUndo() const
+{
+    return isAttached() && _impl->session.canUndo();
+}
+
+bool EditorUiLayoutController::canRedo() const
+{
+    return isAttached() && _impl->session.canRedo();
+}
+
 bool EditorUiLayoutController::onPointerDown(float x, float y, int button)
 {
     return isAttached() && _impl->session.onPointerDown({x, y}, button);
@@ -359,7 +369,10 @@ public:
 
     bool canExecuteCommand(const std::string& commandId) const override
     {
-        return _attached && handlesCommand(commandId);
+        if (!_attached) return false;
+        if (commandId == "edit.undo") return _controller->canUndo();
+        if (commandId == "edit.redo") return _controller->canRedo();
+        return handlesCommand(commandId);
     }
 
     bool executeCommand(const std::string& commandId) override

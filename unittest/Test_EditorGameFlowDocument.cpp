@@ -276,6 +276,12 @@ TEST_CASE(save_recovery_and_reload_keep_document_identity_and_dirty_state)
 
     CHECK(document.addObject(EditorGameFlowObjectKind::Intent, {}, &error));
     CHECK(document.isDirty());
+    CHECK(document.canUndo());
+    CHECK(document.handlesCommand("edit.undo"));
+    CHECK(document.executeCommand("edit.undo"));
+    CHECK_FALSE(document.isDirty());
+    CHECK(document.executeCommand("edit.redo"));
+    CHECK(document.isDirty());
     CHECK(document.writeRecoveryCopy(recovery.path.string(), &error));
     CHECK(document.path() == sourceIdentity);
     CHECK(document.isDirty());

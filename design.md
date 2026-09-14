@@ -298,13 +298,13 @@ C++ 回调仍由使用该布局的宿主通过 AYUI Loader 注册，AYEditor 不
 
 画布选择装饰是透明、像素对齐的单层轮廓与控制点，不改变被选 Widget 的填充，也不重复绘制
 第二层边框。AYEditor 链接 editor-only `AYUILayoutEditorCore`；其中 `LayoutDocumentModel`、
-`LayoutSelectionModel`、`LayoutCommandStack` 和 `LayoutCanvasViewport` 分别承载 authoring 状态，
+`LayoutSelectionModel`、公共 `EditorCommandHistory` 和 `LayoutCanvasViewport` 分别承载 authoring 状态，
 `LayoutEditorSession` 只做 chrome/手势协调。Workspace Document 的保存仍委托绑定 Controller，且
 Document 自身不持有 Widget、HWND 或渲染对象。
 
 Widget Library、默认创建参数和 Inspector 属性集合统一读取 `WidgetAuthoringRegistry`；属性 section
-由 `PropertySchema` 生成。命令栈标注 Property/Insert/Delete/Reorder/Transform/Clipboard 类型化意图，
-并在迁移期保留完整 JSON snapshot 兜底，因此 standalone 与 AYEditor 的 undo/redo 行为仍完全一致。
+由 `PropertySchema` 生成。布局编辑命令接入引擎统一的文档历史；高频属性保留细粒度命令，结构编辑
+在迁移期保留完整 JSON snapshot 兜底，因此 standalone 与 AYEditor 的 undo/redo 和保存点行为一致。
 
 第三阶段的产品编辑能力仍由共享 core 提供。Collections、完整 Tree source、Tab page 与 RichText run
 使用 Structured Content Inspector 增删、重命名和排序；AYEditor 只为 `TextureResourceProvider` 枚举
@@ -1328,6 +1328,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 | 2026-09-12 | Layout Designer 增加可视化 Project Safe Rename；AYUI 只承载中性预览/提交表单，AYEditor 负责引用类型映射、原子磁盘事务与干净文档重载。 |
 | 2026-09-12 | UI Designer 项目索引改为带文件指纹/revision 的长生命周期服务；仅 authoring 文件变化时重解析，并自动同步干净的 Workspace 文档，dirty 冲突只告警不覆盖。 |
 | 2026-09-14 | B-8 公共命令历史抽为无 AYUI/World/Renderer 依赖的 `AYEditorCommandCore`；统一原子 execute/undo 失败契约、事务取消与无副作用丢弃、256 条默认容量、保存游标和过期 owner 熔断。全局路由保留在 AYEditor，各文档各自持有一份历史；公共接口变化使 AYEditor Source ABI 升至 15。 |
+| 2026-09-14 | B-8 生产迁移完成：Scene、GameFlow、UIFlow 与 UI Layout 均改用文档级 `EditorCommandHistory`，删除 `EditorCommandStack`、`LayoutCommandStack` 及 Flow 私有 undo/redo 容器；保存游标统一驱动 dirty，活动文档统一接入命令路由。公共布局变化使 AYEditor Source ABI 升至 18、AYUI Source ABI 升至 128。 |
 
 ---
 

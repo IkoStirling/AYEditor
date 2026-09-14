@@ -77,6 +77,27 @@ TEST_CASE(command_history_tracks_merge_save_undo_and_redo)
     CHECK(notifications >= 5);
 }
 
+TEST_CASE(command_history_records_and_discards_already_applied_edits)
+{
+    int value = 4;
+    EditorCommandHistory history;
+    auto applied = std::make_unique<IntegerCommand>(value, 9);
+    value = 9;
+    CHECK(history.recordApplied(std::move(applied)));
+    CHECK(history.canUndo());
+    CHECK(history.isDirty());
+    CHECK(history.undo());
+    CHECK(value == 4);
+    CHECK(history.redo());
+    CHECK(value == 9);
+
+    auto noChange = std::make_unique<IntegerCommand>(value, 9);
+    CHECK(history.recordApplied(std::move(noChange)));
+    CHECK(history.discardLastApplied());
+    CHECK(history.size() == 1u);
+    CHECK(history.cursor() == 1u);
+}
+
 TEST_CASE(command_history_commits_and_cancels_transactions_explicitly)
 {
     int value = 0;

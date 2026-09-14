@@ -592,7 +592,9 @@ void selectComboItem(ayt::ui::ComboBox& combo,
 // instead of making registration fail and rendering the document unopenable.
 class EditorUiFlowLaunchView final : public IEditorView {
 public:
-    EditorUiFlowLaunchView()
+    explicit EditorUiFlowLaunchView(
+        std::shared_ptr<EditorUiFlowDocument> document)
+        : _document(std::move(document))
     {
         auto* root = new ayt::ui::Panel();
         root->setId("ui_flow_launch_surface");
@@ -611,6 +613,9 @@ public:
     ~EditorUiFlowLaunchView() override { delete _root; }
 
     ayt::ui::Widget* rootWidget() noexcept override { return _root; }
+    IEditorCommandTarget* commandTarget() noexcept override {
+        return _document.get();
+    }
     ayt::ui::Widget* releaseRootWidget() noexcept override {
         ayt::ui::Widget* result = _root;
         _root = nullptr;
@@ -618,6 +623,7 @@ public:
     }
 
 private:
+    std::shared_ptr<EditorUiFlowDocument> _document;
     ayt::ui::Widget* _root = nullptr;
 };
 
@@ -1374,10 +1380,11 @@ EditorDescriptor makeEditorUiFlowDescriptor(EditorUiFlowExtensionConfig)
     descriptor.createView = [](
         const std::shared_ptr<IEditorDocument>& document,
         IEditorHostServices&) -> std::unique_ptr<IEditorView> {
-        if (std::dynamic_pointer_cast<EditorUiFlowDocument>(document) == nullptr) {
+        auto uiFlow = std::dynamic_pointer_cast<EditorUiFlowDocument>(document);
+        if (uiFlow == nullptr) {
             return nullptr;
         }
-        return std::make_unique<EditorUiFlowLaunchView>();
+        return std::make_unique<EditorUiFlowLaunchView>(std::move(uiFlow));
     };
     return descriptor;
 }

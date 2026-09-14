@@ -88,6 +88,39 @@ bool EditorCommandHistory::execute(std::unique_ptr<IEditorCommand> command)
     return appendApplied(std::move(command));
 }
 
+bool EditorCommandHistory::recordApplied(
+    std::unique_ptr<IEditorCommand> command)
+{
+    if (_faulted || command == nullptr || !command->isAlive()) return false;
+    if (_transaction.active) {
+        if (!tryMerge(_transaction.commands, *command)) {
+            _transaction.commands.push_back(std::move(command));
+        }
+        notifyChanged();
+        return true;
+    }
+    return appendApplied(std::move(command));
+}
+
+bool EditorCommandHistory::discardLastApplied()
+{
+    if (_faulted) return false;
+    if (_transaction.active) {
+        if (_transaction.commands.empty()) return false;
+        _transaction.commands.pop_back();
+        notifyChanged();
+        return true;
+    }
+    if (_cursor == 0u || _cursor != _history.size()) return false;
+    _history.pop_back();
+    --_cursor;
+    if (_savedCursor.has_value() && *_savedCursor > _cursor) {
+        _savedCursor.reset();
+    }
+    notifyChanged();
+    return true;
+}
+
 bool EditorCommandHistory::undo()
 {
     if (!canUndo()) return false;

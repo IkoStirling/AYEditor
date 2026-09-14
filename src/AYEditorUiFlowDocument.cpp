@@ -245,6 +245,39 @@ std::string firstDiagnostic(
 
 } // namespace
 
+class EditorUiFlowDocument::SnapshotCommand final : public IEditorCommand {
+public:
+    SnapshotCommand(EditorUiFlowDocument& document, Snapshot before,
+                    Snapshot after, std::string label)
+        : _document(&document), _before(std::move(before)),
+          _after(std::move(after)), _label(std::move(label)) {}
+
+    const std::string& label() const noexcept override { return _label; }
+    bool execute() override {
+        if (_document == nullptr) return false;
+        _document->restore(_after);
+        return true;
+    }
+    bool undo() override {
+        if (_document == nullptr) return false;
+        _document->restore(_before);
+        return true;
+    }
+
+private:
+    EditorUiFlowDocument* _document = nullptr;
+    Snapshot _before;
+    Snapshot _after;
+    std::string _label;
+};
+
+EditorUiFlowDocument::EditorUiFlowDocument()
+{
+    _history.setChangedCallback([this]() { onHistoryChanged(); });
+}
+
+EditorUiFlowDocument::~EditorUiFlowDocument() = default;
+
 const char* EditorUiFlowDocument::kindName(
     EditorUiFlowObjectKind kind) noexcept
 {
@@ -298,12 +331,7 @@ void EditorUiFlowDocument::createNew()
     _path.clear();
     _title = "Untitled UI Flow";
     _selection = {};
-    _undo.clear();
-    _redo.clear();
-    _dirty = false;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
+    _history.discardHistory(EditorHistoryDiscardState::MarkClean);
 }
 
 bool EditorUiFlowDocument::loadFromPath(
@@ -332,12 +360,8 @@ bool EditorUiFlowDocument::loadFromPath(
     _valid = true;
     _path = path;
     _selection = {};
-    _undo.clear();
-    _redo.clear();
-    _dirty = false;
-    ++_revision;
     updateTitle(displayPath);
-    notifyChanged();
+    _history.discardHistory(EditorHistoryDiscardState::MarkClean);
     if (error != nullptr) error->clear();
     return true;
 }
@@ -349,9 +373,7 @@ bool EditorUiFlowDocument::save(std::string* error)
         return false;
     }
     if (!writeToPath(_path, true, error)) return false;
-    _dirty = false;
-    ++_revision;
-    notifyChanged();
+    (void)_history.markSaved();
     return true;
 }
 
@@ -363,11 +385,11 @@ bool EditorUiFlowDocument::saveAs(
         return false;
     }
     if (!writeToPath(path, true, error)) return false;
+    const bool historyWasDirty = _history.isDirty();
     _path = path;
-    _dirty = false;
-    ++_revision;
     updateTitle();
-    notifyChanged();
+    (void)_history.markSaved();
+    if (!historyWasDirty) onHistoryChanged();
     return true;
 }
 
@@ -425,48 +447,57 @@ void EditorUiFlowDocument::refreshDiagnostics()
 
 EditorUiFlowDocument::Snapshot EditorUiFlowDocument::snapshot() const
 {
-    return {_flow, _selection, _dirty};
+    return {_flow, _selection};
 }
 
-void EditorUiFlowDocument::commitMutation(Snapshot before)
+void EditorUiFlowDocument::commitMutation(Snapshot before, std::string label)
 {
-    _undo.push_back(std::move(before));
-    if (_undo.size() > 100u) _undo.erase(_undo.begin());
-    _redo.clear();
-    _dirty = true;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
+    (void)_history.recordApplied(std::make_unique<SnapshotCommand>(
+        *this, std::move(before), snapshot(), std::move(label)));
 }
 
 void EditorUiFlowDocument::restore(Snapshot value)
 {
     _flow = std::move(value.flow);
     _selection = std::move(value.selection);
-    _dirty = value.dirty;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
 }
 
 bool EditorUiFlowDocument::undo()
 {
-    if (_undo.empty()) return false;
-    _redo.push_back(snapshot());
-    Snapshot prior = std::move(_undo.back());
-    _undo.pop_back();
-    restore(std::move(prior));
-    return true;
+    return _history.undo();
 }
 
 bool EditorUiFlowDocument::redo()
 {
-    if (_redo.empty()) return false;
-    _undo.push_back(snapshot());
-    Snapshot next = std::move(_redo.back());
-    _redo.pop_back();
-    restore(std::move(next));
-    return true;
+    return _history.redo();
+}
+
+bool EditorUiFlowDocument::handlesCommand(
+    const std::string& commandId) const
+{
+    return commandId == "edit.undo" || commandId == "edit.redo";
+}
+
+bool EditorUiFlowDocument::canExecuteCommand(
+    const std::string& commandId) const
+{
+    if (commandId == "edit.undo") return canUndo();
+    if (commandId == "edit.redo") return canRedo();
+    return false;
+}
+
+bool EditorUiFlowDocument::executeCommand(const std::string& commandId)
+{
+    if (commandId == "edit.undo") return undo();
+    if (commandId == "edit.redo") return redo();
+    return false;
+}
+
+void EditorUiFlowDocument::onHistoryChanged()
+{
+    ++_revision;
+    refreshDiagnostics();
+    notifyChanged();
 }
 
 bool EditorUiFlowDocument::selectionExists(
@@ -911,7 +942,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
     case EditorUiFlowObjectKind::Graph:
         break;
     }
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Edit UI Flow Properties");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1019,7 +1050,7 @@ bool EditorUiFlowDocument::addObject(
         return false;
     }
     _selection = {kind, id, ownerId};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Add UI Flow Object");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1048,7 +1079,7 @@ bool EditorUiFlowDocument::addGraphNode(
     }
     Snapshot before = snapshot();
     graph->nodes.push_back({std::move(id), std::move(nodeType), {}});
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Add UI Flow Graph Node");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1092,7 +1123,7 @@ bool EditorUiFlowDocument::connectGraphNodes(
     Snapshot before = snapshot();
     graph->links.push_back({std::move(fromNode), std::move(fromPin),
                             std::move(toNode), std::move(toPin)});
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Connect UI Flow Graph Nodes");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1182,7 +1213,7 @@ bool EditorUiFlowDocument::deleteSelection(std::string* error)
         return false;
     }
     _selection = {};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Delete UI Flow Object");
     if (error != nullptr) error->clear();
     return true;
 }

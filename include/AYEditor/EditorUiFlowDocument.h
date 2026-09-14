@@ -1,6 +1,8 @@
 #pragma once
 
+#include "AYEditor/EditorCommandSystem.h"
 #include "AYEditor/EditorExtension.h"
+#include "AYEditorCommand/EditorCommandHistory.h"
 
 #include <AYUI/UIFlow.h>
 
@@ -71,9 +73,15 @@ struct EditorUiFlowPropertyLabels {
     std::string flag;
 };
 
-class EditorUiFlowDocument final : public IEditorDocument {
+class EditorUiFlowDocument final : public IEditorDocument,
+                                   public IEditorCommandTarget {
 public:
     using ChangedHandler = std::function<void()>;
+
+    EditorUiFlowDocument();
+    ~EditorUiFlowDocument();
+    EditorUiFlowDocument(const EditorUiFlowDocument&) = delete;
+    EditorUiFlowDocument& operator=(const EditorUiFlowDocument&) = delete;
 
     bool initialize(const std::string& path,
                     const std::string& displayPath,
@@ -83,7 +91,7 @@ public:
     const std::string& typeId() const noexcept override { return _typeId; }
     const std::string& path() const noexcept override { return _path; }
     const std::string& title() const noexcept override { return _title; }
-    bool isDirty() const noexcept override { return _dirty; }
+    bool isDirty() const noexcept override { return _history.isDirty(); }
     std::uint64_t revision() const noexcept override { return _revision; }
 
     bool save(std::string* error = nullptr) override;
@@ -126,10 +134,18 @@ public:
                            std::string* error = nullptr);
     bool deleteSelection(std::string* error = nullptr);
 
-    bool canUndo() const noexcept { return !_undo.empty(); }
-    bool canRedo() const noexcept { return !_redo.empty(); }
+    bool canUndo() const noexcept { return _history.canUndo(); }
+    bool canRedo() const noexcept { return _history.canRedo(); }
     bool undo();
     bool redo();
+    EditorCommandHistory& commandHistory() noexcept { return _history; }
+    const EditorCommandHistory& commandHistory() const noexcept {
+        return _history;
+    }
+
+    bool handlesCommand(const std::string& commandId) const override;
+    bool canExecuteCommand(const std::string& commandId) const override;
+    bool executeCommand(const std::string& commandId) override;
 
     void setChangedHandler(ChangedHandler handler) {
         _changed = std::move(handler);
@@ -138,10 +154,11 @@ public:
     static const char* kindName(EditorUiFlowObjectKind kind) noexcept;
 
 private:
+    class SnapshotCommand;
+    friend class SnapshotCommand;
     struct Snapshot {
         ayt::ui::UIFlowDocument flow;
         EditorUiFlowSelection selection;
-        bool dirty = false;
     };
 
     bool loadFromPath(const std::string& path,
@@ -152,9 +169,10 @@ private:
                      std::string* error) const;
     void updateTitle(const std::string& displayPath = {});
     void refreshDiagnostics();
-    void commitMutation(Snapshot before);
+    void commitMutation(Snapshot before, std::string label = "Edit UI Flow");
     Snapshot snapshot() const;
     void restore(Snapshot value);
+    void onHistoryChanged();
     bool selectionExists(const EditorUiFlowSelection& selection) const;
     std::string uniqueId(EditorUiFlowObjectKind kind,
                          std::string_view ownerId = {}) const;
@@ -168,11 +186,9 @@ private:
     ayt::ui::UIFlowDocument _flow;
     std::vector<ayt::ui::UIFlowDiagnostic> _diagnostics;
     EditorUiFlowSelection _selection;
-    std::vector<Snapshot> _undo;
-    std::vector<Snapshot> _redo;
+    EditorCommandHistory _history{100u};
     ChangedHandler _changed;
     bool _valid = false;
-    bool _dirty = false;
     std::uint64_t _revision = 1;
 };
 

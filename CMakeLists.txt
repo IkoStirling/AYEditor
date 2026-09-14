@@ -6,11 +6,6 @@ project(AYEditor
 
 set(MODULE_NAME AYEditor)
 
-# Dependency-light authoring command history. It deliberately has no AYUI,
-# World, window, renderer, or AYEditor product dependency, so standalone
-# authoring surfaces can reuse the same mechanism.
-add_subdirectory(command)
-
 set(AY_RESOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYResource")
 set(AY_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader")
 include("${AY_SHADER_ROOT}/cmake/AYBgfx.cmake")
@@ -207,7 +202,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=17)
+    AYEDITOR_SOURCE_ABI_VERSION=18)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

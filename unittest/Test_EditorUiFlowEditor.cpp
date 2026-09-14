@@ -292,6 +292,14 @@ TEST_CASE(document_save_load_roundtrip_preserves_authoring_model)
         graphId, "node_1", "completed", "node_2", "execute", &error));
     CHECK(source.saveAs(temp.path.string(), &error));
     CHECK_FALSE(source.isDirty());
+    CHECK(source.addObject(EditorUiFlowObjectKind::Signal, {}, &error));
+    CHECK(source.isDirty());
+    CHECK(source.handlesCommand("edit.undo"));
+    CHECK(source.executeCommand("edit.undo"));
+    CHECK_FALSE(source.isDirty());
+    CHECK(source.executeCommand("edit.redo"));
+    CHECK(source.isDirty());
+    CHECK(source.executeCommand("edit.undo"));
 
     EditorUiFlowDocument loaded;
     CHECK(loaded.initialize(temp.path.string(), temp.path.string(), &error));

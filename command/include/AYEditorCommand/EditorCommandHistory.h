@@ -46,6 +46,15 @@ public:
         std::size_t capacity = kDefaultCapacity) noexcept;
 
     bool execute(std::unique_ptr<IEditorCommand> command);
+    // Records a command whose effect has already been applied by an immediate
+    // authoring surface. This is the migration bridge for retained-mode tools
+    // that mutate their model during pointer/text callbacks and can only
+    // create the undo record after the edit succeeds.
+    bool recordApplied(std::unique_ptr<IEditorCommand> command);
+    // Drops the newest applied record without touching the model. Intended
+    // only for an operation that recorded its baseline and then discovered it
+    // made no change or failed before completion.
+    bool discardLastApplied();
     bool undo();
     bool redo();
 

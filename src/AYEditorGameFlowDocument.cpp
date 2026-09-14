@@ -197,6 +197,39 @@ bool propertiesEqual(const EditorGameFlowProperties& left,
 
 } // namespace
 
+class EditorGameFlowDocument::SnapshotCommand final : public IEditorCommand {
+public:
+    SnapshotCommand(EditorGameFlowDocument& document, Snapshot before,
+                    Snapshot after, std::string label)
+        : _document(&document), _before(std::move(before)),
+          _after(std::move(after)), _label(std::move(label)) {}
+
+    const std::string& label() const noexcept override { return _label; }
+    bool execute() override {
+        if (_document == nullptr) return false;
+        _document->restore(_after);
+        return true;
+    }
+    bool undo() override {
+        if (_document == nullptr) return false;
+        _document->restore(_before);
+        return true;
+    }
+
+private:
+    EditorGameFlowDocument* _document = nullptr;
+    Snapshot _before;
+    Snapshot _after;
+    std::string _label;
+};
+
+EditorGameFlowDocument::EditorGameFlowDocument()
+{
+    _history.setChangedCallback([this]() { onHistoryChanged(); });
+}
+
+EditorGameFlowDocument::~EditorGameFlowDocument() = default;
+
 const char* EditorGameFlowDocument::kindName(
     EditorGameFlowObjectKind kind) noexcept
 {
@@ -237,12 +270,7 @@ void EditorGameFlowDocument::createNew()
     _path.clear();
     _title = "Untitled Game Flow";
     _selection = {};
-    _undo.clear();
-    _redo.clear();
-    _dirty = false;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
+    _history.discardHistory(EditorHistoryDiscardState::MarkClean);
 }
 
 bool EditorGameFlowDocument::loadFromPath(
@@ -272,15 +300,12 @@ bool EditorGameFlowDocument::loadFromPath(
     _flow = std::move(loaded);
     _path = path;
     _selection = {};
-    _undo.clear();
-    _redo.clear();
     // Keep successful in-memory migration visible to the author. The normal
     // save path serializes the current schema and clears this dirty state.
-    _dirty = migration.changed;
-    ++_revision;
     updateTitle(displayPath);
-    refreshDiagnostics();
-    notifyChanged();
+    _history.discardHistory(migration.changed
+        ? EditorHistoryDiscardState::KeepDirty
+        : EditorHistoryDiscardState::MarkClean);
     if (error != nullptr) error->clear();
     return true;
 }
@@ -299,9 +324,7 @@ bool EditorGameFlowDocument::save(std::string* error)
         return false;
     }
     if (!writeToPath(_path, error)) return false;
-    _dirty = false;
-    ++_revision;
-    notifyChanged();
+    (void)_history.markSaved();
     return true;
 }
 
@@ -320,11 +343,11 @@ bool EditorGameFlowDocument::saveAs(
         return false;
     }
     if (!writeToPath(path, error)) return false;
+    const bool historyWasDirty = _history.isDirty();
     _path = path;
-    _dirty = false;
-    ++_revision;
     updateTitle();
-    notifyChanged();
+    (void)_history.markSaved();
+    if (!historyWasDirty) onHistoryChanged();
     return true;
 }
 
@@ -435,18 +458,13 @@ bool EditorGameFlowDocument::buildPlan(
 
 EditorGameFlowDocument::Snapshot EditorGameFlowDocument::snapshot() const
 {
-    return {_flow, _selection, _dirty};
+    return {_flow, _selection};
 }
 
-void EditorGameFlowDocument::commitMutation(Snapshot before)
+void EditorGameFlowDocument::commitMutation(Snapshot before, std::string label)
 {
-    _undo.push_back(std::move(before));
-    if (_undo.size() > 100u) _undo.erase(_undo.begin());
-    _redo.clear();
-    _dirty = true;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
+    (void)_history.recordApplied(std::make_unique<SnapshotCommand>(
+        *this, std::move(before), snapshot(), std::move(label)));
 }
 
 void EditorGameFlowDocument::restore(Snapshot value)
@@ -454,30 +472,44 @@ void EditorGameFlowDocument::restore(Snapshot value)
     _flow = std::move(value.flow);
     _selection = std::move(value.selection);
     if (!selectionExists(_selection)) _selection = {};
-    _dirty = value.dirty;
-    ++_revision;
-    refreshDiagnostics();
-    notifyChanged();
 }
 
 bool EditorGameFlowDocument::undo()
 {
-    if (_undo.empty()) return false;
-    _redo.push_back(snapshot());
-    Snapshot previous = std::move(_undo.back());
-    _undo.pop_back();
-    restore(std::move(previous));
-    return true;
+    return _history.undo();
 }
 
 bool EditorGameFlowDocument::redo()
 {
-    if (_redo.empty()) return false;
-    _undo.push_back(snapshot());
-    Snapshot next = std::move(_redo.back());
-    _redo.pop_back();
-    restore(std::move(next));
-    return true;
+    return _history.redo();
+}
+
+bool EditorGameFlowDocument::handlesCommand(
+    const std::string& commandId) const
+{
+    return commandId == "edit.undo" || commandId == "edit.redo";
+}
+
+bool EditorGameFlowDocument::canExecuteCommand(
+    const std::string& commandId) const
+{
+    if (commandId == "edit.undo") return canUndo();
+    if (commandId == "edit.redo") return canRedo();
+    return false;
+}
+
+bool EditorGameFlowDocument::executeCommand(const std::string& commandId)
+{
+    if (commandId == "edit.undo") return undo();
+    if (commandId == "edit.redo") return redo();
+    return false;
+}
+
+void EditorGameFlowDocument::onHistoryChanged()
+{
+    ++_revision;
+    refreshDiagnostics();
+    notifyChanged();
 }
 
 bool EditorGameFlowDocument::selectionExists(
@@ -896,7 +928,7 @@ bool EditorGameFlowDocument::applySelectedProperties(
     case EditorGameFlowObjectKind::ActionArgument:
         break;
     }
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Edit Game Flow Properties");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -994,7 +1026,7 @@ bool EditorGameFlowDocument::addObject(
         if (error != nullptr) *error = "Unsupported GameFlow object kind.";
         return false;
     }
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Add Game Flow Object");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1027,7 +1059,7 @@ bool EditorGameFlowDocument::addIntentField(
     intent->payload.push_back(std::move(field));
     _selection = {EditorGameFlowObjectKind::IntentField,
                   fieldId, std::move(intentId)};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Add Intent Field");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1051,7 +1083,7 @@ bool EditorGameFlowDocument::addAction(
     transition->actions.push_back({actionType, {}});
     _selection = {EditorGameFlowObjectKind::Action, actionType,
                   std::move(transitionId), transition->actions.size() - 1u};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Add Game Flow Action");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1078,7 +1110,7 @@ bool EditorGameFlowDocument::setTransitionGuard(
                                   transitionId}
         : EditorGameFlowSelection{EditorGameFlowObjectKind::Guard,
                                   guardType, transitionId};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Set Transition Guard");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1114,7 +1146,7 @@ bool EditorGameFlowDocument::moveSelectedAction(
     transition->actions.insert(transition->actions.begin() + target,
                                std::move(action));
     _selection.index = static_cast<std::size_t>(target);
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Move Game Flow Action");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1218,7 +1250,7 @@ bool EditorGameFlowDocument::deleteSelection(std::string* error)
         return false;
     }
     _selection = {};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Delete Game Flow Object");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1311,7 +1343,7 @@ bool EditorGameFlowDocument::setSelectedArgument(
     arguments->insert_or_assign(argumentId, std::move(value));
     _selection = {EditorGameFlowObjectKind::ActionArgument, argumentId,
                   _selection.ownerId, _selection.index};
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Set Game Flow Argument");
     if (error != nullptr) error->clear();
     return true;
 }
@@ -1346,7 +1378,7 @@ bool EditorGameFlowDocument::clearSelectedArgument(
             _selection.id = transition->actions[_selection.index].action;
         }
     }
-    commitMutation(std::move(before));
+    commitMutation(std::move(before), "Clear Game Flow Argument");
     if (error != nullptr) error->clear();
     return true;
 }

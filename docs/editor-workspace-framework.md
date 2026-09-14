@@ -52,7 +52,7 @@ state and must not contain Widget, HWND, renderer, or input objects.
   policy, ticking, document-local pointer/key routing, cursor hints, and
   two-phase UI-safe shutdown.
 
-## Command-history consolidation (B-8, foundation complete)
+## Command-history consolidation (B-8, complete)
 
 **Decision:** AYEditor will keep one shared undo/redo mechanism, with one
 `EditorCommandHistory` instance per open document. The history is not a global
@@ -70,7 +70,7 @@ dependency and has its own unit-test executable. The compatibility
 `AYEditor/EditorCommandSystem.h` include remains while existing consumers
 migrate; `EditorCommandRouter` stays in the AYEditor product layer.
 
-The editor integrations have not reached the final target yet:
+The main document editor integrations now share the same history core:
 
 - `EditorSceneDocument` now owns the production Scene history and is the
   active command target. Transform, entity creation/deletion, component
@@ -79,9 +79,14 @@ The editor integrations have not reached the final target yet:
 - `EditorCommandStack` has been removed. The imported-character preview path
   still performs a compound external Scene replacement and explicitly
   invalidates history until it is redesigned as an authoring operation.
-- GameFlow, UIFlow, UI Layout, and some built-in editor surfaces retain their
-  own snapshot or command stacks. B-8 therefore tracks command-history
-  fragmentation across editors, rather than only two competing classes.
+- GameFlow and UIFlow own document-local `EditorCommandHistory` instances.
+  Their existing whole-document snapshots are domain commands in the shared
+  history, so save cursors, dirty state, reload boundaries, and active command
+  routing no longer use private `_undo`/`_redo` containers.
+- UI Layout's shared `LayoutEditorSession` also uses
+  `EditorCommandHistory`. Snapshot gestures and typed property edits coexist
+  in one history, and the obsolete `LayoutCommandStack` is removed. This
+  covers both AYEditor and the standalone AYUI Designer.
 
 Migration order and status:
 
@@ -97,28 +102,33 @@ Migration order and status:
    snapshots reuse the Scene serializer format, and logical entity identities
    keep older commands valid when undo restores an entity with a new runtime
    ID. A continuous gizmo drag remains one undo step.
-3. Adapt GameFlow, UIFlow, and UI Layout to the shared history. Full-document
-   snapshot commands are acceptable as an intermediate adapter; frequently
-   edited operations should later become smaller domain commands with merge
-   rules.
-4. Use the shared save cursor, dirty state, labels, menu state, and active
-   document routing everywhere. Then remove `EditorCommandStack` and the
-   remaining private `_undo`/`_redo` history containers.
+3. **Complete:** GameFlow, UIFlow, and UI Layout use the shared history.
+   Full-document snapshots remain as an intermediate adapter for structural
+   operations, while UI Layout property edits keep their smaller typed
+   commands.
+4. **Complete for these production document editors:** save cursors, dirty
+   state, labels, menu state, and active document routing use the shared
+   history; `LayoutCommandStack` and the flow `_undo`/`_redo` containers are
+   removed. Any later built-in authoring surface must integrate the same core
+   rather than introduce another history algorithm.
 
 Truly cross-document reversible operations may use a separate
 workspace/project command target, but ordinary edits must remain in the
 document that owns the changed resource. Switching tabs must preserve each
 document's history, and Ctrl+Z/Ctrl+Y must affect only the active target.
 
-Removing the `EditorCommandStack` member changed the public class layout, so
-the Scene cutover deliberately bumped the AYEditor source ABI to 17. The
-migration must also verify Foundation, headless, and full-client configurations
-without creating separate dependency installs.
+The Scene cutover bumped the AYEditor source ABI to 17. Migrating the public
+GameFlow/UIFlow document layouts and UI Layout controller API bumps AYEditor to
+18; replacing the public `LayoutEditorSession` history member bumps AYUI to
+128. The superproject configures `AYEditorCommandCore` before AYUI and
+AYEditor, allowing both consumers to reuse the dependency-light target without
+a reverse AYUI-to-AYEditor product dependency.
 
-B-8 is complete when save/dirty state follows the per-document history cursor,
-closing/reloading a Scene or replacing its World cannot leave executable stale
-commands, routine edits no longer clear unrelated history, and no built-in
-editor maintains an independent undo/redo algorithm.
+B-8 now meets its completion criteria: save/dirty state follows each document's
+history cursor; closing/reloading a Scene or replacing its World cannot leave
+executable stale commands; routine edits no longer clear unrelated history;
+and the migrated built-in document editors no longer maintain independent
+undo/redo algorithms.
 
 ## First production integration: DSL
 
@@ -168,7 +178,7 @@ combos, scrolling, focus, and popups continue through the child UIManager.
 The standalone `AYUI_LayoutEditor` remains a module-level regression host. Both
 hosts link the editor-only `AYUILayoutEditorCore`; AYEditor no longer compiles a
 copy of a demo source. `LayoutDocumentModel`, `LayoutSelectionModel`,
-`LayoutCommandStack`, and `LayoutCanvasViewport` own the authoring state while
+`EditorCommandHistory`, and `LayoutCanvasViewport` own the authoring state while
 `LayoutEditorSession` coordinates chrome and gestures. There is no second save,
 undo, serialization, or input state machine. `EditorUiLayoutDocument::save`
 delegates to its bound Controller and the workspace document contains no Widget,
@@ -176,9 +186,9 @@ native-window, or renderer state.
 
 `WidgetAuthoringRegistry` is the common source for palette metadata, SVG icons,
 default creation parameters, initialization, and editable property/event schema.
-`PropertySchema` generates Inspector row/section visibility. The command stack
-records typed edit intents while retaining full-JSON snapshots as the migration
-fallback for reliable undo/redo of composite widgets.
+`PropertySchema` generates Inspector row/section visibility. The shared history
+records typed property edits while retaining full-JSON snapshots as the
+migration fallback for reliable undo/redo of composite widgets.
 
 The Designer chrome is a modern six-region layout: title/file actions, command
 bar, Widget Library plus Document Outline, Canvas, scrolling Inspector, and a
