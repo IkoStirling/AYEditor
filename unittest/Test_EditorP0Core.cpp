@@ -89,6 +89,24 @@ TEST_CASE(editor_transform_command_executes_undoes_and_redoes)
     CHECK(changeCount == 3);
 }
 
+TEST_CASE(editor_entity_rename_uses_scene_history)
+{
+    EditorSceneDocument document;
+    ayt::entity::Entity* entity = document.scene().world().createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) return;
+    entity->setName("Cube");
+
+    std::string error;
+    CHECK(document.renameEntity(entity->getId(), "Player Cube", &error));
+    CHECK(std::string(entity->getName()) == "Player Cube");
+    CHECK(document.undo());
+    CHECK(std::string(entity->getName()) == "Cube");
+    CHECK(document.redo());
+    CHECK(std::string(entity->getName()) == "Player Cube");
+    CHECK_FALSE(document.renameEntity(entity->getId(), "   ", &error));
+}
+
 TEST_CASE(editor_scene_history_tracks_save_cursor_and_reload_boundary)
 {
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -213,6 +231,10 @@ TEST_CASE(editor_scene_component_and_property_commands_share_history)
     sprite = entity->getComponent<ayt::entity::SpriteComponent>();
     CHECK(sprite != nullptr
         && sprite->texturePath == "textures/history.aytex");
+
+    CHECK_FALSE(document.removeComponent(
+        entity->getId(), "Transform", &error));
+    CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
 }
 
 TEST_SUITE_END

@@ -33,6 +33,9 @@ enum class EditorGizmoHandle : uint8_t {
 class EditorTransformGizmo {
 public:
     static constexpr float kWorldScalePerCameraDistance = 0.18f;
+    static constexpr float kCameraDistanceExponent = 0.90f;
+    static constexpr float kMinWorldScale = 0.12f;
+    static constexpr float kMaxWorldScale = 120.0f;
     // Projection quality is the length/area that remains after a handle is
     // projected onto the view plane. Two thresholds provide hysteresis so a
     // handle cannot flicker while the camera crosses the cutoff.

@@ -20,15 +20,18 @@ void EditorComponentPolicyRegistry::installDefaults()
     _defaultsInstalled = true;
 
     const auto add = [this](const char* component,
-                            std::initializer_list<const char*> prerequisites) {
+                            std::initializer_list<const char*> prerequisites,
+                            bool removable = true) {
         EditorComponentPolicy policy;
         policy.componentType = component;
+        policy.removable = removable;
         for (const char* required : prerequisites) {
             policy.prerequisites.emplace_back(required);
         }
         (void)registerPolicy(std::move(policy));
     };
 
+    add("Transform", {}, false);
     add("SimTransformComponent", {"Transform"});
     add("MeshComponent", {"Transform"});
     add("SpriteComponent", {"Transform"});

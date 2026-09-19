@@ -54,6 +54,8 @@ public:
                           const EditorTransformState& after,
                           std::string label = "Transform",
                           std::string mergeKey = {});
+    bool renameEntity(uint32_t entityId, std::string name,
+                      std::string* error = nullptr);
     bool createEntity(
         std::string label,
         const std::function<bool(ayt::entity::Entity&)>& configure,
@@ -92,12 +94,14 @@ public:
 
 private:
     class TransformCommand;
+    class EntityRenameCommand;
     class EntityCreateCommand;
     class EntityDeleteCommand;
     class AddComponentCommand;
     class RemoveComponentCommand;
     class ComponentMutationCommand;
     friend class TransformCommand;
+    friend class EntityRenameCommand;
     friend class EntityCreateCommand;
     friend class EntityDeleteCommand;
     friend class AddComponentCommand;
@@ -109,6 +113,8 @@ private:
 
     bool applyTransform(uint64_t generation, uint32_t entityId,
                         const EditorTransformState& state);
+    bool applyEntityName(uint64_t generation, uint32_t entityId,
+                         const std::string& name);
     bool snapshotComponent(ayt::entity::IComponent& component,
                            ComponentSnapshot& snapshot) const;
     bool restoreComponent(ayt::entity::Entity& entity,

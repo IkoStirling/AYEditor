@@ -105,6 +105,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <optional>
 #include <limits>
@@ -542,6 +543,12 @@ constexpr uint16_t kTwoDGizmoDisabledHandleMask =
 static_assert(EditorTransformGizmo::kWorldScalePerCameraDistance
               == ayt::render::kEditorTransformGizmoScalePerDistance,
               "editor hit geometry and renderer gizmo scale must match");
+static_assert(EditorTransformGizmo::kCameraDistanceExponent
+              == ayt::render::kEditorTransformGizmoDistanceExponent);
+static_assert(EditorTransformGizmo::kMinWorldScale
+              == ayt::render::kEditorTransformGizmoMinWorldScale);
+static_assert(EditorTransformGizmo::kMaxWorldScale
+              == ayt::render::kEditorTransformGizmoMaxWorldScale);
 
 bool intersectRaySphere(const ayt::math::FVector3& origin,
                         const ayt::math::FVector3& direction,
@@ -1017,8 +1024,12 @@ std::string showSceneOpenDialog(HWND owner,
 }
 
 std::string showSceneSaveDialog(HWND owner,
-                                const std::string& initialDirectory = {}) {
+                                const std::string& initialDirectory,
+                                const std::string& suggestedFileName) {
     char path[MAX_PATH] = {};
+    if (!suggestedFileName.empty()) {
+        strncpy_s(path, suggestedFileName.c_str(), _TRUNCATE);
+    }
     OPENFILENAMEA ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = owner;
@@ -1030,6 +1041,63 @@ std::string showSceneSaveDialog(HWND owner,
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     ofn.lpstrDefExt = "ayscene";
     return ::GetSaveFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string sceneFileNameForTitle(std::string title)
+{
+    if (title.empty() || title == "Untitled") title = "NewScene";
+    for (char& value : title) {
+        if (value == '<' || value == '>' || value == ':' || value == '"'
+            || value == '/' || value == '\\' || value == '|'
+            || value == '?' || value == '*') {
+            value = '_';
+        }
+    }
+    return title + ".ayscene";
+}
+
+bool pathIsInside(const std::filesystem::path& path,
+                  const std::filesystem::path& root)
+{
+    std::error_code error;
+    const std::filesystem::path absolutePath =
+        std::filesystem::absolute(path, error).lexically_normal();
+    if (error) return false;
+    const std::filesystem::path absoluteRoot =
+        std::filesystem::absolute(root, error).lexically_normal();
+    if (error) return false;
+    auto pathIt = absolutePath.begin();
+    auto rootIt = absoluteRoot.begin();
+    for (; rootIt != absoluteRoot.end(); ++rootIt, ++pathIt) {
+        if (pathIt == absolutePath.end()) return false;
+        std::wstring left = pathIt->wstring();
+        std::wstring right = rootIt->wstring();
+        std::transform(left.begin(), left.end(), left.begin(), ::towlower);
+        std::transform(right.begin(), right.end(), right.begin(), ::towlower);
+        if (left != right) return false;
+    }
+    return true;
+}
+
+std::string uniqueEntityName(const ayt::entity::World& world,
+                             const std::string& requestedBase)
+{
+    const std::string base = requestedBase.empty() ? "Entity" : requestedBase;
+    auto lower = [](std::string value) {
+        std::transform(value.begin(), value.end(), value.begin(),
+            [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return value;
+    };
+    std::unordered_set<std::string> used;
+    for (const ayt::entity::Entity* entity : world.getAllEntities()) {
+        if (entity == nullptr || entity->getName() == nullptr) continue;
+        used.insert(lower(entity->getName()));
+    }
+    if (!used.contains(lower(base))) return base;
+    for (unsigned suffix = 2u; ; ++suffix) {
+        const std::string candidate = base + " " + std::to_string(suffix);
+        if (!used.contains(lower(candidate))) return candidate;
+    }
 }
 
 std::wstring formatFloat(float value) {
@@ -1896,7 +1964,8 @@ void EditorSession::shutdown() {
     _assetInspectorPreview = nullptr;
     _assetDeleteButton = nullptr;
     _componentPicker = nullptr;
-    _attachedComponentPicker = nullptr;
+    _componentTree = nullptr;
+    _entityNameInput = nullptr;
     _componentPropertyBody = nullptr;
     _componentPickerTypeNames.clear();
     _attachedComponentTypeNames.clear();
@@ -5645,15 +5714,13 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
 
     const std::string stem = std::filesystem::path(record->name).stem().string();
     const char* fallbackName = isMesh ? "Mesh" : (isTexture ? "Sprite" : "Tilemap");
+    const std::string entityName = uniqueEntityName(
+        *world, stem.empty() ? std::string(fallbackName) : stem);
     uint32_t entityId = 0;
     if (!_document->createEntity(
             std::string("Create ") + fallbackName,
             [&](ayt::entity::Entity& candidate) {
-                const std::string name =
-                    (stem.empty() ? std::string(fallbackName) : stem)
-                    + " " + std::to_string(
-                        static_cast<unsigned>(candidate.getId()));
-                candidate.setName(name.c_str());
+                candidate.setName(entityName.c_str());
                 auto* transform =
                     candidate.addComponent<ayt::entity::Transform>();
                 if (transform == nullptr) return false;
@@ -7415,16 +7482,39 @@ void EditorSession::saveSceneDocument()
                       MB_OK | MB_ICONERROR);
         return;
     }
+    if (pathIsInside(_document->path(), _assetDatabase.sourceRoot())) {
+        _pendingAssetSelectionPath =
+            std::filesystem::path(_document->path()).lexically_normal().string();
+        (void)_assetDatabase.scanNow(nullptr);
+        refreshAssetBrowser();
+    }
     refreshUnsavedIndicator();
 }
 
 void EditorSession::saveSceneDocumentAs()
 {
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
-    const std::string path = showSceneSaveDialog(static_cast<HWND>(_hostWindow),
-        (std::filesystem::path(_assetDatabase.projectRoot())
-            / "Assets" / "worlds").string());
+    const std::filesystem::path sceneRoot =
+        std::filesystem::path(_assetDatabase.sourceRoot()) / "worlds";
+    std::error_code directoryError;
+    std::filesystem::create_directories(sceneRoot, directoryError);
+    if (directoryError) {
+        const std::wstring message = L"Unable to create the project scene folder:\n"
+            + sceneRoot.wstring();
+        ::MessageBoxW(static_cast<HWND>(_hostWindow), message.c_str(),
+                      L"Save Scene Failed", MB_OK | MB_ICONERROR);
+        return;
+    }
+    const std::string path = showSceneSaveDialog(
+        static_cast<HWND>(_hostWindow), sceneRoot.string(),
+        sceneFileNameForTitle(_document->title()));
     if (path.empty()) return;
+    if (!pathIsInside(path, _assetDatabase.sourceRoot())) {
+        ::MessageBoxW(static_cast<HWND>(_hostWindow),
+            L"Scenes must be saved inside this project's Assets folder.",
+            L"Save Scene", MB_OK | MB_ICONWARNING);
+        return;
+    }
     std::string error;
     if (!_document->saveAs(path, &error)) {
         const std::wstring message(error.begin(), error.end());
@@ -7432,6 +7522,13 @@ void EditorSession::saveSceneDocumentAs()
                       MB_OK | MB_ICONERROR);
         return;
     }
+    _pendingAssetSelectionPath =
+        std::filesystem::path(path).lexically_normal().string();
+    if (!_assetDatabase.scanNow(&error)) {
+        setAssetBrowserStatus(L"Scene saved, but the asset index refresh failed: "
+            + ayt::ui::decodeUtf8Text(error), true);
+    }
+    refreshAssetBrowser();
     refreshOutliner();
     refreshUnsavedIndicator();
     rememberCurrentSceneView();
@@ -7498,6 +7595,7 @@ void EditorSession::syncDocumentCommandMenu()
 
 void EditorSession::afterDocumentReload()
 {
+    finishTransformGizmoDrag(false);
     clearSelectedEntity(false);
     _playRuntime.forgetEditScenePreview();
     refreshOutliner();
@@ -7513,9 +7611,7 @@ void EditorSession::createEmptyEntity()
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
     ayt::entity::World* world = hierarchyWorldMutable();
     if (world == nullptr) return;
-    const std::string name = "Entity "
-        + std::to_string(static_cast<unsigned>(
-            world->getAllEntities().size() + 1u));
+    const std::string name = uniqueEntityName(*world, "Entity");
     uint32_t entityId = 0;
     if (!_document->createEntity(
             "Create Entity",
@@ -7554,10 +7650,11 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
         typeName = "2D Camera";
         inspectedTypeName = "OrthoCameraComponent";
     }
+    const std::string entityName = uniqueEntityName(*world, typeName);
     uint32_t entityId = 0;
     if (!_document->createEntity(
             std::string("Create ") + typeName,
-            [&, typeName](ayt::entity::Entity& candidate) {
+            [&, typeName, entityName](ayt::entity::Entity& candidate) {
                 auto* transform =
                     candidate.addComponent<ayt::entity::Transform>();
                 if (transform == nullptr) return false;
@@ -7583,9 +7680,7 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
                     camera->viewportAspect = 1.6f;
                     camera->active = true;
                 }
-                candidate.setName((std::string(typeName) + " "
-                    + std::to_string(static_cast<unsigned>(candidate.getId())))
-                    .c_str());
+                candidate.setName(entityName.c_str());
                 return true;
             },
             &entityId)) {
@@ -9085,24 +9180,36 @@ void EditorSession::bindComponentBrowser()
 {
     _componentPicker = dynamic_cast<ayt::ui::ComboBox*>(
         _ui.findById("cmb_add_component"));
-    _attachedComponentPicker = dynamic_cast<ayt::ui::ComboBox*>(
-        _ui.findById("cmb_attached_component"));
+    _componentTree = dynamic_cast<ayt::ui::TreeView*>(
+        _ui.findById("tree_inspector_components"));
+    _entityNameInput = dynamic_cast<ayt::ui::TextInput*>(
+        _ui.findById("inspector_entity_name"));
     _componentPropertyBody = dynamic_cast<ayt::ui::VBox*>(
         _ui.findById("inspector_component_properties"));
-    if (_attachedComponentPicker != nullptr) {
-        _attachedComponentPicker->setOnSelectionChanged([this](int index) {
-            if (_updatingComponentPicker || index < 0
-                || static_cast<std::size_t>(index)
-                    >= _attachedComponentTypeNames.size()) {
+    if (_componentTree != nullptr) {
+        _componentTree->setItemHeight(22.0f);
+        _componentTree->setOnSelectionChanged([this](int index) {
+            if (_updatingComponentPicker || index < 0) {
                 return;
             }
-            _inspectedComponentTypeName = _attachedComponentTypeNames[
-                static_cast<std::size_t>(index)];
-            // Selection changes also change dependency-aware remove state.
-            // Rebuild the browser under the existing re-entry guard so the
-            // button cannot retain the previous component's policy.
+            if (index == 0) {
+                _inspectedComponentTypeName.clear();
+            } else if (static_cast<std::size_t>(index - 1)
+                       < _attachedComponentTypeNames.size()) {
+                _inspectedComponentTypeName = _attachedComponentTypeNames[
+                    static_cast<std::size_t>(index - 1)];
+            } else {
+                return;
+            }
             refreshComponentBrowser();
         });
+    }
+    if (_entityNameInput != nullptr) {
+        _entityNameInput->setMaxLength(128u);
+        _entityNameInput->setOnSubmit(
+            [this](const std::wstring&) { commitSelectedEntityName(); });
+        _entityNameInput->setOnFocusLostNotify(
+            [this]() { commitSelectedEntityName(); });
     }
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_add_component"))) {
@@ -9157,22 +9264,16 @@ void EditorSession::refreshComponentBrowser()
     }
 
     _attachedComponentTypeNames.clear();
-    std::vector<std::wstring> attachedItems;
-    attachedItems.reserve(attached.size());
     _attachedComponentTypeNames.reserve(attached.size());
     int inspectedIndex = -1;
     for (std::size_t i = 0; i < attached.size(); ++i) {
         const auto* descriptor = attached[i];
-        attachedItems.push_back(ayt::ui::decodeUtf8Text(
-            descriptor->category + " / " + descriptor->displayName));
         _attachedComponentTypeNames.push_back(descriptor->name);
         if (descriptor->name == _inspectedComponentTypeName) {
             inspectedIndex = static_cast<int>(i);
         }
     }
-    if (attachedItems.empty()) {
-        attachedItems.push_back(entity == nullptr
-            ? L"Select an entity" : L"No components attached");
+    if (attached.empty()) {
         _inspectedComponentTypeName.clear();
     } else if (inspectedIndex < 0) {
         inspectedIndex = 0;
@@ -9186,11 +9287,36 @@ void EditorSession::refreshComponentBrowser()
             static_cast<std::size_t>(inspectedIndex)];
     }
     _updatingComponentPicker = true;
-    if (_attachedComponentPicker != nullptr) {
-        _attachedComponentPicker->setItems(attachedItems);
-        _attachedComponentPicker->setSelectedIndex(
-            attached.empty() ? 0 : inspectedIndex);
-        _attachedComponentPicker->setEnabled(!attached.empty());
+    if (_entityNameInput != nullptr) {
+        const char* name = entity != nullptr ? entity->getName() : nullptr;
+        _updatingEntityName = true;
+        _entityNameInput->setText(entity != nullptr
+            ? ayt::ui::decodeUtf8Text(name != nullptr ? name : "")
+            : std::wstring{});
+        _entityNameInput->setReadOnly(!canAdd);
+        _updatingEntityName = false;
+    }
+    if (_componentTree != nullptr) {
+        std::vector<ayt::ui::TreeNodeData> nodes;
+        if (entity != nullptr) {
+            ayt::ui::TreeNodeData root;
+            const char* name = entity->getName();
+            root.label = ayt::ui::decodeUtf8Text(
+                name != nullptr && name[0] != '\0' ? name : "Unnamed");
+            root.hasChildren = !attached.empty();
+            root.expanded = true;
+            nodes.push_back(std::move(root));
+            for (const auto* descriptor : attached) {
+                ayt::ui::TreeNodeData node;
+                node.label = ayt::ui::decodeUtf8Text(
+                    descriptor->category + " / " + descriptor->displayName);
+                node.parentIndex = 0;
+                nodes.push_back(std::move(node));
+            }
+        }
+        _componentTree->setTree(nodes);
+        _componentTree->setSelectedIndex(entity == nullptr ? -1
+            : (inspectedIndex < 0 ? 0 : inspectedIndex + 1));
     }
     _updatingComponentPicker = false;
 
@@ -9239,6 +9365,25 @@ void EditorSession::refreshComponentBrowser()
         button->setEnabled(canAdd && !available.empty());
     }
     rebuildComponentPropertyEditor();
+}
+
+void EditorSession::commitSelectedEntityName()
+{
+    if (_updatingEntityName || _entityNameInput == nullptr
+        || _document == nullptr || _gameView.mode() != EditorMode::Edit) {
+        return;
+    }
+    ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    if (entity == nullptr) return;
+    std::string error;
+    if (!_document->renameEntity(
+            entity->getId(), wideToUtf8(_entityNameInput->getText()), &error)) {
+        if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+    }
+    _outlinerRefreshPending = true;
+    refreshComponentBrowser();
+    refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
 }
 
 void EditorSession::addSelectedComponent()
@@ -9331,7 +9476,9 @@ void EditorSession::rebuildComponentPropertyEditor()
         ayt::ui::destroyWidgetTree(child);
     }
 
-    auto addLabel = [this, &density](const std::wstring& text, float height,
+    ayt::ui::VBox* propertyTarget = _componentPropertyBody;
+    auto addLabel = [this, &density, &propertyTarget](
+                                    const std::wstring& text, float height,
                                     const std::string& id = {}) {
         auto* label = new ayt::ui::TextLabel();
         if (!id.empty()) label->setId(id);
@@ -9340,11 +9487,63 @@ void EditorSession::rebuildComponentPropertyEditor()
         label->setVerticalAlignment(
             ayt::ui::TextLabel::VAlignment::Center);
         label->setSize({240.0f, height});
-        _componentPropertyBody->addWidget(label, height);
+        propertyTarget->addWidget(label, height);
         return label;
     };
 
     ayt::entity::Entity* entity = _selection.resolve(hierarchyWorldMutable());
+    if (entity == nullptr) {
+        addLabel(L"Select an entity", 20.0f,
+                 "inspector_property_placeholder");
+        _ui.invalidateLayout();
+        return;
+    }
+
+    bool createdExpandedSection = false;
+    for (const std::string& typeName : _attachedComponentTypeNames) {
+        const auto* sectionDescriptor =
+            ayt::entity::ComponentRegistry::instance().find(typeName);
+        if (sectionDescriptor == nullptr) continue;
+        const bool expanded = typeName == _inspectedComponentTypeName;
+        std::string removeReason;
+        const bool removable = sectionDescriptor->remove != nullptr
+            && EditorComponentPolicyRegistry::instance().canRemove(
+                *entity, typeName, &removeReason);
+        auto* header = new ayt::ui::Button();
+        header->setStyleId("editor_property_button");
+        header->setText((expanded ? L"v  " : L">  ")
+            + ayt::ui::decodeUtf8Text(sectionDescriptor->displayName)
+            + (removable ? L"" : L"  [required]"));
+        header->setSize({240.0f, 27.0f});
+        header->setAccessibilityDescription(
+            expanded ? L"Collapse component properties"
+                     : L"Expand component properties");
+        header->setOnClicked([this, typeName, expanded]() {
+            _inspectedComponentTypeName = expanded ? std::string{} : typeName;
+            refreshComponentBrowser();
+        });
+        _componentPropertyBody->addWidget(header, 27.0f);
+        if (expanded) {
+            auto* section = new ayt::ui::VBox();
+            section->setSpacing(4.0f);
+            section->setPadding(4.0f, 2.0f, 2.0f, 5.0f);
+            section->setSize({240.0f, 0.0f});
+            _componentPropertyBody->addWidget(section);
+            propertyTarget = section;
+            createdExpandedSection = true;
+        }
+    }
+    if (_attachedComponentTypeNames.empty()) {
+        addLabel(L"Entity has no components. It remains in Hierarchy.",
+                 20.0f, "inspector_property_placeholder");
+        _ui.invalidateLayout();
+        return;
+    }
+    if (!createdExpandedSection) {
+        _ui.invalidateLayout();
+        return;
+    }
+
     const auto* descriptor = _inspectedComponentTypeName.empty()
         ? nullptr
         : ayt::entity::ComponentRegistry::instance().find(
@@ -9353,15 +9552,12 @@ void EditorSession::rebuildComponentPropertyEditor()
         && descriptor != nullptr && descriptor->get != nullptr
         ? descriptor->get(*entity) : nullptr;
     if (component == nullptr) {
-        addLabel(entity == nullptr ? L"Select an entity"
-                                   : L"Entity has no components. It remains in Hierarchy.",
+        addLabel(L"Component is unavailable.",
                  20.0f, "inspector_property_placeholder");
         _ui.invalidateLayout();
         return;
     }
 
-    addLabel(ayt::ui::decodeUtf8Text(descriptor->displayName), 22.0f,
-             "inspector_property_header");
     auto* type = ayt::reflect::TypeRegistryImpl::instance().findType(
         descriptor->type.hash_code());
     if (type == nullptr || type->getFieldCount() == 0) {
@@ -9555,7 +9751,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                         if (_repaintCallback) _repaintCallback();
                     });
             }
-            _componentPropertyBody->addWidget(row, 26.0f);
+            propertyTarget->addWidget(row, 26.0f);
 
             if (elementCount == 4
                 && field->hasAttribute(ayt::reflect::FieldAttribute::Color)) {
@@ -9573,7 +9769,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                                 componentTypeName, fieldName, color);
                         });
                 }
-                _componentPropertyBody->addWidget(picker, 224.0f);
+                propertyTarget->addWidget(picker, 224.0f);
             }
             continue;
         }
@@ -9594,7 +9790,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                         componentTypeName, fieldName, checked);
                 });
             check->setSize({240.0f, 24.0f});
-            _componentPropertyBody->addWidget(check, 24.0f);
+            propertyTarget->addWidget(check, 24.0f);
             continue;
         }
 
@@ -9707,7 +9903,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                     commitInspectorTextField(componentTypeName, fieldName, -1,
                                              std::to_wstring(index));
                 });
-            _componentPropertyBody->addWidget(combo, 26.0f);
+            propertyTarget->addWidget(combo, 26.0f);
             continue;
         }
 
@@ -9747,7 +9943,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                         componentTypeName, fieldName, -1, text);
                 });
             row->addWidget(input, 68.0f);
-            _componentPropertyBody->addWidget(row, 26.0f);
+            propertyTarget->addWidget(row, 26.0f);
             continue;
         }
 
@@ -9790,7 +9986,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                         componentTypeName, fieldName, -1, portable);
                 });
             row->addWidget(browse, 30.0f);
-            _componentPropertyBody->addWidget(row, 26.0f);
+            propertyTarget->addWidget(row, 26.0f);
             continue;
         }
         auto* input = makeInput(valueText, -1, numericScalar, integralScalar,
@@ -9801,7 +9997,7 @@ void EditorSession::rebuildComponentPropertyEditor()
         input->setNumericScrubEnabled(editableText && scrubbableScalar);
         input->setSize({240.0f, 26.0f});
         if (!tooltip.empty()) input->setAccessibilityDescription(tooltip);
-        _componentPropertyBody->addWidget(input, 26.0f);
+        propertyTarget->addWidget(input, 26.0f);
     }
     if (visibleFieldCount == 0) {
         addLabel(L"No visible reflected properties", 20.0f,

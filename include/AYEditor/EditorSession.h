@@ -341,6 +341,7 @@ private:
     void refreshComponentBrowser();
     void addSelectedComponent();
     void removeSelectedComponent();
+    void commitSelectedEntityName();
     void rebuildComponentPropertyEditor();
     void commitInspectorTextField(const std::string& componentType,
                                   const std::string& fieldName,
@@ -718,11 +719,13 @@ private:
 
     ayt::ui::ComboBox* _componentPicker = nullptr;
     std::vector<std::string> _componentPickerTypeNames;
-    ayt::ui::ComboBox* _attachedComponentPicker = nullptr;
+    ayt::ui::TreeView* _componentTree = nullptr;
+    ayt::ui::TextInput* _entityNameInput = nullptr;
     ayt::ui::VBox* _componentPropertyBody = nullptr;
     std::vector<std::string> _attachedComponentTypeNames;
     std::string _inspectedComponentTypeName;
     bool _updatingComponentPicker = false;
+    bool _updatingEntityName = false;
     bool _updatingComponentPropertyCommit = false;
     bool _controlDown = false;
     ayt::ui::MenuItem* _saveMenuItem = nullptr;

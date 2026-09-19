@@ -100,6 +100,36 @@ private:
     std::string _mergeKey;
 };
 
+class EditorSceneDocument::EntityRenameCommand final : public IEditorCommand {
+public:
+    EntityRenameCommand(EditorSceneDocument& document, uint64_t generation,
+                        uint32_t entityId, std::string before,
+                        std::string after)
+        : _document(&document), _generation(generation), _entityId(entityId),
+          _before(std::move(before)), _after(std::move(after)) {}
+
+    const std::string& label() const noexcept override { return _label; }
+    bool execute() override { return apply(_after); }
+    bool undo() override { return apply(_before); }
+    bool isAlive() const noexcept override {
+        return _document != nullptr
+            && _document->_contentGeneration == _generation;
+    }
+
+private:
+    bool apply(const std::string& name) {
+        return _document != nullptr
+            && _document->applyEntityName(_generation, _entityId, name);
+    }
+
+    EditorSceneDocument* _document = nullptr;
+    uint64_t _generation = 0;
+    uint32_t _entityId = 0;
+    std::string _before;
+    std::string _after;
+    std::string _label = "Rename Entity";
+};
+
 struct EditorSceneDocument::ComponentSnapshot {
     std::string typeName;
     std::string payload;
@@ -462,6 +492,36 @@ bool EditorSceneDocument::executeTransform(
         std::move(label), std::move(mergeKey)));
 }
 
+bool EditorSceneDocument::renameEntity(uint32_t entityId, std::string name,
+                                       std::string* error)
+{
+    const auto first = name.find_first_not_of(" \t\r\n");
+    const auto last = name.find_last_not_of(" \t\r\n");
+    if (first == std::string::npos) {
+        setError(error, "entity name cannot be empty");
+        return false;
+    }
+    name = name.substr(first, last - first + 1u);
+    ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
+    if (entity == nullptr) {
+        setError(error, "entity no longer exists");
+        return false;
+    }
+    const char* current = entity->getName();
+    const std::string before = current != nullptr ? current : "";
+    if (before == name) {
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    const bool renamed = _history.execute(
+        std::make_unique<EntityRenameCommand>(
+            *this, _contentGeneration, logicalEntityId(entityId),
+            before, std::move(name)));
+    if (!renamed) setError(error, "failed to rename entity");
+    else if (error != nullptr) error->clear();
+    return renamed;
+}
+
 bool EditorSceneDocument::createEntity(
     std::string label,
     const std::function<bool(ayt::entity::Entity&)>& configure,
@@ -531,6 +591,13 @@ bool EditorSceneDocument::removeComponent(
     ayt::entity::IComponent* component = entity != nullptr
         && descriptor != nullptr && descriptor->get != nullptr
         ? descriptor->get(*entity) : nullptr;
+    std::string removeReason;
+    if (entity != nullptr
+        && !EditorComponentPolicyRegistry::instance().canRemove(
+            *entity, componentType, &removeReason)) {
+        setError(error, removeReason);
+        return false;
+    }
     ComponentSnapshot snapshot;
     if (component == nullptr || !snapshotComponent(*component, snapshot)) {
         setError(error, "Unable to snapshot component: " + componentType);
@@ -615,6 +682,16 @@ bool EditorSceneDocument::applyTransform(
     transform->setRotation(state.rotation.x, state.rotation.y,
                            state.rotation.z, state.rotation.w);
     transform->setScale(state.scale.x, state.scale.y, state.scale.z);
+    return true;
+}
+
+bool EditorSceneDocument::applyEntityName(
+    uint64_t generation, uint32_t entityId, const std::string& name)
+{
+    if (generation != _contentGeneration) return false;
+    ayt::entity::Entity* entity = findCommandEntity(entityId);
+    if (entity == nullptr || name.empty()) return false;
+    entity->setName(name.c_str());
     return true;
 }
 

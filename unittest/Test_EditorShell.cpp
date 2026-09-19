@@ -27,6 +27,7 @@
 #include "AYUI/TextInput.h"
 #include "AYUI/Theme.h"
 #include "AYUI/ToolBar.h"
+#include "AYUI/TreeView.h"
 #include "AYEntity.h"
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/components/HealthComponent.h>
@@ -262,8 +263,10 @@ TEST_CASE(test_editor_session_loads_shell_json) {
         session.ui().findById("btn_add_component")) != nullptr);
     CHECK(dynamic_cast<ScrollView*>(
         session.ui().findById("panel_inspector_scroll")) != nullptr);
-    CHECK(dynamic_cast<ComboBox*>(
-        session.ui().findById("cmb_attached_component")) != nullptr);
+    CHECK(dynamic_cast<TreeView*>(
+        session.ui().findById("tree_inspector_components")) != nullptr);
+    CHECK(dynamic_cast<TextInput*>(
+        session.ui().findById("inspector_entity_name")) != nullptr);
     CHECK(dynamic_cast<Button*>(
         session.ui().findById("btn_remove_component")) != nullptr);
     CHECK(dynamic_cast<VBox*>(
@@ -1182,7 +1185,8 @@ TEST_CASE(inspector_panel_uses_scrollable_component_properties) {
         CHECK(scroll->isVerticalScrollBarEnabled());
         CHECK_FALSE(scroll->isHorizontalScrollBarEnabled());
     }
-    CHECK_NOT_NULL(session.ui().findById("cmb_attached_component"));
+    CHECK_NOT_NULL(session.ui().findById("tree_inspector_components"));
+    CHECK_NOT_NULL(session.ui().findById("inspector_entity_name"));
     CHECK_NOT_NULL(session.ui().findById("btn_remove_component"));
     CHECK_NOT_NULL(session.ui().findById("inspector_component_properties"));
 
@@ -2215,8 +2219,8 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
         session.ui().findById("cmb_add_component"));
     auto* add = dynamic_cast<Button*>(
         session.ui().findById("btn_add_component"));
-    auto* attached = dynamic_cast<ComboBox*>(
-        session.ui().findById("cmb_attached_component"));
+    auto* attached = dynamic_cast<TreeView*>(
+        session.ui().findById("tree_inspector_components"));
     auto* remove = dynamic_cast<Button*>(
         session.ui().findById("btn_remove_component"));
     Widget* propertyBody = session.ui().findById(
@@ -2295,9 +2299,10 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
             }
 
             auto selectAttached = [attached](const wchar_t* name) {
-                for (std::size_t i = 0; i < attached->getItemCount(); ++i) {
-                    if (attached->getItem(i).find(name) != std::wstring::npos) {
-                        attached->setSelectedIndexAndNotify(static_cast<int>(i));
+                for (std::size_t i = 0; i < attached->getNodeCount(); ++i) {
+                    if (attached->getNodeData(i).label.find(name)
+                        != std::wstring::npos) {
+                        attached->setSelectedIndex(static_cast<int>(i));
                         return true;
                     }
                 }
@@ -2320,18 +2325,13 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
             CHECK(entity->getComponent<ayt::entity::SkeletonComponent>() == nullptr);
 
             CHECK(selectAttached(L"Transform"));
-            CHECK(remove->isEnabled());
-            CHECK(clickButton(remove));
-            CHECK(entity->getComponent<ayt::entity::Transform>() == nullptr);
-
-            // Removing the final component keeps an empty Hierarchy entity.
-            CHECK(world->findEntity(entity->getId()) == entity);
-            CHECK(attached->getItemCount() == 1u);
-            CHECK(attached->getItem(0) == L"No components attached");
-            CHECK_FALSE(attached->isEnabled());
             CHECK_FALSE(remove->isEnabled());
-            CHECK_NOT_NULL(findWidgetInTree(
-                propertyBody, "inspector_property_placeholder"));
+            CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+
+            // The entity remains valid with its required Transform root.
+            CHECK(world->findEntity(entity->getId()) == entity);
+            CHECK(attached->getNodeCount() == 2u);
+            CHECK_FALSE(remove->isEnabled());
         }
     }
 

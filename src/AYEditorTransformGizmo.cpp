@@ -172,7 +172,10 @@ float EditorTransformGizmo::worldScale(
 {
     const float distance = (pivot - cameraEye).length();
     if (!std::isfinite(distance)) return 1.0f;
-    return std::clamp(distance * kWorldScalePerCameraDistance, 0.12f, 1000.0f);
+    return std::clamp(
+        kWorldScalePerCameraDistance
+            * std::pow(std::max(distance, 0.0f), kCameraDistanceExponent),
+        kMinWorldScale, kMaxWorldScale);
 }
 
 ayt::math::FVector3 EditorTransformGizmo::basisAxis(
@@ -391,7 +394,7 @@ EditorGizmoHandle EditorTransformGizmo::hitTestUniversal(
 
     const float scale = std::isfinite(worldScaleOverride)
             && worldScaleOverride > 0.0f
-        ? std::clamp(worldScaleOverride, 0.12f, 1000.0f)
+        ? std::clamp(worldScaleOverride, kMinWorldScale, kMaxWorldScale)
         : worldScale(transform.position, cameraEye);
     ayt::math::FVector3 transformAxes[3] = {
         basisAxis(EditorTool::Move, transform, localSpace, 0),
@@ -543,7 +546,7 @@ bool EditorTransformGizmo::begin(
     _pivot = transform.position;
     _worldScale = std::isfinite(worldScaleOverride)
             && worldScaleOverride > 0.0f
-        ? std::clamp(worldScaleOverride, 0.12f, 1000.0f)
+        ? std::clamp(worldScaleOverride, kMinWorldScale, kMaxWorldScale)
         : worldScale(_pivot, cameraEye);
     _startMouseY = mouseY;
     for (int axis = 0; axis < 3; ++axis) {
