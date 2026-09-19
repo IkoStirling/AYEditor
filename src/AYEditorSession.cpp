@@ -44,6 +44,7 @@
 #include "AYUI/MenuItem.h"
 #include "AYUI/ModalDialog.h"
 #include "AYUI/Panel.h"
+#include "AYUI/ScrollView.h"
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYUI/Slider.h"
 #include "AYUI/SvgIcon.h"
@@ -3762,7 +3763,8 @@ void EditorSession::bindAssetBrowser()
                 cell.setText(presentation.fullFileName);
                 cell.setInfoStrip(
                     presentation.typeAbbreviation,
-                    presentation.categoryColor);
+                    presentation.categoryColor,
+                    ayt::math::FVector4(1.0f, 1.0f, 1.0f, 1.0f));
                 cell.setBadgeText(presentation.bakeBadge);
                 cell.setCornerMarkerVisible(
                     presentation.showEngineResourceMarker);
@@ -5066,11 +5068,32 @@ void EditorSession::showCrashRecoveryDialog()
     const float height = std::min(440.0f,
         150.0f + 28.0f * static_cast<float>(documents.size()));
     _recoveryDialog->setSize({560.0f, height});
+    _recoveryDialog->fitAndCenterInViewport(_ui.getClientSize(), 24.0f);
     _recoveryDialog->setAcceptText(L"Restore Selected");
     _recoveryDialog->setRejectText(L"Later");
+
+    const ayt::math::FVector2 dialogSize = _recoveryDialog->getSize();
+    const float bodyWidth = std::max(1.0f, dialogSize.x
+        - 2.0f * ayt::ui::ModalDialog::kBodyPadding);
+    const float bodyHeight = std::max(1.0f, dialogSize.y
+        - ayt::ui::ModalDialog::kButtonBarHeight
+        - 2.0f * ayt::ui::ModalDialog::kBodyPadding);
+
+    auto* scroll = new ayt::ui::ScrollView();
+    scroll->setId("crash_recovery_documents_scroll");
+    scroll->setSize({bodyWidth, bodyHeight});
+    scroll->setVerticalScrollBarVisibility(
+        ayt::ui::ScrollView::ScrollBarVisibility::Auto);
+    scroll->setHorizontalScrollBarVisibility(
+        ayt::ui::ScrollView::ScrollBarVisibility::Hidden);
+
     auto* body = new ayt::ui::VBox();
     body->setSpacing(7.0f);
-    body->setSize({528.0f, height - 64.0f});
+    const float contentWidth = std::max(1.0f, bodyWidth
+        - ayt::ui::ScrollBar::kDefaultBarWidth);
+    const float contentHeight = 57.0f
+        + 31.0f * static_cast<float>(documents.size());
+    body->setSize({contentWidth, contentHeight});
     auto* title = new ayt::ui::TextLabel();
     title->setText(L"Recover documents from the previous editor session");
     title->setFontSize(15);
@@ -5082,14 +5105,32 @@ void EditorSession::showCrashRecoveryDialog()
     for (const EditorRecoveryDocument& document : documents) {
         auto* check = new ayt::ui::CheckBox();
         check->setChecked(true);
+        std::string displayPath;
+        const std::filesystem::path originalPath(document.originalPath);
+        if (!document.originalPath.empty() && !_projectRoot.empty()
+            && pathIsInside(originalPath, _projectRoot)) {
+            std::error_code relativeError;
+            displayPath = std::filesystem::relative(
+                originalPath, _projectRoot, relativeError).generic_string();
+            if (relativeError) displayPath.clear();
+        }
+        if (displayPath.empty()) {
+            displayPath = originalPath.filename().string();
+        }
+        if (displayPath.empty()) {
+            displayPath = std::filesystem::path(document.recoveryPath)
+                .filename().string();
+        }
         const std::string label = document.title.empty()
-            ? document.originalPath : document.title + "  —  " + document.originalPath;
+            ? displayPath : document.title + "  —  " + displayPath;
         check->setText(ayt::ui::decodeUtf8Text(label));
-        check->setSize({528.0f, 24.0f});
+        check->setSize({contentWidth, 24.0f});
         body->addWidget(check, 24.0f);
         _recoveryChecks.push_back(check);
     }
-    _recoveryDialog->setBodyContentOwned(body);
+    scroll->setContentOwned(body);
+    scroll->setContentSize({contentWidth, contentHeight});
+    _recoveryDialog->setBodyContentOwned(scroll);
     _recoveryDialog->setOnResult([this](int result) {
         if (result != ayt::ui::ModalDialog::Ok) return;
         std::vector<std::size_t> selected;
