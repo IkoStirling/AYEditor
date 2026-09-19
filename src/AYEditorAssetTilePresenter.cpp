@@ -102,7 +102,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::Tilemap: return L"MAP";
     case EditorAssetType::UiFlow: return L"UIFLOW";
     case EditorAssetType::GameFlow: return L"FLOW";
-    case EditorAssetType::SkeletonMapping: return L"SMAP";
+    case EditorAssetType::SkeletonMapping: return L"RIG";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -177,10 +177,10 @@ bool EditorAssetTilePresenter::isEngineNativeFileName(
     // Keep compound suffixes before their shorter constituents if the table
     // grows. Metadata sidecars are not listed: the asset database deliberately
     // filters .aydep.json out of the browser.
-    constexpr std::array<std::string_view, 15> nativeSuffixes = {
+    constexpr std::array<std::string_view, 16> nativeSuffixes = {
         ".gameflow.json", ".uiflow.json", ".aytilemap.json", ".ui.json", ".aytilemap",
         ".aymesh", ".aymat", ".aytex", ".ayscene",
-        ".ayanm", ".ayanim", ".ayskel", ".aysmap", ".logia", ".phoskia",
+        ".ayanm", ".ayanim", ".ayskel", ".ayrig", ".aysmap", ".logia", ".phoskia",
     };
     for (const std::string_view suffix : nativeSuffixes) {
         if (endsWithAsciiInsensitive(fileName, suffix)) return true;

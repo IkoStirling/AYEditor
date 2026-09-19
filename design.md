@@ -516,7 +516,7 @@ control frames continue through the network subsystem independently.
 映射修改、模板应用、参考姿势与绑定选择接入文档级 `EditorCommandHistory` 和保存游标。
 重新导入只迁移可无歧义关联的条目；dirty 文档不被磁盘操作静默覆盖，索引重排不沿用旧映射。
 标志读取统一校验/构建记录，以文字和图形共同表达，不只依靠颜色或维护 UI 私有布尔值。
-当前已具备 Skeleton Editor 第一版与独立 Legacy `.aysmap` 作者资源；[ADR-0011](../../AYDocs/adr/0011-unified-asset-type-registry-and-rig-profile-extension.md) 已将 `.ayrig` 确定为规范 Rig Profile，兼容迁移尚待实现。不得据此声明已有完整运行时重定向求解器或引用安全的生产清理烘焙器。
+当前已具备 Skeleton Editor 第一版与规范 `.ayrig` Rig Profile 作者资源；编辑器仍可读取 Legacy `.aysmap`，但会醒目标记并在保存时迁移为 `.ayrig`，旧文件不被静默覆盖。不得据此声明已有完整运行时重定向求解器或引用安全的生产清理烘焙器。
 
 ## 5. Editor chrome (AYUI)
 
@@ -1302,6 +1302,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-19 | 骨骼映射作者资源迁移到规范 `.ayrig` Rig Profile；Content Browser 与 Skeleton Editor 保留 `.aysmap` 只读兼容入口，旧资源打开后标记为待迁移，保存生成 `.ayrig` 且保留原文件。 |
 | 2026-09-19 | 骨骼作者工作区第一版采用 `AYAnimationEditorCore` 独立核心 + AYEditor 文档/视图薄适配；源 `.ayskel` 只读，映射保存为绑定的 `.aysmap`，Content Browser 与工作区分别展示适配和烘焙状态，动画预览复用公共时间轴能力。 |
 | 2026-09-18 | **计划，待实施**：骨骼作者工作区采用源保留 + 映射/profile 资源绑定 + 手工/模板非破坏式编辑；Content Browser/Inspector 使用独立适配和烘焙标志，公共文档历史、统一转换核心和发布门禁；SKA 优先级在跨模块设计维护，见 §4.3.skeletal。 |
 | 2026-07-03 | AYEditor is a separate module; not embedded in AYUI |

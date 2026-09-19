@@ -48,6 +48,8 @@ TEST_CASE(asset_tile_presenter_marks_native_suffixes_case_insensitively)
 {
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("Hero.AYMESH"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("walk.ayanm"));
+    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("hero.ayrig"));
+    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("legacy.aysmap"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("editor.ui.json"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("lit.phoskia"));
     CHECK(!EditorAssetTilePresenter::isEngineNativeFileName("albedo.png"));
@@ -83,6 +85,8 @@ TEST_CASE(asset_tile_presenter_abbreviates_every_asset_type)
               EditorAssetType::Animation)) == L"ANIM");
     CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
               EditorAssetType::Skeleton)) == L"SKEL");
+    CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
+              EditorAssetType::SkeletonMapping)) == L"RIG");
     CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(
               EditorAssetType::Script)) == L"SCR");
     CHECK(std::wstring(EditorAssetTilePresenter::typeAbbreviation(

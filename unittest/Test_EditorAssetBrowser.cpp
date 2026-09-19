@@ -95,6 +95,12 @@ TEST_CASE(editor_asset_type_classification_covers_runtime_and_source_files)
     CHECK(classifyEditorAssetPath("hero.aymat") == EditorAssetType::Material);
     CHECK(classifyEditorAssetPath("walk.ayanm") == EditorAssetType::Animation);
     CHECK(classifyEditorAssetPath("hero.ayskel") == EditorAssetType::Skeleton);
+    CHECK(classifyEditorAssetPath("hero.ayrig")
+          == EditorAssetType::SkeletonMapping);
+    CHECK(classifyEditorAssetPath("legacy.aysmap")
+          == EditorAssetType::SkeletonMapping);
+    CHECK(std::string(editorAssetTypeName(EditorAssetType::SkeletonMapping))
+          == "Rig Profile");
     CHECK(classifyEditorAssetPath("scene.ayscene") == EditorAssetType::Scene);
     CHECK(classifyEditorAssetPath("editor.ui.json") == EditorAssetType::UiLayout);
     CHECK(classifyEditorAssetPath("ground.aytilemap.json")

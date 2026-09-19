@@ -402,7 +402,10 @@ private:
         _bake->setText(stateLabel(L"Bake: ",
             SkeletonEditorCore::bakeStateName(status.bake)));
         _bake->setTextColor(bakeColor(status.bake));
-        _status->setText((_document->isDirty() ? L"Modified | " : L"")
+        const std::wstring legacy = _document->core().openedLegacyMapping()
+            ? L"LEGACY .aysmap | Save migrates to .ayrig | " : L"";
+        _status->setText(legacy
+            + (_document->isDirty() ? L"Modified | " : L"")
             + ayt::ui::decodeUtf8Text(status.message));
         _status->setTextColor(_document->isDirty()
             ? ayt::math::FVector4{0.95f, 0.72f, 0.30f, 1.0f}
@@ -520,7 +523,8 @@ private:
         std::string error;
         if (snapshot.state != ayt::anim::editor::SkeletonBakeJobState::Cancelled) {
             if (!_document->core().recordBakeResult(
-                    succeeded, snapshot.sourceFingerprint, &error)) {
+                    succeeded, snapshot.sourceFingerprint,
+                    snapshot.profileFingerprint, &error)) {
                 _host.setStatusText(L"Bake result rejected: "
                     + ayt::ui::decodeUtf8Text(error));
                 refreshStatus();
@@ -623,8 +627,8 @@ EditorDescriptor makeEditorSkeletonDescriptor()
     descriptor.openPolicy = EditorOpenPolicy::PerResource;
     descriptor.defaultDockSlot = EditorDockSlot::Center;
     descriptor.priority = 130;
-    descriptor.extensions = {".ayskel", ".aysmap"};
-    descriptor.assetTypes = {"Skeleton", "Skeleton Mapping"};
+    descriptor.extensions = {".ayskel", ".ayrig", ".aysmap"};
+    descriptor.assetTypes = {"Skeleton", "Rig Profile"};
     descriptor.createDocument = [](const EditorOpenRequest& request,
                                    std::string& error) {
         auto document = std::make_shared<EditorSkeletonDocument>();

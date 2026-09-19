@@ -7,6 +7,7 @@
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Skeleton.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <memory>
 
@@ -95,15 +96,20 @@ TEST_SUITE(AYEditor_SkeletonExtension)
 TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
 {
     auto skeletonPath = writeEditorSkeletonFixture();
-    auto mappingPath = skeletonPath;
-    mappingPath.replace_extension(".aysmap");
+    auto legacyMappingPath = skeletonPath;
+    legacyMappingPath.replace_extension(".aysmap");
+    auto rigProfilePath = skeletonPath;
+    rigProfilePath.replace_extension(".ayrig");
     std::error_code ignored;
-    std::filesystem::remove(mappingPath, ignored);
+    std::filesystem::remove(legacyMappingPath, ignored);
+    std::filesystem::remove(rigProfilePath, ignored);
 
     const ayt::editor::EditorDescriptor descriptor =
         ayt::editor::makeEditorSkeletonDescriptor();
     CHECK(descriptor.id == ayt::editor::kEditorSkeletonExtensionId);
-    CHECK(descriptor.extensions.size() == 2u);
+    CHECK(descriptor.extensions.size() == 3u);
+    CHECK(std::find(descriptor.extensions.begin(), descriptor.extensions.end(),
+                    ".ayrig") != descriptor.extensions.end());
 
     std::string error;
     const auto document = descriptor.createDocument(
