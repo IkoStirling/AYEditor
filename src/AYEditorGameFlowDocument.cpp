@@ -1,6 +1,7 @@
 #include "AYEditor/EditorGameFlowDocument.h"
 
 #include <AYApplication/GameFlowMigration.h>
+#include <AYApplication/GameFlowProgram.h>
 #include <AYIO/File.h>
 
 #include <algorithm>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iterator>
+#include <map>
 #include <set>
 #include <utility>
 
@@ -1096,6 +1098,65 @@ bool EditorGameFlowDocument::addAction(
     return true;
 }
 
+bool EditorGameFlowDocument::addTransition(
+    std::string fromState,
+    std::string triggerIntent,
+    std::string toState,
+    std::string* error)
+{
+    fromState = trim(std::move(fromState));
+    triggerIntent = trim(std::move(triggerIntent));
+    toState = trim(std::move(toState));
+    if (findById(_flow.states, fromState) == nullptr
+        || findById(_flow.states, toState) == nullptr) {
+        if (error != nullptr) *error = "Transition endpoints must be existing States.";
+        return false;
+    }
+    if (findById(_flow.intents, triggerIntent) == nullptr) {
+        if (error != nullptr) *error = "Transition trigger must be an existing Intent.";
+        return false;
+    }
+
+    Snapshot before = snapshot();
+    const std::string id = uniqueId(EditorGameFlowObjectKind::Transition);
+    _flow.transitions.push_back(
+        {id, std::move(fromState), std::move(triggerIntent), std::move(toState)});
+    _selection = {EditorGameFlowObjectKind::Transition, id};
+    commitMutation(std::move(before), "Connect Game Flow States");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorGameFlowDocument::addSubflowCall(
+    std::string transitionId,
+    std::string subflowId,
+    std::string* error)
+{
+    auto* transition = findTransition(_flow, transitionId);
+    if (transition == nullptr) {
+        if (error != nullptr) *error = "Transition does not exist.";
+        return false;
+    }
+    subflowId = trim(std::move(subflowId));
+    if (subflowId.empty()) {
+        if (error != nullptr) *error = "Subflow id cannot be empty.";
+        return false;
+    }
+
+    Snapshot before = snapshot();
+    GameFlowActionCall action;
+    action.action = std::string(kGameFlowActionEnter);
+    action.arguments.emplace(std::string(kGameFlowSubflowIdArgument),
+                             GameFlowValue(subflowId));
+    transition->actions.push_back(std::move(action));
+    _selection = {EditorGameFlowObjectKind::Action,
+                  std::string(kGameFlowActionEnter), transitionId,
+                  transition->actions.size() - 1u};
+    commitMutation(std::move(before), "Add Subflow Node");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
 bool EditorGameFlowDocument::setTransitionGuard(
     std::string transitionId,
     std::string guardType,
@@ -1259,6 +1320,215 @@ bool EditorGameFlowDocument::deleteSelection(std::string* error)
     }
     _selection = {};
     commitMutation(std::move(before), "Delete Game Flow Object");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorGameFlowDocument::deleteObjects(
+    const std::vector<EditorGameFlowSelection>& selections,
+    std::string* error)
+{
+    std::set<std::string, std::less<>> states;
+    std::set<std::string, std::less<>> intents;
+    std::set<std::string, std::less<>> transitions;
+    for (const auto& selection : selections) {
+        if (selection.kind == EditorGameFlowObjectKind::State) {
+            states.insert(selection.id);
+        } else if (selection.kind == EditorGameFlowObjectKind::Intent) {
+            intents.insert(selection.id);
+        } else if (selection.kind == EditorGameFlowObjectKind::Transition) {
+            transitions.insert(selection.id);
+        }
+    }
+    if (states.empty() && intents.empty() && transitions.empty()) {
+        if (error != nullptr) *error = "Select States, Intents, or Transitions to delete.";
+        return false;
+    }
+
+    Snapshot before = snapshot();
+    _flow.transitions.erase(std::remove_if(_flow.transitions.begin(),
+        _flow.transitions.end(), [&](const auto& transition) {
+            return transitions.contains(transition.id)
+                || states.contains(transition.fromState)
+                || states.contains(transition.toState)
+                || states.contains(transition.onFailureState)
+                || states.contains(transition.onCancelState)
+                || intents.contains(transition.triggerIntent);
+        }), _flow.transitions.end());
+    _flow.states.erase(std::remove_if(_flow.states.begin(), _flow.states.end(),
+        [&](const auto& state) { return states.contains(state.id); }),
+        _flow.states.end());
+    _flow.intents.erase(std::remove_if(_flow.intents.begin(), _flow.intents.end(),
+        [&](const auto& intent) { return intents.contains(intent.id); }),
+        _flow.intents.end());
+    for (auto& state : _flow.states) {
+        if (states.contains(state.parent)) state.parent.clear();
+        if (states.contains(state.initialChild)) state.initialChild.clear();
+    }
+    if (states.contains(_flow.initialState)) {
+        _flow.initialState = _flow.states.empty() ? std::string{}
+                                                 : _flow.states.front().id;
+    }
+    _selection = {};
+    commitMutation(std::move(before), "Delete Game Flow Selection");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+EditorGameFlowClipboard EditorGameFlowDocument::copyObjects(
+    const std::vector<EditorGameFlowSelection>& selections) const
+{
+    std::set<std::string, std::less<>> stateIds;
+    std::set<std::string, std::less<>> intentIds;
+    std::set<std::string, std::less<>> transitionIds;
+    for (const auto& selection : selections) {
+        if (selection.kind == EditorGameFlowObjectKind::State) {
+            stateIds.insert(selection.id);
+        } else if (selection.kind == EditorGameFlowObjectKind::Intent) {
+            intentIds.insert(selection.id);
+        } else if (selection.kind == EditorGameFlowObjectKind::Transition) {
+            transitionIds.insert(selection.id);
+        } else if (selection.kind == EditorGameFlowObjectKind::Action
+                   || selection.kind == EditorGameFlowObjectKind::Guard
+                   || selection.kind == EditorGameFlowObjectKind::ActionArgument) {
+            transitionIds.insert(selection.ownerId);
+        }
+    }
+    for (const auto& transition : _flow.transitions) {
+        if (transitionIds.contains(transition.id)
+            || (stateIds.contains(transition.fromState)
+                && stateIds.contains(transition.toState))) {
+            transitionIds.insert(transition.id);
+            stateIds.insert(transition.fromState);
+            stateIds.insert(transition.toState);
+            intentIds.insert(transition.triggerIntent);
+        }
+    }
+
+    EditorGameFlowClipboard result;
+    for (const auto& intent : _flow.intents) {
+        if (intentIds.contains(intent.id)) result.intents.push_back(intent);
+    }
+    for (const auto& state : _flow.states) {
+        if (stateIds.contains(state.id)) result.states.push_back(state);
+    }
+    for (const auto& transition : _flow.transitions) {
+        if (transitionIds.contains(transition.id)) {
+            result.transitions.push_back(transition);
+        }
+    }
+    return result;
+}
+
+bool EditorGameFlowDocument::pasteObjects(
+    const EditorGameFlowClipboard& clipboard,
+    std::string* error)
+{
+    if (clipboard.empty()) {
+        if (error != nullptr) *error = "The GameFlow clipboard is empty.";
+        return false;
+    }
+    Snapshot before = snapshot();
+    std::map<std::string, std::string, std::less<>> intentMap;
+    std::map<std::string, std::string, std::less<>> stateMap;
+    const auto uniqueCopyId = [](std::string base, const auto& exists) {
+        if (!exists(base)) return base;
+        for (unsigned serial = 1u;; ++serial) {
+            const std::string candidate = base + "_copy"
+                + (serial == 1u ? std::string{} : "_" + std::to_string(serial));
+            if (!exists(candidate)) return candidate;
+        }
+    };
+
+    for (auto intent : clipboard.intents) {
+        const std::string oldId = intent.id;
+        intent.id = uniqueCopyId(intent.id, [&](std::string_view candidate) {
+            return findById(_flow.intents, candidate) != nullptr
+                || std::any_of(intentMap.begin(), intentMap.end(),
+                    [&](const auto& item) { return item.second == candidate; });
+        });
+        intentMap.emplace(oldId, intent.id);
+        _flow.intents.push_back(std::move(intent));
+    }
+    for (auto state : clipboard.states) {
+        const std::string oldId = state.id;
+        state.id = uniqueCopyId(state.id, [&](std::string_view candidate) {
+            return findById(_flow.states, candidate) != nullptr
+                || std::any_of(stateMap.begin(), stateMap.end(),
+                    [&](const auto& item) { return item.second == candidate; });
+        });
+        stateMap.emplace(oldId, state.id);
+        _flow.states.push_back(std::move(state));
+    }
+    const auto mapped = [](const auto& values, const std::string& id) {
+        const auto found = values.find(id);
+        return found == values.end() ? std::string{} : found->second;
+    };
+    for (std::size_t index = _flow.states.size() - clipboard.states.size();
+         index < _flow.states.size(); ++index) {
+        auto& state = _flow.states[index];
+        state.parent = mapped(stateMap, state.parent);
+        state.initialChild = mapped(stateMap, state.initialChild);
+    }
+    std::string lastTransition;
+    for (auto transition : clipboard.transitions) {
+        transition.id = uniqueCopyId(transition.id,
+            [&](std::string_view candidate) {
+                return findTransition(_flow, candidate) != nullptr;
+            });
+        transition.fromState = mapped(stateMap, transition.fromState);
+        transition.toState = mapped(stateMap, transition.toState);
+        transition.triggerIntent = mapped(intentMap, transition.triggerIntent);
+        transition.onFailureState = mapped(stateMap, transition.onFailureState);
+        transition.onCancelState = mapped(stateMap, transition.onCancelState);
+        lastTransition = transition.id;
+        _flow.transitions.push_back(std::move(transition));
+    }
+    if (!clipboard.states.empty()) {
+        _selection = {EditorGameFlowObjectKind::State,
+                      stateMap.at(clipboard.states.front().id)};
+    } else if (!lastTransition.empty()) {
+        _selection = {EditorGameFlowObjectKind::Transition, lastTransition};
+    } else if (!clipboard.intents.empty()) {
+        _selection = {EditorGameFlowObjectKind::Intent,
+                      intentMap.at(clipboard.intents.front().id)};
+    }
+    commitMutation(std::move(before), "Paste Game Flow Selection");
+    if (error != nullptr) error->clear();
+    return true;
+}
+
+bool EditorGameFlowDocument::applyTemplate(
+    EditorGameFlowTemplate value,
+    std::string* error)
+{
+    if (value != EditorGameFlowTemplate::MainMenuToResult) {
+        if (error != nullptr) *error = "Unknown GameFlow template.";
+        return false;
+    }
+    Snapshot before = snapshot();
+    const std::string documentId = _flow.id.empty() ? "game-flow" : _flow.id;
+    _flow = {};
+    _flow.id = documentId;
+    _flow.initialState = "main-menu";
+    _flow.intents = {
+        {"game.start", {}}, {"world.loaded", {}}, {"game.pause", {}},
+        {"game.resume", {}}, {"game.finish", {}}, {"game.restart", {}},
+    };
+    _flow.states = {
+        {"main-menu", {}, {}}, {"loading", {}, {}},
+        {"gameplay", {}, {}}, {"pause", {}, {}}, {"result", {}, {}},
+    };
+    _flow.transitions = {
+        {"start-game", "main-menu", "game.start", "loading"},
+        {"finish-loading", "loading", "world.loaded", "gameplay"},
+        {"pause-game", "gameplay", "game.pause", "pause"},
+        {"resume-game", "pause", "game.resume", "gameplay"},
+        {"finish-game", "gameplay", "game.finish", "result"},
+        {"restart-game", "result", "game.restart", "loading"},
+    };
+    _selection = {EditorGameFlowObjectKind::Document, _flow.id};
+    commitMutation(std::move(before), "Apply Game Flow Template");
     if (error != nullptr) error->clear();
     return true;
 }

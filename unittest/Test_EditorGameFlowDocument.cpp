@@ -325,4 +325,52 @@ TEST_CASE(normal_save_rejects_known_schema_errors_but_recovery_preserves_them)
     CHECK_FALSE(document.isDirty());
 }
 
+TEST_CASE(template_connections_subflows_and_clipboard_are_atomic_authoring_operations)
+{
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+    CHECK(document.applyTemplate(
+        EditorGameFlowTemplate::MainMenuToResult, &error));
+    CHECK(document.flow().states.size() == 5u);
+    CHECK(document.flow().transitions.size() == 6u);
+    CHECK(document.flow().initialState == "main-menu");
+
+    CHECK(document.addTransition(
+        "result", "game.restart", "main-menu", &error));
+    const std::string transitionId = document.selection().id;
+    CHECK(document.addSubflowCall(
+        transitionId, "flow/credits.gameflow.json", &error));
+    const auto transition = std::find_if(document.flow().transitions.begin(),
+        document.flow().transitions.end(), [&](const auto& value) {
+            return value.id == transitionId;
+        });
+    CHECK(transition != document.flow().transitions.end());
+    CHECK(transition != document.flow().transitions.end()
+        && transition->actions.size() == 1u);
+    CHECK(transition != document.flow().transitions.end()
+        && transition->actions.front().action == "flow.enter");
+
+    const EditorGameFlowClipboard copied = document.copyObjects({
+        {EditorGameFlowObjectKind::State, "gameplay"},
+        {EditorGameFlowObjectKind::State, "pause"},
+    });
+    CHECK(copied.states.size() == 2u);
+    CHECK(copied.transitions.size() == 2u);
+    CHECK(document.pasteObjects(copied, &error));
+    CHECK(document.flow().findState("gameplay_copy") != nullptr);
+    CHECK(document.flow().findState("pause_copy") != nullptr);
+
+    CHECK(document.deleteObjects({
+        {EditorGameFlowObjectKind::State, "gameplay_copy"},
+        {EditorGameFlowObjectKind::State, "pause_copy"},
+    }, &error));
+    CHECK(document.flow().findState("gameplay_copy") == nullptr);
+    CHECK(document.flow().findState("pause_copy") == nullptr);
+    CHECK(document.undo());
+    CHECK(document.flow().findState("gameplay_copy") != nullptr);
+    CHECK(document.redo());
+    CHECK(document.flow().findState("gameplay_copy") == nullptr);
+}
+
 TEST_SUITE_END

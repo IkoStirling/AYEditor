@@ -97,6 +97,26 @@ struct EditorGameFlowArgumentView
     bool known = false;
 };
 
+enum class EditorGameFlowTemplate : std::uint8_t
+{
+    MainMenuToResult,
+};
+
+// Clipboard data is intentionally a typed authoring projection instead of
+// serialized DSL text. This keeps copy/paste independent from the system
+// clipboard and lets the document remap stable ids atomically on paste.
+struct EditorGameFlowClipboard
+{
+    std::vector<ayt::app::GameFlowIntentDefinition> intents;
+    std::vector<ayt::app::GameFlowStateDefinition> states;
+    std::vector<ayt::app::GameFlowTransitionDefinition> transitions;
+
+    bool empty() const noexcept
+    {
+        return intents.empty() && states.empty() && transitions.empty();
+    }
+};
+
 class EditorGameFlowDocument final : public IEditorDocument,
                                      public IEditorCommandTarget
 {
@@ -169,12 +189,27 @@ public:
     bool addAction(std::string transitionId,
                    std::string actionType,
                    std::string* error = nullptr);
+    bool addTransition(std::string fromState,
+                       std::string triggerIntent,
+                       std::string toState,
+                       std::string* error = nullptr);
+    bool addSubflowCall(std::string transitionId,
+                        std::string subflowId,
+                        std::string* error = nullptr);
     bool setTransitionGuard(std::string transitionId,
                             std::string guardType,
                             std::string* error = nullptr);
     bool moveSelectedAction(std::ptrdiff_t offset,
                             std::string* error = nullptr);
     bool deleteSelection(std::string* error = nullptr);
+    bool deleteObjects(const std::vector<EditorGameFlowSelection>& selections,
+                       std::string* error = nullptr);
+    EditorGameFlowClipboard copyObjects(
+        const std::vector<EditorGameFlowSelection>& selections) const;
+    bool pasteObjects(const EditorGameFlowClipboard& clipboard,
+                      std::string* error = nullptr);
+    bool applyTemplate(EditorGameFlowTemplate value,
+                       std::string* error = nullptr);
 
     std::vector<EditorGameFlowArgumentView> selectedArguments() const;
     bool setSelectedArgument(std::string argumentId,
