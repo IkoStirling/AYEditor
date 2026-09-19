@@ -1,8 +1,11 @@
 # AYEditor Design
 
 **Version:** v0.3.2
-**Date:** 2026-08-31
+**Date:** 2026-09-18
 **Status:** E2-composite + native SVG shell icons + Transform Gizmo baseline + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
+**Owner:** AYEditor
+
+> **2026-09-19 实现状态**：§4.3.skeletal 第一版已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、57 角色映射资源、双状态标志和动画/时间轴预览；实际重定向求解、清理烘焙及发布门禁仍按 SKA 后续项实施。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -498,6 +501,22 @@ other editor-owned authority mutations. Replication's final Full and migration
 control frames continue through the network subsystem independently.
 
 ---
+
+### 4.3.skeletal 骨骼映射与重定向作者工作区（第一版已实现）
+
+完整资源、状态和验收契约见 [统一设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md) §3～§7。
+工作区使用通用文档/扩展宿主及 AYDevice 窗口生命周期，不在 AYUI 中实现骨骼业务，也不另建资源加载器。
+
+- **P0 / SKA-04**：打开完整源骨架与绑定的映射/profile 作者资源；树/角色槽、搜索、左右侧与缺失高亮、模板预览/手工覆盖、目标选择、参考姿势修正。配置保存不改写源骨名、层级或 Bind Pose。
+- **P0 / SKA-05**：Content Browser 图标与 Inspector 同时展示醒目的适配、烘焙两个标志；展示 profile/目标/platform 范围、未配置/不完整/失效和未烘焙/当前/过期/失败。原生与非人形状态明确；不以 canonicalName 或 importState 的 Ready 判断已重定向。
+- **P0 / SKA-06**：源/目标并排骨轴与动画预览、时间拖动和逐帧检查，复用 AYAnimation 转换核心；不通过实体补偿或修改源绑定掩盖问题。
+- **P0 / SKA-07～09 协作**：发起检查、清理预览和异步烘焙，显示保留/删除及受影响依赖、取消/失败诊断；迟到结果按请求 generation 丢弃。发布使用同一 manifest 门禁。
+- **P1 / SKA-10/13**：批量 clip/模板库、依赖导航、直接兼容/需重定向/不兼容分级、配置比较和迁移影响分析。
+
+映射修改、模板应用、参考姿势与绑定选择接入文档级 `EditorCommandHistory` 和保存游标。
+重新导入只迁移可无歧义关联的条目；dirty 文档不被磁盘操作静默覆盖，索引重排不沿用旧映射。
+标志读取统一校验/构建记录，以文字和图形共同表达，不只依靠颜色或维护 UI 私有布尔值。
+当前已具备 Skeleton Editor 第一版与独立 `.aysmap` 作者资源；不得据此声明已有运行时重定向求解器、清理烘焙执行器或发布门禁。
 
 ## 5. Editor chrome (AYUI)
 
@@ -1280,6 +1299,8 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-19 | 骨骼作者工作区第一版采用 `AYAnimationEditorCore` 独立核心 + AYEditor 文档/视图薄适配；源 `.ayskel` 只读，映射保存为绑定的 `.aysmap`，Content Browser 与工作区分别展示适配和烘焙状态，动画预览复用公共时间轴能力。 |
+| 2026-09-18 | **计划，待实施**：骨骼作者工作区采用源保留 + 映射/profile 资源绑定 + 手工/模板非破坏式编辑；Content Browser/Inspector 使用独立适配和烘焙标志，公共文档历史、统一转换核心和发布门禁；SKA 优先级在跨模块设计维护，见 §4.3.skeletal。 |
 | 2026-07-03 | AYEditor is a separate module; not embedded in AYUI |
 | 2026-07-03 | Chrome via existing `UILayoutLoader` JSON; ImGui samples in Extension doc are non-normative |
 | 2026-07-03 | E0–E3 without Inspector/scene I/O; metadata + serializer deferred to E4+ |

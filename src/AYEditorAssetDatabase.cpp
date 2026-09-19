@@ -262,7 +262,7 @@ bool readIndex(const std::filesystem::path& path,
     while (input >> record.id >> std::quoted(record.logicalPath)
                  >> type >> origin >> importState
                  >> record.size >> record.lastModified) {
-        if (type > static_cast<unsigned>(EditorAssetType::GameFlow)
+        if (type > static_cast<unsigned>(EditorAssetType::SkeletonMapping)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -326,6 +326,7 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::Tilemap: return "Tilemap";
     case EditorAssetType::UiFlow: return "UI Flow";
     case EditorAssetType::GameFlow: return "Game Flow";
+    case EditorAssetType::SkeletonMapping: return "Skeleton Mapping";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -377,6 +378,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         return EditorAssetType::Animation;
     }
     if (extension == ".ayskel") return EditorAssetType::Skeleton;
+    if (extension == ".aysmap") return EditorAssetType::SkeletonMapping;
     if (extension == ".lua" || extension == ".logia"
         || extension == ".py") return EditorAssetType::Script;
     if (extension == ".phoskia" || extension == ".shader" || extension == ".sc"

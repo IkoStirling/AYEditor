@@ -28,6 +28,7 @@
 #include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorUiFlowDocument.h"
 #include "AYEditor/EditorGameFlowExtension.h"
+#include "AYEditor/EditorSkeletonExtension.h"
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEntity.h"
@@ -1242,6 +1243,12 @@ EditorSession::EditorSession()
     if (!registerEditorDslExtension(_workspace->registry(), &error)) {
         std::fprintf(stderr,
             "[EditorSession] DSL workspace registration failed: %s\n",
+            error.c_str());
+    }
+    error.clear();
+    if (!registerEditorSkeletonExtension(_workspace->registry(), &error)) {
+        std::fprintf(stderr,
+            "[EditorSession] Skeleton workspace registration failed: %s\n",
             error.c_str());
     }
     EditorUiLayoutExtensionConfig layoutConfig;
@@ -3663,23 +3670,23 @@ void EditorSession::bindAssetBrowser()
                     return;
                 }
                 const EditorAssetEntry& entry = _assetEntries.at(index);
-                const EditorAssetTilePresentation presentation =
-                    _assetTilePresenter.present(entry);
+                const EditorAssetRecord* record = !entry.folder
+                    ? _assetDatabase.find(entry.assetId) : nullptr;
+                const EditorAssetTilePresentation presentation = record != nullptr
+                    ? _assetTilePresenter.present(*record)
+                    : _assetTilePresenter.present(entry);
                 cell.setText(presentation.fullFileName);
                 cell.setInfoStrip(
                     presentation.typeAbbreviation,
-                    presentation.categoryColor,
-                    ayt::math::FVector4(1.0f, 1.0f, 1.0f, 1.0f));
+                    presentation.categoryColor);
+                cell.setBadgeText(presentation.bakeBadge);
                 cell.setCornerMarkerVisible(
                     presentation.showEngineResourceMarker);
                 cell.clearThumbnail();
-                if (!entry.folder && _assetPreviewCache != nullptr) {
-                    if (const EditorAssetRecord* record =
-                            _assetDatabase.find(entry.assetId)) {
-                        const ayt::ui::ImageTextureHandle preview =
-                            _assetPreviewCache->request(*record);
-                        if (preview.isValid()) cell.setThumbnail(preview);
-                    }
+                if (record != nullptr && _assetPreviewCache != nullptr) {
+                    const ayt::ui::ImageTextureHandle preview =
+                        _assetPreviewCache->request(*record);
+                    if (preview.isValid()) cell.setThumbnail(preview);
                 }
             });
         _assetTileView->setSelectionMode(
@@ -5071,6 +5078,30 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         return openUiFlowEditor(record->absolutePath);
     case EditorAssetType::GameFlow:
         return openGameFlowEditor(record->absolutePath);
+    case EditorAssetType::Skeleton:
+    case EditorAssetType::SkeletonMapping: {
+        if (_dockViewHost == nullptr) return false;
+        EditorOpenRequest request;
+        request.resourcePath = record->absolutePath;
+        request.resourceKey = record->absolutePath;
+        request.displayPath = record->logicalPath;
+        request.assetType = editorAssetTypeName(record->type);
+        request.preferredEditorId = kEditorSkeletonExtensionId;
+        EditorDockViewOptions options;
+        options.cardId = "card_skeleton_" + std::to_string(assetId);
+        const EditorDockOpenResult opened = _dockViewHost->open(request, options);
+        if (!opened) {
+            setAssetBrowserStatus(L"Skeleton open failed: "
+                + ayt::ui::decodeUtf8Text(opened.error), true);
+            return false;
+        }
+        (void)openRegisteredTool(kEditorTimelineToolExtensionId);
+        wirePromoteCallback();
+        _ui.invalidateLayout();
+        setAssetBrowserStatus(L"Opened skeleton: "
+            + ayt::ui::decodeUtf8Text(record->logicalPath));
+        return true;
+    }
     case EditorAssetType::Animation:
     case EditorAssetType::Audio: {
         if (_dockViewHost == nullptr) return false;

@@ -22,6 +22,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorTransformGizmo.cpp
     Test_EditorAssetBrowser.cpp
     Test_EditorAssetTilePresenter.cpp
+    Test_EditorSkeletonExtension.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp

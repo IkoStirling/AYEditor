@@ -43,6 +43,11 @@ struct EditorAssetTilePresentation {
     // True only for engine-native file formats. Imported source PNG/FBX files
     // do not gain the marker merely because they live under Imported.
     bool showEngineResourceMarker = false;
+
+    // Skeleton authoring exposes two independent truth sources. Empty for
+    // non-skeleton assets; rendered as separate compact labels in the strip.
+    std::wstring adaptationBadge;
+    std::wstring bakeBadge;
 };
 
 class EditorAssetTilePresenter final {

@@ -114,6 +114,9 @@ set(SRC_FILES
     src/AYEditorGameFlowDocument.cpp
     src/AYEditorGameFlowPreview.cpp
     src/AYEditorGameFlowExtension.cpp
+    src/AYEditorSkeletonDocument.cpp
+    src/AYEditorSkeletonCanvas.cpp
+    src/AYEditorSkeletonExtension.cpp
     src/AYEditorStartupSplash.cpp
     src/AYEditorProductPaths.cpp
     src/AYEditor2DViewportModel.cpp
@@ -183,6 +186,8 @@ set(HEAD_FILES
     include/AYEditor/EditorGameFlowDocument.h
     include/AYEditor/EditorGameFlowPreview.h
     include/AYEditor/EditorGameFlowExtension.h
+    include/AYEditor/EditorSkeletonDocument.h
+    include/AYEditor/EditorSkeletonExtension.h
     include/AYEditor/EditorStartupSplash.h
     include/AYEditor/EditorProductPaths.h
     include/AYEditor/Editor2DViewportModel.h
@@ -232,6 +237,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
     PUBLIC AY2DEditorCore AYApplicationGameFlow
     PRIVATE AYUILayoutEditorCore AYProjectContentValidationCore
     PRIVATE AYApplicationUI
+    PUBLIC AYAnimationEditorCore
     PRIVATE AYEntity AYRenderer AYResource AYResourceImport AYIO AYProject AYScript AYShader AYPlatform AYNetwork AYLocalization
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要

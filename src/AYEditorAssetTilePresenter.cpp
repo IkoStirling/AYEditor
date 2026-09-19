@@ -1,6 +1,7 @@
 #include "AYEditor/EditorAssetTilePresenter.h"
 
 #include "AYUI/UnicodeText.h"
+#include <AYAnimationEditor/SkeletonEditorCore.h>
 
 #include <array>
 
@@ -49,7 +50,31 @@ EditorAssetTilePresentation makePresentation(
 EditorAssetTilePresentation EditorAssetTilePresenter::present(
     const EditorAssetRecord& record) const
 {
-    return makePresentation(record.id, record.type, false, record.name);
+    EditorAssetTilePresentation result =
+        makePresentation(record.id, record.type, false, record.name);
+    if (record.type == EditorAssetType::Skeleton
+        || record.type == EditorAssetType::SkeletonMapping) {
+        const auto status = ayt::anim::editor::SkeletonEditorCore::inspectStatus(
+            record.absolutePath);
+        using A = ayt::anim::editor::SkeletonAdaptationState;
+        using B = ayt::anim::editor::SkeletonBakeState;
+        switch (status.adaptation) {
+        case A::Unmapped: result.adaptationBadge = L"M:--"; break;
+        case A::Incomplete: result.adaptationBadge = L"M:!"; break;
+        case A::Validated: result.adaptationBadge = L"M:OK"; break;
+        case A::Native: result.adaptationBadge = L"M:N"; break;
+        }
+        switch (status.bake) {
+        case B::NotBaked: result.bakeBadge = L"B:--"; break;
+        case B::Stale: result.bakeBadge = L"B:!"; break;
+        case B::Ready: result.bakeBadge = L"B:OK"; break;
+        case B::Failed: result.bakeBadge = L"B:X"; break;
+        }
+        // Mapping remains in the bottom information strip while bake is
+        // rendered by the view as an independent top badge.
+        result.typeAbbreviation += L" " + result.adaptationBadge;
+    }
+    return result;
 }
 
 EditorAssetTilePresentation EditorAssetTilePresenter::present(
@@ -77,6 +102,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::Tilemap: return L"MAP";
     case EditorAssetType::UiFlow: return L"UIFLOW";
     case EditorAssetType::GameFlow: return L"FLOW";
+    case EditorAssetType::SkeletonMapping: return L"SMAP";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -97,6 +123,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
         return EditorAssetTileCategory::Scene;
     case EditorAssetType::Animation:
     case EditorAssetType::Skeleton:
+    case EditorAssetType::SkeletonMapping:
         return EditorAssetTileCategory::Motion;
     case EditorAssetType::Script:
     case EditorAssetType::Shader:
@@ -150,10 +177,10 @@ bool EditorAssetTilePresenter::isEngineNativeFileName(
     // Keep compound suffixes before their shorter constituents if the table
     // grows. Metadata sidecars are not listed: the asset database deliberately
     // filters .aydep.json out of the browser.
-    constexpr std::array<std::string_view, 14> nativeSuffixes = {
+    constexpr std::array<std::string_view, 15> nativeSuffixes = {
         ".gameflow.json", ".uiflow.json", ".aytilemap.json", ".ui.json", ".aytilemap",
         ".aymesh", ".aymat", ".aytex", ".ayscene",
-        ".ayanm", ".ayanim", ".ayskel", ".logia", ".phoskia",
+        ".ayanm", ".ayanim", ".ayskel", ".aysmap", ".logia", ".phoskia",
     };
     for (const std::string_view suffix : nativeSuffixes) {
         if (endsWithAsciiInsensitive(fileName, suffix)) return true;

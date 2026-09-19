@@ -32,6 +32,8 @@ enum class EditorAssetType : std::uint8_t {
     Tilemap,
     UiFlow,
     GameFlow,
+    // Author-side humanoid mapping resource. Appended for ABI stability.
+    SkeletonMapping,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {
