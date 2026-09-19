@@ -516,7 +516,7 @@ control frames continue through the network subsystem independently.
 映射修改、模板应用、参考姿势与绑定选择接入文档级 `EditorCommandHistory` 和保存游标。
 重新导入只迁移可无歧义关联的条目；dirty 文档不被磁盘操作静默覆盖，索引重排不沿用旧映射。
 标志读取统一校验/构建记录，以文字和图形共同表达，不只依靠颜色或维护 UI 私有布尔值。
-当前已具备 Skeleton Editor 第一版与独立 `.aysmap` 作者资源；不得据此声明已有运行时重定向求解器、清理烘焙执行器或发布门禁。
+当前已具备 Skeleton Editor 第一版与独立 Legacy `.aysmap` 作者资源；[ADR-0011](../../AYDocs/adr/0011-unified-asset-type-registry-and-rig-profile-extension.md) 已将 `.ayrig` 确定为规范 Rig Profile，兼容迁移尚待实现。不得据此声明已有完整运行时重定向求解器或引用安全的生产清理烘焙器。
 
 ## 5. Editor chrome (AYUI)
 
