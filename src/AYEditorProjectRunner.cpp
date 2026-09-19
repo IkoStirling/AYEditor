@@ -135,6 +135,66 @@ EditorProjectRunConfig loadRunOverride(const fs::path& root,
     }
 }
 
+EditorProjectRunConfig loadLastSuccessfulBuild(const fs::path& root,
+                                               std::string* error)
+{
+    const fs::path path = root / ".ayeditor" / "builds"
+        / "last-success.json";
+    if (!fs::is_regular_file(path)) return {};
+    try {
+        std::ifstream input(path, std::ios::binary);
+        nlohmann::json json;
+        input >> json;
+        if (json.value("format", std::string{}) != "AYProjectBuildState"
+            || json.value("version", 0u) != 1u) {
+            if (error != nullptr) {
+                *error = "Unsupported Project Build state: " + path.string();
+            }
+            return {};
+        }
+        EditorProjectRunConfig result;
+        fs::path executable = json.value("executable", std::string{});
+        if (executable.empty()) {
+            if (error != nullptr) {
+                *error = "Project Build state has no executable.";
+            }
+            return {};
+        }
+        if (executable.is_relative()) executable = root / executable;
+        result.executable = normalized(executable);
+        fs::path working = json.value("workingDirectory", std::string("."));
+        if (working.is_relative()) working = root / working;
+        result.workingDirectory = normalized(working);
+        if (const auto arguments = json.find("arguments");
+            arguments != json.end() && arguments->is_array()) {
+            for (const auto& argument : *arguments) {
+                if (argument.is_string()) {
+                    result.arguments.push_back(argument.get<std::string>());
+                }
+            }
+        }
+        result.source = path.string();
+        if (!isRunConfigContained(root, result.executable,
+                                  result.workingDirectory, error)) {
+            return {};
+        }
+        if (!fs::is_regular_file(result.executable)) {
+            if (error != nullptr) {
+                *error = "Last successful build executable does not exist: "
+                    + result.executable;
+            }
+            return {};
+        }
+        return result;
+    } catch (const std::exception& exception) {
+        if (error != nullptr) {
+            *error = std::string("Invalid Project Build state: ")
+                + exception.what();
+        }
+        return {};
+    }
+}
+
 EditorProjectRunConfig loadProjectDescriptor(const fs::path& root,
                                              std::string* error)
 {
@@ -235,6 +295,12 @@ EditorProjectRunConfig EditorProjectRunner::resolve(
         ? fs::current_path() : fs::path(projectRoot));
     std::string manifestError;
     EditorProjectRunConfig configured = loadRunOverride(root, &manifestError);
+    if (configured) return configured;
+    if (!manifestError.empty()) {
+        if (error != nullptr) *error = manifestError;
+        return {};
+    }
+    configured = loadLastSuccessfulBuild(root, &manifestError);
     if (configured) return configured;
     if (!manifestError.empty()) {
         if (error != nullptr) *error = manifestError;

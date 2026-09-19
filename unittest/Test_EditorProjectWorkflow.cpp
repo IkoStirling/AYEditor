@@ -464,6 +464,36 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
         == "project.ayproject.json");
 }
 
+TEST_CASE(project_runner_resolves_last_successful_project_build)
+{
+    ProjectWorkflowCleanup cleanup{
+        projectWorkflowRoot("project_runner_build_state")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+#if defined(_WIN32)
+    const char* executable = "out/package/windows-development/Game.exe";
+#else
+    const char* executable = "out/package/windows-development/Game";
+#endif
+    writeWorkflowFile(cleanup.root / executable, "placeholder");
+    writeWorkflowFile(cleanup.root
+        / ".ayeditor/builds/last-success.json",
+        (std::string("{\"format\":\"AYProjectBuildState\",\"version\":1,")
+         + "\"profile\":\"windows-development\",\"executable\":\""
+         + executable + "\",\"workingDirectory\":"
+         + "\"out/package/windows-development\","
+         + "\"arguments\":[\"-asset-root\",\"Content\"]}").c_str());
+    std::string error;
+    const EditorProjectRunConfig config = EditorProjectRunner::resolve(
+        cleanup.root.string(), &error);
+    CHECK(config);
+    CHECK(error.empty());
+    CHECK(config.arguments.size() == 2u);
+    CHECK(config.arguments[1] == "Content");
+    CHECK(std::filesystem::path(config.source).filename()
+        == "last-success.json");
+}
+
 TEST_CASE(project_runner_reports_process_liveness)
 {
     CHECK(EditorProjectRunner::processState(0)
