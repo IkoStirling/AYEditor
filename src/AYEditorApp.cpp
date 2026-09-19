@@ -1,4 +1,5 @@
 #include "AYEditor/EditorApp.h"
+#include "AYEditor/EditorChildWindowManager.h"
 
 #if defined(_DEBUG) && defined(_MSC_VER)
 #include "AYEditor/EditorHeapDebug.h"
@@ -974,6 +975,24 @@ void EditorApp::run()
     ::ShowWindow(hwnd, _editorPreferences.windowMaximized
         ? SW_MAXIMIZE : SW_SHOW);
     ::SetForegroundWindow(hwnd);
+
+    // Opt-in, repeatable startup probe for the real visible-owner path. This
+    // exercises the same public lifecycle as the Tools menu without relying
+    // on UI automation, then exits after recording first-open and reopen
+    // timings through AY_EDITOR_UI_TIMINGS.
+    if (ayt::io::env::get("AY_EDITOR_UI_TIMING_AUTORUN").has_value()) {
+        const bool firstOpened = session.openUiLayoutEditor();
+        EditorChildWindowManager* children = session.childWindows();
+        if (firstOpened && children != nullptr && children->count() == 1u) {
+            children->closeChildWindow(children->entries().front().handle);
+        }
+        const bool reopened = session.openUiLayoutEditor();
+        std::fprintf(stderr,
+            "[EditorUiTiming] autorun first_ok=%d reopen_ok=%d\n",
+            firstOpened ? 1 : 0, reopened ? 1 : 0);
+        std::fflush(stderr);
+        ::PostMessageW(hwnd, WM_CLOSE, 0, 0);
+    }
 
     // Diagnostic: per-frame timing print when AY_EDITOR_FRAME_TIMING=1.
     // Reports ms for pollEvents / update / syncViewport / render per

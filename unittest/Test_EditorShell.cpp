@@ -782,6 +782,66 @@ TEST_CASE(ui_layout_editor_is_hosted_as_one_owned_tool_window) {
     windowManager.destroyWindow();
 }
 
+TEST_CASE(ui_layout_editor_can_reopen_after_clean_close) {
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor UI Designer reopen test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = layoutPath;
+    desc.engineAssetsRoot = std::filesystem::path(
+        AY_EDITOR_TEST_SOURCE_DIR).parent_path().string();
+    desc.hostWindow = static_cast<HWND>(windowManager.getWindowHandle());
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+
+    EditorChildWindowManager* children = session.childWindows();
+    CHECK(children != nullptr);
+    if (children == nullptr) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    CHECK(session.openUiLayoutEditor());
+    CHECK(children->count() == 1u);
+    CHECK(session.openUiLayoutDocumentCount() == 1u);
+    if (children->count() != 1u) {
+        session.shutdown();
+        windowManager.destroyWindow();
+        return;
+    }
+
+    const EditorChildWindowManager::Handle firstHandle =
+        children->entries().front().handle;
+    children->closeChildWindow(firstHandle);
+    CHECK(children->count() == 0u);
+    CHECK(session.openUiLayoutDocumentCount() == 0u);
+
+    CHECK(session.openUiLayoutEditor());
+    CHECK(children->count() == 1u);
+    CHECK(session.openUiLayoutDocumentCount() == 1u);
+    if (children->count() == 1u) {
+        children->closeChildWindow(children->entries().front().handle);
+    }
+
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+
 TEST_CASE(ui_flow_editor_is_hosted_as_one_owned_tool_window)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();

@@ -253,6 +253,7 @@ const ayt::ui::UIManager* EditorChildWindowManager::uiForHandle(
 bool EditorChildWindowManager::showChildWindow(Handle h) {
     Entry* entry = findEntryByHandle(h);
     if (entry == nullptr || entry->ui == nullptr) return false;
+    const auto showStarted = std::chrono::steady_clock::now();
 #if defined(_WIN32)
     // Present the fully initialized tree before publishing the HWND. In the
     // deferred-show path this replaces the old chrome-only frame that was
@@ -269,12 +270,27 @@ bool EditorChildWindowManager::showChildWindow(Handle h) {
         }
     }
 #endif
+    const auto frameRendered = std::chrono::steady_clock::now();
     // ShowWindow reports the previous visibility state rather than a simple
     // success flag and an owned child remains effectively hidden when its
     // owner is hidden (as in unit tests). The existence check above is the
     // operation contract; remember the requested state independently.
     (void)_wm.setTopLevelVisible(h, true);
+    const auto visibilityRequested = std::chrono::steady_clock::now();
     entry->visible = true;
+    if (editorUiTimingsEnabled()) {
+        std::fprintf(stderr,
+            "[EditorUiTiming] show layout='%s' total_us=%llu "
+            "render_us=%llu visibility_us=%llu\n",
+            entry->layoutPath.c_str(),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(showStarted, visibilityRequested)),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(showStarted, frameRendered)),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(frameRendered, visibilityRequested)));
+        std::fflush(stderr);
+    }
     return true;
 }
 
