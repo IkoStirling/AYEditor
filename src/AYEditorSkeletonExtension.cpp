@@ -162,6 +162,9 @@ private:
                 ? L"Skeleton preflight passed"
                 : L"Skeleton preflight found blocking issues");
         }), 58.0f);
+        toolbar->addWidget(makeButton(L"Dry Run", [this]() {
+            runDryRun();
+        }), 66.0f);
         _adaptation = new ayt::ui::TextLabel();
         _adaptation->setFontSize(11);
         _adaptation->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
@@ -417,6 +420,55 @@ private:
                  << L" more issue(s)";
         }
         _diagnostics->setText(text.str());
+    }
+
+    void runDryRun()
+    {
+        const auto plan = _document->core().dryRunBake();
+        const std::string manifestPath = SkeletonEditorCore::defaultDryRunManifestPath(
+            _document->core().mappingPath());
+        std::string error;
+        if (!_document->core().writeDryRunManifest(plan, manifestPath, &error)) {
+            _host.setStatusText(L"Bake dry run failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+
+        std::wostringstream text;
+        text << (plan.canBake() ? L"DRY RUN READY" : L"DRY RUN BLOCKED")
+             << L"  |  keep "
+             << plan.boneActionCount(
+                    ayt::anim::editor::SkeletonBakeBoneAction::Keep)
+             << L", rename "
+             << plan.boneActionCount(
+                    ayt::anim::editor::SkeletonBakeBoneAction::Rename)
+             << L", delete "
+             << plan.boneActionCount(
+                    ayt::anim::editor::SkeletonBakeBoneAction::Delete)
+             << L", dependencies " << plan.dependencies.size();
+        std::size_t visible = 0u;
+        for (const auto& operation : plan.boneOperations) {
+            if (operation.action
+                == ayt::anim::editor::SkeletonBakeBoneAction::Keep) {
+                continue;
+            }
+            text << L"\n[" << ayt::ui::decodeUtf8Text(
+                SkeletonEditorCore::bakeBoneActionName(operation.action))
+                 << L"] " << ayt::ui::decodeUtf8Text(operation.sourceName);
+            if (!operation.targetName.empty()) {
+                text << L" -> " << ayt::ui::decodeUtf8Text(operation.targetName);
+            }
+            if (++visible >= 4u) break;
+        }
+        for (const auto& dependency : plan.dependencies) {
+            if (visible++ >= 6u) break;
+            text << L"\n[" << ayt::ui::decodeUtf8Text(
+                SkeletonEditorCore::bakeDependencyKindName(dependency.kind))
+                 << L"] " << ayt::ui::decodeUtf8Text(dependency.path);
+        }
+        _diagnostics->setText(text.str());
+        _host.setStatusText(L"Bake dry-run manifest written: "
+            + ayt::ui::decodeUtf8Text(manifestPath));
     }
 
     void refreshTransport()
