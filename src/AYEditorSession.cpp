@@ -2335,7 +2335,22 @@ void EditorSession::flushFrame() {
 }
 
 bool EditorSession::shouldCompositeViewport() const {
-    return _playRuntime.isPresentationReady();
+    if (!_playRuntime.isPresentationReady()) return false;
+
+    // The native scene composite is a deliberate hole in the AYUI frame.
+    // A document editor can share the Center dock slot with Scene View, and
+    // the viewport widget retains its last bounds while its tab is inactive.
+    // Compositing from geometry alone therefore paints the live scene (and
+    // its UI preview) over GameFlow or another document editor.  Require the
+    // Scene View card to be the visible tab before opening that hole.
+    if (_mainDock != nullptr) {
+        const ayt::ui::DockCard* viewportCard =
+            _mainDock->findCard("card_viewport");
+        if (viewportCard != nullptr && !viewportCard->isVisible()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool EditorSession::ensurePresentationReady() {
