@@ -4,6 +4,7 @@
 
 #include <AYUI/Widget.h>
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -36,7 +37,14 @@ private:
     int hitBone(ayt::math::FVector2 worldPoint) const noexcept;
 
     std::shared_ptr<EditorSkeletonDocument> _document;
+    std::vector<ayt::math::FVector3> _worldPoints;
     std::vector<ProjectedPoint> _projected;
+    ayt::math::FRectangle _projectedBounds{};
+    std::uint64_t _projectedPoseRevision = 0u;
+    float _projectedYaw = 0.0f;
+    float _projectedPitch = 0.0f;
+    float _projectedZoom = 0.0f;
+    bool _projectionValid = false;
     float _yaw = 0.55f;
     float _pitch = -0.18f;
     float _zoom = 1.0f;

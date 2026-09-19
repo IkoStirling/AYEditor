@@ -105,6 +105,9 @@ public:
         pollBake();
         if (_document->timelinePlaying()) {
             _document->timelineTick(dt);
+        }
+        if (_lastPoseRevision != _document->core().poseRevision()) {
+            _lastPoseRevision = _document->core().poseRevision();
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
             _host.requestRepaint();
@@ -162,8 +165,7 @@ private:
             if (_canvas != nullptr) _canvas->frameSkeleton();
         }), 58.0f);
         toolbar->addWidget(makeButton(L"Check", [this]() {
-            refreshPreflight();
-            _host.setStatusText(_document->core().preflight().canBake()
+            _host.setStatusText(refreshPreflight()
                 ? L"Skeleton preflight passed"
                 : L"Skeleton preflight found blocking issues");
         }), 58.0f);
@@ -312,6 +314,7 @@ private:
         refreshPreflight();
         refreshTransport();
         _lastRevision = _document->revision();
+        _lastPoseRevision = _document->core().poseRevision();
         _host.requestRepaint();
     }
 
@@ -396,25 +399,34 @@ private:
     void refreshStatus()
     {
         const auto status = _document->core().status();
-        _adaptation->setText(stateLabel(L"Mapping: ",
-            SkeletonEditorCore::adaptationStateName(status.adaptation)));
+        const std::wstring adaptation = stateLabel(L"Mapping: ",
+            SkeletonEditorCore::adaptationStateName(status.adaptation));
+        if (_adaptation->getText() != adaptation) {
+            _adaptation->setText(adaptation);
+        }
         _adaptation->setTextColor(adaptationColor(status.adaptation));
-        _bake->setText(stateLabel(L"Bake: ",
-            SkeletonEditorCore::bakeStateName(status.bake)));
+        const std::wstring bake = stateLabel(L"Bake: ",
+            SkeletonEditorCore::bakeStateName(status.bake));
+        if (_bake->getText() != bake) {
+            _bake->setText(bake);
+        }
         _bake->setTextColor(bakeColor(status.bake));
         const std::wstring legacy = _document->core().openedLegacyMapping()
             ? L"LEGACY .aysmap | Save migrates to .ayrig | " : L"";
-        _status->setText(legacy
+        const std::wstring message = legacy
             + (_document->isDirty() ? L"Modified | " : L"")
-            + ayt::ui::decodeUtf8Text(status.message));
+            + ayt::ui::decodeUtf8Text(status.message);
+        if (_status->getText() != message) {
+            _status->setText(message);
+        }
         _status->setTextColor(_document->isDirty()
             ? ayt::math::FVector4{0.95f, 0.72f, 0.30f, 1.0f}
             : ayt::math::FVector4{0.62f, 0.66f, 0.74f, 1.0f});
     }
 
-    void refreshPreflight()
+    bool refreshPreflight()
     {
-        if (_diagnostics == nullptr) return;
+        if (_diagnostics == nullptr) return false;
         const auto report = _document->core().preflight();
         std::wostringstream text;
         if (report.canBake()) {
@@ -434,7 +446,11 @@ private:
             text << L"\n... " << (report.issues.size() - visible)
                  << L" more issue(s)";
         }
-        _diagnostics->setText(text.str());
+        const std::wstring diagnostics = text.str();
+        if (_diagnostics->getText() != diagnostics) {
+            _diagnostics->setText(diagnostics);
+        }
+        return report.canBake();
     }
 
     void runDryRun()
@@ -563,7 +579,10 @@ private:
         text << std::fixed << std::setprecision(2)
              << _document->timelinePositionSeconds() << L" / "
              << _document->timelineDurationSeconds();
-        _time->setText(text.str());
+        const std::wstring time = text.str();
+        if (_time->getText() != time) {
+            _time->setText(time);
+        }
     }
 
     void save()
@@ -612,6 +631,7 @@ private:
     std::uint64_t _activeBakeGeneration = 0u;
     std::uint64_t _handledBakeGeneration = 0u;
     std::uint64_t _lastRevision = 0u;
+    std::uint64_t _lastPoseRevision = 0u;
     bool _syncing = false;
 };
 

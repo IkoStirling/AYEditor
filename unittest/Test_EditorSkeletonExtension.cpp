@@ -2,10 +2,12 @@
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditor/EditorSkeletonExtension.h"
 #include "AYEditor/EditorWorkspace.h"
+#include "../src/AYEditorSkeletonCanvas.h"
 
 #include <AYIO/File.h>
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Skeleton.h>
+#include <AYUI/MockRenderer.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -169,6 +171,37 @@ TEST_CASE(skeleton_asset_tile_keeps_mapping_and_bake_status_separate)
         != std::wstring::npos);
     CHECK(presentation.typeAbbreviation.find(presentation.bakeBadge)
         == std::wstring::npos);
+}
+
+TEST_CASE(skeleton_canvas_batches_bones_and_retains_static_presentation)
+{
+    auto document = std::make_shared<ayt::editor::EditorSkeletonDocument>();
+    std::string error;
+    CHECK(document->initialize(
+        ayt::editor::EditorOpenRequest{writeEditorSkeletonFixture().string()},
+        error));
+
+    ayt::editor::EditorSkeletonCanvas canvas(document);
+    canvas.setSize({640.0f, 480.0f});
+    CHECK(canvas.getDisplayListPolicy() == ayt::ui::DisplayListPolicy::Retained);
+
+    ayt::ui::MockRenderer renderer;
+    renderer.beginFrame();
+    canvas.render(renderer);
+
+    const auto& calls = renderer.getDrawCalls();
+    const auto pathCalls = std::count_if(calls.begin(), calls.end(),
+        [](const ayt::ui::MockRenderer::DrawCall& call) {
+            return call.type == ayt::ui::MockRenderer::DrawCall::Path;
+        });
+    const auto rectCalls = std::count_if(calls.begin(), calls.end(),
+        [](const ayt::ui::MockRenderer::DrawCall& call) {
+            return call.type == ayt::ui::MockRenderer::DrawCall::Rect;
+        });
+    CHECK(pathCalls == 1);
+    CHECK(rectCalls <= static_cast<std::ptrdiff_t>(
+        document->core().bones().size() + 1u));
+    CHECK(canvas.hasCachedDisplayList());
 }
 
 TEST_SUITE_END

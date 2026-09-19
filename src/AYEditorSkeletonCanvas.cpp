@@ -8,9 +8,9 @@
 namespace ayt::editor {
 namespace {
 
-void drawThinLine(ayt::ui::IRenderBackend& renderer,
-                  float x0, float y0, float x1, float y1,
-                  const ayt::math::FVector4& color)
+void drawFallbackLine(ayt::ui::IRenderBackend& renderer,
+                      float x0, float y0, float x1, float y1,
+                      const ayt::math::FVector4& color)
 {
     const float dx = x1 - x0;
     const float dy = y1 - y0;
@@ -31,7 +31,6 @@ EditorSkeletonCanvas::EditorSkeletonCanvas(
     : _document(std::move(document))
 {
     setId("skeleton_editor_canvas");
-    setDisplayListPolicy(ayt::ui::DisplayListPolicy::Immediate);
 }
 
 void EditorSkeletonCanvas::frameSkeleton()
@@ -44,18 +43,43 @@ void EditorSkeletonCanvas::frameSkeleton()
 
 void EditorSkeletonCanvas::rebuildProjection()
 {
+    if (_document == nullptr) {
+        _worldPoints.clear();
+        _projected.clear();
+        _projectionValid = false;
+        return;
+    }
+    const auto bounds = getWorldBounds();
+    const std::uint64_t poseRevision = _document->core().poseRevision();
+    if (_projectionValid
+        && _projectedPoseRevision == poseRevision
+        && _projectedYaw == _yaw
+        && _projectedPitch == _pitch
+        && _projectedZoom == _zoom
+        && _projectedBounds.minX == bounds.minX
+        && _projectedBounds.minY == bounds.minY
+        && _projectedBounds.maxX == bounds.maxX
+        && _projectedBounds.maxY == bounds.maxY) {
+        return;
+    }
+
+    _projectionValid = true;
+    _projectedPoseRevision = poseRevision;
+    _projectedYaw = _yaw;
+    _projectedPitch = _pitch;
+    _projectedZoom = _zoom;
+    _projectedBounds = bounds;
+    _worldPoints.clear();
     _projected.clear();
-    if (_document == nullptr) return;
     const auto& world = _document->core().poseWorldMatrices();
     if (world.empty()) return;
 
-    std::vector<ayt::math::FVector3> points;
-    points.reserve(world.size());
+    _worldPoints.reserve(world.size());
     ayt::math::FVector3 minimum = world.front().transformPoint({0, 0, 0});
     ayt::math::FVector3 maximum = minimum;
     for (const auto& matrix : world) {
         const ayt::math::FVector3 point = matrix.transformPoint({0, 0, 0});
-        points.push_back(point);
+        _worldPoints.push_back(point);
         minimum.x = std::min(minimum.x, point.x);
         minimum.y = std::min(minimum.y, point.y);
         minimum.z = std::min(minimum.z, point.z);
@@ -66,14 +90,13 @@ void EditorSkeletonCanvas::rebuildProjection()
     const ayt::math::FVector3 center = (minimum + maximum) * 0.5f;
     const float extent = std::max({maximum.x - minimum.x,
         maximum.y - minimum.y, maximum.z - minimum.z, 0.01f});
-    const auto bounds = getWorldBounds();
     const float width = std::max(1.0f, bounds.maxX - bounds.minX);
     const float height = std::max(1.0f, bounds.maxY - bounds.minY);
     const float scale = std::min(width, height) * 0.72f / extent * _zoom;
     const float cy = std::cos(_yaw), sy = std::sin(_yaw);
     const float cp = std::cos(_pitch), sp = std::sin(_pitch);
-    _projected.reserve(points.size());
-    for (ayt::math::FVector3 point : points) {
+    _projected.reserve(_worldPoints.size());
+    for (ayt::math::FVector3 point : _worldPoints) {
         point -= center;
         const float x1 = cy * point.x + sy * point.z;
         const float z1 = -sy * point.x + cy * point.z;
@@ -166,14 +189,37 @@ void EditorSkeletonCanvas::onRender(ayt::ui::IRenderBackend& renderer)
     rebuildProjection();
     if (_document == nullptr) return;
     const auto& bones = _document->core().bones();
-    for (std::size_t index = 0; index < bones.size()
-         && index < _projected.size(); ++index) {
-        const int parent = bones[index].parentIndex;
-        if (parent < 0 || parent >= static_cast<int>(_projected.size())) continue;
-        const auto& a = _projected[parent];
-        const auto& b = _projected[index];
-        drawThinLine(renderer, a.x, a.y, b.x, b.y,
-                     {0.34f, 0.72f, 0.96f, 1.0f});
+    const ayt::math::FVector4 boneColor{0.34f, 0.72f, 0.96f, 1.0f};
+    const auto path = renderer.createPath();
+    if (path.id >= 0) {
+        for (std::size_t index = 0; index < bones.size()
+             && index < _projected.size(); ++index) {
+            const int parent = bones[index].parentIndex;
+            if (parent < 0
+                || parent >= static_cast<int>(_projected.size())) continue;
+            const ayt::math::FVector2 segment[] = {
+                {_projected[static_cast<std::size_t>(parent)].x,
+                 _projected[static_cast<std::size_t>(parent)].y},
+                {_projected[index].x, _projected[index].y},
+            };
+            renderer.addPathContour(path, segment, 2, false);
+        }
+        renderer.setPathStrokeColor(path, boneColor);
+        renderer.setPathStrokeWidth(path, 2.0f);
+        renderer.setPathStrokeStyle(path, ayt::ui::PathStrokeCap::Round,
+                                    ayt::ui::PathStrokeJoin::Round);
+        renderer.drawPath(path, ayt::ui::PathFillMode::Stroke);
+        renderer.releasePath(path);
+    } else {
+        for (std::size_t index = 0; index < bones.size()
+             && index < _projected.size(); ++index) {
+            const int parent = bones[index].parentIndex;
+            if (parent < 0
+                || parent >= static_cast<int>(_projected.size())) continue;
+            const auto& a = _projected[static_cast<std::size_t>(parent)];
+            const auto& b = _projected[index];
+            drawFallbackLine(renderer, a.x, a.y, b.x, b.y, boneColor);
+        }
     }
     const int selected = _document->core().selectedBone();
     for (std::size_t index = 0; index < _projected.size(); ++index) {
