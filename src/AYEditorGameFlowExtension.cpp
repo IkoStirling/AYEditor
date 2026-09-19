@@ -2,6 +2,10 @@
 
 #include "AYEditor/EditorGameFlowDocument.h"
 #include "AYEditor/EditorGameFlowPreview.h"
+#include "AYEditor/EditorProjectDescriptor.h"
+#include "AYEditor/EditorUiFlowDocument.h"
+
+#include <AYApplication/GameFlowProgram.h>
 
 #include <AYUI/Box.h>
 #include <AYUI/Button.h>
@@ -9,9 +13,11 @@
 #include <AYUI/ComboBox.h>
 #include <AYUI/IRenderBackend.h>
 #include <AYUI/ListView.h>
+#include <AYUI/Menu.h>
 #include <AYUI/TextArea.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
+#include <AYUI/UIManager.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UnicodeText.h>
 #include <AYUI/Widget.h>
@@ -20,9 +26,11 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <filesystem>
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -290,35 +298,170 @@ std::uint64_t flowFingerprint(const ayt::app::GameFlowDocument& flow)
     return hash;
 }
 
+class EditorGameFlowActionPalette final : public ayt::ui::ListView
+{
+public:
+    EditorGameFlowActionPalette()
+    {
+        setItemHeight(22.0f);
+        setDraggable(true);
+        setOnDragEnd([this](bool) { _dragging = false; });
+    }
+
+    ayt::ui::Widget* hitTest(const FVector2& worldPos) override
+    {
+        ayt::ui::Widget* hit = ayt::ui::ListView::hitTest(worldPos);
+        if (hit == nullptr || hit == getVerticalScrollBar()) return hit;
+        // Route row presses through the palette itself so it can distinguish
+        // click selection from a threshold-crossing Action drag gesture.
+        return this;
+    }
+
+    bool onMouseButtonDown(const ayt::ui::UIMouseEvent& event) override
+    {
+        if (event.mouseButton == 0) {
+            const FRectangle bounds = getWorldBounds();
+            const float localY = event.mousePos.y - bounds.minY
+                + getScrollOffset().y;
+            const int index = static_cast<int>(std::floor(
+                localY / (std::max)(1.0f, getItemHeight())));
+            if (index >= 0 && static_cast<std::size_t>(index) < getItemCount()) {
+                setSelectedIndex(index);
+                _pressed = true;
+                _pressPoint = event.mousePos;
+            }
+        }
+        return ayt::ui::ListView::onMouseButtonDown(event) || _pressed;
+    }
+
+    bool onMouseMove(const ayt::ui::UIMouseEvent& event) override
+    {
+        if (!_pressed || _dragging || getSelectedIndex() < 0) return false;
+        const FVector2 delta = event.mousePos - _pressPoint;
+        if (delta.x * delta.x + delta.y * delta.y < 25.0f) return false;
+        ayt::ui::DragPayload payload;
+        payload.kind = "GameFlowAction";
+        payload.text = getSelectedItem();
+        setDragPayload(payload);
+        if (auto* manager = ayt::ui::UIManager::tryGet();
+            manager != nullptr && manager->beginDrag(this)) {
+            _dragging = true;
+            return true;
+        }
+        return false;
+    }
+
+    bool onMouseButtonUp(const ayt::ui::UIMouseEvent& event) override
+    {
+        _pressed = false;
+        if (_dragging) return true;
+        return event.mouseButton == 0;
+    }
+
+    void onCaptureCancelled() override
+    {
+        _pressed = false;
+        _dragging = false;
+    }
+
+private:
+    FVector2 _pressPoint{};
+    bool _pressed = false;
+    bool _dragging = false;
+};
+
 class EditorGameFlowCanvas final : public ayt::ui::Widget
 {
 public:
     EditorGameFlowCanvas(EditorGameFlowDocument& document,
                          EditorGameFlowPreview& preview,
                          std::function<void()> selected,
+                         std::function<void(FVector2)> contextRequested,
                          std::function<std::wstring(
                              std::string_view, std::wstring_view)> localize)
         : _document(document), _preview(preview),
           _selected(std::move(selected)),
+          _contextRequested(std::move(contextRequested)),
           _localize(std::move(localize))
     {
         setId("gameflow_canvas");
         setDisplayListPolicy(ayt::ui::DisplayListPolicy::Immediate);
+        setAcceptDrops(true);
+        setAcceptDropKinds({"GameFlowAction"});
+        setOnDrop([this](const ayt::ui::DragPayload& payload) {
+            if (payload.kind != "GameFlowAction") return;
+            const auto* manager = ayt::ui::UIManager::tryGet();
+            const FVector2 point = manager == nullptr
+                ? FVector2{} : manager->getDragLastMousePos();
+            std::string transitionId;
+            for (auto it = _hits.rbegin(); it != _hits.rend(); ++it) {
+                if (it->selection.kind == EditorGameFlowObjectKind::Transition
+                    && contains(it->bounds, point.x, point.y)) {
+                    transitionId = it->selection.id;
+                    break;
+                }
+            }
+            if (transitionId.empty()
+                && _document.selection().kind
+                    == EditorGameFlowObjectKind::Transition) {
+                transitionId = _document.selection().id;
+            }
+            if (!transitionId.empty()) {
+                std::string ignored;
+                (void)_document.addAction(transitionId,
+                    encodeUtf8(payload.text), &ignored);
+                if (_selected != nullptr) _selected();
+            }
+        });
     }
 
     bool pointerDown(float x, float y, int button)
     {
         if (!contains(getWorldBounds(), x, y)) return false;
+        if (button == 1) {
+            if (_contextRequested != nullptr) _contextRequested({x, y});
+            return true;
+        }
         if (button == 0) {
+            for (auto it = _portHits.rbegin(); it != _portHits.rend(); ++it) {
+                if (!it->output || !contains(it->bounds, x, y)) continue;
+                _linking = true;
+                _linkFrom = it->stateId;
+                _linkPointer = {x, y};
+                markDirty();
+                return true;
+            }
             for (auto it = _hits.rbegin(); it != _hits.rend(); ++it) {
                 if (!contains(it->bounds, x, y)) continue;
                 (void)_document.select(it->selection);
+                if (it->selection.kind == EditorGameFlowObjectKind::State) {
+                    if (!_controlDown) _selectedStates.clear();
+                    if (_controlDown && _selectedStates.contains(
+                            it->selection.id)) {
+                        _selectedStates.erase(it->selection.id);
+                    } else {
+                        _selectedStates.insert(it->selection.id);
+                    }
+                    _draggingState = it->selection.id;
+                    const FRectangle canvas = getWorldBounds();
+                    _dragStateOrigin = {
+                        (it->bounds.minX - canvas.minX - _pan.x) / _zoom,
+                        (it->bounds.minY - canvas.minY - _pan.y) / _zoom};
+                    _dragPointerOrigin = {x, y};
+                } else if (!_controlDown) {
+                    _selectedStates.clear();
+                }
                 if (_selected != nullptr) _selected();
                 markDirty();
                 return true;
             }
+            _selectedStates.clear();
+            _boxSelecting = true;
+            _boxStart = _boxEnd = {x, y};
+            markDirty();
+            return true;
         }
-        if (button == 0 || button == 1 || button == 2) {
+        if (button == 2) {
             _panning = true;
             _lastPointer = {x, y};
             return true;
@@ -328,6 +471,23 @@ public:
 
     bool pointerMove(float x, float y)
     {
+        if (_linking) {
+            _linkPointer = {x, y};
+            markDirty();
+            return true;
+        }
+        if (!_draggingState.empty()) {
+            _manualPositions[_draggingState] = {
+                _dragStateOrigin.x + (x - _dragPointerOrigin.x) / _zoom,
+                _dragStateOrigin.y + (y - _dragPointerOrigin.y) / _zoom};
+            markDirty();
+            return true;
+        }
+        if (_boxSelecting) {
+            _boxEnd = {x, y};
+            markDirty();
+            return true;
+        }
         if (!_panning) return false;
         _pan.x += x - _lastPointer.x;
         _pan.y += y - _lastPointer.y;
@@ -336,11 +496,58 @@ public:
         return true;
     }
 
-    bool pointerUp(float, float, int)
+    bool pointerUp(float x, float y, int)
     {
-        if (!_panning) return false;
-        _panning = false;
-        return true;
+        if (_linking) {
+            std::string target;
+            for (auto it = _portHits.rbegin(); it != _portHits.rend(); ++it) {
+                if (!it->output && contains(it->bounds, x, y)) {
+                    target = it->stateId;
+                    break;
+                }
+            }
+            if (!target.empty() && !_document.flow().intents.empty()) {
+                std::string ignored;
+                (void)_document.addTransition(_linkFrom,
+                    _document.flow().intents.front().id, target, &ignored);
+                if (_selected != nullptr) _selected();
+            }
+            _linking = false;
+            _linkFrom.clear();
+            markDirty();
+            return true;
+        }
+        if (!_draggingState.empty()) {
+            _draggingState.clear();
+            return true;
+        }
+        if (_boxSelecting) {
+            const FRectangle box{
+                (std::min)(_boxStart.x, _boxEnd.x),
+                (std::min)(_boxStart.y, _boxEnd.y),
+                (std::max)(_boxStart.x, _boxEnd.x),
+                (std::max)(_boxStart.y, _boxEnd.y)};
+            _selectedStates.clear();
+            for (const auto& [id, bounds] : _stateBounds) {
+                if (bounds.maxX >= box.minX && bounds.minX <= box.maxX
+                    && bounds.maxY >= box.minY && bounds.minY <= box.maxY) {
+                    _selectedStates.insert(id);
+                }
+            }
+            if (!_selectedStates.empty()) {
+                (void)_document.select({EditorGameFlowObjectKind::State,
+                    *_selectedStates.begin()});
+                if (_selected != nullptr) _selected();
+            }
+            _boxSelecting = false;
+            markDirty();
+            return true;
+        }
+        if (_panning) {
+            _panning = false;
+            return true;
+        }
+        return false;
     }
 
     bool wheel(float x, float y, float delta)
@@ -366,7 +573,49 @@ public:
         markDirty();
     }
 
-    bool captured() const noexcept { return _panning; }
+    void autoLayout()
+    {
+        _manualPositions.clear();
+        frameAll();
+    }
+
+    void setModifierState(bool controlDown) noexcept
+    {
+        _controlDown = controlDown;
+    }
+
+    void selectAllStates()
+    {
+        _selectedStates.clear();
+        for (const auto& state : _document.flow().states) {
+            _selectedStates.insert(state.id);
+        }
+        if (!_document.flow().states.empty()) {
+            (void)_document.select({EditorGameFlowObjectKind::State,
+                _document.flow().states.front().id});
+        }
+        markDirty();
+    }
+
+    std::vector<EditorGameFlowSelection> selectedObjects() const
+    {
+        std::vector<EditorGameFlowSelection> result;
+        result.reserve(_selectedStates.size());
+        for (const auto& id : _selectedStates) {
+            result.push_back({EditorGameFlowObjectKind::State, id});
+        }
+        if (result.empty()
+            && _document.selection().kind != EditorGameFlowObjectKind::Document) {
+            result.push_back(_document.selection());
+        }
+        return result;
+    }
+
+    bool captured() const noexcept
+    {
+        return _panning || _boxSelecting || _linking
+            || !_draggingState.empty();
+    }
 
 protected:
     // Keep the canvas interactive after its DockCard moves to a promoted
@@ -398,6 +647,9 @@ protected:
     void onCaptureCancelled() override
     {
         _panning = false;
+        _boxSelecting = false;
+        _linking = false;
+        _draggingState.clear();
     }
 
     ayt::ui::UiCursorHint getCursorHint() const override
@@ -413,6 +665,15 @@ protected:
         renderer.drawRect(bounds, {0.045f, 0.052f, 0.066f, 1.0f});
         drawGrid(renderer, bounds);
         drawFlow(renderer, bounds);
+        if (_boxSelecting) {
+            const FRectangle box{
+                (std::min)(_boxStart.x, _boxEnd.x),
+                (std::min)(_boxStart.y, _boxEnd.y),
+                (std::max)(_boxStart.x, _boxEnd.x),
+                (std::max)(_boxStart.y, _boxEnd.y)};
+            renderer.drawRect(box, {0.12f, 0.42f, 0.78f, 0.18f});
+            drawBorder(renderer, box, {0.30f, 0.68f, 1.0f, 0.9f});
+        }
     }
 
 private:
@@ -433,6 +694,13 @@ private:
     {
         const ayt::app::GameFlowStateDefinition* state = nullptr;
         FRectangle bounds;
+    };
+
+    struct PortHit
+    {
+        FRectangle bounds;
+        std::string stateId;
+        bool output = false;
     };
 
     FVector2 graphPoint(const FRectangle& bounds, float x, float y) const
@@ -461,6 +729,8 @@ private:
     void drawFlow(ayt::ui::IRenderBackend& renderer,
                   const FRectangle& bounds)
     {
+        _portHits.clear();
+        _stateBounds.clear();
         const auto& flow = _document.flow();
         const auto preview = _preview.snapshot();
         const int font = std::clamp(
@@ -503,25 +773,30 @@ private:
         std::unordered_map<int, int> rows;
         std::vector<StateLayout> layouts;
         layouts.reserve(flow.states.size());
-        std::unordered_map<std::string, FRectangle> stateBounds;
         for (std::size_t index = 0; index < flow.states.size(); ++index) {
             std::unordered_set<std::size_t> visiting;
             const int depth = depthOf(depthOf, index, visiting);
             const int row = rows[depth]++;
-            const FVector2 at = graphPoint(bounds,
+            FVector2 graphPosition{
                 static_cast<float>(depth) * 310.0f,
-                static_cast<float>(row) * 154.0f);
+                static_cast<float>(row) * 154.0f};
+            if (const auto manual = _manualPositions.find(
+                    flow.states[index].id); manual != _manualPositions.end()) {
+                graphPosition = manual->second;
+            }
+            const FVector2 at = graphPoint(
+                bounds, graphPosition.x, graphPosition.y);
             const FRectangle rect{at.x, at.y, at.x + 205.0f * _zoom,
                                   at.y + 66.0f * _zoom};
             layouts.push_back({&flow.states[index], rect});
-            stateBounds.emplace(flow.states[index].id, rect);
+            _stateBounds.emplace(flow.states[index].id, rect);
         }
 
         for (std::size_t index = 0; index < flow.transitions.size(); ++index) {
             const auto& transition = flow.transitions[index];
-            const auto from = stateBounds.find(transition.fromState);
-            const auto to = stateBounds.find(transition.toState);
-            if (from == stateBounds.end() || to == stateBounds.end()) continue;
+            const auto from = _stateBounds.find(transition.fromState);
+            const auto to = _stateBounds.find(transition.toState);
+            if (from == _stateBounds.end() || to == _stateBounds.end()) continue;
             const FVector2 start{from->second.maxX,
                 (from->second.minY + from->second.maxY) * 0.5f};
             const FVector2 end{to->second.minX,
@@ -582,7 +857,9 @@ private:
             for (std::size_t actionIndex = 0;
                  actionIndex < transition.actions.size(); ++actionIndex) {
                 const auto& action = transition.actions[actionIndex];
-                const bool known = _document.actionRegistry().findAction(
+                const bool subflow = action.action
+                    == ayt::app::kGameFlowActionEnter;
+                const bool known = subflow || _document.actionRegistry().findAction(
                     action.action) != nullptr;
                 const bool actionActive = active
                     && preview.activeActionIndex == actionIndex;
@@ -591,14 +868,27 @@ private:
                     laneY + 23.0f * _zoom};
                 renderer.drawRect(actionRect, actionActive
                     ? FVector4{0.08f, 0.28f, 0.23f, 1.0f}
+                    : subflow ? FVector4{0.20f, 0.12f, 0.28f, 1.0f}
                     : known ? FVector4{0.09f, 0.15f, 0.19f, 1.0f}
                             : FVector4{0.24f, 0.08f, 0.10f, 1.0f});
                 drawBorder(renderer, actionRect, actionActive
                     ? FVector4{0.22f, 0.90f, 0.62f, 1.0f}
+                    : subflow ? FVector4{0.68f, 0.38f, 0.92f, 1.0f}
                     : known ? FVector4{0.22f, 0.48f, 0.64f, 1.0f}
                             : FVector4{0.92f, 0.28f, 0.34f, 1.0f});
                 std::string label = std::to_string(actionIndex + 1u)
                     + ". " + action.action;
+                if (subflow) {
+                    const auto target = action.arguments.find(
+                        ayt::app::kGameFlowSubflowIdArgument);
+                    if (target != action.arguments.end()) {
+                        if (const auto* id = std::get_if<std::string>(
+                                &target->second.data)) {
+                            label = std::to_string(actionIndex + 1u)
+                                + ". Subflow: " + *id;
+                        }
+                    }
+                }
                 std::wstring displayLabel = ayt::ui::decodeUtf8Text(label);
                 if (!known) {
                     displayLabel += L"  ["
@@ -620,8 +910,8 @@ private:
                                           float yOffset,
                                           const char* label,
                                           const FVector4& color) {
-                const auto target = stateBounds.find(stateId);
-                if (target == stateBounds.end()) return;
+                const auto target = _stateBounds.find(stateId);
+                if (target == _stateBounds.end()) return;
                 const FVector2 fallbackStart{transitionRect.maxX,
                     transitionRect.minY + yOffset * _zoom};
                 const FVector2 fallbackEnd{target->second.minX,
@@ -654,7 +944,8 @@ private:
         for (const auto& layout : layouts) {
             const auto& state = *layout.state;
             const bool active = preview.currentStateId == state.id;
-            const bool selected = _document.selection()
+            const bool selected = _selectedStates.contains(state.id)
+                || _document.selection()
                 == EditorGameFlowSelection{
                     EditorGameFlowObjectKind::State, state.id};
             renderer.drawRect(layout.bounds, active
@@ -697,6 +988,30 @@ private:
                 FVector4{0.55f, 0.63f, 0.73f, 1.0f});
             _hits.push_back({layout.bounds,
                 {EditorGameFlowObjectKind::State, state.id}});
+            const float portWidth = (std::max)(7.0f, 9.0f * _zoom);
+            const float portHalfHeight = (std::max)(7.0f, 9.0f * _zoom);
+            const float centerY = (layout.bounds.minY + layout.bounds.maxY)
+                * 0.5f;
+            const FRectangle inputPort{layout.bounds.minX - portWidth,
+                centerY - portHalfHeight, layout.bounds.minX + 2.0f,
+                centerY + portHalfHeight};
+            const FRectangle outputPort{layout.bounds.maxX - 2.0f,
+                centerY - portHalfHeight, layout.bounds.maxX + portWidth,
+                centerY + portHalfHeight};
+            renderer.drawRect(inputPort, {0.18f, 0.48f, 0.72f, 1.0f});
+            renderer.drawRect(outputPort, {0.24f, 0.72f, 0.52f, 1.0f});
+            _portHits.push_back({inputPort, state.id, false});
+            _portHits.push_back({outputPort, state.id, true});
+        }
+
+        if (_linking) {
+            const auto source = _stateBounds.find(_linkFrom);
+            if (source != _stateBounds.end()) {
+                drawConnector(renderer,
+                    {source->second.maxX,
+                     (source->second.minY + source->second.maxY) * 0.5f},
+                    _linkPointer, {0.28f, 0.78f, 1.0f, 1.0f}, 2.0f);
+            }
         }
 
         if (flow.states.empty()) {
@@ -711,12 +1026,27 @@ private:
     EditorGameFlowDocument& _document;
     EditorGameFlowPreview& _preview;
     std::function<void()> _selected;
+    std::function<void(FVector2)> _contextRequested;
     std::function<std::wstring(std::string_view, std::wstring_view)> _localize;
     std::vector<Hit> _hits;
+    std::vector<PortHit> _portHits;
+    std::unordered_map<std::string, FRectangle> _stateBounds;
+    std::unordered_map<std::string, FVector2> _manualPositions;
+    std::unordered_set<std::string> _selectedStates;
     FVector2 _pan{28.0f, 62.0f};
     FVector2 _lastPointer{};
+    FVector2 _boxStart{};
+    FVector2 _boxEnd{};
+    FVector2 _linkPointer{};
+    FVector2 _dragPointerOrigin{};
+    FVector2 _dragStateOrigin{};
+    std::string _linkFrom;
+    std::string _draggingState;
     float _zoom = 1.0f;
     bool _panning = false;
+    bool _boxSelecting = false;
+    bool _linking = false;
+    bool _controlDown = false;
 };
 
 class EditorGameFlowWorkspaceView final
@@ -765,6 +1095,7 @@ public:
     void onLanguageChanged(const std::string&) override
     {
         applyLocalization();
+        rebuildCanvasMenu();
         refresh();
         syncPreviewPresentation();
     }
@@ -773,6 +1104,7 @@ public:
     {
         if (_document != nullptr) _document->setChangedHandler({});
         _canvas = nullptr;
+        _canvasMenu = nullptr;
         _outline = nullptr;
         _diagnostics = nullptr;
         _trace = nullptr;
@@ -781,6 +1113,9 @@ public:
         _intentPicker = nullptr;
         _intentFieldPicker = nullptr;
         _intentFieldValue = nullptr;
+        _subflowPicker = nullptr;
+        _argumentChoice = nullptr;
+        _argumentBool = nullptr;
         _localizedBindings.clear();
     }
 
@@ -850,6 +1185,21 @@ public:
     }
     bool onKeyDown(int keyCode) override
     {
+        if (keyCode == ayt::ui::UIKey_Control) {
+            _controlDown = true;
+            if (_canvas != nullptr) _canvas->setModifierState(true);
+            return false;
+        }
+        if (_controlDown && keyCode == ayt::ui::UIKey_C) {
+            return copySelection();
+        }
+        if (_controlDown && keyCode == ayt::ui::UIKey_V) {
+            return pasteSelection();
+        }
+        if (_controlDown && keyCode == ayt::ui::UIKey_A) {
+            if (_canvas != nullptr) _canvas->selectAllStates();
+            return true;
+        }
         if (keyCode == ayt::ui::UIKey_Delete) return deleteSelected();
         if (keyCode == ayt::ui::UIKey_Escape && _preview.isRunning()) {
             (void)_preview.cancelActive("Cancelled from editor preview.");
@@ -858,7 +1208,13 @@ public:
         }
         return false;
     }
-    void onKeyUp(int) override {}
+    void onKeyUp(int keyCode) override
+    {
+        if (keyCode == ayt::ui::UIKey_Control) {
+            _controlDown = false;
+            if (_canvas != nullptr) _canvas->setModifierState(false);
+        }
+    }
     bool hasPointerCapture() const noexcept override
     {
         return _canvas != nullptr && _canvas->captured();
@@ -892,6 +1248,7 @@ private:
         ayt::ui::HBox* row = nullptr;
         ayt::ui::TextLabel* label = nullptr;
         ayt::ui::TextInput* input = nullptr;
+        ayt::ui::ComboBox* choice = nullptr;
     };
 
     std::wstring text(std::string_view key,
@@ -974,8 +1331,11 @@ private:
         value.label->setVerticalAlignment(
             ayt::ui::TextLabel::VAlignment::Center);
         value.input = new ayt::ui::TextInput();
+        value.choice = new ayt::ui::ComboBox();
+        value.choice->setVisible(false);
         value.row->addWidget(value.label, 102.0f);
         value.row->addWidget(value.input, 0.0f);
+        value.row->addWidget(value.choice, 0.0f);
         parent.addWidget(value.row, 25.0f);
         return value;
     }
@@ -1108,6 +1468,10 @@ private:
         button(*toolbar, "ui.editor.game_flow.frame", L"Frame", 54.0f, [this]() {
             if (_canvas != nullptr) _canvas->frameAll();
         });
+        button(*toolbar, "ui.editor.game_flow.auto_layout", L"Auto Layout", 86.0f,
+            [this]() { if (_canvas != nullptr) _canvas->autoLayout(); });
+        button(*toolbar, "ui.editor.game_flow.template", L"Template", 72.0f,
+            [this]() { applyStarterTemplate(); });
         _status = new ayt::ui::TextLabel();
         _status->setFontSize(11);
         _status->setVerticalAlignment(
@@ -1135,8 +1499,9 @@ private:
         left->addWidget(_outline, 0.0f);
         label(*left, "ui.editor.game_flow.action_guard_palette",
               L"ACTION / GUARD PALETTE");
-        _actionPalette = new ayt::ui::ComboBox();
-        left->addWidget(_actionPalette, 27.0f);
+        _actionPalette = new EditorGameFlowActionPalette();
+        _actionPalette->setId("gameflow_action_palette");
+        left->addWidget(_actionPalette, 88.0f);
         auto* actionButtons = new ayt::ui::HBox();
         actionButtons->setSpacing(4.0f);
         button(*actionButtons, "ui.editor.game_flow.add_action",
@@ -1147,6 +1512,14 @@ private:
         button(*actionButtons, "ui.editor.game_flow.move_down", L"Down", 50.0f,
             [this]() { moveAction(1); });
         left->addWidget(actionButtons, 27.0f);
+        _subflowPicker = new ayt::ui::ComboBox();
+        _subflowPicker->setId("gameflow_subflow_picker");
+        left->addWidget(_subflowPicker, 27.0f);
+        auto* subflowButtons = new ayt::ui::HBox();
+        subflowButtons->setSpacing(4.0f);
+        button(*subflowButtons, "ui.editor.game_flow.add_subflow",
+            L"Add Subflow", 112.0f, [this]() { addSubflow(); });
+        left->addWidget(subflowButtons, 27.0f);
         _guardPalette = new ayt::ui::ComboBox();
         left->addWidget(_guardPalette, 27.0f);
         auto* guardButtons = new ayt::ui::HBox();
@@ -1165,9 +1538,11 @@ private:
         center->setSpacing(4.0f);
         _canvas = new EditorGameFlowCanvas(
             *_document, _preview, [this]() { _refreshPending = true; },
+            [this](FVector2 point) { showCanvasMenu(point); },
             [this](std::string_view key, std::wstring_view fallback) {
                 return text(key, fallback);
             });
+        buildCanvasMenu();
         center->addWidget(_canvas, 0.0f);
         auto* previewBar = new ayt::ui::HBox();
         previewBar->setSpacing(4.0f);
@@ -1244,6 +1619,12 @@ private:
         _sixth = propertyRow(*inspector);
         _number = propertyRow(*inspector);
         _integer = propertyRow(*inspector);
+        _first.choice->setId("gameflow_property_first_choice");
+        _second.choice->setId("gameflow_property_second_choice");
+        _third.choice->setId("gameflow_property_third_choice");
+        _fourth.choice->setId("gameflow_property_fourth_choice");
+        _fifth.choice->setId("gameflow_property_fifth_choice");
+        _sixth.choice->setId("gameflow_property_sixth_choice");
         _flagRow = new ayt::ui::HBox();
         _flagLabel = new ayt::ui::TextLabel();
         _flagLabel->setFontSize(11);
@@ -1267,6 +1648,7 @@ private:
         });
         inspector->addWidget(_arguments, 100.0f);
         _argumentValue = new ayt::ui::TextInput();
+        _argumentValue->setId("gameflow_argument_value");
         _argumentValue->setPlaceholder(text(
             "ui.editor.game_flow.selected_parameter_value",
             L"Selected parameter value"));
@@ -1274,6 +1656,14 @@ private:
         bindLocalized(_argumentValue,
             "ui.editor.game_flow.selected_parameter_value",
             L"Selected parameter value", LocalizedTarget::Placeholder);
+        _argumentChoice = new ayt::ui::ComboBox();
+        _argumentChoice->setId("gameflow_argument_choice");
+        _argumentChoice->setVisible(false);
+        inspector->addWidget(_argumentChoice, 25.0f);
+        _argumentBool = new ayt::ui::CheckBox();
+        _argumentBool->setId("gameflow_argument_boolean");
+        _argumentBool->setVisible(false);
+        inspector->addWidget(_argumentBool, 25.0f);
         auto* argumentButtons = new ayt::ui::HBox();
         argumentButtons->setSpacing(4.0f);
         button(*argumentButtons, "ui.editor.game_flow.set", L"Set", 50.0f,
@@ -1293,6 +1683,7 @@ private:
 
         root->addWidget(body, 0.0f);
         populatePalettes();
+        populateSubflowPicker();
     }
 
     void populatePalettes()
@@ -1309,6 +1700,238 @@ private:
         }
         _guardPalette->setItems(guards);
         if (!guards.empty()) _guardPalette->setSelectedIndex(0);
+    }
+
+    void buildCanvasMenu()
+    {
+        if (_canvas == nullptr) return;
+        _canvasMenu = new ayt::ui::Menu();
+        _canvasMenu->setSize({260.0f, 320.0f});
+        auto add = [this](const std::wstring& title,
+                          std::function<void()> action) {
+            auto* item = _canvasMenu->addItem(title);
+            item->setOnActivate(std::move(action));
+        };
+        add(text("ui.editor.game_flow.add_state", L"Add State"), [this]() {
+            addObject(EditorGameFlowObjectKind::State);
+        });
+        add(text("ui.editor.game_flow.add_intent", L"Add Intent"), [this]() {
+            addObject(EditorGameFlowObjectKind::Intent);
+        });
+        add(text("ui.editor.game_flow.add_transition", L"Add Transition"), [this]() {
+            addObject(EditorGameFlowObjectKind::Transition);
+        });
+        add(text("ui.editor.game_flow.add_subflow", L"Add Subflow"),
+            [this]() { addSubflow(); });
+        _canvasMenu->addSeparator();
+        for (const auto& type : _document->actionRegistry().actionTypes()) {
+            add(text("ui.editor.game_flow.add_action", L"Add Action")
+                    + L": " + ayt::ui::decodeUtf8Text(type.id),
+                [this, id = type.id]() {
+                    const std::string transition = selectedTransition();
+                    std::string error;
+                    if (transition.empty()
+                        || !_document->addAction(transition, id, &error)) {
+                        setStatus(transition.empty()
+                            ? "Select a Transition before adding an Action."
+                            : error, true);
+                    }
+                });
+        }
+        _canvasMenu->addSeparator();
+        add(text("ui.editor.game_flow.template", L"Template")
+                + L": Main Menu → Result", [this]() {
+            applyStarterTemplate();
+        });
+        add(text("ui.editor.game_flow.auto_layout", L"Auto Layout"), [this]() {
+            if (_canvas != nullptr) _canvas->autoLayout();
+        });
+        _canvas->addChild(_canvasMenu);
+    }
+
+    void rebuildCanvasMenu()
+    {
+        if (_canvas == nullptr) return;
+        if (_canvasMenu != nullptr) {
+            _canvasMenu->close();
+            _canvas->removeChild(_canvasMenu);
+            ayt::ui::destroyWidgetTree(_canvasMenu);
+            _canvasMenu = nullptr;
+        }
+        buildCanvasMenu();
+    }
+
+    void showCanvasMenu(FVector2 point)
+    {
+        if (_canvasMenu != nullptr && _canvas != nullptr) {
+            _canvasMenu->open(_canvas, point);
+        }
+    }
+
+    void applyStarterTemplate()
+    {
+        std::string error;
+        if (!_document->applyTemplate(
+                EditorGameFlowTemplate::MainMenuToResult, &error)) {
+            setStatus(error, true);
+            return;
+        }
+        if (_canvas != nullptr) _canvas->autoLayout();
+    }
+
+    bool copySelection()
+    {
+        if (_canvas == nullptr) return false;
+        _clipboard = _document->copyObjects(_canvas->selectedObjects());
+        if (_clipboard.empty()) {
+            setStatus("Nothing copyable is selected.", true);
+            return false;
+        }
+        setStatus("GameFlow selection copied.");
+        return true;
+    }
+
+    bool pasteSelection()
+    {
+        std::string error;
+        if (!_document->pasteObjects(_clipboard, &error)) {
+            setStatus(error, true);
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<std::string> projectAssetsWithSuffix(
+        std::string_view suffix) const
+    {
+        std::vector<std::string> result;
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(_host.projectRoot(), &descriptorError);
+        const std::filesystem::path root = std::filesystem::path(
+            _host.projectRoot()) / (descriptor ? descriptor.assetRoot : "Assets");
+        std::error_code error;
+        if (!std::filesystem::is_directory(root, error)) return result;
+        for (std::filesystem::recursive_directory_iterator iterator(
+                 root, std::filesystem::directory_options::skip_permission_denied,
+                 error), end;
+             !error && iterator != end; iterator.increment(error)) {
+            if (!iterator->is_regular_file(error)) continue;
+            const std::string path = iterator->path().generic_string();
+            if (path.size() < suffix.size()
+                || path.compare(path.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                continue;
+            }
+            result.push_back(std::filesystem::relative(
+                iterator->path(), root, error).generic_string());
+            error.clear();
+        }
+        std::sort(result.begin(), result.end());
+        return result;
+    }
+
+    void populateSubflowPicker()
+    {
+        if (_subflowPicker == nullptr) return;
+        const auto assets = projectAssetsWithSuffix(".gameflow.json");
+        std::vector<std::wstring> items;
+        for (const auto& asset : assets) {
+            if (_document->path().empty()
+                || std::filesystem::path(_document->path()).filename()
+                    != std::filesystem::path(asset).filename()) {
+                items.push_back(ayt::ui::decodeUtf8Text(asset));
+            }
+        }
+        _subflowPicker->setItems(items);
+        _subflowPicker->setSelectedIndex(items.empty() ? -1 : 0);
+    }
+
+    const ayt::app::GameFlowActionTypeDefinition*
+    selectedActionDefinition() const
+    {
+        const auto& selection = _document->selection();
+        if (selection.kind != EditorGameFlowObjectKind::Action
+            && selection.kind != EditorGameFlowObjectKind::ActionArgument) {
+            return nullptr;
+        }
+        const auto transition = std::find_if(
+            _document->flow().transitions.begin(),
+            _document->flow().transitions.end(), [&](const auto& value) {
+                return value.id == selection.ownerId;
+            });
+        if (transition == _document->flow().transitions.end()
+            || selection.index >= transition->actions.size()) {
+            return nullptr;
+        }
+        return _document->actionRegistry().findAction(
+            transition->actions[selection.index].action);
+    }
+
+    std::optional<ayt::app::GameFlowReferenceKind>
+    selectedArgumentReference(std::string_view argumentId) const
+    {
+        const auto* definition = selectedActionDefinition();
+        if (definition == nullptr) return std::nullopt;
+        const auto found = std::find_if(definition->references.begin(),
+            definition->references.end(), [&](const auto& reference) {
+                return reference.argumentId == argumentId;
+            });
+        return found == definition->references.end()
+            ? std::nullopt : std::optional(found->kind);
+    }
+
+    std::vector<std::string> uiFlowReferenceChoices(
+        ayt::app::GameFlowReferenceKind kind) const
+    {
+        std::vector<std::string> result;
+        std::string error;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(_host.projectRoot(), &error);
+        if (!descriptor || descriptor.ui.flow.empty()) return result;
+        const std::filesystem::path path = std::filesystem::path(
+            _host.projectRoot()) / descriptor.assetRoot / descriptor.ui.flow;
+        EditorUiFlowDocument document;
+        if (!document.initialize(path.string(), path.string(), &error)) {
+            return result;
+        }
+        if (kind == ayt::app::GameFlowReferenceKind::UIFlowEntry) {
+            for (const auto& value : document.flow().entries) {
+                result.push_back(value.id);
+            }
+        } else if (kind == ayt::app::GameFlowReferenceKind::UIContext) {
+            for (const auto& value : document.flow().contexts) {
+                result.push_back(value.id);
+            }
+        } else if (kind == ayt::app::GameFlowReferenceKind::UISignal) {
+            for (const auto& value : document.flow().signals) {
+                result.push_back(value.id);
+            }
+        }
+        return result;
+    }
+
+    std::vector<std::string> argumentChoices(
+        const EditorGameFlowArgumentView& argument) const
+    {
+        const auto* definition = selectedActionDefinition();
+        if (definition != nullptr && definition->id == "ui.context.activate"
+            && argument.id == "scope") {
+            return {"application", "world", "entity"};
+        }
+        const auto reference = selectedArgumentReference(argument.id);
+        if (!reference.has_value()) return {};
+        if (*reference == ayt::app::GameFlowReferenceKind::WorldId) {
+            std::string error;
+            const EditorProjectDescriptor descriptor =
+                EditorProjectDescriptor::load(_host.projectRoot(), &error);
+            std::vector<std::string> result;
+            for (const auto& world : descriptor.worlds) result.push_back(world.id);
+            return result;
+        }
+        if (*reference == ayt::app::GameFlowReferenceKind::AssetPath) {
+            return projectAssetsWithSuffix({});
+        }
+        return uiFlowReferenceChoices(*reference);
     }
 
     void setStatus(std::wstring message, bool error = false)
@@ -1357,7 +1980,13 @@ private:
     bool deleteSelected()
     {
         std::string error;
-        if (!_document->deleteSelection(&error)) {
+        const auto selected = _canvas == nullptr
+            ? std::vector<EditorGameFlowSelection>{}
+            : _canvas->selectedObjects();
+        const bool deleted = selected.size() > 1u
+            ? _document->deleteObjects(selected, &error)
+            : _document->deleteSelection(&error);
+        if (!deleted) {
             setStatus(error, true);
             return false;
         }
@@ -1391,6 +2020,22 @@ private:
             setStatus(transition.empty()
                 ? "Select a Transition before adding an Action."
                 : type.empty() ? "The Action palette is empty." : error, true);
+        }
+    }
+
+    void addSubflow()
+    {
+        const std::string transition = selectedTransition();
+        const std::string subflow = _subflowPicker == nullptr
+            ? std::string{}
+            : encodeUtf8(_subflowPicker->getSelectedItem());
+        std::string error;
+        if (transition.empty() || subflow.empty()
+            || !_document->addSubflowCall(transition, subflow, &error)) {
+            setStatus(transition.empty()
+                ? "Select a Transition before adding a Subflow."
+                : subflow.empty() ? "No GameFlow asset is available."
+                                  : error, true);
         }
     }
 
@@ -1481,22 +2126,22 @@ private:
         const auto labels = _document->selectedPropertyLabels();
         properties.id = encodeUtf8(_id.input->getText());
         if (!labels.first.empty()) {
-            properties.first = encodeUtf8(_first.input->getText());
+            properties.first = propertyValue(_first);
         }
         if (!labels.second.empty()) {
-            properties.second = encodeUtf8(_second.input->getText());
+            properties.second = propertyValue(_second);
         }
         if (!labels.third.empty()) {
-            properties.third = encodeUtf8(_third.input->getText());
+            properties.third = propertyValue(_third);
         }
         if (!labels.fourth.empty()) {
-            properties.fourth = encodeUtf8(_fourth.input->getText());
+            properties.fourth = propertyValue(_fourth);
         }
         if (!labels.fifth.empty()) {
-            properties.fifth = encodeUtf8(_fifth.input->getText());
+            properties.fifth = propertyValue(_fifth);
         }
         if (!labels.sixth.empty()) {
-            properties.sixth = encodeUtf8(_sixth.input->getText());
+            properties.sixth = propertyValue(_sixth);
         }
         if (!labels.flag.empty()) properties.flag = _flag->isChecked();
         try {
@@ -1567,14 +2212,65 @@ private:
                 return value.id == selection.id;
             });
         if (found == _argumentItems.end()) return;
-        bool valid = false;
-        auto value = parseValue(_argumentValue->getText(), found->type, valid);
+        bool valid = true;
+        ayt::app::GameFlowValue value;
+        if (found->type == ayt::app::GameFlowValueType::Boolean
+            && _argumentBool != nullptr && _argumentBool->isVisible()) {
+            value = ayt::app::GameFlowValue(_argumentBool->isChecked());
+        } else if (_argumentChoice != nullptr
+                   && _argumentChoice->isVisible()) {
+            value = ayt::app::GameFlowValue(
+                encodeUtf8(_argumentChoice->getSelectedItem()));
+        } else {
+            value = parseValue(_argumentValue->getText(), found->type, valid);
+        }
         std::string error;
         if (!valid || !_document->setSelectedArgument(
                 selection.id, std::move(value), &error)) {
             setStatus(valid ? error : "Parameter value has the wrong type.",
                 true);
         }
+    }
+
+    void configureArgumentEditor(const EditorGameFlowArgumentView* argument)
+    {
+        if (_argumentValue == nullptr || _argumentChoice == nullptr
+            || _argumentBool == nullptr) return;
+        _argumentValue->setVisible(false);
+        _argumentChoice->setVisible(false);
+        _argumentBool->setVisible(false);
+        if (argument == nullptr) return;
+        if (argument->type == ayt::app::GameFlowValueType::Boolean) {
+            _argumentBool->setVisible(true);
+            const bool* value = std::get_if<bool>(&argument->value.data);
+            _argumentBool->setChecked(value != nullptr && *value);
+            return;
+        }
+        const auto choices = argumentChoices(*argument);
+        if (!choices.empty()) {
+            std::vector<std::wstring> items;
+            items.reserve(choices.size());
+            for (const auto& choice : choices) {
+                items.push_back(ayt::ui::decodeUtf8Text(choice));
+            }
+            const std::wstring current = ayt::ui::decodeUtf8Text(
+                valueText(argument->value));
+            if (!current.empty()
+                && std::find(items.begin(), items.end(), current)
+                    == items.end()) {
+                items.push_back(current);
+            }
+            _argumentChoice->setItems(items);
+            const auto found = std::find(items.begin(), items.end(), current);
+            _argumentChoice->setSelectedIndex(found == items.end()
+                ? (items.empty() ? -1 : 0)
+                : static_cast<int>(std::distance(items.begin(), found)));
+            _argumentChoice->setVisible(true);
+            return;
+        }
+        _argumentValue->setText(
+            ayt::ui::decodeUtf8Text(valueText(argument->value)));
+        _argumentValue->setVisible(true);
     }
 
     void clearArgument()
@@ -1671,7 +2367,45 @@ private:
         row.row->setVisible(visible);
         if (!visible) return;
         row.label->setText(labelText);
+        row.input->setVisible(true);
+        row.choice->setVisible(false);
         row.input->setText(ayt::ui::decodeUtf8Text(value));
+    }
+
+    static void setPropertyChoice(PropertyRow& row,
+                                  const std::wstring& labelText,
+                                  const std::string& value,
+                                  const std::vector<std::string>& choices,
+                                  bool allowEmpty = false)
+    {
+        row.row->setVisible(!labelText.empty());
+        if (labelText.empty()) return;
+        row.label->setText(labelText);
+        row.input->setVisible(false);
+        row.choice->setVisible(true);
+        std::vector<std::wstring> items;
+        items.reserve(choices.size() + (allowEmpty ? 1u : 0u));
+        if (allowEmpty) items.emplace_back();
+        for (const auto& choice : choices) {
+            items.push_back(ayt::ui::decodeUtf8Text(choice));
+        }
+        const std::wstring selected = ayt::ui::decodeUtf8Text(value);
+        if (!selected.empty()
+            && std::find(items.begin(), items.end(), selected) == items.end()) {
+            items.push_back(selected);
+        }
+        row.choice->setItems(items);
+        const auto found = std::find(items.begin(), items.end(), selected);
+        row.choice->setSelectedIndex(found == items.end()
+            ? (items.empty() ? -1 : 0)
+            : static_cast<int>(std::distance(items.begin(), found)));
+    }
+
+    static std::string propertyValue(const PropertyRow& row)
+    {
+        return row.choice != nullptr && row.choice->isVisible()
+            ? encodeUtf8(row.choice->getSelectedItem())
+            : encodeUtf8(row.input->getText());
     }
 
     void refresh()
@@ -1701,12 +2435,56 @@ private:
             text("ui.editor.game_flow.inspector", L"INSPECTOR")
             + L"  /  " + localizedKind(_document->selection().kind));
         setPropertyRow(_id, localizedProperty("ID"), properties.id);
+        std::vector<std::string> stateIds;
+        std::vector<std::string> intentIds;
+        std::vector<std::string> guardIds;
+        stateIds.reserve(_document->flow().states.size());
+        intentIds.reserve(_document->flow().intents.size());
+        for (const auto& state : _document->flow().states) {
+            stateIds.push_back(state.id);
+        }
+        for (const auto& intent : _document->flow().intents) {
+            intentIds.push_back(intent.id);
+        }
+        for (const auto& guard : _document->actionRegistry().guardTypes()) {
+            guardIds.push_back(guard.id);
+        }
         setPropertyRow(_first, localizedProperty(propertyLabels.first), properties.first);
         setPropertyRow(_second, localizedProperty(propertyLabels.second), properties.second);
         setPropertyRow(_third, localizedProperty(propertyLabels.third), properties.third);
         setPropertyRow(_fourth, localizedProperty(propertyLabels.fourth), properties.fourth);
         setPropertyRow(_fifth, localizedProperty(propertyLabels.fifth), properties.fifth);
         setPropertyRow(_sixth, localizedProperty(propertyLabels.sixth), properties.sixth);
+        const auto kind = _document->selection().kind;
+        if (kind == EditorGameFlowObjectKind::Document) {
+            setPropertyChoice(_first, localizedProperty(propertyLabels.first),
+                properties.first, stateIds);
+        } else if (kind == EditorGameFlowObjectKind::IntentField) {
+            setPropertyChoice(_first, localizedProperty(propertyLabels.first),
+                properties.first, {"boolean", "integer", "number", "string"});
+        } else if (kind == EditorGameFlowObjectKind::State) {
+            std::vector<std::string> relatedStates;
+            for (const auto& id : stateIds) {
+                if (id != properties.id) relatedStates.push_back(id);
+            }
+            setPropertyChoice(_first, localizedProperty(propertyLabels.first),
+                properties.first, relatedStates, true);
+            setPropertyChoice(_second, localizedProperty(propertyLabels.second),
+                properties.second, relatedStates, true);
+        } else if (kind == EditorGameFlowObjectKind::Transition) {
+            setPropertyChoice(_first, localizedProperty(propertyLabels.first),
+                properties.first, stateIds);
+            setPropertyChoice(_second, localizedProperty(propertyLabels.second),
+                properties.second, intentIds);
+            setPropertyChoice(_third, localizedProperty(propertyLabels.third),
+                properties.third, stateIds);
+            setPropertyChoice(_fourth, localizedProperty(propertyLabels.fourth),
+                properties.fourth, guardIds, true);
+            setPropertyChoice(_fifth, localizedProperty(propertyLabels.fifth),
+                properties.fifth, stateIds, true);
+            setPropertyChoice(_sixth, localizedProperty(propertyLabels.sixth),
+                properties.sixth, stateIds, true);
+        }
         setPropertyRow(_number, localizedProperty(propertyLabels.number),
             std::to_string(properties.number));
         setPropertyRow(_integer, localizedProperty(propertyLabels.integer),
@@ -1718,6 +2496,7 @@ private:
             valueText(properties.value));
 
         _argumentItems = _document->selectedArguments();
+        configureArgumentEditor(nullptr);
         std::vector<std::wstring> arguments;
         arguments.reserve(_argumentItems.size());
         int selectedArgument = -1;
@@ -1740,8 +2519,7 @@ private:
                     == EditorGameFlowObjectKind::ActionArgument
                 && _document->selection().id == item.id) {
                 selectedArgument = static_cast<int>(index);
-                _argumentValue->setText(
-                    ayt::ui::decodeUtf8Text(valueText(item.value)));
+                configureArgumentEditor(&item);
             }
         }
         _arguments->setItems(arguments);
@@ -2049,9 +2827,11 @@ private:
     EditorGameFlowPreview _preview;
     ayt::ui::Widget* _root = nullptr;
     EditorGameFlowCanvas* _canvas = nullptr;
+    ayt::ui::Menu* _canvasMenu = nullptr;
     ayt::ui::ListView* _outline = nullptr;
-    ayt::ui::ComboBox* _actionPalette = nullptr;
+    EditorGameFlowActionPalette* _actionPalette = nullptr;
     ayt::ui::ComboBox* _guardPalette = nullptr;
+    ayt::ui::ComboBox* _subflowPicker = nullptr;
     ayt::ui::ComboBox* _intentPicker = nullptr;
     ayt::ui::ComboBox* _intentFieldPicker = nullptr;
     ayt::ui::TextInput* _intentFieldValue = nullptr;
@@ -2075,6 +2855,8 @@ private:
     ayt::ui::CheckBox* _flag = nullptr;
     ayt::ui::ListView* _arguments = nullptr;
     ayt::ui::TextInput* _argumentValue = nullptr;
+    ayt::ui::ComboBox* _argumentChoice = nullptr;
+    ayt::ui::CheckBox* _argumentBool = nullptr;
     std::vector<LocalizedBinding> _localizedBindings;
     std::vector<EditorGameFlowOutlineItem> _outlineItems;
     std::vector<EditorGameFlowArgumentView> _argumentItems;
@@ -2082,12 +2864,14 @@ private:
     std::unordered_map<std::string, ayt::app::GameFlowPayload>
         _previewPayloads;
     std::vector<ayt::app::GameFlowDiagnostic> _diagnosticItems;
+    EditorGameFlowClipboard _clipboard;
     ayt::app::GameFlowCoordinatorSnapshot _lastSnapshot;
     std::uint64_t _contentFingerprint = 0u;
     std::size_t _lastTraceSize = 0u;
     bool _refreshPending = false;
     bool _refreshing = false;
     bool _previewStale = true;
+    bool _controlDown = false;
 };
 
 } // namespace

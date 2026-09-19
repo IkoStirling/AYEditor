@@ -36,6 +36,12 @@ Screen Inspector 现在可把布局语义 handler 映射到 Flow Signal，真实
 完整使用流程、对象关系、控件事件映射和 Graph 调试步骤见
 [UI Flow Editor 操作指南](docs/ui-flow-editor-guide.zh-CN.md)。
 
+GameFlow Editor 已从通用文本属性面板升级为可视化流程编排：状态端口可直接拉线，
+文档引用使用下拉选择，Action 参数按注册表元数据生成布尔、数值、枚举与项目引用控件；
+同时提供 Action 拖放、专用 Subflow 节点、常用流程模板、自动布局、框选、批量删除和
+类型化复制粘贴。完整操作与数据边界见
+[GameFlow 可视化编排指南](docs/game-flow-editor-guide.zh-CN.md)。
+
 UI Designer 项目工作流现在建立 `.ui.json` 与 `.uiflow.json` 的双向索引。Layout Designer 的
 Workflow 菜单可跳到第一个引用当前布局的 Screen，并可扫描布局中的声明式 handler，为所有引用
 Screen 补齐 `handler -> Signal` 映射；Flow Editor 选中 Screen 后可用 **Open Layout** 回到其布局。

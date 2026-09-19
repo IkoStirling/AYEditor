@@ -1401,6 +1401,12 @@ EditorGameFlowClipboard EditorGameFlowDocument::copyObjects(
             transitionIds.insert(transition.id);
             stateIds.insert(transition.fromState);
             stateIds.insert(transition.toState);
+            if (!transition.onFailureState.empty()) {
+                stateIds.insert(transition.onFailureState);
+            }
+            if (!transition.onCancelState.empty()) {
+                stateIds.insert(transition.onCancelState);
+            }
             intentIds.insert(transition.triggerIntent);
         }
     }

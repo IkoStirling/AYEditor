@@ -11,6 +11,8 @@
 #include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
 #include <AYUI/Button.h>
+#include <AYUI/ComboBox.h>
+#include <AYUI/ListView.h>
 #include <AYUI/Widget.h>
 
 #include <algorithm>
@@ -156,6 +158,15 @@ TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
     ayt::ui::Widget* root = view != nullptr ? view->rootWidget() : nullptr;
     CHECK(root != nullptr);
     CHECK(findGameFlowButton(root, L"Localized Save") != nullptr);
+    auto* initialState = dynamic_cast<ayt::ui::ComboBox*>(
+        findGameFlowWidget(root, "gameflow_property_first_choice"));
+    CHECK(initialState != nullptr);
+    CHECK(initialState != nullptr && initialState->isVisible());
+    CHECK(initialState != nullptr && initialState->getItemCount() == 1u);
+    CHECK(initialState != nullptr
+        && initialState->getSelectedItem() == L"Boot");
+    CHECK(dynamic_cast<ayt::ui::ListView*>(
+        findGameFlowWidget(root, "gameflow_action_palette")) != nullptr);
 
     if (root != nullptr) {
         root->setSize({1000.0f, 700.0f});
@@ -168,14 +179,14 @@ TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
         const ayt::math::FVector2 blankPoint{
             bounds.maxX - 16.0f, bounds.maxY - 16.0f};
         CHECK(canvas->onMouseButtonDown(
-            ayt::ui::UIMouseEvent(blankPoint, 1)));
+            ayt::ui::UIMouseEvent(blankPoint, 2)));
         CHECK(view->inputTarget() != nullptr);
         CHECK(view->inputTarget() != nullptr
               && view->inputTarget()->hasPointerCapture());
         CHECK(canvas->onMouseMove(ayt::ui::UIMouseEvent(
-            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 1)));
+            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 2)));
         CHECK(canvas->onMouseButtonUp(ayt::ui::UIMouseEvent(
-            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 1)));
+            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 2)));
         CHECK(view->inputTarget() != nullptr
               && !view->inputTarget()->hasPointerCapture());
     }
