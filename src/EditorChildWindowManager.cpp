@@ -19,7 +19,9 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cmath>
 #include <filesystem>
@@ -35,6 +37,24 @@
 namespace ayt::editor {
 
 namespace {
+
+bool editorUiTimingsEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("AY_EDITOR_UI_TIMINGS");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+std::uint64_t elapsedMicroseconds(
+    std::chrono::steady_clock::time_point start,
+    std::chrono::steady_clock::time_point end =
+        std::chrono::steady_clock::now())
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<
+        std::chrono::microseconds>(end - start).count());
+}
 
 ChildWindowConfig parseOneConfig(const nlohmann::json& j) {
     ChildWindowConfig cfg;
@@ -335,6 +355,7 @@ void EditorChildWindowManager::configurePromotedCard(
 bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
                                                Handle& outHandle) {
     outHandle = nullptr;
+    const auto openStarted = std::chrono::steady_clock::now();
 
     ayt::device::TopLevelWindowDesc d;
     d.title  = cfg.title;
@@ -357,6 +378,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
             "'%s'\n", cfg.title.c_str());
         return false;
     }
+    const auto windowCreated = std::chrono::steady_clock::now();
 
     // Build the entry first so the callbacks can capture a stable
     // shared_ptr (the vector may reallocate on push_back; std::shared_ptr
@@ -378,6 +400,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
 #else
     e.ui->initialize(nullptr);  // K-INV-D5-4 null backend = no render
 #endif
+    const auto uiInitialized = std::chrono::steady_clock::now();
     // Child tools share the primary editor's host-owned localization resolver.
     e.ui->loader().setTextResolver(_primary.loader().textResolver());
     // initialize() claims g_activeUIManager; restore the editor primary
@@ -386,6 +409,7 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
 
     e.ui->setClientSize(static_cast<float>(cfg.width),
                         static_cast<float>(cfg.height));
+    bool layoutLoaded = true;
     if (cfg.card != nullptr) {
         // PR-Dock-TearOff live-card migration: reparent the LIVE card
         // into the child root. addChild auto-detaches from the old
@@ -401,8 +425,11 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
         // Best-effort — failure logs but doesn't abort open. The
         // child window still lives and shows whatever the default
         // canvas draws.
-        e.ui->loadLayout(cfg.layoutPath);
+        layoutLoaded = e.ui->loadLayout(cfg.layoutPath);
     }
+    const auto contentReady = std::chrono::steady_clock::now();
+    const ayt::ui::UILayoutLoadStats loadStats =
+        e.ui->loader().getLastLoadStats();
 
     ayt::device::TopLevelWindowCallbacks cbs;
     // K-INV-D5-6: capture by value. The UIManager lives in `_entries`
@@ -544,6 +571,27 @@ bool EditorChildWindowManager::openChildWindow(const ChildWindowConfig& cfg,
     }
 
     outHandle = h;
+    if (editorUiTimingsEnabled()) {
+        std::fprintf(stderr,
+            "[EditorUiTiming] child title='%s' ok=%d total_us=%llu "
+            "window_us=%llu ui_init_us=%llu content_us=%llu "
+            "loader_parse_us=%llu loader_build_us=%llu widgets=%zu "
+            "heap_checks=%llu\n",
+            cfg.title.c_str(), layoutLoaded ? 1 : 0,
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(openStarted)),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(openStarted, windowCreated)),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(windowCreated, uiInitialized)),
+            static_cast<unsigned long long>(
+                elapsedMicroseconds(uiInitialized, contentReady)),
+            static_cast<unsigned long long>(loadStats.parseMicroseconds),
+            static_cast<unsigned long long>(loadStats.buildMicroseconds),
+            loadStats.widgetCount,
+            static_cast<unsigned long long>(loadStats.heapValidationCount));
+        std::fflush(stderr);
+    }
     return true;
 }
 

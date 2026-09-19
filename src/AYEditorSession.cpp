@@ -101,6 +101,7 @@
 #include <cmath>
 #include <ctime>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <cwchar>
 #include <filesystem>
@@ -123,6 +124,24 @@
 namespace ayt::editor {
 
 namespace {
+
+bool editorUiTimingsEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("AY_EDITOR_UI_TIMINGS");
+        return value != nullptr && value[0] != '\0' && value[0] != '0';
+    }();
+    return enabled;
+}
+
+std::uint64_t editorUiElapsedMicroseconds(
+    std::chrono::steady_clock::time_point start,
+    std::chrono::steady_clock::time_point end =
+        std::chrono::steady_clock::now())
+{
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<
+        std::chrono::microseconds>(end - start).count());
+}
 
 // EditorAssetPreviewCache owns and releases this texture. Image normally owns
 // anonymous handles, so keep the borrowed handle out of Image's release path
@@ -7861,6 +7880,7 @@ void EditorSession::bindMenuBar() {
 }
 
 bool EditorSession::openUiLayoutEditor(const std::string& path) {
+    const auto openStarted = std::chrono::steady_clock::now();
     if (_childWindows == nullptr || _workspace == nullptr) {
         setAssetBrowserStatus(
             L"UI Designer requires the AYDevice child-window host", true);
@@ -7917,6 +7937,7 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
 
     _uiDesignerDocumentId = opened.documentId;
     _uiDesignerDocument = std::move(document);
+    const auto documentReady = std::chrono::steady_clock::now();
 
     EditorUiLayoutExtensionConfig controllerConfig;
     controllerConfig.openPathPicker = [this]() {
@@ -7976,6 +7997,7 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
     _uiDesigner->setStateChanged([this]() {
         refreshUiDesignerTitle();
     });
+    const auto controllerReady = std::chrono::steady_clock::now();
 
     ChildWindowConfig cfg;
     cfg.title = "AYUI Designer";
@@ -8040,6 +8062,7 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
         setAssetBrowserStatus(L"UI Designer window creation failed", true);
         return false;
     }
+    const auto childReady = std::chrono::steady_clock::now();
     _uiDesignerHandle = handle;
     ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
     if (childUi == nullptr || !_uiDesigner->attach(*childUi)) {
@@ -8047,18 +8070,42 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
         setAssetBrowserStatus(L"UI Designer UI attach failed", true);
         return false;
     }
+    const auto sessionAttached = std::chrono::steady_clock::now();
     if (!_uiDesignerDocument->path().empty()
         && !_uiDesigner->openDocument(_uiDesignerDocument->path())) {
         _childWindows->closeChildWindow(handle);
         setAssetBrowserStatus(L"UI Designer document load failed", true);
         return false;
     }
+    const auto documentLoaded = std::chrono::steady_clock::now();
 
     refreshUiDesignerTitle();
     if (!_childWindows->showChildWindow(handle)) {
         _childWindows->closeChildWindow(handle);
         setAssetBrowserStatus(L"UI Designer window show failed", true);
         return false;
+    }
+    if (editorUiTimingsEnabled()) {
+        std::fprintf(stderr,
+            "[EditorUiTiming] designer total_us=%llu document_us=%llu "
+            "controller_us=%llu child_us=%llu attach_us=%llu "
+            "document_load_us=%llu show_us=%llu path='%s'\n",
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(openStarted)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(openStarted, documentReady)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(documentReady, controllerReady)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(controllerReady, childReady)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(childReady, sessionAttached)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(sessionAttached, documentLoaded)),
+            static_cast<unsigned long long>(
+                editorUiElapsedMicroseconds(documentLoaded)),
+            path.c_str());
+        std::fflush(stderr);
     }
     setAssetBrowserStatus(L"UI Designer opened in a dedicated window");
     return true;
