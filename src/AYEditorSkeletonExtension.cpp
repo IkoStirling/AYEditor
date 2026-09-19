@@ -109,6 +109,7 @@ public:
         if (_lastRevision != _document->revision()) {
             _lastRevision = _document->revision();
             refreshStatus();
+            refreshPreflight();
         }
     }
     bool wantsBackgroundTick() const noexcept override {
@@ -154,6 +155,12 @@ private:
         }), 52.0f);
         toolbar->addWidget(makeButton(L"Frame", [this]() {
             if (_canvas != nullptr) _canvas->frameSkeleton();
+        }), 58.0f);
+        toolbar->addWidget(makeButton(L"Check", [this]() {
+            refreshPreflight();
+            _host.setStatusText(_document->core().preflight().canBake()
+                ? L"Skeleton preflight passed"
+                : L"Skeleton preflight found blocking issues");
         }), 58.0f);
         _adaptation = new ayt::ui::TextLabel();
         _adaptation->setFontSize(11);
@@ -243,6 +250,11 @@ private:
         body->addWidget(inspector, 330.0f);
         root->addWidget(body, 0.0f);
 
+        _diagnostics = new ayt::ui::TextArea();
+        _diagnostics->setReadOnly(true);
+        _diagnostics->setWordWrap(false);
+        root->addWidget(_diagnostics, 78.0f);
+
         auto* animation = new ayt::ui::HBox();
         animation->setSpacing(4.0f);
         animation->addWidget(makeHeader(L"ANIMATION"), 76.0f);
@@ -282,6 +294,7 @@ private:
         refreshMapping();
         refreshBoneProperties();
         refreshStatus();
+        refreshPreflight();
         refreshTransport();
         _lastRevision = _document->revision();
         _host.requestRepaint();
@@ -381,6 +394,31 @@ private:
             : ayt::math::FVector4{0.62f, 0.66f, 0.74f, 1.0f});
     }
 
+    void refreshPreflight()
+    {
+        if (_diagnostics == nullptr) return;
+        const auto report = _document->core().preflight();
+        std::wostringstream text;
+        if (report.canBake()) {
+            text << L"PREFLIGHT PASSED";
+        } else {
+            text << L"PREFLIGHT BLOCKED  |  " << report.errorCount()
+                 << L" error(s), " << report.warningCount() << L" warning(s)";
+        }
+        const std::size_t visible = std::min<std::size_t>(report.issues.size(), 6u);
+        for (std::size_t index = 0; index < visible; ++index) {
+            const auto& issue = report.issues[index];
+            text << L"\n[" << ayt::ui::decodeUtf8Text(
+                SkeletonEditorCore::preflightCodeName(issue.code)) << L"] "
+                 << ayt::ui::decodeUtf8Text(issue.message);
+        }
+        if (report.issues.size() > visible) {
+            text << L"\n... " << (report.issues.size() - visible)
+                 << L" more issue(s)";
+        }
+        _diagnostics->setText(text.str());
+    }
+
     void refreshTransport()
     {
         _syncing = true;
@@ -429,6 +467,7 @@ private:
     ayt::ui::ListView* _roleList = nullptr;
     ayt::ui::ComboBox* _bonePicker = nullptr;
     ayt::ui::TextArea* _properties = nullptr;
+    ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::TextInput* _animationPath = nullptr;
     ayt::ui::Slider* _timeline = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
