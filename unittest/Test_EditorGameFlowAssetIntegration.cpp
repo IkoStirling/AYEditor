@@ -2,12 +2,16 @@
 
 #include "AYEditor/EditorAssetDatabase.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
+#include "AYEditor/EditorGameFlowExtension.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
 #include "AYEditor/EditorProjectDescriptor.h"
 #include "AYEditor/EditorProjectRuntimeValidator.h"
+#include "AYEditor/EditorWorkspace.h"
 
 #include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
+#include <AYUI/Button.h>
+#include <AYUI/Widget.h>
 
 #include <algorithm>
 #include <array>
@@ -77,9 +81,105 @@ EditorProjectDescriptor makeGameFlowProjectDescriptor()
     return descriptor;
 }
 
+class GameFlowViewTestHost final : public IEditorHostServices {
+public:
+    EditorWorkspace& workspace() noexcept override { return _workspace; }
+    const std::string& projectRoot() const noexcept override {
+        return _projectRoot;
+    }
+    void requestRepaint() override { ++repaintRequests; }
+    void setStatusText(const std::wstring& value) override {
+        statusText = value;
+    }
+    std::wstring localizedText(
+        std::string_view key, std::wstring_view fallback) const override {
+        if (key == "ui.editor.game_flow.save") return L"Localized Save";
+        return std::wstring(fallback);
+    }
+
+    int repaintRequests = 0;
+    std::wstring statusText;
+
+private:
+    EditorWorkspace _workspace;
+    std::string _projectRoot;
+};
+
+ayt::ui::Widget* findGameFlowWidget(
+    ayt::ui::Widget* root, std::string_view id)
+{
+    if (root == nullptr) return nullptr;
+    if (root->getId() == id) return root;
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (ayt::ui::Widget* found = findGameFlowWidget(child, id)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
+ayt::ui::Button* findGameFlowButton(
+    ayt::ui::Widget* root, std::wstring_view text)
+{
+    if (root == nullptr) return nullptr;
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(root);
+        button != nullptr && button->getText() == text) {
+        return button;
+    }
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (ayt::ui::Button* found = findGameFlowButton(child, text)) {
+            return found;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 TEST_SUITE(AYEditor_GameFlowAssetIntegration)
+
+TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
+{
+    EditorDescriptor descriptor = makeEditorGameFlowDescriptor();
+    EditorOpenRequest request;
+    request.displayPath = "Untitled.gameflow.json";
+    std::string error;
+    std::shared_ptr<IEditorDocument> document =
+        descriptor.createDocument(request, error);
+    CHECK(document != nullptr);
+    CHECK(error.empty());
+
+    GameFlowViewTestHost host;
+    std::unique_ptr<IEditorView> view = document != nullptr
+        ? descriptor.createView(document, host) : nullptr;
+    CHECK(view != nullptr);
+    ayt::ui::Widget* root = view != nullptr ? view->rootWidget() : nullptr;
+    CHECK(root != nullptr);
+    CHECK(findGameFlowButton(root, L"Localized Save") != nullptr);
+
+    if (root != nullptr) {
+        root->setSize({1000.0f, 700.0f});
+        root->performLayout();
+    }
+    ayt::ui::Widget* canvas = findGameFlowWidget(root, "gameflow_canvas");
+    CHECK(canvas != nullptr);
+    if (canvas != nullptr) {
+        const ayt::math::FRectangle bounds = canvas->getWorldBounds();
+        const ayt::math::FVector2 blankPoint{
+            bounds.maxX - 16.0f, bounds.maxY - 16.0f};
+        CHECK(canvas->onMouseButtonDown(
+            ayt::ui::UIMouseEvent(blankPoint, 1)));
+        CHECK(view->inputTarget() != nullptr);
+        CHECK(view->inputTarget() != nullptr
+              && view->inputTarget()->hasPointerCapture());
+        CHECK(canvas->onMouseMove(ayt::ui::UIMouseEvent(
+            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 1)));
+        CHECK(canvas->onMouseButtonUp(ayt::ui::UIMouseEvent(
+            {blankPoint.x - 12.0f, blankPoint.y - 8.0f}, 1)));
+        CHECK(view->inputTarget() != nullptr
+              && !view->inputTarget()->hasPointerCapture());
+    }
+}
 
 TEST_CASE(gameflow_asset_type_is_appended_and_classified_as_a_compound_suffix)
 {
