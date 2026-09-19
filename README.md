@@ -33,6 +33,8 @@ Screen Inspector 现在可把布局语义 handler 映射到 Flow Signal，真实
 暂停状态与 Runtime Trace 可检查解析后的输入和节点完成输出。
 异步 Graph 的暂停、Trace、Region 和 Screen 变化通过 presentation revision 增量刷新；独立工具窗还以
 1280×720、1440×860、1920×1080 三档布局/裁剪渲染契约防止窄窗口控件越界。
+完整使用流程、对象关系、控件事件映射和 Graph 调试步骤见
+[UI Flow Editor 操作指南](docs/ui-flow-editor-guide.zh-CN.md)。
 
 UI Designer 项目工作流现在建立 `.ui.json` 与 `.uiflow.json` 的双向索引。Layout Designer 的
 Workflow 菜单可跳到第一个引用当前布局的 Screen，并可扫描布局中的声明式 handler，为所有引用

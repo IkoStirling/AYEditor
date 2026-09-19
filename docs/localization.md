@@ -36,8 +36,12 @@ user locale. The compatibility/headless initializer remains pinned to
 
 The migrated resource slice covers the editor shell's fixed controls,
 accessibility labels, render options, asset/console/network chrome, and the
-fixed UI Flow editor chrome. Existing inline strings remain valid and can be
-migrated incrementally without blocking feature work.
+UI Flow editor's fixed and runtime-generated chrome. UI Flow object kinds,
+Inspector labels, diagnostics categories, preview/debug state, canvas hints,
+and controller status messages use the same host-owned resolver. Wire IDs,
+asset paths, scope names, and diagnostics returned by runtime/plugin code stay
+unchanged. Existing inline strings remain valid and can be migrated
+incrementally without blocking feature work.
 
 `EditorSession::setLanguage()` switches catalogs without rebuilding the UI.
 `UILayoutLoader::retranslate()` walks existing widgets and preserves list,

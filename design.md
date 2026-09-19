@@ -1278,6 +1278,9 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Flow chrome 建立 1280×720、1440×860、1920×1080 三档确定性视觉契约：主栏与两条 Graph 工具行必须
   完整落在各自容器内，Canvas/真实 Screen Preview 必须保有正面积，所有操作文字必须进入渲染提交，
   裁剪栈必须成对闭合。1280 档的 Graph 编排控件采用紧凑宽度，避免 Pin 选择器越界覆盖 Inspector。
+- Flow 工具窗的静态 chrome 与对象类型、Inspector 字段、诊断类别、预览/调试状态、画布提示和操作状态
+  统一使用 AYEditor 宿主持有的本地化 resolver；语言切换只原位刷新显示文本，保持 Outline 选择、预览和
+  调试状态。ID、资产路径、Scope 及运行时/插件原始诊断仍保持 wire 文本，避免本地化改变资产语义。
 
 ### 10.23 UI Designer project workflow
 

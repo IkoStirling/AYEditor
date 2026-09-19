@@ -6803,6 +6803,10 @@ bool EditorSession::setLanguage(const std::string& language)
     if (_uiDesigner != nullptr) {
         _uiDesigner->onLanguageChanged();
     }
+    if (_uiFlowDesigner != nullptr) {
+        _uiFlowDesigner->tick(0.0f);
+        refreshUiFlowDesignerTitle();
+    }
     if (_childWindows != nullptr) {
         for (const EditorChildWindowManager::Entry& entry
              : _childWindows->entries()) {
@@ -8805,7 +8809,8 @@ bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
     });
 
     ChildWindowConfig cfg;
-    cfg.title = "AYUI Flow Editor";
+    cfg.title = wideToUtf8(localizedText(
+        "ui.editor.flow.title", "AYUI Flow Editor"));
     cfg.layoutPath = resolveUiFlowEditorChromePath(_engineAssetsRoot);
     cfg.x = 112;
     cfg.y = 80;
@@ -8858,7 +8863,8 @@ bool EditorSession::confirmUiFlowDesignerClose()
             HWND owner = _uiFlowDesignerHandle != nullptr
                 ? static_cast<HWND>(_uiFlowDesignerHandle) : static_cast<HWND>(_hostWindow);
             const int choice = ::MessageBoxW(
-                owner, prompt.c_str(), L"AYUI Flow Editor",
+                owner, prompt.c_str(), localizedText(
+                    "ui.editor.flow.title", "AYUI Flow Editor").c_str(),
                 MB_YESNOCANCEL | MB_ICONWARNING);
             if (choice == IDCANCEL) return false;
             action = choice == IDYES
@@ -8911,7 +8917,8 @@ void EditorSession::refreshUiFlowDesignerTitle()
 {
     if (_childWindows == nullptr || _uiFlowDesignerHandle == nullptr
         || _uiFlowDesignerDocument == nullptr) return;
-    std::string title = "AYUI Flow Editor - "
+    std::string title = wideToUtf8(localizedText(
+        "ui.editor.flow.title", "AYUI Flow Editor")) + " - "
         + _uiFlowDesignerDocument->title();
     if (_uiFlowDesignerDocument->isDirty()) title += " *";
     (void)_childWindows->setChildWindowTitle(_uiFlowDesignerHandle, title);

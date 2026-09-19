@@ -505,6 +505,68 @@ TEST_CASE(flow_editor_surfaces_asset_closure_diagnostics_per_revision)
     fs::remove_all(root, ignored);
 }
 
+TEST_CASE(flow_editor_localizes_dynamic_chrome_and_retranslates_in_place)
+{
+    namespace fs = std::filesystem;
+    bool chinese = true;
+    ayt::ui::MockRenderer renderer;
+    ayt::ui::UIManager manager;
+    manager.initialize(&renderer);
+    manager.setClientSize(1440.0f, 860.0f);
+    manager.loader().setTextResolver(
+        [&chinese](std::string_view key, std::wstring_view fallback) {
+            if (!chinese) return std::wstring(fallback);
+            if (key == "ui.editor.flow.object_kind.layer") return std::wstring(L"层");
+            if (key == "ui.editor.flow.object_kind.document") return std::wstring(L"文档");
+            if (key == "ui.editor.flow.property_label.default_entry") {
+                return std::wstring(L"默认入口");
+            }
+            if (key == "ui.editor.flow.inspector") return std::wstring(L"检查器");
+            if (key == "ui.editor.flow.canvas.add_region_hint") {
+                return std::wstring(L"添加区域以编排并行 UI 状态");
+            }
+            return std::wstring(fallback);
+        });
+    const fs::path chrome = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui" / "ui_flow_editor.ui.json";
+    CHECK(manager.loadLayout(chrome.string()));
+
+    auto document = std::make_shared<EditorUiFlowDocument>();
+    std::string error;
+    CHECK(document->initialize({}, {}, &error));
+    EditorUiFlowController controller(document, {});
+    CHECK(controller.attach(manager));
+    manager.root()->performLayout();
+    controller.tick(0.0f);
+
+    auto* kinds = dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_add_kind"));
+    auto* inspector = dynamic_cast<ayt::ui::TextLabel*>(
+        manager.findById("flow_selection_kind"));
+    auto* property = dynamic_cast<ayt::ui::TextLabel*>(
+        manager.findById("flow_lbl_a"));
+    CHECK(kinds != nullptr && kinds->getItem(0) == L"层");
+    CHECK(inspector != nullptr && inspector->getText() == L"检查器 — 文档");
+    CHECK(property != nullptr && property->getText() == L"默认入口");
+
+    manager.render();
+    CHECK(std::any_of(renderer.getDrawCalls().begin(),
+                      renderer.getDrawCalls().end(), [](const auto& call) {
+        return call.type == ayt::ui::MockRenderer::DrawCall::Text
+            && call.text == L"添加区域以编排并行 UI 状态";
+    }));
+
+    chinese = false;
+    manager.loader().retranslate(manager.root());
+    controller.tick(0.0f);
+    CHECK(kinds != nullptr && kinds->getItem(0) == L"Layer");
+    CHECK(inspector != nullptr && inspector->getText() == L"Inspector — Document");
+    CHECK(property != nullptr && property->getText() == L"Default Entry");
+
+    controller.detach();
+    manager.shutdown();
+}
+
 TEST_CASE(flow_graph_canvas_draws_typed_curves_and_filters_link_targets)
 {
     namespace fs = std::filesystem;

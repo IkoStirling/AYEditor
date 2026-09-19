@@ -144,14 +144,19 @@ FVector4 graphPinColor(const ayt::ui::UIFlowGraphPinTypeDefinition& pin)
     }
 }
 
+std::wstring wide(std::string_view value);
+using UiFlowLocalizedText = std::function<std::wstring(
+    std::string_view key, std::wstring_view fallback)>;
+
 class EditorUiFlowCanvas final : public ayt::ui::Widget {
 public:
     EditorUiFlowCanvas(EditorUiFlowDocument& document,
                        EditorUiFlowPreview& preview,
                        const ayt::ui::UIFlowGraphNodeRegistry& registry,
+                       UiFlowLocalizedText localize,
                        std::function<void()> changed)
         : _document(document), _preview(preview), _registry(registry),
-          _changed(std::move(changed))
+          _localize(std::move(localize)), _changed(std::move(changed))
     {
         setId("flow_graph_canvas");
         setLayoutPositionManaged(false);
@@ -215,7 +220,8 @@ private:
         if (flow.regions.empty()) {
             renderer.drawText({bounds.minX + 24.0f, bounds.minY + 24.0f,
                                bounds.maxX - 24.0f, bounds.minY + 60.0f},
-                L"Add a Region to author parallel UI state", 16,
+                localized("ui.editor.flow.canvas.add_region_hint",
+                    L"Add a Region to author parallel UI state"), 16,
                 FVector4{0.56f, 0.60f, 0.68f, 1.0f});
             return;
         }
@@ -266,11 +272,12 @@ private:
                                    card.maxX - 8.0f, card.minY + 30.0f},
                     ayt::ui::decodeUtf8Text(state.id), 14,
                     FVector4{0.93f, 0.95f, 0.98f, 1.0f});
-                const std::string detail = state.contexts.empty()
-                    ? "No Context" : joinContexts(state.contexts);
+                const std::wstring detail = state.contexts.empty()
+                    ? localized("ui.editor.flow.canvas.no_context", L"No Context")
+                    : wide(joinContexts(state.contexts));
                 renderer.drawText({card.minX + 10.0f, card.minY + 29.0f,
                                    card.maxX - 8.0f, card.maxY - 4.0f},
-                    ayt::ui::decodeUtf8Text(detail), 11,
+                    detail, 11,
                     FVector4{0.54f, 0.60f, 0.69f, 1.0f});
                 _hits.push_back({card,
                     {EditorUiFlowObjectKind::State, state.id, region.id}});
@@ -309,7 +316,8 @@ private:
     {
         renderer.drawText({bounds.minX + 18.0f, bounds.minY + 12.0f,
                            bounds.maxX - 18.0f, bounds.minY + 44.0f},
-            ayt::ui::decodeUtf8Text("Action Graph — " + graph.id), 15,
+            localized("ui.editor.flow.canvas.action_graph", L"Action Graph")
+                + L" — " + wide(graph.id), 15,
             FVector4{0.84f, 0.88f, 0.94f, 1.0f});
         struct NodeVisual {
             FRectangle bounds;
@@ -449,9 +457,17 @@ private:
         }
     }
 
+    std::wstring localized(std::string_view key,
+                           std::wstring_view fallback) const
+    {
+        return _localize != nullptr
+            ? _localize(key, fallback) : std::wstring(fallback);
+    }
+
     EditorUiFlowDocument& _document;
     EditorUiFlowPreview& _preview;
     const ayt::ui::UIFlowGraphNodeRegistry& _registry;
+    UiFlowLocalizedText _localize;
     std::function<void()> _changed;
     std::vector<Hit> _hits;
 };
@@ -489,6 +505,95 @@ T* widgetAs(ayt::ui::UIManager& ui, const char* id)
 std::wstring wide(std::string_view value)
 {
     return ayt::ui::decodeUtf8Text(std::string(value));
+}
+
+struct UiFlowKindText {
+    EditorUiFlowObjectKind kind;
+    const char* key;
+    const wchar_t* fallback;
+};
+
+constexpr std::array kUiFlowKindTexts{
+    UiFlowKindText{EditorUiFlowObjectKind::Document,
+        "ui.editor.flow.object_kind.document", L"Document"},
+    UiFlowKindText{EditorUiFlowObjectKind::Layer,
+        "ui.editor.flow.object_kind.layer", L"Layer"},
+    UiFlowKindText{EditorUiFlowObjectKind::Slot,
+        "ui.editor.flow.object_kind.slot", L"Slot"},
+    UiFlowKindText{EditorUiFlowObjectKind::Screen,
+        "ui.editor.flow.object_kind.screen", L"Screen"},
+    UiFlowKindText{EditorUiFlowObjectKind::Context,
+        "ui.editor.flow.object_kind.context", L"Context"},
+    UiFlowKindText{EditorUiFlowObjectKind::Entry,
+        "ui.editor.flow.object_kind.entry", L"Entry"},
+    UiFlowKindText{EditorUiFlowObjectKind::Signal,
+        "ui.editor.flow.object_kind.signal", L"Signal"},
+    UiFlowKindText{EditorUiFlowObjectKind::Action,
+        "ui.editor.flow.object_kind.action", L"Action"},
+    UiFlowKindText{EditorUiFlowObjectKind::Region,
+        "ui.editor.flow.object_kind.region", L"Region"},
+    UiFlowKindText{EditorUiFlowObjectKind::State,
+        "ui.editor.flow.object_kind.state", L"State"},
+    UiFlowKindText{EditorUiFlowObjectKind::Transition,
+        "ui.editor.flow.object_kind.transition", L"Transition"},
+    UiFlowKindText{EditorUiFlowObjectKind::Graph,
+        "ui.editor.flow.object_kind.graph", L"Graph"},
+};
+
+const UiFlowKindText& uiFlowKindText(EditorUiFlowObjectKind kind)
+{
+    const auto found = std::find_if(kUiFlowKindTexts.begin(),
+        kUiFlowKindTexts.end(), [kind](const UiFlowKindText& value) {
+            return value.kind == kind;
+        });
+    return found != kUiFlowKindTexts.end() ? *found : kUiFlowKindTexts.front();
+}
+
+const char* uiFlowPropertyLabelKey(std::string_view label)
+{
+    static constexpr std::pair<std::string_view, const char*> labels[] = {
+        {"Default Entry", "ui.editor.flow.property_label.default_entry"},
+        {"Input Policy", "ui.editor.flow.property_label.input_policy"},
+        {"Max Active Screens (0 = unlimited)",
+            "ui.editor.flow.property_label.max_active_screens"},
+        {"Order", "ui.editor.flow.property_label.order"},
+        {"Block Lower", "ui.editor.flow.property_label.block_lower"},
+        {"Layer", "ui.editor.flow.property_label.layer"},
+        {"Capacity", "ui.editor.flow.property_label.capacity"},
+        {"Restore", "ui.editor.flow.property_label.restore"},
+        {"Layout Asset", "ui.editor.flow.property_label.layout_asset"},
+        {"Slot", "ui.editor.flow.property_label.slot"},
+        {"Scope", "ui.editor.flow.property_label.scope"},
+        {"Enter Animation", "ui.editor.flow.property_label.enter_animation"},
+        {"Exit Animation", "ui.editor.flow.property_label.exit_animation"},
+        {"Widget Events (handler=signal; ...)",
+            "ui.editor.flow.property_label.widget_events"},
+        {"Assignments (slot=screen; !slot)",
+            "ui.editor.flow.property_label.assignments"},
+        {"Priority", "ui.editor.flow.property_label.priority"},
+        {"Contexts (CSV)", "ui.editor.flow.property_label.contexts"},
+        {"Action Graph", "ui.editor.flow.property_label.action_graph"},
+        {"Initial State", "ui.editor.flow.property_label.initial_state"},
+        {"Parent", "ui.editor.flow.property_label.parent"},
+        {"Initial Child", "ui.editor.flow.property_label.initial_child"},
+        {"Enter Graph, Exit Graph",
+            "ui.editor.flow.property_label.enter_exit_graph"},
+        {"Region", "ui.editor.flow.property_label.region"},
+        {"From State", "ui.editor.flow.property_label.from_state"},
+        {"To State", "ui.editor.flow.property_label.to_state"},
+        {"Trigger Signal", "ui.editor.flow.property_label.trigger_signal"},
+        {"Guard Expression", "ui.editor.flow.property_label.guard_expression"},
+        {"Coalesce", "ui.editor.flow.property_label.coalesce"},
+        {"Payload fields are preserved by the wire contract",
+            "ui.editor.flow.property_label.payload_preserved"},
+        {"Input fields are preserved by the wire contract",
+            "ui.editor.flow.property_label.inputs_preserved"},
+        {"Graph nodes are edited on the canvas",
+            "ui.editor.flow.property_label.graph_canvas_hint"},
+    };
+    const auto found = std::find_if(std::begin(labels), std::end(labels),
+        [label](const auto& value) { return value.first == label; });
+    return found != std::end(labels) ? found->second : nullptr;
 }
 
 EditorUiFlowObjectKind kindAt(int index)
@@ -697,12 +802,69 @@ public:
         attached = false;
     }
 
-    void setStatus(std::string value, bool error = false)
+    std::wstring localized(std::string_view key,
+                           std::wstring_view fallback) const
+    {
+        if (ui != nullptr) {
+            const auto& resolver = ui->loader().textResolver();
+            if (resolver != nullptr) return resolver(key, fallback);
+        }
+        return std::wstring(fallback);
+    }
+
+    std::wstring localizedKind(EditorUiFlowObjectKind kind) const
+    {
+        const UiFlowKindText& text = uiFlowKindText(kind);
+        return localized(text.key, text.fallback);
+    }
+
+    std::wstring localizedPropertyLabel(std::string_view label) const
+    {
+        if (label.empty()) return {};
+        const char* key = uiFlowPropertyLabelKey(label);
+        const std::wstring fallback = wide(label);
+        return key != nullptr ? localized(key, fallback) : fallback;
+    }
+
+    void setStatusText(std::wstring value, bool error = false)
     {
         if (status != nullptr) {
-            status->setText(wide((error ? "Error: " : "") + value));
+            status->setText((error
+                ? localized("ui.editor.flow.message.error_prefix", L"Error: ")
+                : std::wstring{}) + value);
         }
         if (stateChanged != nullptr) stateChanged();
+    }
+
+    void setStatus(std::string_view value, bool error = false)
+    {
+        setStatusText(wide(value), error);
+    }
+
+    void setLocalizedStatus(std::string_view key,
+                            std::wstring_view fallback,
+                            bool error = false)
+    {
+        setStatusText(localized(key, fallback), error);
+    }
+
+    void syncLocalization(bool force = false)
+    {
+        if (!attached || addKind == nullptr) return;
+        const std::wstring signature = localized(
+            "ui.editor.flow.object_kind.layer", L"Layer");
+        if (!force && signature == localizationSignature) return;
+        const int selectedKind = addKind->getSelectedIndex();
+        std::vector<std::wstring> kinds;
+        kinds.reserve(kUiFlowKindTexts.size() - 1u);
+        for (const UiFlowKindText& text : kUiFlowKindTexts) {
+            if (text.kind == EditorUiFlowObjectKind::Document) continue;
+            kinds.push_back(localized(text.key, text.fallback));
+        }
+        addKind->setItems(std::move(kinds));
+        addKind->setSelectedIndex(selectedKind >= 0 ? selectedKind : 0);
+        localizationSignature = signature;
+        refreshPending = true;
     }
 
     void refresh()
@@ -714,7 +876,17 @@ public:
         rows.reserve(outlineItems.size());
         int selected = -1;
         for (std::size_t index = 0; index < outlineItems.size(); ++index) {
-            rows.push_back(wide(outlineItems[index].label));
+            const EditorUiFlowSelection& item = outlineItems[index].selection;
+            std::wstring row;
+            if (item.kind == EditorUiFlowObjectKind::Document) {
+                row = localized("ui.editor.flow.object_kind.flow", L"Flow")
+                    + L" — " + wide(document->flow().id);
+            } else {
+                row.assign(static_cast<std::size_t>(outlineItems[index].depth) * 4u,
+                           L' ');
+                row += localizedKind(item.kind) + L"  " + wide(item.id);
+            }
+            rows.push_back(std::move(row));
             if (outlineItems[index].selection == document->selection()) {
                 selected = static_cast<int>(index);
             }
@@ -734,32 +906,42 @@ public:
 
         std::vector<std::wstring> diagnosticRows;
         for (const auto& value : document->diagnostics()) {
-            diagnosticRows.push_back(wide(
-                std::string(value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
-                    ? "ERROR  " : "WARN   ")
-                + value.path + "  " + value.message));
+            diagnosticRows.push_back(
+                localized(value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
+                        ? "ui.editor.flow.diagnostic.error"
+                        : "ui.editor.flow.diagnostic.warning",
+                    value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
+                        ? L"ERROR" : L"WARN")
+                + L"  " + wide(value.path + "  " + value.message));
         }
         for (const auto& value : assetValidation.diagnostics) {
-            diagnosticRows.push_back(wide(
-                std::string(value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
-                    ? "ASSET ERROR  " : "ASSET WARN   ")
-                + value.path + "  " + value.message));
+            diagnosticRows.push_back(
+                localized(value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
+                        ? "ui.editor.flow.diagnostic.asset_error"
+                        : "ui.editor.flow.diagnostic.asset_warning",
+                    value.severity == ayt::ui::UIFlowDiagnosticSeverity::Error
+                        ? L"ASSET ERROR" : L"ASSET WARN")
+                + L"  " + wide(value.path + "  " + value.message));
         }
         std::vector<ayt::ui::UIFlowDiagnostic> graphDiagnostics;
         (void)ayt::ui::validateUIFlowGraphNodes(
             document->flow(), graphRegistry, &graphDiagnostics);
         for (const auto& value : graphDiagnostics) {
-            diagnosticRows.push_back(wide(
-                std::string("NODE ERROR  ") + value.path + "  "
-                + value.message));
+            diagnosticRows.push_back(localized(
+                "ui.editor.flow.diagnostic.node_error", L"NODE ERROR")
+                + L"  " + wide(value.path + "  " + value.message));
         }
-        if (diagnosticRows.empty()) diagnosticRows.push_back(L"No diagnostics");
+        if (diagnosticRows.empty()) diagnosticRows.push_back(localized(
+            "ui.editor.flow.diagnostic.none", L"No diagnostics"));
         diagnostics->setItems(diagnosticRows);
         if (auto* title = widgetAs<ayt::ui::TextLabel>(
                 *ui, "flow_diag_title")) {
-            title->setText(wide("DIAGNOSTICS  ·  "
-                + std::to_string(assetValidation.dependencies.size())
-                + " LAYOUT ASSET(S)"));
+            title->setText(localized(
+                    "ui.editor.flow.diagnostics", L"DIAGNOSTICS")
+                + L"  ·  "
+                + std::to_wstring(assetValidation.dependencies.size()) + L" "
+                + localized("ui.editor.flow.diagnostic.layout_assets",
+                            L"LAYOUT ASSET(S)"));
         }
 
         const EditorUiFlowProperties properties = document->selectedProperties();
@@ -774,22 +956,23 @@ public:
         propG->setText(wide(properties.seventh));
         propNumber->setText(std::to_wstring(properties.number));
         propFlag->setChecked(properties.flag);
-        setFieldLabel("flow_lbl_a", labels.first, propA);
-        setFieldLabel("flow_lbl_b", labels.second, propB);
-        setFieldLabel("flow_lbl_c", labels.third, propC);
-        setFieldLabel("flow_lbl_d", labels.fourth, propD);
-        setFieldLabel("flow_lbl_e", labels.fifth, propE);
-        setFieldLabel("flow_lbl_f", labels.sixth, propF);
-        setFieldLabel("flow_lbl_g", labels.seventh, propG);
-        setFieldLabel("flow_lbl_number", labels.number, propNumber);
+        setFieldLabel("flow_lbl_a", localizedPropertyLabel(labels.first), propA);
+        setFieldLabel("flow_lbl_b", localizedPropertyLabel(labels.second), propB);
+        setFieldLabel("flow_lbl_c", localizedPropertyLabel(labels.third), propC);
+        setFieldLabel("flow_lbl_d", localizedPropertyLabel(labels.fourth), propD);
+        setFieldLabel("flow_lbl_e", localizedPropertyLabel(labels.fifth), propE);
+        setFieldLabel("flow_lbl_f", localizedPropertyLabel(labels.sixth), propF);
+        setFieldLabel("flow_lbl_g", localizedPropertyLabel(labels.seventh), propG);
+        setFieldLabel("flow_lbl_number",
+            localizedPropertyLabel(labels.number), propNumber);
         if (auto* label = widgetAs<ayt::ui::TextLabel>(*ui, "flow_lbl_flag")) {
-            label->setText(wide(labels.flag));
+            label->setText(localizedPropertyLabel(labels.flag));
             label->setVisible(!labels.flag.empty());
         }
         propFlag->setVisible(!labels.flag.empty());
         if (auto* kind = widgetAs<ayt::ui::TextLabel>(*ui, "flow_selection_kind")) {
-            kind->setText(wide(std::string("Inspector — ")
-                + EditorUiFlowDocument::kindName(document->selection().kind)));
+            kind->setText(localized("ui.editor.flow.inspector", L"Inspector")
+                + L" — " + localizedKind(document->selection().kind));
         }
 
         std::vector<std::wstring> signals;
@@ -819,11 +1002,11 @@ public:
         refreshPending = false;
     }
 
-    void setFieldLabel(const char* id, const std::string& text,
+    void setFieldLabel(const char* id, const std::wstring& text,
                        ayt::ui::Widget* input)
     {
         if (auto* label = widgetAs<ayt::ui::TextLabel>(*ui, id)) {
-            label->setText(wide(text));
+            label->setText(text);
             label->setVisible(!text.empty());
         }
         input->setVisible(!text.empty());
@@ -836,29 +1019,37 @@ public:
             screenRows.push_back(wide(value.layerId + " / " + value.slotId
                 + "  →  " + value.screenId));
         }
-        if (screenRows.empty()) screenRows.push_back(L"No mounted Screens");
+        if (screenRows.empty()) screenRows.push_back(localized(
+            "ui.editor.flow.preview_state.no_mounted_screens",
+            L"No mounted Screens"));
         mounted->setItems(screenRows);
         std::vector<std::wstring> traceRows;
         for (const auto& value : preview.trace()) {
             traceRows.push_back(wide(value.category + "  " + value.id
                 + "  —  " + value.detail));
         }
-        if (traceRows.empty()) traceRows.push_back(L"No preview events");
+        if (traceRows.empty()) traceRows.push_back(localized(
+            "ui.editor.flow.preview_state.no_events", L"No preview events"));
         trace->setItems(traceRows);
         if (debugState != nullptr) {
             const EditorUiFlowDebugPause* pause = preview.debugPause();
             if (pause == nullptr) {
-                debugState->setText(L"Running");
+                debugState->setText(localized(
+                    "ui.editor.flow.preview_state.running", L"Running"));
             } else {
                 std::string values;
                 for (const auto& [id, value] : pause->inputs) {
                     if (!values.empty()) values += ", ";
                     values += id + "=" + value;
                 }
-                debugState->setText(wide("Paused " + pause->graphId + "/"
-                    + pause->nodeId + " (" + pause->reason + ")"
-                    + (values.empty() ? std::string{}
-                                      : "  inputs: " + values)));
+                debugState->setText(localized(
+                        "ui.editor.flow.preview_state.paused", L"Paused")
+                    + L" " + wide(pause->graphId + "/" + pause->nodeId)
+                    + L" (" + wide(pause->reason) + L")"
+                    + (values.empty() ? std::wstring{}
+                        : L"  " + localized(
+                            "ui.editor.flow.preview_state.inputs", L"inputs")
+                            + L": " + wide(values)));
             }
         }
         previewPresentationRevision = preview.presentationRevision();
@@ -957,7 +1148,12 @@ public:
             : document->flow().defaultEntry;
         std::string error;
         const bool ok = preview.rebuild(document->flow(), entryId, &error);
-        setStatus(ok ? "Preview running" : error, !ok);
+        if (ok) {
+            setLocalizedStatus("ui.editor.flow.message.preview_running",
+                               L"Preview running");
+        } else {
+            setStatus(error, true);
+        }
         refreshPreviewLists();
         if (canvas != nullptr) canvas->markDirty();
         if (output != nullptr) *output = error;
@@ -976,7 +1172,12 @@ public:
         } else {
             result = document->save(&error);
         }
-        setStatus(result ? "Saved " + document->title() : error, !result);
+        if (result) {
+            setStatusText(localized("ui.editor.flow.message.saved", L"Saved")
+                + L" " + wide(document->title()));
+        } else {
+            setStatus(error, true);
+        }
         return result;
     }
 
@@ -1026,6 +1227,7 @@ public:
     std::uint64_t assetValidationRevision = 0;
     std::unordered_set<std::string> debugBreakpoints;
     std::uint64_t previewPresentationRevision = 0;
+    std::wstring localizationSignature;
     bool attached = false;
     bool refreshing = false;
     bool refreshPending = false;
@@ -1090,10 +1292,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         return false;
     }
     _impl->attached = true;
-    _impl->addKind->setItems({L"Layer", L"Slot", L"Screen", L"Context",
-        L"Entry", L"Signal", L"Action", L"Region", L"State",
-        L"Transition", L"Graph"});
-    _impl->addKind->setSelectedIndex(0);
+    _impl->syncLocalization(true);
     _impl->outline->setOnSelectionChanged([impl = _impl.get()](int index) {
         if (impl->refreshing || index < 0
             || static_cast<std::size_t>(index) >= impl->outlineItems.size()) return;
@@ -1159,21 +1358,31 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         if (impl->config.openLayoutForScreen == nullptr
             || impl->document->selection().kind
                 != EditorUiFlowObjectKind::Screen) {
-            impl->setStatus("Select a Screen before opening its UI Layout.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.select_screen_for_layout",
+                L"Select a Screen before opening its UI Layout.", true);
             return;
         }
         const auto* screen = impl->document->flow().findScreen(
             impl->document->selection().id);
         if (screen == nullptr) {
-            impl->setStatus("Selected Screen no longer exists.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.screen_missing",
+                L"Selected Screen no longer exists.", true);
             return;
         }
         std::string message;
         const bool opened = impl->config.openLayoutForScreen(
             screen->layoutAsset, message);
-        impl->setStatus(message.empty()
-            ? (opened ? "UI Layout opened" : "UI Layout could not be opened")
-            : message, !opened);
+        if (!message.empty()) {
+            impl->setStatus(message, !opened);
+        } else {
+            impl->setLocalizedStatus(opened
+                    ? "ui.editor.flow.message.layout_opened"
+                    : "ui.editor.flow.message.layout_open_failed",
+                opened ? L"UI Layout opened"
+                       : L"UI Layout could not be opened", !opened);
+        }
     });
     _impl->bindButton("flow_btn_emit", [impl = _impl.get()]() {
         const int index = impl->signal->getSelectedIndex();
@@ -1185,7 +1394,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
                 &error)) {
             impl->setStatus(error, true);
         } else {
-            impl->setStatus("Signal simulated");
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.signal_simulated",
+                L"Signal simulated");
             impl->refreshPreviewLists();
             impl->canvas->markDirty();
         }
@@ -1199,7 +1410,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
                 impl->document->flow().actions[static_cast<std::size_t>(index)].id,
                 &error)) impl->setStatus(error, true);
         else {
-            impl->setStatus("Mock Action executed");
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.mock_action_executed",
+                L"Mock Action executed");
             impl->refreshPreviewLists();
         }
     });
@@ -1207,7 +1420,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         if (impl->document->selection().kind
                 != EditorUiFlowObjectKind::Graph
             || impl->debugNode->getSelectedIndex() < 0) {
-            impl->setStatus("Select a Graph node for a breakpoint.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.select_breakpoint_node",
+                L"Select a Graph node for a breakpoint.", true);
             return;
         }
         const std::string graphId = impl->document->selection().id;
@@ -1216,18 +1431,24 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         const std::string key = graphId + "\n" + nodeId;
         const bool enabled = !impl->debugBreakpoints.contains(key);
         if (!impl->preview.setBreakpoint(graphId, nodeId, enabled)) {
-            impl->setStatus("Cannot update breakpoint.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.breakpoint_update_failed",
+                L"Cannot update breakpoint.", true);
             return;
         }
         if (enabled) impl->debugBreakpoints.insert(key);
         else impl->debugBreakpoints.erase(key);
-        impl->setStatus(std::string(enabled ? "Breakpoint set: "
-                                            : "Breakpoint cleared: ")
-            + graphId + "/" + nodeId);
+        impl->setStatusText(impl->localized(enabled
+                ? "ui.editor.flow.message.breakpoint_set"
+                : "ui.editor.flow.message.breakpoint_cleared",
+            enabled ? L"Breakpoint set:" : L"Breakpoint cleared:")
+            + L" " + wide(graphId + "/" + nodeId));
     });
     _impl->bindButton("flow_btn_pause_next", [impl = _impl.get()]() {
         impl->preview.requestPause();
-        impl->setStatus("Debugger will pause before the next Graph node.");
+        impl->setLocalizedStatus(
+            "ui.editor.flow.message.pause_next_requested",
+            L"Debugger will pause before the next Graph node.");
     });
     _impl->bindButton("flow_btn_step", [impl = _impl.get()]() {
         std::string error;
@@ -1237,8 +1458,11 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
         impl->refreshPreviewLists();
         impl->canvas->markDirty();
-        impl->setStatus(impl->preview.isPaused()
-            ? "Stepped to next node" : "Graph completed");
+        impl->setLocalizedStatus(impl->preview.isPaused()
+                ? "ui.editor.flow.message.stepped"
+                : "ui.editor.flow.message.graph_completed",
+            impl->preview.isPaused()
+                ? L"Stepped to next node" : L"Graph completed");
     });
     _impl->bindButton("flow_btn_continue", [impl = _impl.get()]() {
         std::string error;
@@ -1248,12 +1472,17 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
         impl->refreshPreviewLists();
         impl->canvas->markDirty();
-        impl->setStatus(impl->preview.isPaused()
-            ? "Paused at breakpoint" : "Graph continued");
+        impl->setLocalizedStatus(impl->preview.isPaused()
+                ? "ui.editor.flow.message.paused_at_breakpoint"
+                : "ui.editor.flow.message.graph_continued",
+            impl->preview.isPaused()
+                ? L"Paused at breakpoint" : L"Graph continued");
     });
     _impl->bindButton("flow_btn_add_node", [impl = _impl.get()]() {
         if (impl->document->selection().kind != EditorUiFlowObjectKind::Graph) {
-            impl->setStatus("Select a Graph before adding nodes.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.select_graph_for_node",
+                L"Select a Graph before adding nodes.", true);
             return;
         }
         std::string error;
@@ -1265,7 +1494,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     });
     _impl->bindButton("flow_btn_connect", [impl = _impl.get()]() {
         if (impl->document->selection().kind != EditorUiFlowObjectKind::Graph) {
-            impl->setStatus("Select a Graph before connecting nodes.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.select_graph_for_connection",
+                L"Select a Graph before connecting nodes.", true);
             return;
         }
         std::string fromNode;
@@ -1274,7 +1505,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         std::string toPin;
         if (!splitEndpoint(impl->graphFrom->getSelectedItem(), fromNode, fromPin)
             || !splitEndpoint(impl->graphTo->getSelectedItem(), toNode, toPin)) {
-            impl->setStatus("Select compatible graph endpoints.", true);
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.select_compatible_endpoints",
+                L"Select compatible graph endpoints.", true);
             return;
         }
         std::string error;
@@ -1287,6 +1520,10 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     });
     _impl->canvas = new EditorUiFlowCanvas(
         *_impl->document, _impl->preview, _impl->graphRegistry,
+        [impl = _impl.get()](std::string_view key,
+                             std::wstring_view fallback) {
+            return impl->localized(key, fallback);
+        },
         [impl = _impl.get()]() {
             impl->refreshPending = true;
         });
@@ -1313,6 +1550,7 @@ bool EditorUiFlowController::isAttached() const noexcept
 void EditorUiFlowController::tick(float deltaSeconds)
 {
     if (!isAttached()) return;
+    _impl->syncLocalization();
     if (_impl->canvas != nullptr && _impl->canvasHost != nullptr) {
         const FVector2 size = _impl->canvasHost->getSize();
         _impl->canvas->setPosition({0.0f, 0.0f});
