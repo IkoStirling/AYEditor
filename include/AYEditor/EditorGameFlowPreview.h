@@ -1,6 +1,6 @@
 #pragma once
 
-#include <AYApplication/GameFlowCoordinator.h>
+#include <AYApplication/GameFlowProgram.h>
 
 #include <map>
 #include <memory>
@@ -31,6 +31,11 @@ public:
     EditorGameFlowPreview(const EditorGameFlowPreview&) = delete;
     EditorGameFlowPreview& operator=(const EditorGameFlowPreview&) = delete;
 
+    bool rebuild(
+        const ayt::app::GameFlowDocument& document,
+        const ayt::app::GameFlowActionRegistry& authoringRegistry,
+        ayt::app::GameFlowDocumentResolver resolver,
+        std::string* error = nullptr);
     bool rebuild(
         const ayt::app::GameFlowDocument& document,
         const ayt::app::GameFlowActionRegistry& authoringRegistry,

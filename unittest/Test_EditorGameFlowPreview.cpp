@@ -142,8 +142,59 @@ TEST_CASE(rebuilding_preview_starts_a_new_diagnostic_trace)
     CHECK(preview.rebuild(document, registry));
     CHECK(preview.trace().size() == 1u);
     if (!preview.trace().empty()) {
-        CHECK(preview.trace().front().detail == "flow initialized");
+        CHECK(preview.trace().front().detail == "program initialized");
     }
+}
+
+TEST_CASE(preview_compiles_and_executes_referenced_subflows)
+{
+    GameFlowDocument root;
+    root.id = "root";
+    root.initialState = "menu";
+    root.intents = {{"begin", {}}};
+    root.states = {{"menu"}, {"done"}};
+    GameFlowTransitionDefinition enter;
+    enter.id = "enter-child";
+    enter.fromState = "menu";
+    enter.triggerIntent = "begin";
+    enter.toState = "done";
+    enter.actions = {{std::string(kGameFlowActionEnter), {
+        {std::string(kGameFlowSubflowIdArgument), "child"}}}};
+    root.transitions.push_back(std::move(enter));
+
+    GameFlowDocument child;
+    child.id = "child";
+    child.initialState = "inside";
+    child.intents = {{"finish", {}}};
+    child.states = {{"inside"}, {"returned"}};
+    GameFlowTransitionDefinition leave;
+    leave.id = "leave-child";
+    leave.fromState = "inside";
+    leave.triggerIntent = "finish";
+    leave.toState = "returned";
+    leave.actions = {{std::string(kGameFlowActionReturn), {}}};
+    child.transitions.push_back(std::move(leave));
+
+    GameFlowActionRegistry registry;
+    EditorGameFlowPreview preview;
+    std::string error;
+    CHECK(preview.rebuild(root, registry,
+        [&child](std::string_view id, GameFlowDocument& document,
+                 std::string& message) {
+            if (id != child.id) {
+                message = "unknown subflow";
+                return false;
+            }
+            document = child;
+            return true;
+        }, &error));
+    CHECK(preview.request("begin"));
+    preview.update();
+    CHECK(preview.snapshot().currentFlowId == "child");
+    CHECK(preview.request("finish"));
+    preview.update();
+    CHECK(preview.snapshot().currentFlowId == "root");
+    CHECK(preview.snapshot().currentStateId == "done");
 }
 
 TEST_SUITE_END

@@ -689,13 +689,15 @@ EditorGameFlowProperties EditorGameFlowDocument::selectedProperties() const
         break;
     case EditorGameFlowObjectKind::Guard:
         if (const auto* transition = findTransition(_flow, _selection.ownerId)) {
-            result.id = transition->guard.guard;
+            result.id = _selection.id;
+            result.first = transition->guard.guard;
         }
         break;
     case EditorGameFlowObjectKind::Action:
         if (const auto* transition = findTransition(_flow, _selection.ownerId);
             transition != nullptr && _selection.index < transition->actions.size()) {
-            result.id = transition->actions[_selection.index].action;
+            result.id = _selection.id;
+            result.first = transition->actions[_selection.index].action;
         }
         break;
     case EditorGameFlowObjectKind::ActionArgument:
@@ -812,40 +814,12 @@ bool EditorGameFlowDocument::renameSelection(
         }
         return false;
     case EditorGameFlowObjectKind::Guard:
-        if (auto* transition = findTransition(_flow, _selection.ownerId)) {
-            transition->guard.guard = newId;
-            _selection.id = std::move(newId);
-            return true;
-        }
-        return false;
     case EditorGameFlowObjectKind::Action:
-        if (auto* transition = findTransition(_flow, _selection.ownerId);
-            transition != nullptr && _selection.index < transition->actions.size()) {
-            transition->actions[_selection.index].action = newId;
-            _selection.id = std::move(newId);
-            return true;
+    case EditorGameFlowObjectKind::ActionArgument:
+        if (error != nullptr) {
+            *error = "Registered type and argument IDs are defined by their schema.";
         }
         return false;
-    case EditorGameFlowObjectKind::ActionArgument: {
-        auto* transition = findTransition(_flow, _selection.ownerId);
-        if (transition == nullptr || _selection.index >= transition->actions.size()) {
-            return false;
-        }
-        auto& arguments = transition->actions[_selection.index].arguments;
-        const auto found = arguments.find(oldId);
-        if (found == arguments.end()) {
-            if (error != nullptr) {
-                *error = "Default-only arguments cannot be renamed.";
-            }
-            return false;
-        }
-        if (arguments.contains(newId)) break;
-        GameFlowValue value = std::move(found->second);
-        arguments.erase(found);
-        arguments.emplace(newId, std::move(value));
-        _selection.id = std::move(newId);
-        return true;
-    }
     }
     if (error != nullptr) *error = "ID already exists in this collection.";
     return false;
@@ -869,6 +843,37 @@ bool EditorGameFlowDocument::applySelectedProperties(
             *error = "Transition timeout must be finite and non-negative.";
         }
         return false;
+    }
+    if (_selection.kind == EditorGameFlowObjectKind::State) {
+        const std::string parent = trim(properties.first);
+        const std::string initialChild = trim(properties.second);
+        if (!parent.empty()) {
+            if (parent == _selection.id || _flow.findState(parent) == nullptr) {
+                if (error != nullptr) *error = "State parent is invalid.";
+                return false;
+            }
+            const GameFlowStateDefinition* cursor = _flow.findState(parent);
+            std::set<std::string, std::less<>> visited;
+            while (cursor != nullptr && visited.insert(cursor->id).second) {
+                if (cursor->parent == _selection.id) {
+                    if (error != nullptr) {
+                        *error = "State parent would create a hierarchy cycle.";
+                    }
+                    return false;
+                }
+                cursor = cursor->parent.empty()
+                    ? nullptr : _flow.findState(cursor->parent);
+            }
+        }
+        if (!initialChild.empty()) {
+            const auto* child = _flow.findState(initialChild);
+            if (child == nullptr || child->parent != _selection.id) {
+                if (error != nullptr) {
+                    *error = "Initial Child must be a direct child of this State.";
+                }
+                return false;
+            }
+        }
     }
     bool valueTypeValid = true;
     GameFlowValueType valueType = GameFlowValueType::String;
@@ -895,9 +900,20 @@ bool EditorGameFlowDocument::applySelectedProperties(
         }
         return setSelectedArgument(_selection.id, properties.value, error);
     }
+    if ((_selection.kind == EditorGameFlowObjectKind::Guard
+         || _selection.kind == EditorGameFlowObjectKind::Action)
+        && (properties.id != current.id
+            || properties.first != current.first)) {
+        if (error != nullptr) {
+            *error = "Registered Action and Guard types are defined by their schema.";
+        }
+        return false;
+    }
 
     Snapshot before = snapshot();
-    if (!renameSelection(properties.id, error)) return false;
+    if (_selection.kind != EditorGameFlowObjectKind::Guard
+        && _selection.kind != EditorGameFlowObjectKind::Action
+        && !renameSelection(properties.id, error)) return false;
     switch (_selection.kind) {
     case EditorGameFlowObjectKind::Document:
         _flow.initialState = trim(properties.first);
@@ -1022,16 +1038,10 @@ bool EditorGameFlowDocument::addObject(
         _flow.states.push_back({id, std::move(ownerId), {}});
         _selection = {kind, id};
     } else if (kind == EditorGameFlowObjectKind::Transition) {
-        if (_flow.states.empty() || _flow.intents.empty()) {
-            if (error != nullptr) {
-                *error = "A transition needs at least one State and one Intent.";
-            }
-            return false;
+        if (error != nullptr) {
+            *error = "Create a Transition by connecting two States and choosing an Intent.";
         }
-        const std::string id = uniqueId(kind);
-        _flow.transitions.push_back({id, _flow.states.front().id,
-            _flow.intents.front().id, _flow.states.front().id});
-        _selection = {kind, id};
+        return false;
     } else {
         if (error != nullptr) *error = "Unsupported GameFlow object kind.";
         return false;
@@ -1345,15 +1355,43 @@ bool EditorGameFlowDocument::deleteObjects(
         return false;
     }
 
+    if (states.contains(_flow.initialState)) {
+        if (error != nullptr) {
+            *error = "Choose a new initial State before deleting the current one.";
+        }
+        return false;
+    }
+    for (const auto& transition : _flow.transitions) {
+        const bool referenced = states.contains(transition.fromState)
+            || states.contains(transition.toState)
+            || states.contains(transition.onFailureState)
+            || states.contains(transition.onCancelState)
+            || intents.contains(transition.triggerIntent);
+        if (referenced && !transitions.contains(transition.id)) {
+            if (error != nullptr) {
+                *error = "Selection is referenced by Transition '"
+                    + transition.id
+                    + "'. Select that Transition explicitly before deleting.";
+            }
+            return false;
+        }
+    }
+    for (const auto& state : _flow.states) {
+        if (states.contains(state.id)) continue;
+        if (states.contains(state.parent)
+            || states.contains(state.initialChild)) {
+            if (error != nullptr) {
+                *error = "State '" + state.id
+                    + "' has a hierarchy reference to the selection. Update it before deleting.";
+            }
+            return false;
+        }
+    }
+
     Snapshot before = snapshot();
     _flow.transitions.erase(std::remove_if(_flow.transitions.begin(),
         _flow.transitions.end(), [&](const auto& transition) {
-            return transitions.contains(transition.id)
-                || states.contains(transition.fromState)
-                || states.contains(transition.toState)
-                || states.contains(transition.onFailureState)
-                || states.contains(transition.onCancelState)
-                || intents.contains(transition.triggerIntent);
+            return transitions.contains(transition.id);
         }), _flow.transitions.end());
     _flow.states.erase(std::remove_if(_flow.states.begin(), _flow.states.end(),
         [&](const auto& state) { return states.contains(state.id); }),
@@ -1361,14 +1399,6 @@ bool EditorGameFlowDocument::deleteObjects(
     _flow.intents.erase(std::remove_if(_flow.intents.begin(), _flow.intents.end(),
         [&](const auto& intent) { return intents.contains(intent.id); }),
         _flow.intents.end());
-    for (auto& state : _flow.states) {
-        if (states.contains(state.parent)) state.parent.clear();
-        if (states.contains(state.initialChild)) state.initialChild.clear();
-    }
-    if (states.contains(_flow.initialState)) {
-        _flow.initialState = _flow.states.empty() ? std::string{}
-                                                 : _flow.states.front().id;
-    }
     _selection = {};
     commitMutation(std::move(before), "Delete Game Flow Selection");
     if (error != nullptr) error->clear();

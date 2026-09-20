@@ -86,8 +86,8 @@ TEST_CASE(new_document_edits_ids_and_references_atomically)
     EditorGameFlowProperties state = document.selectedProperties();
     state.id = "Gameplay";
     CHECK(document.applySelectedProperties(state, &error));
-    CHECK(document.addObject(
-        EditorGameFlowObjectKind::Transition, {}, &error));
+    CHECK(document.addTransition(
+        "Boot", "app.start", "Gameplay", &error));
     EditorGameFlowProperties transition = document.selectedProperties();
     transition.id = "start-game";
     transition.third = "Gameplay";
@@ -125,6 +125,109 @@ TEST_CASE(intent_field_ids_are_unique_within_their_owner)
     CHECK(document.flow().findIntent("app.start")->payload.size() == 2u);
 }
 
+TEST_CASE(transitions_require_explicit_endpoints_and_intent)
+{
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+    const std::size_t transitionCount = document.flow().transitions.size();
+
+    CHECK_FALSE(document.addObject(
+        EditorGameFlowObjectKind::Transition, {}, &error));
+    CHECK(error.find("connecting two States") != std::string::npos);
+    CHECK(document.flow().transitions.size() == transitionCount);
+
+    CHECK(document.addTransition("Boot", "app.start", "Boot", &error));
+    CHECK(document.flow().transitions.size() == transitionCount + 1u);
+}
+
+TEST_CASE(registered_action_and_guard_types_are_read_only_schema_ids)
+{
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+    CHECK(document.actionRegistry().registerActionType(
+        {"test.action", {}}, false, &error));
+    CHECK(document.actionRegistry().registerGuardType(
+        {"test.guard", {}}, false, &error));
+    document.actionRegistryChanged();
+    CHECK(document.addTransition("Boot", "app.start", "Boot", &error));
+    const std::string transitionId = document.selection().id;
+
+    CHECK(document.addAction(transitionId, "test.action", &error));
+    EditorGameFlowProperties action = document.selectedProperties();
+    CHECK(action.first == "test.action");
+    action.id = "renamed.action";
+    CHECK_FALSE(document.applySelectedProperties(action, &error));
+    CHECK(error.find("schema") != std::string::npos);
+    CHECK(document.flow().transitions.front().actions.front().action
+          == "test.action");
+
+    CHECK(document.setTransitionGuard(transitionId, "test.guard", &error));
+    EditorGameFlowProperties guard = document.selectedProperties();
+    CHECK(guard.first == "test.guard");
+    guard.id = "renamed.guard";
+    CHECK_FALSE(document.applySelectedProperties(guard, &error));
+    CHECK(error.find("schema") != std::string::npos);
+    CHECK(document.flow().transitions.front().guard.guard == "test.guard");
+}
+
+TEST_CASE(state_hierarchy_rejects_cycles_and_non_direct_initial_children)
+{
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+
+    CHECK(document.addObject(EditorGameFlowObjectKind::State, {}, &error));
+    EditorGameFlowProperties parent = document.selectedProperties();
+    parent.id = "Parent";
+    CHECK(document.applySelectedProperties(parent, &error));
+    CHECK(document.addObject(
+        EditorGameFlowObjectKind::State, "Parent", &error));
+    EditorGameFlowProperties child = document.selectedProperties();
+    child.id = "Child";
+    CHECK(document.applySelectedProperties(child, &error));
+
+    CHECK(document.select({EditorGameFlowObjectKind::State, "Parent"}));
+    parent = document.selectedProperties();
+    parent.first = "Child";
+    CHECK_FALSE(document.applySelectedProperties(parent, &error));
+    CHECK(error.find("cycle") != std::string::npos);
+
+    CHECK(document.select({EditorGameFlowObjectKind::State, "Boot"}));
+    EditorGameFlowProperties boot = document.selectedProperties();
+    boot.second = "Child";
+    CHECK_FALSE(document.applySelectedProperties(boot, &error));
+    CHECK(error.find("direct child") != std::string::npos);
+}
+
+TEST_CASE(batch_delete_never_removes_references_implicitly)
+{
+    EditorGameFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+    CHECK(document.addObject(EditorGameFlowObjectKind::State, {}, &error));
+    EditorGameFlowProperties target = document.selectedProperties();
+    target.id = "Target";
+    CHECK(document.applySelectedProperties(target, &error));
+    CHECK(document.addTransition("Boot", "app.start", "Target", &error));
+    const std::string transitionId = document.selection().id;
+
+    CHECK_FALSE(document.deleteObjects({
+        {EditorGameFlowObjectKind::State, "Target"},
+    }, &error));
+    CHECK(error.find("explicitly") != std::string::npos);
+    CHECK(document.flow().findState("Target") != nullptr);
+    CHECK(document.flow().transitions.size() == 1u);
+
+    CHECK(document.deleteObjects({
+        {EditorGameFlowObjectKind::State, "Target"},
+        {EditorGameFlowObjectKind::Transition, transitionId},
+    }, &error));
+    CHECK(document.flow().findState("Target") == nullptr);
+    CHECK(document.flow().transitions.empty());
+}
+
 TEST_CASE(registry_drives_argument_defaults_validation_and_plan_building)
 {
     EditorGameFlowDocument document;
@@ -140,8 +243,8 @@ TEST_CASE(registry_drives_argument_defaults_validation_and_plan_building)
 
     CHECK(document.addObject(EditorGameFlowObjectKind::State, {}, &error));
     const std::string targetState = document.selection().id;
-    CHECK(document.addObject(
-        EditorGameFlowObjectKind::Transition, {}, &error));
+    CHECK(document.addTransition(
+        "Boot", "app.start", targetState, &error));
     const std::string transitionId = document.selection().id;
     EditorGameFlowProperties transition = document.selectedProperties();
     transition.third = targetState;
@@ -306,8 +409,8 @@ TEST_CASE(normal_save_rejects_known_schema_errors_but_recovery_preserves_them)
         {"token", GameFlowValueType::String, true, {}},
     }}, false, &error));
     document.actionRegistryChanged();
-    CHECK(document.addObject(
-        EditorGameFlowObjectKind::Transition, {}, &error));
+    CHECK(document.addTransition(
+        "Boot", "app.start", "Boot", &error));
     const std::string transitionId = document.selection().id;
     CHECK(document.addAction(transitionId, "test.required", &error));
     CHECK_FALSE(document.isValid());
@@ -361,10 +464,18 @@ TEST_CASE(template_connections_subflows_and_clipboard_are_atomic_authoring_opera
     CHECK(document.flow().findState("gameplay_copy") != nullptr);
     CHECK(document.flow().findState("pause_copy") != nullptr);
 
-    CHECK(document.deleteObjects({
+    std::vector<EditorGameFlowSelection> deletion = {
         {EditorGameFlowObjectKind::State, "gameplay_copy"},
         {EditorGameFlowObjectKind::State, "pause_copy"},
-    }, &error));
+    };
+    for (const auto& value : document.flow().transitions) {
+        if (value.fromState.ends_with("_copy")
+            || value.toState.ends_with("_copy")) {
+            deletion.push_back(
+                {EditorGameFlowObjectKind::Transition, value.id});
+        }
+    }
+    CHECK(document.deleteObjects(deletion, &error));
     CHECK(document.flow().findState("gameplay_copy") == nullptr);
     CHECK(document.flow().findState("pause_copy") == nullptr);
     CHECK(document.undo());

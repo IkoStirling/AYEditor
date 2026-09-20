@@ -9,7 +9,7 @@ class EditorGameFlowPreview::Impl
 {
 public:
     ayt::app::GameFlowActionRegistry registry;
-    ayt::app::GameFlowPlan plan;
+    ayt::app::GameFlowProgram program;
     ayt::app::GameFlowCoordinator coordinator;
     std::map<std::string, bool, std::less<>> guardResults;
     std::vector<EditorGameFlowActionInvocation> invocations;
@@ -32,6 +32,7 @@ EditorGameFlowPreview::~EditorGameFlowPreview() = default;
 bool EditorGameFlowPreview::rebuild(
     const ayt::app::GameFlowDocument& document,
     const ayt::app::GameFlowActionRegistry& authoringRegistry,
+    ayt::app::GameFlowDocumentResolver resolver,
     std::string* error)
 {
     stop();
@@ -79,8 +80,18 @@ bool EditorGameFlowPreview::rebuild(
     }
 
     std::vector<ayt::app::GameFlowDiagnostic> diagnostics;
-    if (!ayt::app::buildGameFlowPlan(
-            document, _impl->registry, _impl->plan, &diagnostics)) {
+    if (!resolver) {
+        resolver = [](std::string_view flowId,
+                      ayt::app::GameFlowDocument&,
+                      std::string& message) {
+            message = "Subflow '" + std::string(flowId)
+                + "' cannot be resolved by this preview host.";
+            return false;
+        };
+    }
+    if (!ayt::app::buildGameFlowProgram(
+            document, _impl->registry, std::move(resolver),
+            _impl->program, &diagnostics)) {
         _impl->fail(diagnostics.empty()
             ? "GameFlow preview validation failed."
             : diagnostics.front().path + ": " + diagnostics.front().message);
@@ -88,8 +99,8 @@ bool EditorGameFlowPreview::rebuild(
         return false;
     }
     std::string coordinatorError;
-    if (!_impl->coordinator.setPlan(
-            &_impl->plan, &_impl->registry, &coordinatorError)) {
+    if (!_impl->coordinator.setProgram(
+            &_impl->program, &_impl->registry, {}, &coordinatorError)) {
         _impl->fail(std::move(coordinatorError));
         if (error != nullptr) *error = _impl->lastError;
         return false;
@@ -97,6 +108,14 @@ bool EditorGameFlowPreview::rebuild(
     _impl->running = true;
     if (error != nullptr) error->clear();
     return true;
+}
+
+bool EditorGameFlowPreview::rebuild(
+    const ayt::app::GameFlowDocument& document,
+    const ayt::app::GameFlowActionRegistry& authoringRegistry,
+    std::string* error)
+{
+    return rebuild(document, authoringRegistry, {}, error);
 }
 
 void EditorGameFlowPreview::stop() noexcept

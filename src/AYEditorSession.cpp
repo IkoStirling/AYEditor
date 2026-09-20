@@ -69,6 +69,8 @@
 #include "AYUI/UIKeyCode.h"
 #include "AYDevice/DeviceManager.h"
 #include <AYApplication/GameFlowStandardActions.h>
+#include <AYApplication/GameFlowContract.h>
+#include <AYIO/File.h>
 #include <AYLocalization.h>
 
 // v0.3 PR-4 — Editor 消费 host->scenes()（design §4.2.x + §4.3.x）
@@ -1467,21 +1469,45 @@ EditorSession::EditorSession()
             error.c_str());
     }
     EditorGameFlowExtensionConfig gameFlowConfig;
-    gameFlowConfig.configureRegistry = [](
+    gameFlowConfig.configureRegistry = [this](
         ayt::app::GameFlowActionRegistry& registry) {
         std::string registrationError;
         if (!ayt::app::registerGameFlowWorldActionType(
                 registry, &registrationError)) {
-            std::fprintf(stderr,
-                "[EditorSession] GameFlow World metadata registration "
-                "failed: %s\n", registrationError.c_str());
+            throw std::runtime_error(
+                "GameFlow World metadata registration failed: "
+                + registrationError);
         }
         registrationError.clear();
         if (!ayt::app::registerGameFlowUIActionTypes(
                 registry, &registrationError)) {
-            std::fprintf(stderr,
-                "[EditorSession] GameFlow UI metadata registration "
-                "failed: %s\n", registrationError.c_str());
+            throw std::runtime_error(
+                "GameFlow UI metadata registration failed: "
+                + registrationError);
+        }
+
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(
+                _assetDatabase.projectRoot(), &descriptorError);
+        if (!descriptor || descriptor.gameFlowContract.empty()) return;
+        const std::filesystem::path contractPath =
+            std::filesystem::path(resolveProjectAssetRoot(
+                _assetDatabase.projectRoot()))
+            / descriptor.gameFlowContract;
+        if (!ayt::io::File::exists(contractPath.string())) {
+            throw std::runtime_error(
+                "GameFlow contract does not exist: "
+                + contractPath.string());
+        }
+        const std::string contract =
+            ayt::io::File::readAllText(contractPath.string());
+        registrationError.clear();
+        if (!ayt::app::loadGameFlowContract(
+                contract, registry, &registrationError)) {
+            throw std::runtime_error(
+                "GameFlow contract registration failed: "
+                + registrationError);
         }
     };
     error.clear();
