@@ -85,6 +85,7 @@ class EditorAssetImportQueue;
 class EditorAssetTrash;
 class EditorAssetOperations;
 class EditorRecoveryStore;
+class EditorProjectSettingsController;
 
 // `ImportedCharacter` is defined in `AYEditor/EditorPlayRuntime.h` (included
 // above). The editor session forwards it straight through to the
@@ -256,6 +257,7 @@ public:
     std::size_t openUiFlowDocumentCount() const noexcept;
     bool openGameFlowEditor(const std::string& path = {});
     std::size_t openGameFlowDocumentCount() const noexcept;
+    bool openProjectSettings();
     bool createProjectAsset(EditorAssetType type);
     bool restoreLastDeletedAssets();
     bool runCurrentProject();
@@ -324,6 +326,9 @@ private:
     bool confirmUiFlowDesignerClose();
     void releaseUiFlowDesigner(bool closeDocument);
     void refreshUiFlowDesignerTitle();
+    void syncProjectSettingsLifetime();
+    bool confirmProjectSettingsClose();
+    void releaseProjectSettings();
     bool openRegisteredTool(const std::string& editorId);
     void bindTransportBar();
     void bindNetworkPanelStub();
@@ -572,6 +577,12 @@ private:
     std::shared_ptr<EditorUiFlowDocument> _uiFlowDesignerDocument;
     std::string _uiFlowDesignerDocumentId;
     EditorChildWindowManager::Handle _uiFlowDesignerHandle = nullptr;
+
+    // Project Settings is the checked-in project/build authoring surface.
+    // It edits project.ayproject.json plus BuildProfiles/*.aybuild.json and
+    // executes the shared AYProjectBuild pipeline without blocking the UI.
+    std::unique_ptr<EditorProjectSettingsController> _projectSettings;
+    EditorChildWindowManager::Handle _projectSettingsHandle = nullptr;
 
     // Audio Editor child (shared with AYAudio_AudioEditor).
     std::unique_ptr<ayt::audio::AudioEditorSession> _audioEditor;

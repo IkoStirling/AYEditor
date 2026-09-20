@@ -95,6 +95,7 @@ set(SRC_FILES
     src/AYEditorProjectUiFlow.cpp
     src/AYEditorProjectRunner.cpp
     src/AYEditorProjectRuntimeValidator.cpp
+    src/AYEditorProjectSettingsController.cpp
     src/AYEditorRecoveryStore.cpp
     src/AYEditorBuiltInExtensions.cpp
     src/AYEditorTilemapCanvas.cpp
@@ -207,7 +208,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=19)
+    AYEDITOR_SOURCE_ABI_VERSION=20)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)
@@ -238,7 +239,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
     PRIVATE AYUILayoutEditorCore AYProjectContentValidationCore
     PRIVATE AYApplicationUI
     PUBLIC AYAnimationEditorCore
-    PRIVATE AYEntity AYRenderer AYResource AYResourceImport AYIO AYProject AYScript AYShader AYPlatform AYNetwork AYLocalization
+    PRIVATE AYEntity AYRenderer AYResource AYResourceImport AYResource::ProjectBuild AYIO AYProject AYScript AYShader AYPlatform AYNetwork AYLocalization
     # v0.3 PR-4: Editor 消费 host->scenes() + _editScene Scene 完整定义需要
     # AYScene 完整 link；PRIVATE 因为 AYGameLoop / AYApplication 不需要
     # 暴露 SceneManager 类型。

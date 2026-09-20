@@ -7,10 +7,10 @@
 // target and every public consumer so stale object files fail at compile/link
 // time instead of surfacing as a vtable or layout crash.
 #ifndef AYEDITOR_SOURCE_ABI_VERSION
-#define AYEDITOR_SOURCE_ABI_VERSION 19
+#define AYEDITOR_SOURCE_ABI_VERSION 20
 #endif
 
-static_assert(AYEDITOR_SOURCE_ABI_VERSION == 19,
+static_assert(AYEDITOR_SOURCE_ABI_VERSION == 20,
               "AYEditor headers and target disagree; perform a full rebuild.");
 
 #define AYEDITOR_STRINGIZE_IMPL(value) #value

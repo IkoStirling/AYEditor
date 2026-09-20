@@ -76,6 +76,35 @@ undo/redo edits, scrub, and save a portable `<asset>.timeline.json` sidecar.
 Imported PCM audio registers a real AYAudio clip; its device voice-frame
 cursor drives the playhead and supports exact seek when the user scrubs.
 
+## Project Settings and Build
+
+Use **File -> Project Settings...** for the canonical visual project workflow,
+or **Tools -> Build & Package...** to open the same window directly from build
+intent. The window is modeless and keeps configuration in seven focused pages:
+
+- Project identity, Assets/code roots, game assembly, and Scene authoring mode.
+- GameFlow startup document and action/guard contract, plus UIFlow document and
+  default Entry. Both Flow documents can be opened in their visual editors.
+- World definitions, startup World, Scene, UI Context, and Tilemap references.
+- Build target, CMake presets/target/artifact, content defaults, incremental
+  `.cookCache`, package output, compression, and atomic publication.
+- Ordered content rules where the first matching glob selects Raw, Cook, or
+  Exclude independently from Loose or Pak storage.
+- Editor-run and packaged-run working directories and arguments.
+- Read-only planning and diagnostics, including Dry Run and live build progress.
+
+**Save All** writes `project.ayproject.json` and every selected
+`BuildProfiles/*.aybuild.json` through their canonical serializers. A new
+project receives an editable Windows Development profile in memory; it is not
+written until Save All. Build & Package first saves and validates both models,
+then runs asynchronously so the editor window remains responsive. Build & Run
+launches only the exact successfully published artifact recorded in
+`.ayeditor/builds/last-success.json`.
+
+The visual pages are the normal editing path. Direct JSON editing remains a
+portable advanced workflow, not a prerequisite for configuring GameFlow,
+UIFlow, cooking, packaging, or project run.
+
 ## Run current project
 
 The rocket button and Tools -> Run Current Project first honor the local
@@ -158,8 +187,8 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 8. AYUI 1.1.0 publishes source ABI
-version 119. MSVC object files embed link mismatch records and the public
+AYEditor 0.2.0 publishes source ABI version 20. AYUI 1.1.0 publishes source ABI
+version 128. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.
 The editor extension registry remains an in-process compile-time registry; this

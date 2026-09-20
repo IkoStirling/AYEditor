@@ -31,6 +31,7 @@
 #include "AYEditor/EditorSkeletonExtension.h"
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
+#include "AYEditorProjectSettingsController.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Button.h"
@@ -790,6 +791,13 @@ std::string resolveUiFlowEditorChromePath(
         / "AYEditor" / "ui" / "ui_flow_editor.ui.json").string();
 }
 
+std::string resolveProjectSettingsChromePath(
+    const std::string& engineAssetsRoot)
+{
+    return (std::filesystem::path(engineAssetsRoot)
+        / "AYEditor" / "ui" / "project_settings.ui.json").string();
+}
+
 std::string resolveProjectAssetRoot(const std::string& projectRoot)
 {
     std::string error;
@@ -924,6 +932,62 @@ std::string showAssetReferenceDialog(HWND owner, const std::string& projectRoot)
         "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.aytex;*.aytilemap;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
         "All files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string showProjectSettingsPathDialog(
+    HWND owner, const std::string& projectRoot, EditorProjectPathKind kind)
+{
+    char path[MAX_PATH] = {};
+    const bool assetPath = kind == EditorProjectPathKind::GameFlow
+        || kind == EditorProjectPathKind::GameFlowContract
+        || kind == EditorProjectPathKind::UiFlow
+        || kind == EditorProjectPathKind::Scene
+        || kind == EditorProjectPathKind::Tilemap;
+    const std::string initialDirectory = assetPath
+        ? (std::filesystem::path(projectRoot) / "Assets").string()
+        : projectRoot;
+    const char* filter = "All files (*.*)\0*.*\0";
+    const char* defaultExtension = nullptr;
+    switch (kind) {
+    case EditorProjectPathKind::GameFlow:
+        filter = "GameFlow (*.gameflow.json)\0*.gameflow.json\0JSON (*.json)\0*.json\0";
+        defaultExtension = "gameflow.json";
+        break;
+    case EditorProjectPathKind::GameFlowContract:
+        filter = "GameFlow contract (*.json)\0*.json\0";
+        defaultExtension = "json";
+        break;
+    case EditorProjectPathKind::UiFlow:
+        filter = "UIFlow (*.uiflow.json)\0*.uiflow.json\0JSON (*.json)\0*.json\0";
+        defaultExtension = "uiflow.json";
+        break;
+    case EditorProjectPathKind::Scene:
+        filter = "AY Scene (*.ayscene)\0*.ayscene\0";
+        defaultExtension = "ayscene";
+        break;
+    case EditorProjectPathKind::Tilemap:
+        filter = "AY Tilemap (*.aytilemap;*.aytilemap.json)\0*.aytilemap;*.aytilemap.json\0";
+        break;
+    case EditorProjectPathKind::Executable:
+    case EditorProjectPathKind::BuildArtifact:
+        filter = "Executable (*.exe)\0*.exe\0All files (*.*)\0*.*\0";
+        defaultExtension = "exe";
+        break;
+    case EditorProjectPathKind::GameAssembly:
+        filter = "C++ source (*.cpp;*.cc;*.cxx)\0*.cpp;*.cc;*.cxx\0All files (*.*)\0*.*\0";
+        break;
+    }
+    OPENFILENAMEA ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFile = path;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrInitialDir = initialDirectory.c_str();
+    ofn.lpstrFilter = filter;
+    ofn.nFilterIndex = 1;
+    ofn.lpstrDefExt = defaultExtension;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
 }
@@ -1907,6 +1971,7 @@ void EditorSession::shutdown() {
     // avoids an UAF cleanup race against the primary.
     _audioEditor.reset();
     _audioEditorHandle = nullptr;
+    releaseProjectSettings();
     if (_tilemapDockViewHost != nullptr) {
         _tilemapDockViewHost->prepareForUiShutdown();
         _tilemapWindowUiPrepared = true;
@@ -2073,6 +2138,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     syncUiFlowDesignerLifetime();
     if (_uiFlowDesigner != nullptr) {
         _uiFlowDesigner->tick(dt);
+    }
+    syncProjectSettingsLifetime();
+    if (_projectSettings != nullptr) {
+        _projectSettings->tick(dt);
     }
     syncAudioEditorLifetime();
     if (_audioEditor != nullptr) {
@@ -7878,6 +7947,12 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { importCharacterFromDialog(); });
         }
         fileMenu->addSeparator();
+        if (auto* item = addLocalizedItem(fileMenu,
+                "ui.editor.menu.file.project_settings",
+                L"Project Settings...")) {
+            item->setOnActivate([this]() { (void)openProjectSettings(); });
+        }
+        fileMenu->addSeparator();
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.exit", L"Exit")) {
             item->setOnActivate([this]() { requestHostClose(); });
         }
@@ -8007,6 +8082,11 @@ void EditorSession::bindMenuBar() {
     if (toolsMenu != nullptr) {
         if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.run_project", L"Run Current Project")) {
             item->setOnActivate([this]() { (void)runCurrentProject(); });
+        }
+        if (auto* item = addLocalizedItem(toolsMenu,
+                "ui.editor.menu.tools.build_package",
+                L"Build & Package...")) {
+            item->setOnActivate([this]() { (void)openProjectSettings(); });
         }
         toolsMenu->addSeparator();
         if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.ui_layout", L"UI Layout Editor...")) {
@@ -8683,6 +8763,131 @@ bool EditorSession::openLayoutForFlowScreen(
     }
     message = "Opened UI Layout " + path.filename().string();
     return true;
+}
+
+bool EditorSession::openProjectSettings()
+{
+    if (_childWindows == nullptr || _projectRoot.empty()) {
+        setAssetBrowserStatus(
+            L"Project Settings requires an open project and child-window host",
+            true);
+        return false;
+    }
+    syncProjectSettingsLifetime();
+    if (_projectSettings != nullptr && _projectSettingsHandle != nullptr) {
+        (void)_childWindows->activateChildWindow(_projectSettingsHandle);
+        setAssetBrowserStatus(L"Project Settings focused");
+        return true;
+    }
+
+    EditorProjectSettingsConfig config;
+    config.projectRoot = _projectRoot;
+    config.choosePath = [this](EditorProjectPathKind kind) {
+        HWND owner = _projectSettingsHandle != nullptr
+            ? static_cast<HWND>(_projectSettingsHandle)
+            : static_cast<HWND>(_hostWindow);
+        return showProjectSettingsPathDialog(owner, _projectRoot, kind);
+    };
+    config.openGameFlow = [this](const std::string& path) {
+        if (path.empty()) return openGameFlowEditor();
+        const std::filesystem::path absolute =
+            std::filesystem::path(resolveProjectAssetRoot(_projectRoot)) / path;
+        return openGameFlowEditor(absolute.lexically_normal().string());
+    };
+    config.openUiFlow = [this](const std::string& path) {
+        if (path.empty()) return openUiFlowEditor();
+        const std::filesystem::path absolute =
+            std::filesystem::path(resolveProjectAssetRoot(_projectRoot)) / path;
+        return openUiFlowEditor(absolute.lexically_normal().string());
+    };
+    config.runProject = [this]() { return runCurrentProject(); };
+    config.localize = [this](std::string_view key,
+                             std::wstring_view fallback) {
+        return localizedText(key, fallback);
+    };
+    _projectSettings = std::make_unique<EditorProjectSettingsController>(
+        std::move(config));
+
+    ChildWindowConfig cfg;
+    cfg.title = "Project Settings & Build";
+    cfg.layoutPath = resolveProjectSettingsChromePath(_engineAssetsRoot);
+    cfg.x = 132;
+    cfg.y = 72;
+    cfg.width = 1280;
+    cfg.height = 800;
+    cfg.showOnOpen = false;
+    cfg.beforeCloseRequested = [this](ayt::ui::UIManager&) {
+        return confirmProjectSettingsClose();
+    };
+    cfg.beforeClose = [this](ayt::ui::UIManager&) {
+        releaseProjectSettings();
+    };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        releaseProjectSettings();
+        setAssetBrowserStatus(L"Project Settings window creation failed", true);
+        return false;
+    }
+    _projectSettingsHandle = handle;
+    ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
+    std::string error;
+    if (childUi == nullptr || !_projectSettings->attach(*childUi, &error)) {
+        _childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"Project Settings could not load: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return false;
+    }
+    childUi->invalidateLayout();
+    childUi->layout();
+    (void)_childWindows->showChildWindow(handle);
+    setAssetBrowserStatus(L"Project Settings & Build opened");
+    return true;
+}
+
+void EditorSession::syncProjectSettingsLifetime()
+{
+    if (_projectSettingsHandle == nullptr || _childWindows == nullptr) return;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == _projectSettingsHandle) return;
+    }
+    releaseProjectSettings();
+}
+
+bool EditorSession::confirmProjectSettingsClose()
+{
+    if (_projectSettings == nullptr) return true;
+    HWND owner = _projectSettingsHandle != nullptr
+        ? static_cast<HWND>(_projectSettingsHandle)
+        : static_cast<HWND>(_hostWindow);
+    if (_projectSettings->isBusy()) {
+        if (owner != nullptr) {
+            ::MessageBoxW(owner,
+                L"A project build is still running. Wait for it to finish "
+                L"before closing Project Settings.",
+                L"Project Settings & Build", MB_OK | MB_ICONINFORMATION);
+        }
+        return false;
+    }
+    if (!_projectSettings->isDirty()) return true;
+    if (owner == nullptr) return false;
+    const int choice = ::MessageBoxW(owner,
+        L"Project or build settings have unsaved changes.\n\nSave before closing?",
+        L"Project Settings & Build", MB_YESNOCANCEL | MB_ICONWARNING);
+    if (choice == IDCANCEL) return false;
+    if (choice == IDNO) return true;
+    std::string error;
+    if (_projectSettings->save(&error)) return true;
+    ::MessageBoxW(owner, ayt::ui::decodeUtf8Text(error).c_str(),
+        L"Project Settings save failed", MB_OK | MB_ICONERROR);
+    return false;
+}
+
+void EditorSession::releaseProjectSettings()
+{
+    if (_projectSettings != nullptr) _projectSettings->detach();
+    _projectSettings.reset();
+    _projectSettingsHandle = nullptr;
 }
 
 bool EditorSession::openGameFlowEditor(const std::string& requestedPath)

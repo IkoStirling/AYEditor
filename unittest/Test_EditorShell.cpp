@@ -5,6 +5,7 @@
 #include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorWorkspace.h"
+#include "../src/AYEditorProjectSettingsController.h"
 #include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
@@ -184,6 +185,74 @@ TEST_CASE(test_editor_shell_layout_ids) {
     CHECK(ui.findById("btn_play") != nullptr);
     CHECK(ui.findById("lbl_mode") != nullptr);
     ui.shutdown();
+}
+
+TEST_CASE(project_settings_pages_layout_on_first_activation) {
+    namespace fs = std::filesystem;
+    const fs::path layout = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui/project_settings.ui.json";
+    CHECK(fs::is_regular_file(layout));
+    if (!fs::is_regular_file(layout)) return;
+
+    const fs::path projectRoot = fs::temp_directory_path()
+        / "ayeditor_project_settings_layout_test";
+    std::error_code fileError;
+    fs::remove_all(projectRoot, fileError);
+    fs::create_directories(projectRoot / "Assets", fileError);
+
+    MockRenderer backend;
+    UIManager ui;
+    ui.initialize(&backend);
+    ui.setClientSize(1280.0f, 800.0f);
+    CHECK(ui.loadLayout(layout.string()));
+    ui.layout();
+
+    EditorProjectSettingsConfig config;
+    config.projectRoot = projectRoot.string();
+    EditorProjectSettingsController controller(std::move(config));
+    std::string error;
+    CHECK(controller.attach(ui, &error));
+    CHECK(error.empty());
+
+    auto* navigation = dynamic_cast<ListView*>(
+        ui.findById("settings_navigation"));
+    CHECK(navigation != nullptr);
+    struct PageProbe {
+        int page;
+        const char* pageId;
+        const char* childId;
+    };
+    const PageProbe probes[] = {
+        {0, "settings_page_project", "settings_project_id"},
+        {1, "settings_page_flow", "settings_gameflow"},
+        {2, "settings_page_worlds", "settings_world_list"},
+        {3, "settings_page_build", "settings_build_id"},
+        {4, "settings_page_rules", "settings_rule_list"},
+        {5, "settings_page_run", "settings_run_executable"},
+        {6, "settings_page_diagnostics", "settings_diagnostics"},
+    };
+    if (navigation != nullptr) {
+        for (const PageProbe& probe : probes) {
+            navigation->setSelectedIndex(probe.page);
+            Widget* page = ui.findById(probe.pageId);
+            Widget* child = ui.findById(probe.childId);
+            CHECK(page != nullptr && page->isVisible());
+            CHECK(child != nullptr && child->getWidth() > 100.0f);
+            CHECK(child != nullptr && child->getHeight() > 20.0f);
+        }
+        navigation->setSelectedIndex(3);
+        auto* scroll = dynamic_cast<ScrollView*>(
+            ui.findById("settings_scroll"));
+        CHECK(scroll != nullptr);
+        CHECK(scroll != nullptr
+              && scroll->getContentSize().y > scroll->getClientRect().height());
+        CHECK(scroll != nullptr && scroll->scrollBy({0.0f, 80.0f}));
+        CHECK(scroll != nullptr && scroll->getScrollOffset().y > 0.0f);
+    }
+
+    controller.detach();
+    ui.shutdown();
+    fs::remove_all(projectRoot, fileError);
 }
 
 TEST_CASE(test_editor_session_loads_shell_json) {
