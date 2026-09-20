@@ -213,25 +213,72 @@ std::string lowerAscii(std::string value)
     return value;
 }
 
-ayt::ui::UIFlowScope parseScope(std::string value)
+bool parseScope(std::string value, ayt::ui::UIFlowScope& result)
 {
     value = lowerAscii(trim(std::move(value)));
-    if (value == "application") return ayt::ui::UIFlowScope::Application;
-    if (value == "world") return ayt::ui::UIFlowScope::World;
-    if (value == "owner") return ayt::ui::UIFlowScope::Owner;
-    return ayt::ui::UIFlowScope::Transient;
+    if (value == "application") {
+        result = ayt::ui::UIFlowScope::Application;
+        return true;
+    }
+    if (value == "world") {
+        result = ayt::ui::UIFlowScope::World;
+        return true;
+    }
+    if (value == "owner") {
+        result = ayt::ui::UIFlowScope::Owner;
+        return true;
+    }
+    if (value == "transient") {
+        result = ayt::ui::UIFlowScope::Transient;
+        return true;
+    }
+    return false;
 }
 
-ayt::ui::UIFlowInputPolicy parseInputPolicy(std::string value)
+bool parseInputPolicy(std::string value,
+                      ayt::ui::UIFlowInputPolicy& result)
 {
     value = lowerAscii(trim(std::move(value)));
     if (value == "passthrough" || value == "pass-through") {
-        return ayt::ui::UIFlowInputPolicy::PassThrough;
+        result = ayt::ui::UIFlowInputPolicy::PassThrough;
+        return true;
+    }
+    if (value == "consumehandled" || value == "consume-handled") {
+        result = ayt::ui::UIFlowInputPolicy::ConsumeHandled;
+        return true;
     }
     if (value == "blocklower" || value == "block-lower") {
-        return ayt::ui::UIFlowInputPolicy::BlockLower;
+        result = ayt::ui::UIFlowInputPolicy::BlockLower;
+        return true;
     }
-    return ayt::ui::UIFlowInputPolicy::ConsumeHandled;
+    return false;
+}
+
+bool parseInterruptPolicy(std::string value,
+                          ayt::ui::UIFlowInterruptPolicy& result)
+{
+    value = lowerAscii(trim(std::move(value)));
+    if (value == "queue") {
+        result = ayt::ui::UIFlowInterruptPolicy::Queue;
+        return true;
+    }
+    if (value == "cancelprevious" || value == "cancel-previous") {
+        result = ayt::ui::UIFlowInterruptPolicy::CancelPrevious;
+        return true;
+    }
+    if (value == "reverseprevious" || value == "reverse-previous") {
+        result = ayt::ui::UIFlowInterruptPolicy::ReversePrevious;
+        return true;
+    }
+    if (value == "ignoreifrunning" || value == "ignore-if-running") {
+        result = ayt::ui::UIFlowInterruptPolicy::IgnoreIfRunning;
+        return true;
+    }
+    if (value == "coalesce") {
+        result = ayt::ui::UIFlowInterruptPolicy::Coalesce;
+        return true;
+    }
+    return false;
 }
 
 std::string firstDiagnostic(
@@ -654,9 +701,9 @@ EditorUiFlowProperties EditorUiFlowDocument::selectedProperties() const
             result.fourth = value->triggerSignal;
             result.fifth = value->guardExpression;
             result.sixth = value->actionGraph;
+            result.seventh = ayt::ui::uiFlowInterruptPolicyName(
+                value->interruptPolicy);
             result.number = value->priority;
-            result.flag = value->interruptPolicy
-                == ayt::ui::UIFlowInterruptPolicy::Coalesce;
         }
         break;
     case EditorUiFlowObjectKind::Signal:
@@ -693,7 +740,8 @@ EditorUiFlowPropertyLabels EditorUiFlowDocument::selectedPropertyLabels() const
                 "Enter Graph, Exit Graph"};
     case EditorUiFlowObjectKind::Transition:
         return {"Region", "From State", "To State", "Trigger Signal",
-                "Guard Expression", "Action Graph", {}, "Priority", "Coalesce"};
+                "Guard Expression", "Action Graph", "Interrupt Policy",
+                "Priority"};
     case EditorUiFlowObjectKind::Signal:
         return {"Payload fields are preserved by the wire contract"};
     case EditorUiFlowObjectKind::Action:
@@ -857,6 +905,9 @@ bool EditorUiFlowDocument::applySelectedProperties(
     std::uint32_t parsedMaximum = 0u;
     std::vector<ayt::ui::UIFlowSlotAssignment> parsedAssignments;
     std::vector<ayt::ui::UIFlowScreenEventBinding> parsedScreenEvents;
+    ayt::ui::UIFlowInputPolicy parsedInputPolicy{};
+    ayt::ui::UIFlowScope parsedScope{};
+    ayt::ui::UIFlowInterruptPolicy parsedInterruptPolicy{};
     if (_selection.kind == EditorUiFlowObjectKind::Layer
         && !parseUnsigned(properties.second, parsedMaximum)) {
         if (error != nullptr) *error = "Max Active Screens must be a non-negative integer.";
@@ -871,6 +922,27 @@ bool EditorUiFlowDocument::applySelectedProperties(
             properties.seventh, parsedScreenEvents, error)) {
         return false;
     }
+    if (_selection.kind == EditorUiFlowObjectKind::Layer
+        && !parseInputPolicy(properties.first, parsedInputPolicy)) {
+        if (error != nullptr) {
+            *error = "Input Policy must be passThrough, consumeHandled, or blockLower.";
+        }
+        return false;
+    }
+    if (_selection.kind == EditorUiFlowObjectKind::Screen
+        && !parseScope(properties.fourth, parsedScope)) {
+        if (error != nullptr) {
+            *error = "Scope must be application, world, owner, or transient.";
+        }
+        return false;
+    }
+    if (_selection.kind == EditorUiFlowObjectKind::Transition
+        && !parseInterruptPolicy(properties.seventh, parsedInterruptPolicy)) {
+        if (error != nullptr) {
+            *error = "Interrupt Policy must be queue, cancelPrevious, reversePrevious, ignoreIfRunning, or coalesce.";
+        }
+        return false;
+    }
     Snapshot before = snapshot();
     if (!renameSelection(properties.id, error)) return false;
 
@@ -880,7 +952,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
         break;
     case EditorUiFlowObjectKind::Layer: {
         auto* value = findById(_flow.layers, _selection.id);
-        value->inputPolicy = parseInputPolicy(properties.first);
+        value->inputPolicy = parsedInputPolicy;
         value->maxActiveScreens = parsedMaximum;
         value->order = properties.number;
         value->blocksLowerInput = properties.flag;
@@ -899,7 +971,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
         value->layoutAsset = trim(properties.first);
         value->layer = trim(properties.second);
         value->slot = trim(properties.third);
-        value->scope = parseScope(properties.fourth);
+        value->scope = parsedScope;
         value->enterAnimation = trim(properties.fifth);
         value->exitAnimation = trim(properties.sixth);
         value->events = std::move(parsedScreenEvents);
@@ -940,9 +1012,7 @@ bool EditorUiFlowDocument::applySelectedProperties(
         value->guardExpression = trim(properties.fifth);
         value->actionGraph = trim(properties.sixth);
         value->priority = properties.number;
-        value->interruptPolicy = properties.flag
-            ? ayt::ui::UIFlowInterruptPolicy::Coalesce
-            : ayt::ui::UIFlowInterruptPolicy::Queue;
+        value->interruptPolicy = parsedInterruptPolicy;
         break;
     }
     case EditorUiFlowObjectKind::Signal:

@@ -1282,6 +1282,18 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   统一使用 AYEditor 宿主持有的本地化 resolver；语言切换只原位刷新显示文本，保持 Outline 选择、预览和
   调试状态。ID、资产路径、Scope 及运行时/插件原始诊断仍保持 wire 文本，避免本地化改变资产语义。
 
+#### UI Flow authoring quality gate
+
+- Inspector 的 Enter、失焦、保存、预览及选择切换统一先提交当前合法输入；提交失败保留编辑缓冲并阻止
+  破坏性导航。工具栏打开操作不得覆盖 dirty 文档。正在运行的 Preview 记录源文档 revision，文档变化后
+  进入明确的过期状态并禁用 Signal、Action 与调试命令，直至用户重新启动预览。
+- 枚举和数值不得依赖静默 fallback。Scope、Layer Input Policy、32 位整数及 Transition Interrupt Policy
+  在进入命令历史前严格校验；Transition 暴露 `queue`、`cancelPrevious`、`reversePrevious`、
+  `ignoreIfRunning`、`coalesce` 全集，不能再用单个 Coalesce 布尔值压缩生产 wire contract。
+- Add 列表只展示当前依赖已满足的对象种类；所有选择相关命令依据 Document/Preview 状态禁用，避免把
+  “先点击再读错误”当作正常发现机制。后续任务导向改版继续以该 gate 为底线，不改变 AYUI wire model、
+  AYApplication runtime 或生产 Preview 路径。
+
 ### 10.23 UI Designer project workflow
 
 - `EditorUiDesignerWorkflow` 扫描项目 asset root 下的 `.ui.json` 与 `.uiflow.json`，建立

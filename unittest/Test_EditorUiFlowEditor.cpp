@@ -23,6 +23,7 @@
 #include <AYUI/UIFlowGraphNodeRegistry.h>
 #include <AYUI/ListView.h>
 #include <AYUI/MockRenderer.h>
+#include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
@@ -157,6 +158,16 @@ bool hasMountedScreen(
     return false;
 }
 
+bool clickButton(ayt::ui::Button* button)
+{
+    if (button == nullptr || !button->isEnabled()) return false;
+    const auto bounds = button->getWorldBounds();
+    const ayt::ui::UIMouseEvent event(
+        {(bounds.minX + bounds.maxX) * 0.5f,
+         (bounds.minY + bounds.maxY) * 0.5f}, 0);
+    return button->onMouseButtonDown(event) && button->onMouseButtonUp(event);
+}
+
 } // namespace editor_ui_flow_editor_test
 
 using namespace ayt::editor;
@@ -251,6 +262,58 @@ TEST_CASE(state_transition_authoring_is_reference_safe_and_undoable)
     CHECK(document.flow().findRegion(regionId)->initialState == "idle");
     CHECK(document.redo());
     CHECK(document.flow().findRegion(regionId)->initialState == "ready");
+}
+
+TEST_CASE(transition_interrupt_policy_roundtrips_without_loss)
+{
+    EditorUiFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+    CHECK(document.addObject(EditorUiFlowObjectKind::Region, {}, &error));
+    CHECK(document.addObject(EditorUiFlowObjectKind::Signal, {}, &error));
+    CHECK(document.addObject(EditorUiFlowObjectKind::Transition, {}, &error));
+
+    static constexpr std::array policies{
+        "queue", "cancelPrevious", "reversePrevious",
+        "ignoreIfRunning", "coalesce",
+    };
+    int failures = 0;
+    for (const char* policy : policies) {
+        EditorUiFlowProperties properties = document.selectedProperties();
+        properties.seventh = policy;
+        if (!document.applySelectedProperties(properties, &error)
+            || document.selectedProperties().seventh != policy
+            || std::string(ayt::ui::uiFlowInterruptPolicyName(
+                document.flow().transitions.front().interruptPolicy)) != policy) {
+            ++failures;
+        }
+    }
+    CHECK(failures == 0);
+
+    EditorUiFlowProperties invalid = document.selectedProperties();
+    invalid.seventh = "silentlyGuess";
+    CHECK_FALSE(document.applySelectedProperties(invalid, &error));
+    CHECK(error.find("Interrupt Policy") != std::string::npos);
+    CHECK(document.selectedProperties().seventh == "coalesce");
+}
+
+TEST_CASE(enum_authoring_rejects_unknown_values_instead_of_falling_back)
+{
+    EditorUiFlowDocument document;
+    std::string error;
+    CHECK(document.initialize({}, {}, &error));
+
+    CHECK(document.select({EditorUiFlowObjectKind::Layer, "application", {}}));
+    EditorUiFlowProperties layer = document.selectedProperties();
+    layer.first = "guess";
+    CHECK_FALSE(document.applySelectedProperties(layer, &error));
+    CHECK(document.selectedProperties().first == "consumeHandled");
+
+    CHECK(document.addObject(EditorUiFlowObjectKind::Screen, {}, &error));
+    EditorUiFlowProperties screen = document.selectedProperties();
+    screen.fourth = "forever";
+    CHECK_FALSE(document.applySelectedProperties(screen, &error));
+    CHECK(document.selectedProperties().fourth == "world");
 }
 
 TEST_CASE(project_factory_and_asset_database_expose_ui_flow_assets)
@@ -565,6 +628,76 @@ TEST_CASE(flow_editor_localizes_dynamic_chrome_and_retranslates_in_place)
 
     controller.detach();
     manager.shutdown();
+}
+
+TEST_CASE(flow_editor_commits_fields_strictly_and_exposes_valid_commands_only)
+{
+    namespace fs = std::filesystem;
+    ayt::ui::UIManager manager;
+    manager.initialize(nullptr);
+    manager.setClientSize(1440.0f, 860.0f);
+    const fs::path chrome = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
+        / "ui" / "ui_flow_editor.ui.json";
+    CHECK(manager.loadLayout(chrome.string()));
+
+    auto document = std::make_shared<EditorUiFlowDocument>();
+    std::string error;
+    CHECK(document->initialize({}, {}, &error));
+    int openPickerCalls = 0;
+    EditorUiFlowExtensionConfig config;
+    config.openPathPicker = [&openPickerCalls]() {
+        ++openPickerCalls;
+        return std::string{};
+    };
+    EditorUiFlowController controller(document, std::move(config));
+    CHECK(controller.attach(manager));
+    manager.root()->performLayout();
+
+    CHECK(document->select({EditorUiFlowObjectKind::Layer, "application", {}}));
+    controller.tick(0.0f);
+    auto* number = dynamic_cast<ayt::ui::TextInput*>(
+        manager.findById("flow_prop_number"));
+    auto* status = dynamic_cast<ayt::ui::TextLabel*>(
+        manager.findById("flow_status"));
+    auto* open = dynamic_cast<ayt::ui::Button*>(
+        manager.findById("flow_btn_open"));
+    auto* openLayout = dynamic_cast<ayt::ui::Button*>(
+        manager.findById("flow_btn_open_layout"));
+    CHECK(number != nullptr);
+    CHECK(open != nullptr);
+    CHECK(openLayout != nullptr && !openLayout->isEnabled());
+
+    number->setText(L"42");
+    manager.setFocus(number);
+    CHECK(manager.onKeyDown(13));
+    CHECK(document->flow().findLayer("application")->order == 42);
+    CHECK(document->isDirty());
+    CHECK(editor_ui_flow_editor_test::clickButton(open));
+    CHECK(openPickerCalls == 0);
+
+    number->setText(L"not-a-number");
+    manager.setFocus(number);
+    CHECK(manager.onKeyDown(13));
+    CHECK(document->flow().findLayer("application")->order == 42);
+    CHECK(number->getText() == L"not-a-number");
+    CHECK(status != nullptr
+        && status->getText().find(L"32-bit integer") != std::wstring::npos);
+
+    number->setText(L"42");
+    manager.setFocus(number);
+    CHECK(manager.onKeyDown(13));
+    CHECK(document->addObject(EditorUiFlowObjectKind::Region, {}, &error));
+    CHECK(document->addObject(EditorUiFlowObjectKind::Signal, {}, &error));
+    CHECK(document->addObject(EditorUiFlowObjectKind::Transition, {}, &error));
+    controller.tick(0.0f);
+    auto* interrupt = dynamic_cast<ayt::ui::ComboBox*>(
+        manager.findById("flow_prop_interrupt_policy"));
+    CHECK(interrupt != nullptr && interrupt->isVisible());
+    CHECK(interrupt != nullptr && interrupt->getItemCount() == 5u);
+    interrupt->setSelectedIndexAndNotify(1);
+    CHECK(document->selectedProperties().seventh == "cancelPrevious");
+
+    controller.detach();
 }
 
 TEST_CASE(flow_graph_canvas_draws_typed_curves_and_filters_link_targets)

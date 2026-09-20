@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -154,9 +155,12 @@ public:
                        EditorUiFlowPreview& preview,
                        const ayt::ui::UIFlowGraphNodeRegistry& registry,
                        UiFlowLocalizedText localize,
+                       std::function<bool()> beforeSelection,
                        std::function<void()> changed)
         : _document(document), _preview(preview), _registry(registry),
-          _localize(std::move(localize)), _changed(std::move(changed))
+          _localize(std::move(localize)),
+          _beforeSelection(std::move(beforeSelection)),
+          _changed(std::move(changed))
     {
         setId("flow_graph_canvas");
         setLayoutPositionManaged(false);
@@ -169,6 +173,7 @@ public:
         if (event.mouseButton != 0) return false;
         for (auto it = _hits.rbegin(); it != _hits.rend(); ++it) {
             if (!inside(it->bounds, event.mousePos)) continue;
+            if (_beforeSelection != nullptr && !_beforeSelection()) return true;
             if (_document.select(it->selection)) {
                 if (_changed != nullptr) _changed();
                 markDirty();
@@ -468,6 +473,7 @@ private:
     EditorUiFlowPreview& _preview;
     const ayt::ui::UIFlowGraphNodeRegistry& _registry;
     UiFlowLocalizedText _localize;
+    std::function<bool()> _beforeSelection;
     std::function<void()> _changed;
     std::vector<Hit> _hits;
 };
@@ -549,6 +555,25 @@ const UiFlowKindText& uiFlowKindText(EditorUiFlowObjectKind kind)
     return found != kUiFlowKindTexts.end() ? *found : kUiFlowKindTexts.front();
 }
 
+struct UiFlowInterruptPolicyText {
+    ayt::ui::UIFlowInterruptPolicy value;
+    const char* key;
+    const wchar_t* fallback;
+};
+
+constexpr std::array kUiFlowInterruptPolicyTexts{
+    UiFlowInterruptPolicyText{ayt::ui::UIFlowInterruptPolicy::Queue,
+        "ui.editor.flow.interrupt_policy.queue", L"Queue"},
+    UiFlowInterruptPolicyText{ayt::ui::UIFlowInterruptPolicy::CancelPrevious,
+        "ui.editor.flow.interrupt_policy.cancel_previous", L"Cancel Previous"},
+    UiFlowInterruptPolicyText{ayt::ui::UIFlowInterruptPolicy::ReversePrevious,
+        "ui.editor.flow.interrupt_policy.reverse_previous", L"Reverse Previous"},
+    UiFlowInterruptPolicyText{ayt::ui::UIFlowInterruptPolicy::IgnoreIfRunning,
+        "ui.editor.flow.interrupt_policy.ignore_if_running", L"Ignore If Running"},
+    UiFlowInterruptPolicyText{ayt::ui::UIFlowInterruptPolicy::Coalesce,
+        "ui.editor.flow.interrupt_policy.coalesce", L"Coalesce"},
+};
+
 const char* uiFlowPropertyLabelKey(std::string_view label)
 {
     static constexpr std::pair<std::string_view, const char*> labels[] = {
@@ -583,7 +608,7 @@ const char* uiFlowPropertyLabelKey(std::string_view label)
         {"To State", "ui.editor.flow.property_label.to_state"},
         {"Trigger Signal", "ui.editor.flow.property_label.trigger_signal"},
         {"Guard Expression", "ui.editor.flow.property_label.guard_expression"},
-        {"Coalesce", "ui.editor.flow.property_label.coalesce"},
+        {"Interrupt Policy", "ui.editor.flow.property_label.interrupt_policy"},
         {"Payload fields are preserved by the wire contract",
             "ui.editor.flow.property_label.payload_preserved"},
         {"Input fields are preserved by the wire contract",
@@ -594,26 +619,6 @@ const char* uiFlowPropertyLabelKey(std::string_view label)
     const auto found = std::find_if(std::begin(labels), std::end(labels),
         [label](const auto& value) { return value.first == label; });
     return found != std::end(labels) ? found->second : nullptr;
-}
-
-EditorUiFlowObjectKind kindAt(int index)
-{
-    static constexpr std::array kinds{
-        EditorUiFlowObjectKind::Layer,
-        EditorUiFlowObjectKind::Slot,
-        EditorUiFlowObjectKind::Screen,
-        EditorUiFlowObjectKind::Context,
-        EditorUiFlowObjectKind::Entry,
-        EditorUiFlowObjectKind::Signal,
-        EditorUiFlowObjectKind::Action,
-        EditorUiFlowObjectKind::Region,
-        EditorUiFlowObjectKind::State,
-        EditorUiFlowObjectKind::Transition,
-        EditorUiFlowObjectKind::Graph,
-    };
-    return index >= 0 && static_cast<std::size_t>(index) < kinds.size()
-        ? kinds[static_cast<std::size_t>(index)]
-        : EditorUiFlowObjectKind::Layer;
 }
 
 bool splitEndpoint(const std::wstring& text,
@@ -789,6 +794,7 @@ public:
         propE = nullptr;
         propF = nullptr;
         propG = nullptr;
+        interruptPolicy = nullptr;
         propNumber = nullptr;
         propFlag = nullptr;
         graphNodeType = nullptr;
@@ -848,21 +854,166 @@ public:
         setStatusText(localized(key, fallback), error);
     }
 
+    bool readInspector(EditorUiFlowProperties& value, std::string& error) const
+    {
+        value.id = encodeUtf8(propId->getText());
+        value.first = encodeUtf8(propA->getText());
+        value.second = encodeUtf8(propB->getText());
+        value.third = encodeUtf8(propC->getText());
+        value.fourth = encodeUtf8(propD->getText());
+        value.fifth = encodeUtf8(propE->getText());
+        value.sixth = encodeUtf8(propF->getText());
+        if (document->selection().kind == EditorUiFlowObjectKind::Transition) {
+            const int index = interruptPolicy->getSelectedIndex();
+            if (index < 0 || static_cast<std::size_t>(index)
+                    >= kUiFlowInterruptPolicyTexts.size()) {
+                error = "Select an Interrupt Policy.";
+                return false;
+            }
+            value.seventh = ayt::ui::uiFlowInterruptPolicyName(
+                kUiFlowInterruptPolicyTexts[static_cast<std::size_t>(index)].value);
+        } else {
+            value.seventh = encodeUtf8(propG->getText());
+        }
+        value.flag = propFlag->isChecked();
+
+        const EditorUiFlowPropertyLabels labels =
+            document->selectedPropertyLabels();
+        if (labels.number.empty()) {
+            value.number = document->selectedProperties().number;
+            return true;
+        }
+        const std::string encoded = encodeUtf8(propNumber->getText());
+        try {
+            std::size_t consumed = 0;
+            const long long parsed = std::stoll(encoded, &consumed, 10);
+            if (consumed != encoded.size()
+                || parsed < (std::numeric_limits<std::int32_t>::min)()
+                || parsed > (std::numeric_limits<std::int32_t>::max)()) {
+                error = "Number must be a 32-bit integer.";
+                return false;
+            }
+            value.number = static_cast<std::int32_t>(parsed);
+        } catch (...) {
+            error = "Number must be a 32-bit integer.";
+            return false;
+        }
+        return true;
+    }
+
+    bool commitInspector()
+    {
+        if (!attached || refreshing || document == nullptr) return true;
+        EditorUiFlowProperties value;
+        std::string error;
+        if (!readInspector(value, error)
+            || !document->applySelectedProperties(value, &error)) {
+            setStatus(error, true);
+            return false;
+        }
+        return true;
+    }
+
+    void setButtonEnabled(const char* id, bool enabled)
+    {
+        if (auto* button = widgetAs<ayt::ui::Button>(*ui, id)) {
+            button->setEnabled(enabled);
+        }
+    }
+
+    void refreshAddKinds()
+    {
+        EditorUiFlowObjectKind previous = EditorUiFlowObjectKind::Document;
+        const int previousIndex = addKind->getSelectedIndex();
+        if (previousIndex >= 0
+            && static_cast<std::size_t>(previousIndex)
+                < availableAddKinds.size()) {
+            previous = availableAddKinds[static_cast<std::size_t>(previousIndex)];
+        }
+
+        const auto& flow = document->flow();
+        availableAddKinds = {
+            EditorUiFlowObjectKind::Layer,
+            EditorUiFlowObjectKind::Context,
+            EditorUiFlowObjectKind::Entry,
+            EditorUiFlowObjectKind::Signal,
+            EditorUiFlowObjectKind::Action,
+            EditorUiFlowObjectKind::Region,
+            EditorUiFlowObjectKind::Graph,
+        };
+        if (!flow.layers.empty()) {
+            availableAddKinds.insert(availableAddKinds.begin() + 1,
+                EditorUiFlowObjectKind::Slot);
+        }
+        if (!flow.layers.empty() && !flow.slots.empty()) {
+            const auto slot = std::find(availableAddKinds.begin(),
+                availableAddKinds.end(), EditorUiFlowObjectKind::Context);
+            availableAddKinds.insert(slot, EditorUiFlowObjectKind::Screen);
+        }
+        if (!flow.regions.empty()) {
+            const auto graph = std::find(availableAddKinds.begin(),
+                availableAddKinds.end(), EditorUiFlowObjectKind::Graph);
+            availableAddKinds.insert(graph, EditorUiFlowObjectKind::State);
+        }
+        const bool hasState = std::any_of(flow.regions.begin(), flow.regions.end(),
+            [](const auto& region) { return !region.states.empty(); });
+        if (hasState && !flow.signals.empty()) {
+            const auto graph = std::find(availableAddKinds.begin(),
+                availableAddKinds.end(), EditorUiFlowObjectKind::Graph);
+            availableAddKinds.insert(graph, EditorUiFlowObjectKind::Transition);
+        }
+
+        std::vector<std::wstring> labels;
+        labels.reserve(availableAddKinds.size());
+        for (const EditorUiFlowObjectKind kind : availableAddKinds) {
+            labels.push_back(localizedKind(kind));
+        }
+        addKind->setItems(labels);
+        const auto selected = std::find(availableAddKinds.begin(),
+            availableAddKinds.end(), previous);
+        addKind->setSelectedIndex(selected != availableAddKinds.end()
+            ? static_cast<int>(std::distance(availableAddKinds.begin(), selected))
+            : 0);
+    }
+
+    void syncCommandStates()
+    {
+        if (!attached || document == nullptr) return;
+        const bool graphSelected = document->selection().kind
+            == EditorUiFlowObjectKind::Graph;
+        setButtonEnabled("flow_btn_delete", document->selection().kind
+            != EditorUiFlowObjectKind::Document);
+        setButtonEnabled("flow_btn_open_layout", document->selection().kind
+            == EditorUiFlowObjectKind::Screen);
+        setButtonEnabled("flow_btn_undo", document->canUndo());
+        setButtonEnabled("flow_btn_redo", document->canRedo());
+        setButtonEnabled("flow_btn_add", !availableAddKinds.empty());
+        setButtonEnabled("flow_btn_preview", document->isValid());
+        const bool previewCurrent = preview.isRunning()
+            && previewDocumentRevision == document->revision();
+        setButtonEnabled("flow_btn_emit", previewCurrent
+            && !document->flow().signals.empty());
+        setButtonEnabled("flow_btn_action", previewCurrent
+            && !document->flow().actions.empty());
+        setButtonEnabled("flow_btn_add_node", graphSelected
+            && graphNodeType->getSelectedIndex() >= 0);
+        setButtonEnabled("flow_btn_connect", graphSelected
+            && graphFrom->getSelectedIndex() >= 0
+            && graphTo->getSelectedIndex() >= 0);
+        setButtonEnabled("flow_btn_breakpoint", graphSelected
+            && debugNode->getSelectedIndex() >= 0);
+        setButtonEnabled("flow_btn_pause_next", previewCurrent
+            && !preview.isPaused());
+        setButtonEnabled("flow_btn_step", previewCurrent && preview.isPaused());
+        setButtonEnabled("flow_btn_continue", previewCurrent && preview.isPaused());
+    }
+
     void syncLocalization(bool force = false)
     {
         if (!attached || addKind == nullptr) return;
         const std::wstring signature = localized(
             "ui.editor.flow.object_kind.layer", L"Layer");
         if (!force && signature == localizationSignature) return;
-        const int selectedKind = addKind->getSelectedIndex();
-        std::vector<std::wstring> kinds;
-        kinds.reserve(kUiFlowKindTexts.size() - 1u);
-        for (const UiFlowKindText& text : kUiFlowKindTexts) {
-            if (text.kind == EditorUiFlowObjectKind::Document) continue;
-            kinds.push_back(localized(text.key, text.fallback));
-        }
-        addKind->setItems(std::move(kinds));
-        addKind->setSelectedIndex(selectedKind >= 0 ? selectedKind : 0);
         localizationSignature = signature;
         refreshPending = true;
     }
@@ -893,6 +1044,7 @@ public:
         }
         outline->setItems(rows);
         outline->setSelectedIndex(selected);
+        refreshAddKinds();
 
         if (!config.assetRoot.empty() && document->isValid()
             && assetValidationRevision != document->revision()) {
@@ -963,6 +1115,28 @@ public:
         setFieldLabel("flow_lbl_e", localizedPropertyLabel(labels.fifth), propE);
         setFieldLabel("flow_lbl_f", localizedPropertyLabel(labels.sixth), propF);
         setFieldLabel("flow_lbl_g", localizedPropertyLabel(labels.seventh), propG);
+        const bool transitionSelected = document->selection().kind
+            == EditorUiFlowObjectKind::Transition;
+        if (transitionSelected) {
+            std::vector<std::wstring> policies;
+            policies.reserve(kUiFlowInterruptPolicyTexts.size());
+            int selectedPolicy = -1;
+            for (std::size_t index = 0;
+                 index < kUiFlowInterruptPolicyTexts.size(); ++index) {
+                const auto& policy = kUiFlowInterruptPolicyTexts[index];
+                policies.push_back(localized(policy.key, policy.fallback));
+                if (properties.seventh
+                    == ayt::ui::uiFlowInterruptPolicyName(policy.value)) {
+                    selectedPolicy = static_cast<int>(index);
+                }
+            }
+            interruptPolicy->setItems(policies);
+            interruptPolicy->setSelectedIndex(selectedPolicy);
+            propG->setVisible(false);
+            interruptPolicy->setVisible(true);
+        } else {
+            interruptPolicy->setVisible(false);
+        }
         setFieldLabel("flow_lbl_number",
             localizedPropertyLabel(labels.number), propNumber);
         if (auto* label = widgetAs<ayt::ui::TextLabel>(*ui, "flow_lbl_flag")) {
@@ -996,6 +1170,7 @@ public:
         }
         refreshGraphChoices();
         refreshPreviewLists();
+        syncCommandStates();
         if (canvas != nullptr) canvas->markDirty();
         ui->invalidateLayout();
         refreshing = false;
@@ -1032,6 +1207,14 @@ public:
             "ui.editor.flow.preview_state.no_events", L"No preview events"));
         trace->setItems(traceRows);
         if (debugState != nullptr) {
+            if (preview.isRunning()
+                && previewDocumentRevision != document->revision()) {
+                debugState->setText(localized(
+                    "ui.editor.flow.preview_state.out_of_date",
+                    L"Out of date — restart preview"));
+                syncCommandStates();
+                return;
+            }
             const EditorUiFlowDebugPause* pause = preview.debugPause();
             if (pause == nullptr) {
                 debugState->setText(localized(
@@ -1093,9 +1276,10 @@ public:
                             ? outputs : inputs;
                         choices.push_back({wide(node.id + "." + pin.id),
                                            node.id, &pin});
-                    }
-                }
             }
+        }
+        syncCommandStates();
+    }
         }
         const std::wstring selectedOutput = graphFrom->getSelectedItem();
         const std::wstring selectedInput = graphTo->getSelectedItem();
@@ -1149,6 +1333,7 @@ public:
         std::string error;
         const bool ok = preview.rebuild(document->flow(), entryId, &error);
         if (ok) {
+            previewDocumentRevision = document->revision();
             setLocalizedStatus("ui.editor.flow.message.preview_running",
                                L"Preview running");
         } else {
@@ -1210,6 +1395,7 @@ public:
     ayt::ui::TextInput* propE = nullptr;
     ayt::ui::TextInput* propF = nullptr;
     ayt::ui::TextInput* propG = nullptr;
+    ayt::ui::ComboBox* interruptPolicy = nullptr;
     ayt::ui::TextInput* propNumber = nullptr;
     ayt::ui::CheckBox* propFlag = nullptr;
     ayt::ui::ComboBox* graphNodeType = nullptr;
@@ -1223,10 +1409,12 @@ public:
     EditorUiFlowCanvas* canvas = nullptr;
     EditorUiFlowPreviewViewport* visualViewport = nullptr;
     std::vector<EditorUiFlowOutlineItem> outlineItems;
+    std::vector<EditorUiFlowObjectKind> availableAddKinds;
     ayt::app::UIFlowAssetValidationResult assetValidation;
     std::uint64_t assetValidationRevision = 0;
     std::unordered_set<std::string> debugBreakpoints;
     std::uint64_t previewPresentationRevision = 0;
+    std::uint64_t previewDocumentRevision = 0;
     std::wstring localizationSignature;
     bool attached = false;
     bool refreshing = false;
@@ -1262,6 +1450,8 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->propE = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_e");
     _impl->propF = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_f");
     _impl->propG = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_g");
+    _impl->interruptPolicy = widgetAs<ayt::ui::ComboBox>(
+        ui, "flow_prop_interrupt_policy");
     _impl->propNumber = widgetAs<ayt::ui::TextInput>(ui, "flow_prop_number");
     _impl->propFlag = widgetAs<ayt::ui::CheckBox>(ui, "flow_prop_flag");
     _impl->graphNodeType = widgetAs<ayt::ui::ComboBox>(ui, "flow_graph_node_type");
@@ -1281,6 +1471,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         || _impl->propB == nullptr || _impl->propC == nullptr
         || _impl->propD == nullptr || _impl->propE == nullptr
         || _impl->propF == nullptr || _impl->propG == nullptr
+        || _impl->interruptPolicy == nullptr
         || _impl->propNumber == nullptr
         || _impl->propFlag == nullptr || _impl->graphNodeType == nullptr
         || _impl->graphFrom == nullptr || _impl->graphTo == nullptr
@@ -1296,53 +1487,92 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
     _impl->outline->setOnSelectionChanged([impl = _impl.get()](int index) {
         if (impl->refreshing || index < 0
             || static_cast<std::size_t>(index) >= impl->outlineItems.size()) return;
+        if (!impl->commitInspector()) {
+            impl->refreshPending = true;
+            return;
+        }
         (void)impl->document->select(impl->outlineItems[static_cast<std::size_t>(index)].selection);
     });
+    _impl->addKind->setOnSelectionChanged([impl = _impl.get()](int) {
+        if (!impl->refreshing) impl->syncCommandStates();
+    });
     _impl->graphFrom->setOnSelectionChanged([impl = _impl.get()](int) {
-        if (!impl->refreshing) impl->refreshGraphChoices();
+        if (!impl->refreshing) {
+            impl->refreshGraphChoices();
+            impl->syncCommandStates();
+        }
+    });
+    _impl->graphTo->setOnSelectionChanged([impl = _impl.get()](int) {
+        if (!impl->refreshing) impl->syncCommandStates();
+    });
+    _impl->debugNode->setOnSelectionChanged([impl = _impl.get()](int) {
+        if (!impl->refreshing) impl->syncCommandStates();
+    });
+    _impl->interruptPolicy->setOnSelectionChanged(
+        [impl = _impl.get()](int) {
+            if (!impl->refreshing) (void)impl->commitInspector();
+        });
+    const std::array inspectorInputs{
+        _impl->propId, _impl->propA, _impl->propB, _impl->propC,
+        _impl->propD, _impl->propE, _impl->propF, _impl->propG,
+        _impl->propNumber,
+    };
+    for (ayt::ui::TextInput* input : inspectorInputs) {
+        input->setOnSubmit([impl = _impl.get()](const std::wstring&) {
+            (void)impl->commitInspector();
+        });
+        input->setOnFocusLostNotify([impl = _impl.get()]() {
+            (void)impl->commitInspector();
+        });
+    }
+    _impl->propFlag->setOnToggled([impl = _impl.get()](bool) {
+        if (!impl->refreshing) (void)impl->commitInspector();
     });
     _impl->bindButton("flow_btn_add", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
+        const int index = impl->addKind->getSelectedIndex();
+        if (index < 0 || static_cast<std::size_t>(index)
+                >= impl->availableAddKinds.size()) return;
         std::string error;
         if (!impl->document->addObject(
-                kindAt(impl->addKind->getSelectedIndex()), {}, &error)) {
+                impl->availableAddKinds[static_cast<std::size_t>(index)],
+                {}, &error)) {
             impl->setStatus(error, true);
         }
     });
     _impl->bindButton("flow_btn_delete", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         std::string error;
         if (!impl->document->deleteSelection(&error)) impl->setStatus(error, true);
     });
     _impl->bindButton("flow_btn_apply", [impl = _impl.get()]() {
-        EditorUiFlowProperties value;
-        value.id = encodeUtf8(impl->propId->getText());
-        value.first = encodeUtf8(impl->propA->getText());
-        value.second = encodeUtf8(impl->propB->getText());
-        value.third = encodeUtf8(impl->propC->getText());
-        value.fourth = encodeUtf8(impl->propD->getText());
-        value.fifth = encodeUtf8(impl->propE->getText());
-        value.sixth = encodeUtf8(impl->propF->getText());
-        value.seventh = encodeUtf8(impl->propG->getText());
-        try { value.number = std::stoi(impl->propNumber->getText()); }
-        catch (...) { value.number = 0; }
-        value.flag = impl->propFlag->isChecked();
-        std::string error;
-        if (!impl->document->applySelectedProperties(value, &error)) {
-            impl->setStatus(error, true);
-        }
+        (void)impl->commitInspector();
     });
     _impl->bindButton("flow_btn_undo", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         (void)impl->document->undo();
     });
     _impl->bindButton("flow_btn_redo", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         (void)impl->document->redo();
     });
     _impl->bindButton("flow_btn_save", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         (void)impl->save(false);
     });
     _impl->bindButton("flow_btn_save_as", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         (void)impl->save(true);
     });
     _impl->bindButton("flow_btn_open", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
+        if (impl->document->isDirty()) {
+            impl->setLocalizedStatus(
+                "ui.editor.flow.message.save_before_open",
+                L"Save or close the current Flow before opening another file.",
+                true);
+            return;
+        }
         if (impl->config.openPathPicker == nullptr) return;
         const std::string path = impl->config.openPathPicker();
         if (path.empty()) return;
@@ -1352,9 +1582,11 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->bindButton("flow_btn_preview", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         (void)impl->restart(nullptr);
     });
     _impl->bindButton("flow_btn_open_layout", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         if (impl->config.openLayoutForScreen == nullptr
             || impl->document->selection().kind
                 != EditorUiFlowObjectKind::Screen) {
@@ -1385,6 +1617,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->bindButton("flow_btn_emit", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         const int index = impl->signal->getSelectedIndex();
         if (index < 0 || static_cast<std::size_t>(index)
                 >= impl->document->flow().signals.size()) return;
@@ -1402,6 +1635,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->bindButton("flow_btn_action", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         const int index = impl->action->getSelectedIndex();
         if (index < 0 || static_cast<std::size_t>(index)
                 >= impl->document->flow().actions.size()) return;
@@ -1417,6 +1651,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->bindButton("flow_btn_breakpoint", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         if (impl->document->selection().kind
                 != EditorUiFlowObjectKind::Graph
             || impl->debugNode->getSelectedIndex() < 0) {
@@ -1445,12 +1680,14 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
             + L" " + wide(graphId + "/" + nodeId));
     });
     _impl->bindButton("flow_btn_pause_next", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         impl->preview.requestPause();
         impl->setLocalizedStatus(
             "ui.editor.flow.message.pause_next_requested",
             L"Debugger will pause before the next Graph node.");
     });
     _impl->bindButton("flow_btn_step", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         std::string error;
         if (!impl->preview.stepExecution(&error)) {
             impl->setStatus(error, true);
@@ -1465,6 +1702,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
                 ? L"Stepped to next node" : L"Graph completed");
     });
     _impl->bindButton("flow_btn_continue", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         std::string error;
         if (!impl->preview.continueExecution(&error)) {
             impl->setStatus(error, true);
@@ -1479,6 +1717,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
                 ? L"Paused at breakpoint" : L"Graph continued");
     });
     _impl->bindButton("flow_btn_add_node", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         if (impl->document->selection().kind != EditorUiFlowObjectKind::Graph) {
             impl->setLocalizedStatus(
                 "ui.editor.flow.message.select_graph_for_node",
@@ -1493,6 +1732,7 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         }
     });
     _impl->bindButton("flow_btn_connect", [impl = _impl.get()]() {
+        if (!impl->commitInspector()) return;
         if (impl->document->selection().kind != EditorUiFlowObjectKind::Graph) {
             impl->setLocalizedStatus(
                 "ui.editor.flow.message.select_graph_for_connection",
@@ -1523,6 +1763,9 @@ bool EditorUiFlowController::attach(ayt::ui::UIManager& ui)
         [impl = _impl.get()](std::string_view key,
                              std::wstring_view fallback) {
             return impl->localized(key, fallback);
+        },
+        [impl = _impl.get()]() {
+            return impl->commitInspector();
         },
         [impl = _impl.get()]() {
             impl->refreshPending = true;
