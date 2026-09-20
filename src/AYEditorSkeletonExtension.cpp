@@ -16,8 +16,10 @@
 #include <AYUI/UnicodeText.h>
 #include <AYUI/Widget.h>
 
+#include <algorithm>
 #include <iomanip>
 #include <filesystem>
+#include <cwctype>
 #include <memory>
 #include <sstream>
 
@@ -59,12 +61,16 @@ ayt::math::FVector4 adaptationColor(SkeletonAdaptationState state)
     if (state == SkeletonAdaptationState::Incomplete) {
         return {0.96f, 0.58f, 0.24f, 1.0f};
     }
+    if (state == SkeletonAdaptationState::Invalid) {
+        return {0.95f, 0.34f, 0.34f, 1.0f};
+    }
     return {0.62f, 0.66f, 0.74f, 1.0f};
 }
 
 ayt::math::FVector4 bakeColor(SkeletonBakeState state)
 {
-    if (state == SkeletonBakeState::Ready) return {0.35f, 0.82f, 0.50f, 1.0f};
+    if (state == SkeletonBakeState::Current) return {0.35f, 0.82f, 0.50f, 1.0f};
+    if (state == SkeletonBakeState::Baking) return {0.36f, 0.68f, 0.96f, 1.0f};
     if (state == SkeletonBakeState::Failed) return {0.95f, 0.34f, 0.34f, 1.0f};
     if (state == SkeletonBakeState::Stale) return {0.96f, 0.58f, 0.24f, 1.0f};
     return {0.62f, 0.66f, 0.74f, 1.0f};
@@ -75,12 +81,20 @@ std::wstring stateLabel(const wchar_t* prefix, const char* state)
     return std::wstring(prefix) + ayt::ui::decodeUtf8Text(state);
 }
 
+std::wstring lowerText(std::wstring value)
+{
+    std::transform(value.begin(), value.end(), value.begin(),
+        [](wchar_t character) { return std::towlower(character); });
+    return value;
+}
+
 class EditorSkeletonWorkspaceView final : public IEditorView {
 public:
     EditorSkeletonWorkspaceView(std::shared_ptr<EditorSkeletonDocument> document,
                                 IEditorHostServices& host)
         : _document(std::move(document)), _host(host)
     {
+        _document->configureProjectRoot(_host.projectRoot());
         build();
         refreshAll();
     }
@@ -199,11 +213,22 @@ private:
         auto* hierarchy = new ayt::ui::VBox();
         hierarchy->setSpacing(3.0f);
         hierarchy->addWidget(makeHeader(L"SKELETON HIERARCHY"), 20.0f);
+        _boneSearch = new ayt::ui::TextInput();
+        _boneSearch->setId("skeleton_bone_search");
+        _boneSearch->setPlaceholder(L"Search bone name or index…");
+        _boneSearch->setOnTextChanged([this](const std::wstring&) {
+            refreshHierarchy();
+        });
+        hierarchy->addWidget(_boneSearch, 26.0f);
         _boneList = new ayt::ui::ListView();
+        _boneList->setId("skeleton_bone_list");
         _boneList->setItemHeight(20.0f);
         _boneList->setOnSelectionChanged([this](int index) {
-            if (_syncing || index < 0) return;
-            (void)_document->core().selectBone(index);
+            if (_syncing || index < 0
+                || static_cast<std::size_t>(index) >= _visibleBoneIndices.size()) {
+                return;
+            }
+            (void)_document->core().selectBone(_visibleBoneIndices[index]);
             refreshBoneProperties();
             if (_canvas != nullptr) _canvas->markDirty();
         });
@@ -213,7 +238,11 @@ private:
         _canvas = new EditorSkeletonCanvas(_document);
         _canvas->setOnBoneSelected([this](int index) {
             _syncing = true;
-            _boneList->setSelectedIndex(index);
+            const auto found = std::find(
+                _visibleBoneIndices.begin(), _visibleBoneIndices.end(), index);
+            _boneList->setSelectedIndex(found == _visibleBoneIndices.end()
+                ? -1 : static_cast<int>(std::distance(
+                    _visibleBoneIndices.begin(), found)));
             _syncing = false;
             refreshBoneProperties();
         });
@@ -227,7 +256,49 @@ private:
         _properties->setWordWrap(false);
         inspector->addWidget(_properties, 124.0f);
         inspector->addWidget(makeHeader(L"AYHUMANOID MAPPING"), 20.0f);
+        auto* targetRow = new ayt::ui::HBox();
+        targetRow->setSpacing(4.0f);
+        _targetSkeletonPath = new ayt::ui::TextInput();
+        _targetSkeletonPath->setId("skeleton_retarget_target");
+        _targetSkeletonPath->setPlaceholder(L"Target .ayskel path");
+        targetRow->addWidget(_targetSkeletonPath, 0.0f);
+        targetRow->addWidget(makeButton(L"Set target", [this]() {
+            configureRetarget();
+        }), 78.0f);
+        inspector->addWidget(targetRow, 28.0f);
+        auto* platformRow = new ayt::ui::HBox();
+        platformRow->setSpacing(4.0f);
+        _platform = new ayt::ui::TextInput();
+        _platform->setId("skeleton_retarget_platform");
+        _platform->setPlaceholder(L"Platform/capability (default)");
+        platformRow->addWidget(_platform, 0.0f);
+        platformRow->addWidget(makeButton(L"Mapping", [this]() {
+            clearRetarget();
+        }), 78.0f);
+        inspector->addWidget(platformRow, 28.0f);
+        auto* profileRow = new ayt::ui::HBox();
+        profileRow->setSpacing(4.0f);
+        _profilePicker = new ayt::ui::ComboBox();
+        _profilePicker->setMaxPopupItems(10);
+        profileRow->addWidget(_profilePicker, 0.0f);
+        profileRow->addWidget(makeButton(L"Use profile", [this]() {
+            switchProfile();
+        }), 82.0f);
+        inspector->addWidget(profileRow, 28.0f);
+        auto* templateRow = new ayt::ui::HBox();
+        templateRow->setSpacing(4.0f);
+        _templatePicker = new ayt::ui::ComboBox();
+        _templatePicker->setMaxPopupItems(10);
+        templateRow->addWidget(_templatePicker, 0.0f);
+        templateRow->addWidget(makeButton(L"Preview", [this]() {
+            previewSelectedTemplate();
+        }), 62.0f);
+        templateRow->addWidget(makeButton(L"Apply template", [this]() {
+            applySelectedTemplate();
+        }), 92.0f);
+        inspector->addWidget(templateRow, 28.0f);
         _roleList = new ayt::ui::ListView();
+        _roleList->setId("skeleton_role_list");
         _roleList->setItemHeight(20.0f);
         _roleList->setOnSelectionChanged([this](int index) {
             if (_syncing || index < 0
@@ -246,23 +317,30 @@ private:
             if (index <= 0) (void)_document->core().unbind(role);
             else (void)_document->core().bind(role, index - 1);
             refreshMapping();
+            refreshHierarchy();
         });
         inspector->addWidget(_bonePicker, 28.0f);
         auto* mappingActions = new ayt::ui::HBox();
         mappingActions->setSpacing(4.0f);
-        mappingActions->addWidget(makeButton(L"Canonical template", [this]() {
+        mappingActions->addWidget(makeButton(L"Canonical", [this]() {
             (void)_document->core().applyCanonicalNameTemplate();
             refreshAll();
-        }), 132.0f);
+        }), 90.0f);
         mappingActions->addWidget(makeButton(L"Clear", [this]() {
             (void)_document->core().clearMapping();
             refreshAll();
-        }), 52.0f);
+        }), 44.0f);
         _nativeButton = makeButton(L"Native: Off", [this]() {
             (void)_document->core().setNative(!_document->core().isNative());
             refreshAll();
         });
-        mappingActions->addWidget(_nativeButton, 86.0f);
+        mappingActions->addWidget(_nativeButton, 72.0f);
+        _customButton = makeButton(L"Custom: Off", [this]() {
+            (void)_document->core().setNotApplicable(
+                !_document->core().isNotApplicable());
+            refreshAll();
+        });
+        mappingActions->addWidget(_customButton, 76.0f);
         inspector->addWidget(mappingActions, 28.0f);
         body->addWidget(inspector, 330.0f);
         root->addWidget(body, 0.0f);
@@ -308,6 +386,7 @@ private:
     void refreshAll()
     {
         refreshHierarchy();
+        refreshProfiles();
         refreshMapping();
         refreshBoneProperties();
         refreshStatus();
@@ -318,18 +397,188 @@ private:
         _host.requestRepaint();
     }
 
+    void refreshProfiles()
+    {
+        std::vector<std::wstring> profiles;
+        const auto& availableProfiles = _document->mappingProfiles();
+        int selectedProfile = -1;
+        for (std::size_t index = 0; index < availableProfiles.size(); ++index) {
+            const auto& profile = availableProfiles[index];
+            profiles.push_back(L"[" + ayt::ui::decodeUtf8Text(
+                    SkeletonEditorCore::rigProfileKindName(profile.kind)) + L"] "
+                + ayt::ui::decodeUtf8Text(profile.name)
+                + L"  [" + ayt::ui::decodeUtf8Text(
+                    std::filesystem::path(profile.path).filename().string()) + L"]");
+            std::error_code error;
+            if (std::filesystem::equivalent(profile.path,
+                    _document->core().mappingPath(), error) && !error) {
+                selectedProfile = static_cast<int>(index);
+            }
+        }
+        if (profiles.empty()) profiles.push_back(L"<No saved mapping profiles>");
+        _profilePicker->setItems(profiles);
+        _profilePicker->setSelectedIndex(
+            selectedProfile >= 0 ? selectedProfile : 0);
+        _profilePicker->setEnabled(!availableProfiles.empty());
+        if (_targetSkeletonPath != nullptr) {
+            _targetSkeletonPath->setText(ayt::ui::decodeUtf8Text(
+                _document->core().targetSkeletonPath()));
+        }
+        if (_platform != nullptr) {
+            _platform->setText(ayt::ui::decodeUtf8Text(
+                _document->core().bakePlatform()));
+        }
+
+        std::vector<std::wstring> templates;
+        for (const auto& profile : _document->templates()) {
+            templates.push_back(ayt::ui::decodeUtf8Text(profile.name)
+                + L"  [" + ayt::ui::decodeUtf8Text(
+                    std::filesystem::path(profile.path).filename().string()) + L"]");
+        }
+        if (templates.empty()) templates.push_back(L"<No .ayrig templates>");
+        _templatePicker->setItems(templates);
+        _templatePicker->setSelectedIndex(0);
+        _templatePicker->setEnabled(!_document->templates().empty());
+    }
+
+    void switchProfile()
+    {
+        const int index = _profilePicker->getSelectedIndex();
+        const auto& profiles = _document->mappingProfiles();
+        if (index < 0 || static_cast<std::size_t>(index) >= profiles.size()) {
+            _host.setStatusText(L"No mapping profile selected");
+            return;
+        }
+        std::string error;
+        if (!_document->switchMappingProfile(profiles[index].path, &error)) {
+            _host.setStatusText(L"Profile switch failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        _host.setStatusText(L"Skeleton mapping profile switched");
+        refreshAll();
+    }
+
+    void configureRetarget()
+    {
+        std::string error;
+        if (!_document->configureRetarget(
+                encodeUtf8(_targetSkeletonPath->getText()),
+                encodeUtf8(_platform->getText()), &error)) {
+            _host.setStatusText(L"Retarget target rejected: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        _host.setStatusText(
+            L"Retarget target configured; bake remains blocked until the solver is implemented");
+        refreshAll();
+    }
+
+    void clearRetarget()
+    {
+        (void)_document->clearRetarget();
+        _host.setStatusText(L"RigProfile changed to source mapping mode");
+        refreshAll();
+    }
+
+    void applySelectedTemplate()
+    {
+        const int index = _templatePicker->getSelectedIndex();
+        const auto& templates = _document->templates();
+        if (index < 0 || static_cast<std::size_t>(index) >= templates.size()) {
+            _host.setStatusText(L"No RigProfile template selected");
+            return;
+        }
+        ayt::anim::editor::SkeletonTemplateApplyReport report;
+        std::string error;
+        if (!_document->applyTemplate(templates[index].path, &report, &error)) {
+            _host.setStatusText(L"Template apply failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        std::wostringstream status;
+        status << L"Template applied " << report.appliedCount
+               << L" | preserved " << report.preservedCount
+               << L" | missing " << report.missingCount
+               << L" | ambiguous " << report.ambiguousCount;
+        _host.setStatusText(status.str());
+        refreshAll();
+    }
+
+    void previewSelectedTemplate()
+    {
+        const int index = _templatePicker->getSelectedIndex();
+        const auto& templates = _document->templates();
+        if (index < 0 || static_cast<std::size_t>(index) >= templates.size()) {
+            _host.setStatusText(L"No RigProfile template selected");
+            return;
+        }
+        ayt::anim::editor::SkeletonTemplateApplyReport report;
+        std::string error;
+        if (!_document->previewTemplate(templates[index].path, &report, &error)) {
+            _host.setStatusText(L"Template preview failed: "
+                + ayt::ui::decodeUtf8Text(error));
+            return;
+        }
+        std::wostringstream preview;
+        preview << L"TEMPLATE PREVIEW  |  "
+                << ayt::ui::decodeUtf8Text(report.templateName)
+                << L"\nWould apply: " << report.appliedCount
+                << L"  |  preserve manual: " << report.preservedCount
+                << L"  |  missing: " << report.missingCount
+                << L"  |  ambiguous/conflict: " << report.ambiguousCount
+                << L"\nPreview does not modify the mapping.";
+        _diagnostics->setText(preview.str());
+        _host.setStatusText(L"RigProfile template preview ready");
+    }
+
     void refreshHierarchy()
     {
         std::vector<std::wstring> items;
+        _visibleBoneIndices.clear();
+        const std::wstring filter = _boneSearch != nullptr
+            ? lowerText(_boneSearch->getText()) : std::wstring{};
+        std::vector<std::vector<std::string>> rolesByBone(
+            _document->core().bones().size());
+        for (const auto& spec : ayt::anim::getHumanoidBoneSpecs()) {
+            const int mapped = _document->core().mapping()
+                .getSourceBoneIndex(spec.role);
+            if (mapped >= 0
+                && static_cast<std::size_t>(mapped) < rolesByBone.size()) {
+                rolesByBone[static_cast<std::size_t>(mapped)].push_back(
+                    std::string(spec.canonicalName));
+            }
+        }
         for (const auto& bone : _document->core().bones()) {
+            const std::wstring searchable = lowerText(
+                ayt::ui::decodeUtf8Text(bone.name) + L" "
+                + std::to_wstring(bone.index));
+            if (!filter.empty() && searchable.find(filter) == std::wstring::npos) {
+                continue;
+            }
             std::wstring label(static_cast<std::size_t>(bone.depth * 2), L' ');
             label += ayt::ui::decodeUtf8Text(bone.name);
             label += L"  [" + std::to_wstring(bone.index) + L"]";
+            const auto& mappedRoles = rolesByBone[static_cast<std::size_t>(bone.index)];
+            if (!mappedRoles.empty()) {
+                label += L"  → ";
+                for (std::size_t roleIndex = 0; roleIndex < mappedRoles.size();
+                     ++roleIndex) {
+                    if (roleIndex != 0u) label += L", ";
+                    label += ayt::ui::decodeUtf8Text(mappedRoles[roleIndex]);
+                }
+                if (mappedRoles.size() > 1u) label += L"  [DUPLICATE]";
+            }
             items.push_back(std::move(label));
+            _visibleBoneIndices.push_back(bone.index);
         }
         _syncing = true;
         _boneList->setItems(items);
-        _boneList->setSelectedIndex(_document->core().selectedBone());
+        const auto selected = std::find(_visibleBoneIndices.begin(),
+            _visibleBoneIndices.end(), _document->core().selectedBone());
+        _boneList->setSelectedIndex(selected == _visibleBoneIndices.end()
+            ? -1 : static_cast<int>(std::distance(
+                _visibleBoneIndices.begin(), selected)));
         std::vector<std::wstring> choices{L"<Unmapped>"};
         for (const auto& bone : _document->core().bones()) {
             choices.push_back(ayt::ui::decodeUtf8Text(bone.name)
@@ -343,14 +592,33 @@ private:
     {
         std::vector<std::wstring> roles;
         roles.reserve(ayt::anim::kHumanoidBoneCount);
+        std::vector<int> ownerCount(_document->core().bones().size(), 0);
         for (const auto& spec : ayt::anim::getHumanoidBoneSpecs()) {
-            std::wstring label = spec.requirement == HumanoidBoneRequirement::Required
-                ? L"* " : L"  ";
+            const int mapped = _document->core().mapping()
+                .getSourceBoneIndex(spec.role);
+            if (mapped >= 0 && static_cast<std::size_t>(mapped) < ownerCount.size()) {
+                ++ownerCount[static_cast<std::size_t>(mapped)];
+            }
+        }
+        for (const auto& spec : ayt::anim::getHumanoidBoneSpecs()) {
+            const std::string roleName(spec.canonicalName);
+            const bool left = roleName.starts_with("left");
+            const bool right = roleName.starts_with("right");
+            std::wstring label = left ? L"L " : right ? L"R " : L"· ";
+            label += spec.requirement == HumanoidBoneRequirement::Required
+                ? L"REQ " : L"    ";
             label += ayt::ui::decodeUtf8Text(std::string(spec.canonicalName));
             const int bone = _document->core().mapping().getSourceBoneIndex(spec.role);
             if (bone >= 0 && bone < static_cast<int>(_document->core().bones().size())) {
                 label += L"  ->  " + ayt::ui::decodeUtf8Text(
                     _document->core().bones()[bone].name);
+                if (ownerCount[static_cast<std::size_t>(bone)] > 1) {
+                    label += L"  [DUPLICATE]";
+                }
+            } else if (spec.requirement == HumanoidBoneRequirement::Required) {
+                label += L"  [MISSING]";
+            } else {
+                label += L"  [optional]";
             }
             roles.push_back(std::move(label));
         }
@@ -360,6 +628,8 @@ private:
             static_cast<int>(_document->core().selectedRole()));
         _nativeButton->setText(_document->core().isNative()
             ? L"Native: On" : L"Native: Off");
+        _customButton->setText(_document->core().isNotApplicable()
+            ? L"Custom: On" : L"Custom: Off");
         _syncing = false;
         refreshRolePicker();
         refreshStatus();
@@ -505,11 +775,17 @@ private:
     void startBake()
     {
         const auto plan = _document->core().dryRunBake();
+        if (!plan.canBake()) {
+            (void)refreshPreflight();
+            _host.setStatusText(L"Skeleton bake blocked by preflight");
+            return;
+        }
         const std::filesystem::path output =
             std::filesystem::path(_document->core().skeletonPath()).parent_path()
             / "Baked";
         _activeBakeGeneration = _bakeJob.start(plan, output.string());
         _handledBakeGeneration = 0u;
+        _document->core().setBakeInProgress(true);
         _host.setStatusText(L"Skeleton bake started");
         pollBake();
     }
@@ -533,6 +809,7 @@ private:
             || snapshot.generation == _handledBakeGeneration) {
             return;
         }
+        _document->core().setBakeInProgress(false);
         _handledBakeGeneration = snapshot.generation;
         const bool succeeded = snapshot.state
             == ayt::anim::editor::SkeletonBakeJobState::Succeeded;
@@ -590,6 +867,7 @@ private:
         std::string error;
         if (_document->save(&error)) {
             _host.setStatusText(L"Skeleton mapping saved");
+            refreshProfiles();
         } else {
             _host.setStatusText(L"Skeleton mapping save failed: "
                 + ayt::ui::decodeUtf8Text(error));
@@ -616,17 +894,24 @@ private:
     ayt::ui::Widget* _root = nullptr;
     EditorSkeletonCanvas* _canvas = nullptr;
     ayt::ui::ListView* _boneList = nullptr;
+    ayt::ui::TextInput* _boneSearch = nullptr;
     ayt::ui::ListView* _roleList = nullptr;
     ayt::ui::ComboBox* _bonePicker = nullptr;
+    ayt::ui::ComboBox* _profilePicker = nullptr;
+    ayt::ui::ComboBox* _templatePicker = nullptr;
     ayt::ui::TextArea* _properties = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::TextInput* _animationPath = nullptr;
+    ayt::ui::TextInput* _targetSkeletonPath = nullptr;
+    ayt::ui::TextInput* _platform = nullptr;
     ayt::ui::Slider* _timeline = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
     ayt::ui::TextLabel* _adaptation = nullptr;
     ayt::ui::TextLabel* _bake = nullptr;
     ayt::ui::TextLabel* _status = nullptr;
     ayt::ui::Button* _nativeButton = nullptr;
+    ayt::ui::Button* _customButton = nullptr;
+    std::vector<int> _visibleBoneIndices;
     ayt::anim::editor::SkeletonBakeJob _bakeJob;
     std::uint64_t _activeBakeGeneration = 0u;
     std::uint64_t _handledBakeGeneration = 0u;

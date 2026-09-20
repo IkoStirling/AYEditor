@@ -115,6 +115,9 @@ set(SRC_FILES
     src/AYEditorGameFlowDocument.cpp
     src/AYEditorGameFlowPreview.cpp
     src/AYEditorGameFlowExtension.cpp
+    src/AYEditorAnimationDocument.cpp
+    src/AYEditorAnimationCanvas.cpp
+    src/AYEditorAnimationExtension.cpp
     src/AYEditorSkeletonDocument.cpp
     src/AYEditorSkeletonCanvas.cpp
     src/AYEditorSkeletonExtension.cpp
@@ -187,6 +190,8 @@ set(HEAD_FILES
     include/AYEditor/EditorGameFlowDocument.h
     include/AYEditor/EditorGameFlowPreview.h
     include/AYEditor/EditorGameFlowExtension.h
+    include/AYEditor/EditorAnimationDocument.h
+    include/AYEditor/EditorAnimationExtension.h
     include/AYEditor/EditorSkeletonDocument.h
     include/AYEditor/EditorSkeletonExtension.h
     include/AYEditor/EditorStartupSplash.h
@@ -208,7 +213,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=21)
+    AYEDITOR_SOURCE_ABI_VERSION=22)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

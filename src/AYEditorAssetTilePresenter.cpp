@@ -52,8 +52,25 @@ EditorAssetTilePresentation EditorAssetTilePresenter::present(
 {
     EditorAssetTilePresentation result =
         makePresentation(record.id, record.type, false, record.name);
-    if (record.type == EditorAssetType::Skeleton
-        || record.type == EditorAssetType::SkeletonMapping) {
+    bool inspectSkeletonStatus = record.type == EditorAssetType::Skeleton;
+    if (record.type == EditorAssetType::SkeletonMapping) {
+        ayt::anim::editor::RigProfileInfo info;
+        if (ayt::anim::editor::SkeletonEditorCore::inspectRigProfile(
+                record.absolutePath, info, nullptr)
+            && info.kind != ayt::anim::editor::RigProfileKind::Mapping
+            && info.kind != ayt::anim::editor::RigProfileKind::Retarget) {
+            result.typeAbbreviation += L" ";
+            result.typeAbbreviation += ayt::ui::decodeUtf8Text(
+                ayt::anim::editor::SkeletonEditorCore::rigProfileKindName(
+                    info.kind));
+        } else {
+            inspectSkeletonStatus = true;
+            if (info.kind == ayt::anim::editor::RigProfileKind::Retarget) {
+                result.typeAbbreviation += L" RT";
+            }
+        }
+    }
+    if (inspectSkeletonStatus) {
         const auto status = ayt::anim::editor::SkeletonEditorCore::inspectStatus(
             record.absolutePath);
         using A = ayt::anim::editor::SkeletonAdaptationState;
@@ -61,13 +78,16 @@ EditorAssetTilePresentation EditorAssetTilePresenter::present(
         switch (status.adaptation) {
         case A::Unmapped: result.adaptationBadge = L"M:--"; break;
         case A::Incomplete: result.adaptationBadge = L"M:!"; break;
+        case A::Invalid: result.adaptationBadge = L"M:X"; break;
         case A::Validated: result.adaptationBadge = L"M:OK"; break;
         case A::Native: result.adaptationBadge = L"M:N"; break;
+        case A::NotApplicable: result.adaptationBadge = L"M:N/A"; break;
         }
         switch (status.bake) {
         case B::NotBaked: result.bakeBadge = L"B:--"; break;
+        case B::Baking: result.bakeBadge = L"B:…"; break;
         case B::Stale: result.bakeBadge = L"B:!"; break;
-        case B::Ready: result.bakeBadge = L"B:OK"; break;
+        case B::Current: result.bakeBadge = L"B:OK"; break;
         case B::Failed: result.bakeBadge = L"B:X"; break;
         }
         // Mapping remains in the bottom information strip while bake is

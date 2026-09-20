@@ -1,4 +1,5 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
+#include "AYEditor/EditorAnimationExtension.h"
 
 #include "AYEditor/EditorCommandSystem.h"
 #include "AYEditor/EditorProductPaths.h"
@@ -4621,7 +4622,9 @@ public:
                 break;
             }
         }
-        if (timeline != nullptr) timeline->timelineTick(dt);
+        if (timeline != nullptr && !timeline->timelineOwnsPlaybackTick()) {
+            timeline->timelineTick(dt);
+        }
         const std::wstring text = timeline == nullptr
             ? L"No open document exposes timeline data."
             : ayt::ui::decodeUtf8Text(sourceTitle) + L"   "
@@ -4869,8 +4872,7 @@ bool registerEditorBuiltInExtensions(
         };
         return add(registry, std::move(descriptor), error);
     };
-    if (!addTimedAsset(kEditorAnimationTimelineExtensionId, L"Animation",
-            false, {".ayanm", ".ayanim"}, {"Animation"})) return false;
+    if (!registerEditorAnimationExtension(registry, error)) return false;
     if (!addTimedAsset(kEditorAudioTimelineExtensionId, L"Audio",
             true, {".ayaudio", ".wav", ".ogg", ".mp3", ".flac"},
             {"Audio"})) return false;

@@ -19,6 +19,7 @@ class EditorSkeletonDocument final : public IEditorDocument,
                                      public IEditorTimelineSource {
 public:
     bool initialize(const EditorOpenRequest& request, std::string& error);
+    void configureProjectRoot(const std::string& projectRoot);
 
     const std::string& typeId() const noexcept override { return _typeId; }
     const std::string& path() const noexcept override { return _path; }
@@ -34,6 +35,26 @@ public:
         return _core;
     }
 
+    const std::vector<ayt::anim::editor::RigProfileInfo>& mappingProfiles()
+        const noexcept { return _mappingProfiles; }
+    const std::vector<ayt::anim::editor::RigProfileInfo>& templates()
+        const noexcept { return _templates; }
+    bool switchMappingProfile(const std::string& path,
+                              std::string* error = nullptr);
+    bool configureRetarget(const std::string& targetSkeletonPath,
+                           const std::string& platform,
+                           std::string* error = nullptr);
+    bool clearRetarget();
+    bool applyTemplate(const std::string& path,
+                       ayt::anim::editor::SkeletonTemplateApplyReport* report,
+                       std::string* error = nullptr);
+    bool previewTemplate(const std::string& path,
+                         ayt::anim::editor::SkeletonTemplateApplyReport* report,
+                         std::string* error = nullptr);
+    bool persistProfileBinding(std::string* error = nullptr) const;
+    static std::string resolveBoundProfilePath(
+        const std::string& projectRoot, const std::string& skeletonPath);
+
     bool handlesCommand(const std::string& commandId) const override;
     bool canExecuteCommand(const std::string& commandId) const override;
     bool executeCommand(const std::string& commandId) override;
@@ -48,6 +69,7 @@ public:
     void timelinePause() override;
     void timelineStop() override;
     void timelineTick(double seconds) override;
+    bool timelineOwnsPlaybackTick() const noexcept override { return true; }
     bool timelineCanUndo() const noexcept override;
     bool timelineCanRedo() const noexcept override;
     bool timelineUndo() override;
@@ -57,7 +79,15 @@ private:
     std::string _typeId = "ayeditor.skeleton.document";
     std::string _path;
     std::string _title;
+    std::string _projectRoot;
+    std::string _bindingMetadataPath;
+    std::string _openedResourcePath;
+    bool _openedProfileExplicitly = false;
+    std::vector<ayt::anim::editor::RigProfileInfo> _mappingProfiles;
+    std::vector<ayt::anim::editor::RigProfileInfo> _templates;
     ayt::anim::editor::SkeletonEditorCore _core;
+
+    void discoverProfiles();
 };
 
 } // namespace ayt::editor

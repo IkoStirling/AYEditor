@@ -30,6 +30,8 @@ struct EditorUiLayoutExtensionConfig {
     std::function<std::string()> themePathPicker;
     std::function<std::vector<ayt::ui::LayoutTextureResource>()>
         textureResourceProvider;
+    ayt::ui::LayoutEditorSession::ApplicationCommandProvider
+        applicationCommandProvider;
     // Project-level reusable components shared by every *.ui.json document.
     // Evaluated on attach so projects selected after editor construction use
     // the current asset root.

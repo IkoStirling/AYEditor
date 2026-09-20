@@ -29,6 +29,7 @@
 #include "AYEditor/EditorUiFlowDocument.h"
 #include "AYEditor/EditorGameFlowExtension.h"
 #include "AYEditor/EditorSkeletonExtension.h"
+#include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEditorProjectSettingsController.h"
@@ -70,6 +71,7 @@
 #include "AYDevice/DeviceManager.h"
 #include <AYApplication/GameFlowStandardActions.h>
 #include <AYApplication/GameFlowContract.h>
+#include <AYApplication/GameFlowAssets.h>
 #include <AYIO/File.h>
 #include <AYLocalization.h>
 
@@ -872,6 +874,27 @@ std::vector<ayt::ui::LayoutTextureResource> enumerateUiTextureResources(
     return resources;
 }
 
+std::vector<std::string> enumerateGameFlowApplicationCommands(
+    const std::string& projectRoot)
+{
+    std::vector<std::string> commands;
+    if (projectRoot.empty()) return commands;
+    ayt::app::GameFlowAssetCatalog catalog;
+    std::string error;
+    if (!ayt::app::scanGameFlowAssets(
+            resolveProjectAssetRoot(projectRoot), catalog, &error)) {
+        return commands;
+    }
+    for (const auto& asset : catalog.documents) {
+        for (const auto& intent : asset.document.intents) {
+            if (!intent.id.empty()) commands.push_back(intent.id);
+        }
+    }
+    std::sort(commands.begin(), commands.end());
+    commands.erase(std::unique(commands.begin(), commands.end()), commands.end());
+    return commands;
+}
+
 std::string resolveAudioEditorChromePath(
     const std::string& engineAssetsRoot) {
     const std::string path = (std::filesystem::path(engineAssetsRoot)
@@ -1413,6 +1436,10 @@ EditorSession::EditorSession()
     layoutConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
             _engineAssetsRoot, _assetDatabase.projectRoot());
+    };
+    layoutConfig.applicationCommandProvider = [this]() {
+        return enumerateGameFlowApplicationCommands(
+            _assetDatabase.projectRoot());
     };
     layoutConfig.externalComponentLibraryPath = [this]() {
         return (std::filesystem::path(resolveProjectAssetRoot(
@@ -4367,6 +4394,58 @@ void EditorSession::refreshAssetInspector()
         stateText += L" | Import: ";
         stateText += ayt::ui::decodeUtf8Text(
             editorAssetImportStateName(record->importState));
+    }
+    if (record->type == EditorAssetType::Skeleton) {
+        const std::string boundProfile =
+            EditorSkeletonDocument::resolveBoundProfilePath(
+                _assetDatabase.projectRoot(), record->absolutePath);
+        const auto authoring =
+            ayt::anim::editor::SkeletonEditorCore::inspectStatus(
+                boundProfile.empty() ? record->absolutePath : boundProfile);
+        stateText += L" | Mapping: ";
+        stateText += ayt::ui::decodeUtf8Text(
+            ayt::anim::editor::SkeletonEditorCore::adaptationStateName(
+                authoring.adaptation));
+        stateText += L" | Bake: ";
+        stateText += ayt::ui::decodeUtf8Text(
+            ayt::anim::editor::SkeletonEditorCore::bakeStateName(
+                authoring.bake));
+    } else if (record->type == EditorAssetType::SkeletonMapping) {
+        ayt::anim::editor::RigProfileInfo info;
+        std::string profileError;
+        if (ayt::anim::editor::SkeletonEditorCore::inspectRigProfile(
+                record->absolutePath, info, &profileError)) {
+            stateText += L" | Profile: ";
+            stateText += ayt::ui::decodeUtf8Text(
+                ayt::anim::editor::SkeletonEditorCore::rigProfileKindName(
+                    info.kind));
+            if (info.kind == ayt::anim::editor::RigProfileKind::Mapping
+                || info.kind == ayt::anim::editor::RigProfileKind::Retarget) {
+                const auto authoring =
+                    ayt::anim::editor::SkeletonEditorCore::inspectStatus(
+                        record->absolutePath);
+                stateText += L" | Mapping: ";
+                stateText += ayt::ui::decodeUtf8Text(
+                    ayt::anim::editor::SkeletonEditorCore::adaptationStateName(
+                        authoring.adaptation));
+                stateText += L" | Bake: ";
+                stateText += ayt::ui::decodeUtf8Text(
+                    ayt::anim::editor::SkeletonEditorCore::bakeStateName(
+                        authoring.bake));
+                if (info.kind == ayt::anim::editor::RigProfileKind::Retarget) {
+                    stateText += L" | Target: ";
+                    stateText += ayt::ui::decodeUtf8Text(
+                        std::filesystem::path(info.targetSkeletonPath)
+                            .filename().string());
+                    stateText += L" | Platform: ";
+                    stateText += ayt::ui::decodeUtf8Text(info.platform);
+                }
+            } else {
+                stateText += L" | Mapping: template | Bake: not applicable";
+            }
+        } else {
+            stateText += L" | RigProfile: invalid";
+        }
     }
     set("inspector_asset_state", stateText);
     if (auto* reload = dynamic_cast<ayt::ui::Button*>(
@@ -8263,6 +8342,10 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
     controllerConfig.textureResourceProvider = [this]() {
         return enumerateUiTextureResources(
             _engineAssetsRoot, _assetDatabase.projectRoot());
+    };
+    controllerConfig.applicationCommandProvider = [this]() {
+        return enumerateGameFlowApplicationCommands(
+            _assetDatabase.projectRoot());
     };
     controllerConfig.externalComponentLibraryPath = [this]() {
         return (std::filesystem::path(resolveProjectAssetRoot(

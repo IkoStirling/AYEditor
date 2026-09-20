@@ -69,6 +69,10 @@ public:
     virtual void timelinePause() {}
     virtual void timelineStop() { (void)setTimelinePositionSeconds(0.0); }
     virtual void timelineTick(double) {}
+    // Document views that own a live visual preview advance themselves so
+    // playback remains available even when the Timeline tool is closed.
+    // The Timeline tool must not advance such sources a second time.
+    virtual bool timelineOwnsPlaybackTick() const noexcept { return false; }
     virtual std::vector<EditorTimelineKeyframe> timelineKeyframes() const {
         return {};
     }

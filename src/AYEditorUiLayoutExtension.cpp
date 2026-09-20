@@ -46,6 +46,7 @@ struct EditorUiLayoutController::Impl {
         session.setProjectRefactorKinds(config.projectRefactorKinds);
         session.setProjectRefactorAction(config.projectRefactorAction);
         session.setTextureResourceProvider(config.textureResourceProvider);
+        session.setApplicationCommandProvider(config.applicationCommandProvider);
         session.setDocumentStateUpdater(
             [this](const std::string& path, bool dirty) {
                 if (document != nullptr) document->updateViewState(path, dirty);

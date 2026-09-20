@@ -23,6 +23,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorAssetBrowser.cpp
     Test_EditorAssetTilePresenter.cpp
     Test_EditorSkeletonExtension.cpp
+    Test_EditorAnimationExtension.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp

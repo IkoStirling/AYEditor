@@ -117,8 +117,12 @@ pause.close
 
 ## 5. 让布局中的按钮驱动 Flow
 
-先在 UI Layout Designer 中给按钮绑定声明式 handler，例如 `startGame`。然后选中对应 Screen，在
-“控件事件”字段填写：
+常规游戏流程按钮在 UI Layout Designer 的 `On Click` 下拉框中直接选择 GameFlow Intent，
+例如 `menu.start`。作者只配置这一处；运行时自动把未被 Screen 显式映射的事件作为应用命令
+交给 GameFlow，同名 Intent 决定切换 World、显示界面或执行其他流程动作。
+
+只有 UI 内部状态、带类型 payload 的交互或兼容旧项目时，才需要选中对应 Screen，在
+“控件事件”字段填写显式 handler/Signal 映射：
 
 ```text
 startGame=game.start; openPause=pause.open
@@ -147,7 +151,8 @@ Workflow 功能也能扫描 handler，并自动补齐 Flow Signal 与映射。
 - **预览为空**：确认 Entry 激活了 Context，Context 又把 Screen 分配到有效 Slot。
 - **触发信号没有变化**：检查 Transition 的 Region、起始 State 和 Signal ID；转换只在起始 State 活动时生效。
 - **布局无法加载**：Screen 的 Layout Asset 必须相对项目 Assets 根目录，不能使用绝对路径或 `..` 越界。
-- **按钮点击无效**：检查 Layout handler 与 Screen 的 `handler=signal` 映射，并确认 Signal 已声明。
+- **按钮点击无效**：普通流程按钮检查 `On Click` 是否选择了当前 GameFlow 状态可接受的 Intent；
+  高级 UIFlow 事件再检查 Layout handler、Screen 的 `handler=signal` 映射与 Signal 声明。
 - **无法删除对象**：编辑器禁止删除仍被 Slot、Context、State、Transition 或 Graph 引用的对象；先移除引用。
 - **暂停界面没有挡住下层输入**：将模态 Layer 的输入策略设为 `blockLower`，并提高其 Order。
 - **修改后预览仍是旧状态**：检查器会自动提交，但运行中的预览不会静默替换；点击“重新启动预览”。

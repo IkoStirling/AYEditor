@@ -8,6 +8,9 @@
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Skeleton.h>
 #include <AYUI/MockRenderer.h>
+#include <AYUI/ListView.h>
+#include <AYUI/TextInput.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <filesystem>
@@ -91,6 +94,17 @@ private:
     std::string _root;
 };
 
+ayt::ui::Widget* findSkeletonWidget(ayt::ui::Widget* root,
+                                    const std::string& id)
+{
+    if (root == nullptr) return nullptr;
+    if (root->getId() == id) return root;
+    for (ayt::ui::Widget* child : root->getChildren()) {
+        if (auto* found = findSkeletonWidget(child, id)) return found;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 TEST_SUITE(AYEditor_SkeletonExtension)
@@ -132,6 +146,24 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
     CHECK(view != nullptr);
     CHECK(view != nullptr && view->rootWidget() != nullptr);
     CHECK(view != nullptr && view->commandTarget() == skeleton.get());
+    auto* search = dynamic_cast<ayt::ui::TextInput*>(findSkeletonWidget(
+        view->rootWidget(), "skeleton_bone_search"));
+    auto* bones = dynamic_cast<ayt::ui::ListView*>(findSkeletonWidget(
+        view->rootWidget(), "skeleton_bone_list"));
+    auto* roles = dynamic_cast<ayt::ui::ListView*>(findSkeletonWidget(
+        view->rootWidget(), "skeleton_role_list"));
+    CHECK(search != nullptr);
+    CHECK(bones != nullptr && bones->getItemCount() == 17u);
+    CHECK(roles != nullptr
+        && roles->getItemCount() == ayt::anim::kHumanoidBoneCount);
+    if (search != nullptr && bones != nullptr) {
+        search->setText(L"head");
+        CHECK(bones->getItemCount() == 1u);
+    }
+    CHECK(findSkeletonWidget(
+        view->rootWidget(), "skeleton_retarget_target") != nullptr);
+    CHECK(findSkeletonWidget(
+        view->rootWidget(), "skeleton_retarget_platform") != nullptr);
 }
 
 TEST_CASE(skeleton_document_exposes_animation_through_shared_timeline)
@@ -150,6 +182,76 @@ TEST_CASE(skeleton_document_exposes_animation_through_shared_timeline)
     CHECK(document.timelinePlaying());
     document.timelinePause();
     CHECK_FALSE(document.timelinePlaying());
+}
+
+TEST_CASE(skeleton_document_persists_explicit_profile_binding_and_discovers_templates)
+{
+    const auto projectRoot = skeletonExtensionFixtureRoot();
+    const auto skeletonPath = writeEditorSkeletonFixture();
+    const auto profiles = projectRoot / "Profiles";
+    std::error_code ignored;
+    std::filesystem::remove_all(projectRoot / ".ayeditor", ignored);
+    std::filesystem::remove_all(profiles, ignored);
+    std::filesystem::create_directories(profiles, ignored);
+
+    std::string error;
+    ayt::anim::editor::SkeletonEditorCore complete;
+    CHECK(complete.open(skeletonPath.string(), &error));
+    CHECK(complete.applyCanonicalNameTemplate());
+    const auto completePath = profiles / "complete.ayrig";
+    CHECK(complete.saveMappingAs(completePath.string(), &error));
+
+    ayt::anim::editor::SkeletonEditorCore minimal;
+    CHECK(minimal.open(skeletonPath.string(), &error));
+    CHECK(minimal.bind(ayt::anim::HumanoidBone::Hips, 2));
+    const auto minimalPath = profiles / "minimal.ayrig";
+    CHECK(minimal.saveMappingAs(minimalPath.string(), &error));
+
+    const auto templatePath = profiles / "canonical-names.ayrig";
+    const nlohmann::json rigTemplate = {
+        {"type", "RigProfile"}, {"version", 1},
+        {"id", "template-editor-test"}, {"kind", "template"},
+        {"name", "Canonical names"},
+        {"roles", {{"spine", "spine"}, {"head", "head"}}},
+    };
+    CHECK(ayt::io::File::writeAllText(
+        templatePath.string(), rigTemplate.dump(2) + "\n"));
+
+    ayt::editor::EditorSkeletonDocument first;
+    CHECK(first.initialize(
+        ayt::editor::EditorOpenRequest{skeletonPath.string()}, error));
+    first.configureProjectRoot(projectRoot.string());
+    CHECK(first.mappingProfiles().size() >= 2u);
+    CHECK(first.templates().size() == 1u);
+    CHECK(first.switchMappingProfile(completePath.string(), &error));
+    const auto bindingPath = projectRoot / ".ayeditor"
+        / "skeleton-profile-bindings.json";
+    CHECK(std::filesystem::exists(bindingPath));
+    const auto bindingJson = nlohmann::json::parse(
+        ayt::io::File::readAllText(bindingPath.string()));
+    CHECK(bindingJson["bindings"]["editor_fixture.ayskel"]
+        ["profileId"].is_string());
+
+    const auto movedCompletePath = profiles / "complete-renamed.ayrig";
+    ignored.clear();
+    std::filesystem::rename(completePath, movedCompletePath, ignored);
+    CHECK(!ignored);
+
+    ayt::editor::EditorSkeletonDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{skeletonPath.string()}, error));
+    reopened.configureProjectRoot(projectRoot.string());
+    CHECK(std::filesystem::equivalent(
+        reopened.core().mappingPath(), movedCompletePath));
+    CHECK(reopened.core().validation().isValid());
+    CHECK(reopened.switchMappingProfile(minimalPath.string(), &error));
+    CHECK(reopened.core().mapping().getBoundCount() == 1u);
+
+    ayt::anim::editor::SkeletonTemplateApplyReport report;
+    CHECK(reopened.applyTemplate(templatePath.string(), &report, &error));
+    CHECK(report.appliedCount == 2u);
+    CHECK(reopened.core().mapping().getSourceBoneIndex(
+        ayt::anim::HumanoidBone::Spine) == 3);
 }
 
 TEST_CASE(skeleton_asset_tile_keeps_mapping_and_bake_status_separate)
