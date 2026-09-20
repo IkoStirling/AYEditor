@@ -13,10 +13,12 @@
 #include <AYUI/TextArea.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
+#include <AYUI/UIManager.h>
 #include <AYUI/UnicodeText.h>
 #include <AYUI/Widget.h>
 
 #include <algorithm>
+#include <cmath>
 #include <iomanip>
 #include <filesystem>
 #include <cwctype>
@@ -87,6 +89,96 @@ std::wstring lowerText(std::wstring value)
         [](wchar_t character) { return std::towlower(character); });
     return value;
 }
+
+class SkeletonBoneDragList final : public ayt::ui::ListView {
+public:
+    using PayloadProvider = std::function<ayt::ui::DragPayload(int)>;
+
+    SkeletonBoneDragList()
+    {
+        setDraggable(true);
+        setOnDragEnd([this](bool) { resetDrag(); });
+    }
+
+    void setPayloadProvider(PayloadProvider provider)
+    {
+        _payloadProvider = std::move(provider);
+    }
+
+    ayt::ui::Widget* hitTest(const ayt::math::FVector2& worldPos) override
+    {
+        ayt::ui::Widget* hit = ayt::ui::ListView::hitTest(worldPos);
+        if (hit == nullptr || hit == getVerticalScrollBar()) return hit;
+        return this;
+    }
+
+    bool onMouseButtonDown(const ayt::ui::UIMouseEvent& event) override
+    {
+        (void)ayt::ui::ListView::onMouseButtonDown(event);
+        if (event.mouseButton != 0) return false;
+        const auto bounds = getWorldBounds();
+        if (!bounds.contains(event.mousePos)) return false;
+        const float localY = event.mousePos.y - bounds.minY
+            + getScrollOffset().y;
+        const int row = static_cast<int>(std::floor(
+            localY / (std::max)(1.0f, getItemHeight())));
+        if (row < 0 || static_cast<std::size_t>(row) >= getItemCount()) {
+            resetDrag();
+            return false;
+        }
+        const ayt::ui::DragPayload payload = _payloadProvider
+            ? _payloadProvider(row) : ayt::ui::DragPayload{};
+        if (payload.isEmpty()) {
+            resetDrag();
+            return false;
+        }
+        setSelectedIndex(row);
+        setDragPayload(payload);
+        _pressPoint = event.mousePos;
+        _pressed = true;
+        return true;
+    }
+
+    bool onMouseMove(const ayt::ui::UIMouseEvent& event) override
+    {
+        if (!_pressed || _dragging) return false;
+        const auto delta = event.mousePos - _pressPoint;
+        if (delta.x * delta.x + delta.y * delta.y < 25.0f) return true;
+        if (auto* manager = ayt::ui::UIManager::tryGet();
+            manager != nullptr && manager->beginDrag(this)) {
+            _dragging = true;
+            return true;
+        }
+        resetDrag();
+        return false;
+    }
+
+    bool onMouseButtonUp(const ayt::ui::UIMouseEvent& event) override
+    {
+        if (_dragging) {
+            resetDrag();
+            return true;
+        }
+        const bool handled = ayt::ui::ListView::onMouseButtonUp(event);
+        resetDrag();
+        return handled;
+    }
+
+    void onCaptureCancelled() override { resetDrag(); }
+
+private:
+    void resetDrag()
+    {
+        _pressed = false;
+        _dragging = false;
+        setDragPayload({});
+    }
+
+    PayloadProvider _payloadProvider;
+    ayt::math::FVector2 _pressPoint{};
+    bool _pressed = false;
+    bool _dragging = false;
+};
 
 class EditorSkeletonWorkspaceView final : public IEditorView {
 public:
@@ -220,7 +312,8 @@ private:
             refreshHierarchy();
         });
         hierarchy->addWidget(_boneSearch, 26.0f);
-        _boneList = new ayt::ui::ListView();
+        auto* boneList = new SkeletonBoneDragList();
+        _boneList = boneList;
         _boneList->setId("skeleton_bone_list");
         _boneList->setItemHeight(20.0f);
         _boneList->setOnSelectionChanged([this](int index) {
@@ -231,6 +324,19 @@ private:
             (void)_document->core().selectBone(_visibleBoneIndices[index]);
             refreshBoneProperties();
             if (_canvas != nullptr) _canvas->markDirty();
+        });
+        boneList->setPayloadProvider([this](int row) {
+            ayt::ui::DragPayload payload;
+            if (row < 0
+                || static_cast<std::size_t>(row) >= _visibleBoneIndices.size()) {
+                return payload;
+            }
+            const int boneIndex = _visibleBoneIndices[static_cast<std::size_t>(row)];
+            payload.kind = "SkeletonBone";
+            payload.userData = boneIndex;
+            payload.text = ayt::ui::decodeUtf8Text(
+                _document->core().bones()[static_cast<std::size_t>(boneIndex)].name);
+            return payload;
         });
         hierarchy->addWidget(_boneList, 0.0f);
         body->addWidget(hierarchy, 230.0f);
@@ -307,6 +413,34 @@ private:
             }
             (void)_document->core().selectRole(static_cast<HumanoidBone>(index));
             refreshRolePicker();
+        });
+        _roleList->setAcceptDrops(true);
+        _roleList->setAcceptDropKinds({"SkeletonBone"});
+        _roleList->setOnDrop([this](const ayt::ui::DragPayload& payload) {
+            if (payload.kind != "SkeletonBone") return;
+            const auto* manager = ayt::ui::UIManager::tryGet();
+            if (manager == nullptr) return;
+            const auto point = manager->getDragLastMousePos();
+            const auto bounds = _roleList->getWorldBounds();
+            if (!bounds.contains(point)) return;
+            const float localY = point.y - bounds.minY
+                + _roleList->getScrollOffset().y;
+            const int row = static_cast<int>(std::floor(
+                localY / (std::max)(1.0f, _roleList->getItemHeight())));
+            if (row < 0
+                || static_cast<std::size_t>(row) >= ayt::anim::kHumanoidBoneCount) {
+                return;
+            }
+            const auto role = static_cast<HumanoidBone>(row);
+            if (!_document->core().selectRole(role)
+                || !_document->core().bind(role, payload.userData)) {
+                _host.setStatusText(L"Bone mapping drop was rejected");
+                return;
+            }
+            _host.setStatusText(L"Mapped " + payload.text + L" by drag and drop");
+            refreshMapping();
+            refreshHierarchy();
+            refreshPreflight();
         });
         inspector->addWidget(_roleList, 0.0f);
         _bonePicker = new ayt::ui::ComboBox();

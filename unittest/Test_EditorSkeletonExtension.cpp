@@ -156,6 +156,9 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
     CHECK(bones != nullptr && bones->getItemCount() == 17u);
     CHECK(roles != nullptr
         && roles->getItemCount() == ayt::anim::kHumanoidBoneCount);
+    CHECK(bones != nullptr && bones->isDraggable());
+    CHECK(roles != nullptr && roles->isAcceptDrops());
+    CHECK(roles != nullptr && roles->acceptsKind("SkeletonBone"));
     if (search != nullptr && bones != nullptr) {
         search->setText(L"head");
         CHECK(bones->getItemCount() == 1u);
