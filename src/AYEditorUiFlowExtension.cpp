@@ -189,6 +189,7 @@ protected:
         _hits.clear();
         const FRectangle bounds = getWorldBounds();
         renderer.drawRect(bounds, {0.055f, 0.063f, 0.078f, 1.0f});
+        renderer.pushClip(bounds);
         drawGrid(renderer, bounds);
         const auto& flow = _document.flow();
         if (_document.selection().kind == EditorUiFlowObjectKind::Graph) {
@@ -198,6 +199,7 @@ protected:
             drawStateMachines(renderer, bounds);
         }
         drawMountedScreens(renderer, bounds);
+        renderer.popClip();
     }
 
 private:

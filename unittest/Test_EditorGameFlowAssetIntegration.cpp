@@ -157,7 +157,8 @@ TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
     CHECK(view != nullptr);
     ayt::ui::Widget* root = view != nullptr ? view->rootWidget() : nullptr;
     CHECK(root != nullptr);
-    CHECK(findGameFlowButton(root, L"Localized Save") != nullptr);
+    auto* saveButton = findGameFlowButton(root, L"Localized Save");
+    CHECK(saveButton != nullptr);
     auto* initialState = dynamic_cast<ayt::ui::ComboBox*>(
         findGameFlowWidget(root, "gameflow_property_first_choice"));
     CHECK(initialState != nullptr);
@@ -172,6 +173,11 @@ TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
         root->setSize({1000.0f, 700.0f});
         root->performLayout();
     }
+    CHECK(saveButton != nullptr && saveButton->getHeight() >= 32.0f);
+    auto* parameterPanel = findGameFlowWidget(
+        root, "gameflow_parameter_panel");
+    CHECK(parameterPanel != nullptr);
+    CHECK(parameterPanel != nullptr && !parameterPanel->isVisible());
     ayt::ui::Widget* canvas = findGameFlowWidget(root, "gameflow_canvas");
     CHECK(canvas != nullptr);
     if (canvas != nullptr) {

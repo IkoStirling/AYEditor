@@ -738,6 +738,7 @@ protected:
         _hits.clear();
         const FRectangle bounds = getWorldBounds();
         renderer.drawRect(bounds, {0.045f, 0.052f, 0.066f, 1.0f});
+        renderer.pushClip(bounds);
         drawGrid(renderer, bounds);
         drawFlow(renderer, bounds);
         if (_boxSelecting) {
@@ -749,6 +750,7 @@ protected:
             renderer.drawRect(box, {0.12f, 0.42f, 0.78f, 0.18f});
             drawBorder(renderer, box, {0.30f, 0.68f, 1.0f, 0.9f});
         }
+        renderer.popClip();
     }
 
 private:
@@ -1200,6 +1202,12 @@ public:
         _previewGuardPicker = nullptr;
         _previewGuardAccepted = nullptr;
         _subflowPicker = nullptr;
+        _parameterPanel = nullptr;
+        _parametersHeading = nullptr;
+        _argumentEditorHint = nullptr;
+        _argumentButtons = nullptr;
+        _arguments = nullptr;
+        _argumentValue = nullptr;
         _argumentChoice = nullptr;
         _argumentBool = nullptr;
         _localizedBindings.clear();
@@ -1383,7 +1391,7 @@ private:
     {
         auto* result = new ayt::ui::Button();
         result->setText(text(key, fallback));
-        result->setPadding(6.0f, 3.0f, 6.0f, 3.0f);
+        result->setPadding(7.0f, 4.0f, 7.0f, 4.0f);
         result->setOnClicked(std::move(clicked));
         parent.addWidget(result, width);
         bindLocalized(result, std::move(key), std::move(fallback));
@@ -1411,6 +1419,7 @@ private:
         PropertyRow value;
         value.row = new ayt::ui::HBox();
         value.row->setSpacing(4.0f);
+        value.row->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         value.label = new ayt::ui::TextLabel();
         value.label->setFontSize(11);
         value.label->setTextColor({0.67f, 0.71f, 0.78f, 1.0f});
@@ -1526,6 +1535,7 @@ private:
 
         auto* toolbar = new ayt::ui::HBox();
         toolbar->setSpacing(4.0f);
+        toolbar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         button(*toolbar, "ui.editor.game_flow.save", L"Save", 50.0f,
             [this]() { (void)save(); });
         button(*toolbar, "ui.editor.game_flow.undo", L"Undo", 50.0f, [this]() {
@@ -1560,7 +1570,7 @@ private:
         _status->setVerticalAlignment(
             ayt::ui::TextLabel::VAlignment::Center);
         toolbar->addWidget(_status, 0.0f);
-        root->addWidget(toolbar, 29.0f);
+        root->addWidget(toolbar, 34.0f);
 
         auto* body = new ayt::ui::HBox();
         body->setSpacing(5.0f);
@@ -1587,6 +1597,7 @@ private:
         left->addWidget(_actionPalette, 88.0f);
         auto* actionButtons = new ayt::ui::HBox();
         actionButtons->setSpacing(4.0f);
+        actionButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         button(*actionButtons, "ui.editor.game_flow.add_action",
             L"Add Action", 92.0f,
             [this]() { addPaletteAction(); });
@@ -1594,19 +1605,21 @@ private:
             [this]() { moveAction(-1); });
         button(*actionButtons, "ui.editor.game_flow.move_down", L"Down", 50.0f,
             [this]() { moveAction(1); });
-        left->addWidget(actionButtons, 27.0f);
+        left->addWidget(actionButtons, 32.0f);
         _subflowPicker = new ayt::ui::ComboBox();
         _subflowPicker->setId("gameflow_subflow_picker");
-        left->addWidget(_subflowPicker, 27.0f);
+        left->addWidget(_subflowPicker, 30.0f);
         auto* subflowButtons = new ayt::ui::HBox();
         subflowButtons->setSpacing(4.0f);
+        subflowButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         button(*subflowButtons, "ui.editor.game_flow.add_subflow",
             L"Add Subflow", 112.0f, [this]() { addSubflow(); });
-        left->addWidget(subflowButtons, 27.0f);
+        left->addWidget(subflowButtons, 32.0f);
         _guardPalette = new ayt::ui::ComboBox();
-        left->addWidget(_guardPalette, 27.0f);
+        left->addWidget(_guardPalette, 30.0f);
         auto* guardButtons = new ayt::ui::HBox();
         guardButtons->setSpacing(4.0f);
+        guardButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         button(*guardButtons, "ui.editor.game_flow.set_guard",
             L"Set Guard", 92.0f,
             [this]() { setPaletteGuard(); });
@@ -1614,7 +1627,7 @@ private:
             [this]() { clearGuard(); });
         button(*guardButtons, "ui.editor.game_flow.add_field", L"+ Field", 66.0f,
             [this]() { addIntentField(); });
-        left->addWidget(guardButtons, 27.0f);
+        left->addWidget(guardButtons, 32.0f);
         body->addWidget(left, 224.0f);
 
         auto* center = new ayt::ui::VBox();
@@ -1648,7 +1661,8 @@ private:
         center->addWidget(_canvas, 0.0f);
         auto* previewBar = new ayt::ui::HBox();
         previewBar->setSpacing(4.0f);
-        button(*previewBar, "ui.editor.game_flow.restart", L"Restart", 66.0f,
+        previewBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        button(*previewBar, "ui.editor.game_flow.restart", L"Restart", 78.0f,
             [this]() { restartPreview(); });
         _intentPicker = new ayt::ui::ComboBox();
         _intentPicker->setOnSelectionChanged([this](int) {
@@ -1674,9 +1688,10 @@ private:
         _previewStatus->setVerticalAlignment(
             ayt::ui::TextLabel::VAlignment::Center);
         previewBar->addWidget(_previewStatus, 0.0f);
-        center->addWidget(previewBar, 28.0f);
+        center->addWidget(previewBar, 32.0f);
         auto* payloadBar = new ayt::ui::HBox();
         payloadBar->setSpacing(4.0f);
+        payloadBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         auto* payloadLabel = new ayt::ui::TextLabel();
         payloadLabel->setText(text("ui.editor.game_flow.payload", L"Payload"));
         payloadLabel->setFontSize(11);
@@ -1699,9 +1714,10 @@ private:
             [this]() { setPreviewPayloadField(); });
         button(*payloadBar, "ui.editor.game_flow.clear", L"Clear", 50.0f,
             [this]() { clearPreviewPayloadField(); });
-        center->addWidget(payloadBar, 27.0f);
+        center->addWidget(payloadBar, 32.0f);
         auto* guardBar = new ayt::ui::HBox();
         guardBar->setSpacing(4.0f);
+        guardBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         auto* guardLabel = new ayt::ui::TextLabel();
         guardLabel->setText(text("ui.editor.game_flow.guard", L"Guard"));
         guardLabel->setFontSize(11);
@@ -1715,7 +1731,7 @@ private:
         guardBar->addWidget(_previewGuardAccepted, 28.0f);
         button(*guardBar, "ui.editor.game_flow.apply_guard", L"Apply Guard", 86.0f,
             [this]() { applyPreviewGuard(); });
-        center->addWidget(guardBar, 27.0f);
+        center->addWidget(guardBar, 32.0f);
         _trace = new ayt::ui::TextArea();
         _trace->setReadOnly(true);
         _trace->setWordWrap(false);
@@ -1744,6 +1760,7 @@ private:
         _fifth.choice->setId("gameflow_property_fifth_choice");
         _sixth.choice->setId("gameflow_property_sixth_choice");
         _flagRow = new ayt::ui::HBox();
+        _flagRow->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         _flagLabel = new ayt::ui::TextLabel();
         _flagLabel->setFontSize(11);
         _flagLabel->setVerticalAlignment(
@@ -1755,41 +1772,54 @@ private:
         _value = propertyRow(*inspector);
         auto* inspectorButtons = new ayt::ui::HBox();
         inspectorButtons->setSpacing(4.0f);
+        inspectorButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         button(*inspectorButtons, "ui.editor.game_flow.apply", L"Apply", 62.0f,
             [this]() { applyInspector(); });
-        inspector->addWidget(inspectorButtons, 27.0f);
-        label(*inspector, "ui.editor.game_flow.parameters", L"PARAMETERS");
+        inspector->addWidget(inspectorButtons, 32.0f);
+        _parameterPanel = new ayt::ui::VBox();
+        _parameterPanel->setId("gameflow_parameter_panel");
+        _parameterPanel->setSpacing(3.0f);
+        _parameterPanel->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        _parametersHeading = label(*_parameterPanel,
+            "ui.editor.game_flow.parameters", L"PARAMETERS");
         _arguments = new ayt::ui::ListView();
-        _arguments->setItemHeight(21.0f);
+        _arguments->setItemHeight(24.0f);
         _arguments->setOnSelectionChanged([this](int index) {
             selectArgument(index);
         });
-        inspector->addWidget(_arguments, 100.0f);
+        _parameterPanel->addWidget(_arguments, 76.0f);
+        _argumentEditorHint = label(*_parameterPanel,
+            "ui.editor.game_flow.parameter_editor_hint",
+            L"Select a declared parameter. Values are data, not code.",
+            32.0f);
         _argumentValue = new ayt::ui::TextInput();
         _argumentValue->setId("gameflow_argument_value");
         _argumentValue->setPlaceholder(text(
             "ui.editor.game_flow.selected_parameter_value",
-            L"Selected parameter value"));
-        inspector->addWidget(_argumentValue, 25.0f);
+            L"Parameter value"));
+        _parameterPanel->addWidget(_argumentValue, 30.0f);
         bindLocalized(_argumentValue,
             "ui.editor.game_flow.selected_parameter_value",
-            L"Selected parameter value", LocalizedTarget::Placeholder);
+            L"Parameter value", LocalizedTarget::Placeholder);
         _argumentChoice = new ayt::ui::ComboBox();
         _argumentChoice->setId("gameflow_argument_choice");
         _argumentChoice->setVisible(false);
-        inspector->addWidget(_argumentChoice, 25.0f);
+        _parameterPanel->addWidget(_argumentChoice, 30.0f);
         _argumentBool = new ayt::ui::CheckBox();
         _argumentBool->setId("gameflow_argument_boolean");
         _argumentBool->setVisible(false);
-        inspector->addWidget(_argumentBool, 25.0f);
-        auto* argumentButtons = new ayt::ui::HBox();
-        argumentButtons->setSpacing(4.0f);
-        button(*argumentButtons, "ui.editor.game_flow.set", L"Set", 50.0f,
+        _parameterPanel->addWidget(_argumentBool, 30.0f);
+        _argumentButtons = new ayt::ui::HBox();
+        _argumentButtons->setSpacing(4.0f);
+        _argumentButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        button(*_argumentButtons, "ui.editor.game_flow.apply_parameter",
+            L"Apply Value", 88.0f,
             [this]() { setArgument(); });
-        button(*argumentButtons, "ui.editor.game_flow.use_default",
-            L"Use Default", 92.0f,
+        button(*_argumentButtons, "ui.editor.game_flow.reset_parameter",
+            L"Reset to Default", 116.0f,
             [this]() { clearArgument(); });
-        inspector->addWidget(argumentButtons, 27.0f);
+        _parameterPanel->addWidget(_argumentButtons, 32.0f);
+        inspector->addWidget(_parameterPanel, 178.0f);
         label(*inspector, "ui.editor.game_flow.diagnostics", L"DIAGNOSTICS");
         _diagnostics = new ayt::ui::ListView();
         _diagnostics->setItemHeight(23.0f);
@@ -2457,21 +2487,19 @@ private:
 
     void setArgument()
     {
-        const auto& selection = _document->selection();
-        if (selection.kind != EditorGameFlowObjectKind::ActionArgument) {
+        const int index = _arguments == nullptr
+            ? -1 : _arguments->getSelectedIndex();
+        if (index < 0
+            || static_cast<std::size_t>(index) >= _argumentItems.size()) {
             setLocalizedStatus(
                 "ui.editor.game_flow.status.select_parameter",
                 L"Select a parameter before setting its value.", true);
             return;
         }
-        const auto found = std::find_if(_argumentItems.begin(),
-            _argumentItems.end(), [&](const auto& value) {
-                return value.id == selection.id;
-            });
-        if (found == _argumentItems.end()) return;
+        const auto& argument = _argumentItems[static_cast<std::size_t>(index)];
         bool valid = true;
         ayt::app::GameFlowValue value;
-        if (found->type == ayt::app::GameFlowValueType::Boolean
+        if (argument.type == ayt::app::GameFlowValueType::Boolean
             && _argumentBool != nullptr && _argumentBool->isVisible()) {
             value = ayt::app::GameFlowValue(_argumentBool->isChecked());
         } else if (_argumentChoice != nullptr
@@ -2479,11 +2507,12 @@ private:
             value = ayt::app::GameFlowValue(
                 encodeUtf8(_argumentChoice->getSelectedItem()));
         } else {
-            value = parseValue(_argumentValue->getText(), found->type, valid);
+            value = parseValue(
+                _argumentValue->getText(), argument.type, valid);
         }
         std::string error;
         if (!valid || !_document->setSelectedArgument(
-                selection.id, std::move(value), &error)) {
+                argument.id, std::move(value), &error)) {
             setStatus(valid ? error : "Parameter value has the wrong type.",
                 true);
         }
@@ -2496,6 +2525,20 @@ private:
         _argumentValue->setVisible(false);
         _argumentChoice->setVisible(false);
         _argumentBool->setVisible(false);
+        if (_argumentEditorHint != nullptr) {
+            _argumentEditorHint->setText(argument == nullptr
+                ? text("ui.editor.game_flow.parameter_editor_hint",
+                    L"Select a declared parameter. Values are data, not code.")
+                : ayt::ui::decodeUtf8Text(argument->id) + L"  ·  "
+                    + text("ui.editor.game_flow.type", L"Type") + L": "
+                    + ayt::ui::decodeUtf8Text(
+                        ayt::app::gameFlowValueTypeName(argument->type))
+                    + L"  ·  " + (argument->authored
+                        ? text("ui.editor.game_flow.overridden_value",
+                            L"Overridden value")
+                        : text("ui.editor.game_flow.contract_default",
+                            L"Contract default")));
+        }
         if (argument == nullptr) return;
         if (argument->type == ayt::app::GameFlowValueType::Boolean) {
             _argumentBool->setVisible(true);
@@ -2532,13 +2575,25 @@ private:
 
     void clearArgument()
     {
-        const auto& selection = _document->selection();
+        const int index = _arguments == nullptr
+            ? -1 : _arguments->getSelectedIndex();
         std::string error;
-        if (selection.kind != EditorGameFlowObjectKind::ActionArgument
-            || !_document->clearSelectedArgument(selection.id, &error)) {
-            setStatus(selection.kind != EditorGameFlowObjectKind::ActionArgument
-                ? "Select an authored parameter before using its default."
-                : error, true);
+        if (index < 0
+            || static_cast<std::size_t>(index) >= _argumentItems.size()) {
+            setLocalizedStatus(
+                "ui.editor.game_flow.status.select_parameter",
+                L"Select a parameter before setting its value.", true);
+            return;
+        }
+        const auto& argument = _argumentItems[static_cast<std::size_t>(index)];
+        if (!argument.authored) {
+            setLocalizedStatus(
+                "ui.editor.game_flow.status.parameter_already_default",
+                L"This parameter already uses its contract default.", true);
+            return;
+        }
+        if (!_document->clearSelectedArgument(argument.id, &error)) {
+            setStatus(error, true);
         }
     }
 
@@ -2847,18 +2902,22 @@ private:
 
         _argumentItems = _document->selectedArguments();
         configureArgumentEditor(nullptr);
+        if (_parameterPanel != nullptr) {
+            _parameterPanel->setVisible(!_argumentItems.empty());
+        }
         std::vector<std::wstring> arguments;
         arguments.reserve(_argumentItems.size());
         int selectedArgument = -1;
         for (std::size_t index = 0; index < _argumentItems.size(); ++index) {
             const auto& item = _argumentItems[index];
-            std::string text = item.id + " : "
-                + ayt::app::gameFlowValueTypeName(item.type);
-            std::wstring display = ayt::ui::decodeUtf8Text(text);
-            display += L"  [" + (item.authored
-                ? this->text("ui.editor.game_flow.authored", L"authored")
-                : this->text("ui.editor.game_flow.default_value", L"default"))
-                + L"]";
+            std::wstring display = ayt::ui::decodeUtf8Text(item.id)
+                + L"  ·  " + ayt::ui::decodeUtf8Text(
+                    ayt::app::gameFlowValueTypeName(item.type))
+                + L"  ·  " + (item.authored
+                    ? this->text("ui.editor.game_flow.overridden_value",
+                        L"Overridden value")
+                    : this->text("ui.editor.game_flow.contract_default",
+                        L"Contract default"));
             if (!item.known) {
                 display += L"  [" + this->text(
                     "ui.editor.game_flow.unknown_schema", L"unknown schema")
@@ -2871,6 +2930,10 @@ private:
                 selectedArgument = static_cast<int>(index);
                 configureArgumentEditor(&item);
             }
+        }
+        if (selectedArgument < 0 && !_argumentItems.empty()) {
+            selectedArgument = 0;
+            configureArgumentEditor(&_argumentItems.front());
         }
         _arguments->setItems(arguments);
         _arguments->setSelectedIndex(selectedArgument);
@@ -3237,6 +3300,10 @@ private:
     ayt::ui::HBox* _flagRow = nullptr;
     ayt::ui::TextLabel* _flagLabel = nullptr;
     ayt::ui::CheckBox* _flag = nullptr;
+    ayt::ui::VBox* _parameterPanel = nullptr;
+    ayt::ui::TextLabel* _parametersHeading = nullptr;
+    ayt::ui::TextLabel* _argumentEditorHint = nullptr;
+    ayt::ui::HBox* _argumentButtons = nullptr;
     ayt::ui::ListView* _arguments = nullptr;
     ayt::ui::TextInput* _argumentValue = nullptr;
     ayt::ui::ComboBox* _argumentChoice = nullptr;
