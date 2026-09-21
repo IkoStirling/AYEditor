@@ -167,6 +167,12 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
         view->rootWidget(), "skeleton_retarget_target") != nullptr);
     CHECK(findSkeletonWidget(
         view->rootWidget(), "skeleton_retarget_platform") != nullptr);
+    CHECK(findSkeletonWidget(
+        view->rootWidget(), "skeleton_target_bone_picker") != nullptr);
+    CHECK(findSkeletonWidget(
+        view->rootWidget(), "skeleton_correction_kind") != nullptr);
+    CHECK(findSkeletonWidget(
+        view->rootWidget(), "skeleton_correction_quaternion") != nullptr);
 }
 
 TEST_CASE(skeleton_document_exposes_animation_through_shared_timeline)

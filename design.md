@@ -5,7 +5,7 @@
 **Status:** E2-composite + native SVG shell icons + Transform Gizmo baseline + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
 **Owner:** AYEditor
 
-> **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/最小 retarget RigProfile、目标/platform 配置、双状态标志和动画/时间轴预览；实际重定向求解与引用安全的生产清理烘焙仍按 SKA 后续项实施。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
+> **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；实际重定向求解、源目标并排预览与引用安全的生产清理烘焙仍按 SKA 后续项实施。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -516,7 +516,7 @@ control frames continue through the network subsystem independently.
 映射修改、模板应用、参考姿势与绑定选择接入文档级 `EditorCommandHistory` 和保存游标。
 重新导入只迁移可无歧义关联的条目；dirty 文档不被磁盘操作静默覆盖，索引重排不沿用旧映射。
 标志读取统一校验/构建记录，以文字和图形共同表达，不只依靠颜色或维护 UI 私有布尔值。
-当前已具备 Skeleton Editor 第一版与规范 `.ayrig` Rig Profile 作者资源；编辑器仍可读取 Legacy `.aysmap`，但会醒目标记并在保存时迁移为 `.ayrig`，旧文件不被静默覆盖。不得据此声明已有完整运行时重定向求解器或引用安全的生产清理烘焙器。
+当前已具备 Skeleton Editor 第一版与规范 `.ayrig` Rig Profile 作者资源；编辑器仍可读取 Legacy `.aysmap`，但会醒目标记并在保存时迁移为 `.ayrig`，旧文件不被静默覆盖。源/目标骨映射支持选择与源骨树拖放，逐角色源参考姿势、目标参考姿势和骨轴四元数修正纳入文档级撤销、保存及 profile 指纹；早期不含目标角色表的最小 retarget profile 会按规范骨名迁移。不得据此声明已有完整运行时重定向求解器、源目标并排预览或引用安全的生产清理烘焙器。
 项目元数据 `.ayeditor/skeleton-profile-bindings.json` 现以工程相对路径保存骨架到默认 mapping/retarget profile 的显式绑定；同一骨架可在工作区切换多个 `.ayrig`，同名 sidecar 仅保留为首次建议。`kind=template` 的 `.ayrig` 可被发现、预览命中/保留/缺失/冲突计数并显式应用，已有手工槽不会被模板静默覆盖。骨树支持按名称/索引搜索，角色槽显示左右侧、必需、缺失和重复占用。`kind=retarget` 的最小结构保存目标骨架、`BakeToTarget` 和 platform；目标/模式/platform 进入 profile 指纹和输出 scope，求解器交付前预检必须以 `retargetSolverUnavailable` 阻止烘焙。普通资源 Inspector 与 Content Browser 读取同一 authoring/build 状态来源展示 Mapping/Bake 两个状态及 retarget 目标/platform。
 
 ## 5. Editor chrome (AYUI)
@@ -1315,6 +1315,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-21 | Skeleton Editor 增加源骨树拖放、目标角色映射，以及逐角色源/目标参考姿势和骨轴修正；修正参与撤销、保存和 profile 指纹，早期最小 retarget profile 可迁移。 |
 | 2026-09-21 | Skeleton Editor 增加骨树搜索及左右/必需/缺失/重复诊断；`.ayrig kind=retarget` 最小作者结构保存目标骨架、输出模式和 platform，并按该范围隔离 dry-run/回执身份；真实重定向求解器交付前预检阻止 BakeToTarget。 |
 | 2026-09-19 | 骨骼映射作者资源迁移到规范 `.ayrig` Rig Profile；Content Browser 与 Skeleton Editor 保留 `.aysmap` 只读兼容入口，旧资源打开后标记为待迁移，保存生成 `.ayrig` 且保留原文件。 |
 | 2026-09-19 | 骨骼作者工作区第一版采用 `AYAnimationEditorCore` 独立核心 + AYEditor 文档/视图薄适配；源 `.ayskel` 只读，映射保存为绑定的 `.ayrig`，Content Browser 与工作区分别展示适配和烘焙状态，动画预览复用公共时间轴能力。 |

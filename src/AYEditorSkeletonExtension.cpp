@@ -90,6 +90,21 @@ std::wstring lowerText(std::wstring value)
     return value;
 }
 
+std::wstring quaternionText(const ayt::math::FQuaternion& value)
+{
+    std::wostringstream text;
+    text << std::fixed << std::setprecision(4) << value.x << L", "
+         << value.y << L", " << value.z << L", " << value.w;
+    return text.str();
+}
+
+bool parseQuaternionText(std::wstring text, ayt::math::FQuaternion& value)
+{
+    std::replace(text.begin(), text.end(), L',', L' ');
+    std::wistringstream input(text);
+    return static_cast<bool>(input >> value.x >> value.y >> value.z >> value.w);
+}
+
 class SkeletonBoneDragList final : public ayt::ui::ListView {
 public:
     using PayloadProvider = std::function<ayt::ui::DragPayload(int)>;
@@ -413,6 +428,8 @@ private:
             }
             (void)_document->core().selectRole(static_cast<HumanoidBone>(index));
             refreshRolePicker();
+            refreshTargetRolePicker();
+            refreshCorrectionEditor();
         });
         _roleList->setAcceptDrops(true);
         _roleList->setAcceptDropKinds({"SkeletonBone"});
@@ -454,6 +471,36 @@ private:
             refreshHierarchy();
         });
         inspector->addWidget(_bonePicker, 28.0f);
+        _targetBonePicker = new ayt::ui::ComboBox();
+        _targetBonePicker->setId("skeleton_target_bone_picker");
+        _targetBonePicker->setMaxPopupItems(12);
+        _targetBonePicker->setOnSelectionChanged([this](int index) {
+            if (_syncing || _document->core().profileKind()
+                    != ayt::anim::editor::RigProfileKind::Retarget) return;
+            const HumanoidBone role = _document->core().selectedRole();
+            if (index <= 0) (void)_document->core().unbindTarget(role);
+            else (void)_document->core().bindTarget(role, index - 1);
+            refreshMapping();
+        });
+        inspector->addWidget(_targetBonePicker, 28.0f);
+        auto* correctionRow = new ayt::ui::HBox();
+        correctionRow->setSpacing(4.0f);
+        _correctionKind = new ayt::ui::ComboBox();
+        _correctionKind->setId("skeleton_correction_kind");
+        _correctionKind->setItems({L"Source ref", L"Target ref", L"Axis"});
+        _correctionKind->setSelectedIndex(2);
+        _correctionKind->setOnSelectionChanged([this](int) {
+            if (!_syncing) refreshCorrectionEditor();
+        });
+        correctionRow->addWidget(_correctionKind, 86.0f);
+        _correctionValue = new ayt::ui::TextInput();
+        _correctionValue->setId("skeleton_correction_quaternion");
+        _correctionValue->setPlaceholder(L"x, y, z, w");
+        correctionRow->addWidget(_correctionValue, 0.0f);
+        correctionRow->addWidget(makeButton(L"Apply", [this]() {
+            applyCorrection();
+        }), 48.0f);
+        inspector->addWidget(correctionRow, 28.0f);
         auto* mappingActions = new ayt::ui::HBox();
         mappingActions->setSpacing(4.0f);
         mappingActions->addWidget(makeButton(L"Canonical", [this]() {
@@ -766,6 +813,8 @@ private:
             ? L"Custom: On" : L"Custom: Off");
         _syncing = false;
         refreshRolePicker();
+        refreshTargetRolePicker();
+        refreshCorrectionEditor();
         refreshStatus();
     }
 
@@ -776,6 +825,60 @@ private:
         _syncing = true;
         _bonePicker->setSelectedIndex(mapped >= 0 ? mapped + 1 : 0);
         _syncing = false;
+    }
+
+    void refreshTargetRolePicker()
+    {
+        std::vector<std::wstring> choices{L"<Target unmapped>"};
+        for (const auto& bone : _document->core().targetBones()) {
+            choices.push_back(ayt::ui::decodeUtf8Text(bone.name)
+                + L"  [" + std::to_wstring(bone.index) + L"]");
+        }
+        const int mapped = _document->core().targetMapping()
+            .getSourceBoneIndex(_document->core().selectedRole());
+        _syncing = true;
+        _targetBonePicker->setItems(choices);
+        _targetBonePicker->setSelectedIndex(mapped >= 0 ? mapped + 1 : 0);
+        _targetBonePicker->setEnabled(
+            _document->core().profileKind()
+                == ayt::anim::editor::RigProfileKind::Retarget
+            && !choices.empty());
+        _syncing = false;
+    }
+
+    void refreshCorrectionEditor()
+    {
+        const auto& correction = _document->core().retargetCorrection(
+            _document->core().selectedRole());
+        const int kind = _correctionKind != nullptr
+            ? _correctionKind->getSelectedIndex() : 2;
+        const auto& value = kind == 0 ? correction.sourceReferenceOffset
+            : kind == 1 ? correction.targetReferenceOffset
+            : correction.axisCorrection;
+        _correctionValue->setText(quaternionText(value));
+    }
+
+    void applyCorrection()
+    {
+        ayt::math::FQuaternion value;
+        if (!parseQuaternionText(_correctionValue->getText(), value)) {
+            _host.setStatusText(L"Correction must be x, y, z, w");
+            return;
+        }
+        auto correction = _document->core().retargetCorrection(
+            _document->core().selectedRole());
+        const int kind = _correctionKind->getSelectedIndex();
+        if (kind == 0) correction.sourceReferenceOffset = value;
+        else if (kind == 1) correction.targetReferenceOffset = value;
+        else correction.axisCorrection = value;
+        if (!_document->core().setRetargetCorrection(
+                _document->core().selectedRole(), correction)) {
+            _host.setStatusText(L"Correction quaternion was rejected");
+            return;
+        }
+        _host.setStatusText(L"Retarget reference/axis correction updated");
+        refreshCorrectionEditor();
+        refreshStatus();
     }
 
     void refreshBoneProperties()
@@ -1031,6 +1134,8 @@ private:
     ayt::ui::TextInput* _boneSearch = nullptr;
     ayt::ui::ListView* _roleList = nullptr;
     ayt::ui::ComboBox* _bonePicker = nullptr;
+    ayt::ui::ComboBox* _targetBonePicker = nullptr;
+    ayt::ui::ComboBox* _correctionKind = nullptr;
     ayt::ui::ComboBox* _profilePicker = nullptr;
     ayt::ui::ComboBox* _templatePicker = nullptr;
     ayt::ui::TextArea* _properties = nullptr;
@@ -1038,6 +1143,7 @@ private:
     ayt::ui::TextInput* _animationPath = nullptr;
     ayt::ui::TextInput* _targetSkeletonPath = nullptr;
     ayt::ui::TextInput* _platform = nullptr;
+    ayt::ui::TextInput* _correctionValue = nullptr;
     ayt::ui::Slider* _timeline = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
     ayt::ui::TextLabel* _adaptation = nullptr;
