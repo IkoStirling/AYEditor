@@ -6548,6 +6548,15 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
+    // Diagnostics are session-only and never alter the TAA history contents.
+    if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(_ui.findById("cmb_taa_debug"))) {
+        combo->setOnSelectionChanged([rendererOrNull](int index) {
+            if (auto* r = rendererOrNull()) {
+                r->setTaaDebugView(static_cast<uint8_t>(std::clamp(index, 0, 5)));
+            }
+        });
+    }
+
     // Color grading is an optional final LDR look pass. Neutral is retained as
     // an explicit identity/bypass preset, but enabling the effect while that
     // preset is selected promotes the UI to Warm so the checkbox always gives
@@ -6729,6 +6738,9 @@ void EditorSession::applyRenderSettingsFromPanel()
         }
     }
     r.setTaaEnabled(taaEnabled);
+    if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(_ui.findById("cmb_taa_debug"))) {
+        r.setTaaDebugView(static_cast<uint8_t>(std::clamp(combo->getSelectedIndex(), 0, 5)));
+    }
     r.setSmaaEnabled(smaaEnabled && !taaEnabled);
     r.setFxaaEnabled(fxaaEnabled && !smaaEnabled && !taaEnabled);
     {

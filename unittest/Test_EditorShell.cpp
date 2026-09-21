@@ -322,6 +322,7 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_smaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_taa")) != nullptr);
+    CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_taa_debug")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_color_grading")) != nullptr);
     CHECK(dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_grading_preset")) != nullptr);
     CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_color_grading_strength")) != nullptr);
