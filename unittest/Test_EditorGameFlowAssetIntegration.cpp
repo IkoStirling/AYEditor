@@ -159,6 +159,18 @@ TEST_CASE(gameflow_view_uses_host_localization_and_canvas_accepts_widget_input)
     CHECK(root != nullptr);
     auto* saveButton = findGameFlowButton(root, L"Localized Save");
     CHECK(saveButton != nullptr);
+    CHECK(saveButton != nullptr && saveButton->isEnabled());
+    CHECK(findGameFlowButton(root, L"Apply") == nullptr);
+    CHECK(findGameFlowButton(root, L"Apply Value") == nullptr);
+    auto* addAction = findGameFlowButton(root, L"Add Action");
+    auto* addSubflow = findGameFlowButton(root, L"Add Subflow");
+    auto* setGuard = findGameFlowButton(root, L"Set Guard");
+    auto* addField = findGameFlowButton(root, L"+ Field");
+    CHECK(addAction != nullptr && !addAction->isEnabled());
+    CHECK(addSubflow != nullptr && !addSubflow->isEnabled());
+    CHECK(setGuard != nullptr && !setGuard->isEnabled());
+    CHECK(addField != nullptr && !addField->isEnabled());
+    CHECK(findGameFlowButton(root, L"Details") != nullptr);
     auto* initialState = dynamic_cast<ayt::ui::ComboBox*>(
         findGameFlowWidget(root, "gameflow_property_first_choice"));
     CHECK(initialState != nullptr);

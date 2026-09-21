@@ -20,6 +20,7 @@
 #include <AYUI/IRenderBackend.h>
 #include <AYUI/ListView.h>
 #include <AYUI/Menu.h>
+#include <AYUI/ModalDialog.h>
 #include <AYUI/TextArea.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
@@ -321,6 +322,21 @@ public:
         setOnDragEnd([this](bool) { _dragging = false; });
     }
 
+    void setActions(std::vector<std::wstring> labels,
+                    std::vector<std::string> ids)
+    {
+        _actionIds = std::move(ids);
+        setItems(labels);
+        setSelectedIndex(_actionIds.empty() ? -1 : 0);
+    }
+
+    std::string selectedActionId() const
+    {
+        const int index = getSelectedIndex();
+        return index < 0 || static_cast<std::size_t>(index) >= _actionIds.size()
+            ? std::string{} : _actionIds[static_cast<std::size_t>(index)];
+    }
+
     ayt::ui::Widget* hitTest(const FVector2& worldPos) override
     {
         ayt::ui::Widget* hit = ayt::ui::ListView::hitTest(worldPos);
@@ -354,7 +370,7 @@ public:
         if (delta.x * delta.x + delta.y * delta.y < 25.0f) return false;
         ayt::ui::DragPayload payload;
         payload.kind = "GameFlowAction";
-        payload.text = getSelectedItem();
+        payload.text = ayt::ui::decodeUtf8Text(selectedActionId());
         setDragPayload(payload);
         if (auto* manager = ayt::ui::UIManager::tryGet();
             manager != nullptr && manager->beginDrag(this)) {
@@ -378,6 +394,7 @@ public:
     }
 
 private:
+    std::vector<std::string> _actionIds;
     FVector2 _pressPoint{};
     bool _pressed = false;
     bool _dragging = false;
@@ -406,6 +423,7 @@ public:
                          std::function<void(const EditorGameFlowLayout&)>
                              layoutChanged,
                          std::function<void()> selected,
+                         std::function<void()> invalidActionDrop,
                          std::function<void(FVector2)> contextRequested,
                          std::function<std::wstring(
                              std::string_view, std::wstring_view)> localize)
@@ -414,6 +432,7 @@ public:
           _transitionRequested(std::move(transitionRequested)),
           _layoutChanged(std::move(layoutChanged)),
           _selected(std::move(selected)),
+          _invalidActionDrop(std::move(invalidActionDrop)),
           _contextRequested(std::move(contextRequested)),
           _localize(std::move(localize))
     {
@@ -439,6 +458,8 @@ public:
                     _addAction(transitionId, encodeUtf8(payload.text));
                 }
                 if (_selected != nullptr) _selected();
+            } else if (_invalidActionDrop != nullptr) {
+                _invalidActionDrop();
             }
         });
     }
@@ -1098,6 +1119,13 @@ private:
                 localized("ui.editor.game_flow.canvas.empty",
                     L"Add a State to begin authoring the game flow."), 15,
                 FVector4{0.58f, 0.63f, 0.72f, 1.0f});
+        } else if (flow.states.size() == 1u && flow.transitions.empty()) {
+            renderer.drawText({bounds.minX + 22.0f, bounds.minY + 22.0f,
+                               bounds.maxX - 22.0f, bounds.minY + 62.0f},
+                localized("ui.editor.game_flow.canvas.connect_hint",
+                    L"Add another State, then drag from the green output "
+                    L"port to its blue input port."), 14,
+                FVector4{0.58f, 0.68f, 0.80f, 1.0f});
         }
     }
 
@@ -1108,6 +1136,7 @@ private:
         _transitionRequested;
     std::function<void(const EditorGameFlowLayout&)> _layoutChanged;
     std::function<void()> _selected;
+    std::function<void()> _invalidActionDrop;
     std::function<void(FVector2)> _contextRequested;
     std::function<std::wstring(std::string_view, std::wstring_view)> _localize;
     std::vector<Hit> _hits;
@@ -1161,6 +1190,7 @@ public:
     ~EditorGameFlowWorkspaceView() override
     {
         if (_document != nullptr) _document->setChangedHandler({});
+        _templateDialog.reset();
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
 
@@ -1185,6 +1215,7 @@ public:
     void prepareForUiShutdown() override
     {
         if (_document != nullptr) _document->setChangedHandler({});
+        _templateDialog.reset();
         _canvas = nullptr;
         _canvasMenu = nullptr;
         _transitionMenu = nullptr;
@@ -1193,6 +1224,9 @@ public:
         _trace = nullptr;
         _status = nullptr;
         _previewStatus = nullptr;
+        _previewDetailsButton = nullptr;
+        _previewPayloadBar = nullptr;
+        _previewGuardBar = nullptr;
         _completePreview = nullptr;
         _failPreview = nullptr;
         _cancelPreview = nullptr;
@@ -1210,6 +1244,17 @@ public:
         _argumentValue = nullptr;
         _argumentChoice = nullptr;
         _argumentBool = nullptr;
+        _saveButton = nullptr;
+        _undoButton = nullptr;
+        _redoButton = nullptr;
+        _deleteButton = nullptr;
+        _addActionButton = nullptr;
+        _moveActionUpButton = nullptr;
+        _moveActionDownButton = nullptr;
+        _addSubflowButton = nullptr;
+        _setGuardButton = nullptr;
+        _clearGuardButton = nullptr;
+        _addFieldButton = nullptr;
         _localizedBindings.clear();
     }
 
@@ -1242,7 +1287,10 @@ public:
     {
         if (commandId == "edit.undo") return _document->canUndo();
         if (commandId == "edit.redo") return _document->canRedo();
-        if (commandId == "file.save") return _document->isDirty();
+        if (commandId == "file.save") {
+            return _document->isDirty() || _document->path().empty()
+                || _inspectorDraftDirty || _argumentDraftDirty;
+        }
         if (commandId == kEditorGameFlowDeleteCommand) {
             return _document->selection().kind
                 != EditorGameFlowObjectKind::Document;
@@ -1254,8 +1302,12 @@ public:
     {
         if (!canExecuteCommand(commandId)) return false;
         if (commandId == "file.save") return save();
-        if (commandId == "edit.undo") return _document->undo();
-        if (commandId == "edit.redo") return _document->redo();
+        if (commandId == "edit.undo") {
+            return commitPendingEditors() && _document->undo();
+        }
+        if (commandId == "edit.redo") {
+            return commitPendingEditors() && _document->redo();
+        }
         if (commandId == kEditorGameFlowDeleteCommand) return deleteSelected();
         validate();
         return true;
@@ -1379,7 +1431,27 @@ private:
                 label->setText(value);
             }
         }
+        syncPreviewDetailsVisibility();
         if (_canvas != nullptr) _canvas->markDirty();
+        _host.requestRepaint();
+    }
+
+    void syncPreviewDetailsVisibility()
+    {
+        if (_previewPayloadBar != nullptr) {
+            _previewPayloadBar->setVisible(_previewDetailsVisible);
+        }
+        if (_previewGuardBar != nullptr) {
+            _previewGuardBar->setVisible(_previewDetailsVisible);
+        }
+        if (_trace != nullptr) _trace->setVisible(_previewDetailsVisible);
+        if (_previewDetailsButton != nullptr) {
+            _previewDetailsButton->setText(_previewDetailsVisible
+                ? text("ui.editor.game_flow.hide_preview_details",
+                    L"Hide Details")
+                : text("ui.editor.game_flow.show_preview_details",
+                    L"Details"));
+        }
         _host.requestRepaint();
     }
 
@@ -1428,6 +1500,20 @@ private:
         value.input = new ayt::ui::TextInput();
         value.choice = new ayt::ui::ComboBox();
         value.choice->setVisible(false);
+        value.input->setOnTextChanged([this](const std::wstring&) {
+            if (!_refreshing) markInspectorDraftDirty();
+        });
+        value.input->setOnSubmit([this](const std::wstring&) {
+            if (!_refreshing) (void)commitInspectorDraft();
+        });
+        value.input->setOnFocusLostNotify([this]() {
+            if (!_refreshing) (void)commitInspectorDraft();
+        });
+        value.choice->setOnSelectionChanged([this](int) {
+            if (_refreshing) return;
+            markInspectorDraftDirty();
+            (void)commitInspectorDraft();
+        });
         value.row->addWidget(value.label, 102.0f);
         value.row->addWidget(value.input, 0.0f);
         value.row->addWidget(value.choice, 0.0f);
@@ -1499,6 +1585,23 @@ private:
         return ayt::ui::decodeUtf8Text(std::string(value));
     }
 
+    std::wstring actionDisplayName(std::string_view id) const
+    {
+        if (id == "world.replace") return text(
+            "ui.editor.game_flow.action.world_replace", L"Switch World");
+        if (id == "ui.flow.start") return text(
+            "ui.editor.game_flow.action.ui_flow_start", L"Open UI Flow");
+        if (id == "ui.context.activate") return text(
+            "ui.editor.game_flow.action.ui_context_activate",
+            L"Show UI Context");
+        if (id == "ui.context.deactivate") return text(
+            "ui.editor.game_flow.action.ui_context_deactivate",
+            L"Hide UI Context");
+        if (id == "ui.signal.emit") return text(
+            "ui.editor.game_flow.action.ui_signal_emit", L"Send UI Signal");
+        return ayt::ui::decodeUtf8Text(std::string(id));
+    }
+
     std::wstring localizedOutlineLabel(
         const EditorGameFlowOutlineItem& item) const
     {
@@ -1536,14 +1639,16 @@ private:
         auto* toolbar = new ayt::ui::HBox();
         toolbar->setSpacing(4.0f);
         toolbar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*toolbar, "ui.editor.game_flow.save", L"Save", 50.0f,
+        _saveButton = button(*toolbar, "ui.editor.game_flow.save", L"Save", 50.0f,
             [this]() { (void)save(); });
-        button(*toolbar, "ui.editor.game_flow.undo", L"Undo", 50.0f, [this]() {
+        _undoButton = button(*toolbar, "ui.editor.game_flow.undo", L"Undo", 50.0f, [this]() {
+            if (!commitPendingEditors()) return;
             if (!_document->undo()) setLocalizedStatus(
                 "ui.editor.game_flow.status.nothing_to_undo",
                 L"Nothing to undo.", true);
         });
-        button(*toolbar, "ui.editor.game_flow.redo", L"Redo", 50.0f, [this]() {
+        _redoButton = button(*toolbar, "ui.editor.game_flow.redo", L"Redo", 50.0f, [this]() {
+            if (!commitPendingEditors()) return;
             if (!_document->redo()) setLocalizedStatus(
                 "ui.editor.game_flow.status.nothing_to_redo",
                 L"Nothing to redo.", true);
@@ -1554,7 +1659,7 @@ private:
         button(*toolbar, "ui.editor.game_flow.add_state", L"+ State", 70.0f, [this]() {
             addObject(EditorGameFlowObjectKind::State);
         });
-        button(*toolbar, "ui.editor.game_flow.delete", L"Delete", 58.0f,
+        _deleteButton = button(*toolbar, "ui.editor.game_flow.delete", L"Delete", 58.0f,
             [this]() { (void)deleteSelected(); });
         button(*toolbar, "ui.editor.game_flow.validate", L"Validate", 68.0f,
             [this]() { validate(); });
@@ -1564,7 +1669,7 @@ private:
         button(*toolbar, "ui.editor.game_flow.auto_layout", L"Auto Layout", 86.0f,
             [this]() { if (_canvas != nullptr) _canvas->autoLayout(); });
         button(*toolbar, "ui.editor.game_flow.template", L"Template", 72.0f,
-            [this]() { applyStarterTemplate(); });
+            [this]() { requestStarterTemplate(); });
         _status = new ayt::ui::TextLabel();
         _status->setFontSize(11);
         _status->setVerticalAlignment(
@@ -1586,7 +1691,7 @@ private:
                 || static_cast<std::size_t>(index) >= _outlineItems.size()) {
                 return;
             }
-            (void)_document->select(_outlineItems[
+            (void)selectObject(_outlineItems[
                 static_cast<std::size_t>(index)].selection);
         });
         left->addWidget(_outline, 0.0f);
@@ -1594,16 +1699,19 @@ private:
               L"ACTION / GUARD PALETTE");
         _actionPalette = new EditorGameFlowActionPalette();
         _actionPalette->setId("gameflow_action_palette");
+        _actionPalette->setOnSelectionChanged([this](int) {
+            updateAuthoringControls();
+        });
         left->addWidget(_actionPalette, 88.0f);
         auto* actionButtons = new ayt::ui::HBox();
         actionButtons->setSpacing(4.0f);
         actionButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*actionButtons, "ui.editor.game_flow.add_action",
+        _addActionButton = button(*actionButtons, "ui.editor.game_flow.add_action",
             L"Add Action", 92.0f,
             [this]() { addPaletteAction(); });
-        button(*actionButtons, "ui.editor.game_flow.move_up", L"Up", 44.0f,
+        _moveActionUpButton = button(*actionButtons, "ui.editor.game_flow.move_up", L"Up", 44.0f,
             [this]() { moveAction(-1); });
-        button(*actionButtons, "ui.editor.game_flow.move_down", L"Down", 50.0f,
+        _moveActionDownButton = button(*actionButtons, "ui.editor.game_flow.move_down", L"Down", 50.0f,
             [this]() { moveAction(1); });
         left->addWidget(actionButtons, 32.0f);
         _subflowPicker = new ayt::ui::ComboBox();
@@ -1612,7 +1720,7 @@ private:
         auto* subflowButtons = new ayt::ui::HBox();
         subflowButtons->setSpacing(4.0f);
         subflowButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*subflowButtons, "ui.editor.game_flow.add_subflow",
+        _addSubflowButton = button(*subflowButtons, "ui.editor.game_flow.add_subflow",
             L"Add Subflow", 112.0f, [this]() { addSubflow(); });
         left->addWidget(subflowButtons, 32.0f);
         _guardPalette = new ayt::ui::ComboBox();
@@ -1620,12 +1728,12 @@ private:
         auto* guardButtons = new ayt::ui::HBox();
         guardButtons->setSpacing(4.0f);
         guardButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*guardButtons, "ui.editor.game_flow.set_guard",
+        _setGuardButton = button(*guardButtons, "ui.editor.game_flow.set_guard",
             L"Set Guard", 92.0f,
             [this]() { setPaletteGuard(); });
-        button(*guardButtons, "ui.editor.game_flow.clear", L"Clear", 54.0f,
+        _clearGuardButton = button(*guardButtons, "ui.editor.game_flow.clear", L"Clear", 54.0f,
             [this]() { clearGuard(); });
-        button(*guardButtons, "ui.editor.game_flow.add_field", L"+ Field", 66.0f,
+        _addFieldButton = button(*guardButtons, "ui.editor.game_flow.add_field", L"+ Field", 66.0f,
             [this]() { addIntentField(); });
         left->addWidget(guardButtons, 32.0f);
         body->addWidget(left, 224.0f);
@@ -1635,7 +1743,7 @@ private:
         _canvas = new EditorGameFlowCanvas(
             [this]() { return canvasModel(); },
             [this](EditorGameFlowSelection selection) {
-                (void)_document->select(std::move(selection));
+                (void)selectObject(std::move(selection));
             },
             [this](std::string transition, std::string action) {
                 std::string error;
@@ -1652,6 +1760,11 @@ private:
                 saveCanvasLayout(positions);
             },
             [this]() { _refreshPending = true; },
+            [this]() {
+                setLocalizedStatus(
+                    "ui.editor.game_flow.status.drop_action_on_transition",
+                    L"Drop the Action on a Transition node.", true);
+            },
             [this](FVector2 point) { showCanvasMenu(point); },
             [this](std::string_view key, std::wstring_view fallback) {
                 return text(key, fallback);
@@ -1662,6 +1775,12 @@ private:
         auto* previewBar = new ayt::ui::HBox();
         previewBar->setSpacing(4.0f);
         previewBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
+        _previewDetailsButton = button(*previewBar,
+            "ui.editor.game_flow.show_preview_details", L"Details", 68.0f,
+            [this]() {
+                _previewDetailsVisible = !_previewDetailsVisible;
+                syncPreviewDetailsVisibility();
+            });
         button(*previewBar, "ui.editor.game_flow.restart", L"Restart", 78.0f,
             [this]() { restartPreview(); });
         _intentPicker = new ayt::ui::ComboBox();
@@ -1690,6 +1809,7 @@ private:
         previewBar->addWidget(_previewStatus, 0.0f);
         center->addWidget(previewBar, 32.0f);
         auto* payloadBar = new ayt::ui::HBox();
+        _previewPayloadBar = payloadBar;
         payloadBar->setSpacing(4.0f);
         payloadBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         auto* payloadLabel = new ayt::ui::TextLabel();
@@ -1716,6 +1836,7 @@ private:
             [this]() { clearPreviewPayloadField(); });
         center->addWidget(payloadBar, 32.0f);
         auto* guardBar = new ayt::ui::HBox();
+        _previewGuardBar = guardBar;
         guardBar->setSpacing(4.0f);
         guardBar->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
         auto* guardLabel = new ayt::ui::TextLabel();
@@ -1737,6 +1858,7 @@ private:
         _trace->setWordWrap(false);
         _trace->setLineHeight(15.0f);
         center->addWidget(_trace, 92.0f);
+        syncPreviewDetailsVisibility();
         body->addWidget(center, 0.0f);
 
         auto* inspector = new ayt::ui::VBox();
@@ -1766,16 +1888,15 @@ private:
         _flagLabel->setVerticalAlignment(
             ayt::ui::TextLabel::VAlignment::Center);
         _flag = new ayt::ui::CheckBox();
+        _flag->setOnToggled([this](bool) {
+            if (_refreshing) return;
+            markInspectorDraftDirty();
+            (void)commitInspectorDraft();
+        });
         _flagRow->addWidget(_flagLabel, 102.0f);
         _flagRow->addWidget(_flag, 0.0f);
         inspector->addWidget(_flagRow, 25.0f);
         _value = propertyRow(*inspector);
-        auto* inspectorButtons = new ayt::ui::HBox();
-        inspectorButtons->setSpacing(4.0f);
-        inspectorButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*inspectorButtons, "ui.editor.game_flow.apply", L"Apply", 62.0f,
-            [this]() { applyInspector(); });
-        inspector->addWidget(inspectorButtons, 32.0f);
         _parameterPanel = new ayt::ui::VBox();
         _parameterPanel->setId("gameflow_parameter_panel");
         _parameterPanel->setSpacing(3.0f);
@@ -1794,6 +1915,15 @@ private:
             32.0f);
         _argumentValue = new ayt::ui::TextInput();
         _argumentValue->setId("gameflow_argument_value");
+        _argumentValue->setOnTextChanged([this](const std::wstring&) {
+            if (!_refreshing) markArgumentDraftDirty();
+        });
+        _argumentValue->setOnSubmit([this](const std::wstring&) {
+            if (!_refreshing) (void)commitArgumentDraft();
+        });
+        _argumentValue->setOnFocusLostNotify([this]() {
+            if (!_refreshing) (void)commitArgumentDraft();
+        });
         _argumentValue->setPlaceholder(text(
             "ui.editor.game_flow.selected_parameter_value",
             L"Parameter value"));
@@ -1803,18 +1933,25 @@ private:
             L"Parameter value", LocalizedTarget::Placeholder);
         _argumentChoice = new ayt::ui::ComboBox();
         _argumentChoice->setId("gameflow_argument_choice");
+        _argumentChoice->setOnSelectionChanged([this](int) {
+            if (_refreshing) return;
+            markArgumentDraftDirty();
+            (void)commitArgumentDraft();
+        });
         _argumentChoice->setVisible(false);
         _parameterPanel->addWidget(_argumentChoice, 30.0f);
         _argumentBool = new ayt::ui::CheckBox();
         _argumentBool->setId("gameflow_argument_boolean");
+        _argumentBool->setOnToggled([this](bool) {
+            if (_refreshing) return;
+            markArgumentDraftDirty();
+            (void)commitArgumentDraft();
+        });
         _argumentBool->setVisible(false);
         _parameterPanel->addWidget(_argumentBool, 30.0f);
         _argumentButtons = new ayt::ui::HBox();
         _argumentButtons->setSpacing(4.0f);
         _argumentButtons->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        button(*_argumentButtons, "ui.editor.game_flow.apply_parameter",
-            L"Apply Value", 88.0f,
-            [this]() { setArgument(); });
         button(*_argumentButtons, "ui.editor.game_flow.reset_parameter",
             L"Reset to Default", 116.0f,
             [this]() { clearArgument(); });
@@ -1837,11 +1974,12 @@ private:
     void populatePalettes()
     {
         std::vector<std::wstring> actions;
+        std::vector<std::string> actionIds;
         for (const auto& type : _document->actionRegistry().actionTypes()) {
-            actions.push_back(ayt::ui::decodeUtf8Text(type.id));
+            actions.push_back(actionDisplayName(type.id));
+            actionIds.push_back(type.id);
         }
-        _actionPalette->setItems(actions);
-        if (!actions.empty()) _actionPalette->setSelectedIndex(0);
+        _actionPalette->setActions(std::move(actions), std::move(actionIds));
         std::vector<std::wstring> guards;
         for (const auto& type : _document->actionRegistry().guardTypes()) {
             guards.push_back(ayt::ui::decodeUtf8Text(type.id));
@@ -1875,7 +2013,7 @@ private:
         _canvasMenu->addSeparator();
         for (const auto& type : _document->actionRegistry().actionTypes()) {
             add(text("ui.editor.game_flow.add_action", L"Add Action")
-                    + L": " + ayt::ui::decodeUtf8Text(type.id),
+                    + L": " + actionDisplayName(type.id),
                 [this, id = type.id]() {
                     const std::string transition = selectedTransition();
                     std::string error;
@@ -1890,7 +2028,7 @@ private:
         _canvasMenu->addSeparator();
         add(text("ui.editor.game_flow.template", L"Template")
                 + L": Main Menu → Result", [this]() {
-            applyStarterTemplate();
+            requestStarterTemplate();
         });
         add(text("ui.editor.game_flow.auto_layout", L"Auto Layout"), [this]() {
             if (_canvas != nullptr) _canvas->autoLayout();
@@ -2022,6 +2160,65 @@ private:
         }
         _canvas->addChild(_transitionMenu);
         _transitionMenu->open(_canvas, point);
+    }
+
+    bool isPristineNewDocument() const
+    {
+        const auto& flow = _document->flow();
+        return _document->path().empty() && !_document->isDirty()
+            && flow.states.size() == 1u && flow.states.front().id == "Boot"
+            && flow.intents.size() == 1u
+            && flow.intents.front().id == "app.start"
+            && flow.transitions.empty();
+    }
+
+    void requestStarterTemplate()
+    {
+        if (!commitPendingEditors()) return;
+        if (isPristineNewDocument()) {
+            applyStarterTemplate();
+            return;
+        }
+        auto* manager = _host.uiManager();
+        if (manager == nullptr) {
+            setLocalizedStatus(
+                "ui.editor.game_flow.status.template_confirmation_unavailable",
+                L"Template confirmation is unavailable in this host.", true);
+            return;
+        }
+
+        _templateDialog = std::make_unique<ayt::ui::ModalDialog>();
+        _templateDialog->setId("gameflow_template_confirmation");
+        _templateDialog->setSize({460.0f, 190.0f});
+        _templateDialog->setAcceptText(text(
+            "ui.editor.game_flow.template_apply", L"Apply Template"));
+        _templateDialog->setRejectText(text(
+            "ui.editor.game_flow.cancel", L"Cancel"));
+        _templateDialog->setDismissOnDimmerClick(false);
+
+        auto* body = new ayt::ui::VBox();
+        body->setSpacing(9.0f);
+        body->setSize({428.0f, 118.0f});
+        auto* title = new ayt::ui::TextLabel();
+        title->setText(text("ui.editor.game_flow.template_confirm_title",
+            L"Replace this GameFlow with the starter template?"));
+        title->setFontSize(15);
+        body->addWidget(title, 28.0f);
+        auto* detail = new ayt::ui::TextLabel();
+        detail->setText(text("ui.editor.game_flow.template_confirm_body",
+            L"The current states, intents, transitions, guards, and actions "
+            L"will be replaced. You can undo this operation afterwards."));
+        detail->setFontSize(12);
+        detail->setTextColor({0.72f, 0.75f, 0.81f, 1.0f});
+        body->addWidget(detail, 58.0f);
+        _templateDialog->setBodyContentOwned(body);
+        _templateDialog->setOnResult([this](int result) {
+            if (result == ayt::ui::ModalDialog::Ok) applyStarterTemplate();
+        });
+        _templateDialog->fitAndCenterInViewport(
+            manager->getClientSize(), 24.0f);
+        _templateDialog->openModal();
+        _host.requestRepaint();
     }
 
     void applyStarterTemplate()
@@ -2235,6 +2432,41 @@ private:
         setStatus(text(key, fallback), error);
     }
 
+    void markInspectorDraftDirty()
+    {
+        _inspectorDraftDirty = true;
+        if (_saveButton != nullptr) _saveButton->setEnabled(true);
+        _host.requestRepaint();
+    }
+
+    void markArgumentDraftDirty()
+    {
+        _argumentDraftDirty = true;
+        if (_saveButton != nullptr) _saveButton->setEnabled(true);
+        _host.requestRepaint();
+    }
+
+    bool commitInspectorDraft()
+    {
+        return !_inspectorDraftDirty || applyInspector();
+    }
+
+    bool commitArgumentDraft()
+    {
+        return !_argumentDraftDirty || setArgument();
+    }
+
+    bool commitPendingEditors()
+    {
+        return commitArgumentDraft() && commitInspectorDraft();
+    }
+
+    bool selectObject(EditorGameFlowSelection selection)
+    {
+        if (!_refreshing && !commitPendingEditors()) return false;
+        return _document->select(std::move(selection));
+    }
+
     std::string selectedTransition() const
     {
         const auto& selection = _document->selection();
@@ -2251,12 +2483,14 @@ private:
 
     void addObject(EditorGameFlowObjectKind kind)
     {
+        if (!commitPendingEditors()) return;
         std::string error;
         if (!_document->addObject(kind, {}, &error)) setStatus(error, true);
     }
 
     bool deleteSelected()
     {
+        if (!commitPendingEditors()) return false;
         std::string error;
         const auto selected = _canvas == nullptr
             ? std::vector<EditorGameFlowSelection>{}
@@ -2273,6 +2507,7 @@ private:
 
     void addIntentField()
     {
+        if (!commitPendingEditors()) return;
         const auto& selection = _document->selection();
         const std::string intent = selection.kind
                 == EditorGameFlowObjectKind::Intent
@@ -2290,8 +2525,9 @@ private:
 
     void addPaletteAction()
     {
+        if (!commitPendingEditors()) return;
         const std::string transition = selectedTransition();
-        const std::string type = encodeUtf8(_actionPalette->getSelectedItem());
+        const std::string type = _actionPalette->selectedActionId();
         std::string error;
         if (transition.empty() || type.empty()
             || !_document->addAction(transition, type, &error)) {
@@ -2303,6 +2539,7 @@ private:
 
     void addSubflow()
     {
+        if (!commitPendingEditors()) return;
         const std::string transition = selectedTransition();
         const std::string subflow = _subflowPicker == nullptr
             ? std::string{}
@@ -2319,6 +2556,7 @@ private:
 
     void setPaletteGuard()
     {
+        if (!commitPendingEditors()) return;
         const std::string transition = selectedTransition();
         const std::string type = encodeUtf8(_guardPalette->getSelectedItem());
         std::string error;
@@ -2332,6 +2570,7 @@ private:
 
     void clearGuard()
     {
+        if (!commitPendingEditors()) return;
         const std::string transition = selectedTransition();
         std::string error;
         if (transition.empty()
@@ -2344,6 +2583,7 @@ private:
 
     void moveAction(std::ptrdiff_t offset)
     {
+        if (!commitPendingEditors()) return;
         std::string error;
         if (!_document->moveSelectedAction(offset, &error)) {
             setStatus(error, true);
@@ -2352,6 +2592,7 @@ private:
 
     bool save()
     {
+        if (!commitPendingEditors()) return false;
         std::string error;
         bool saved = false;
         if (_document->path().empty()) {
@@ -2383,8 +2624,14 @@ private:
         if (_canvas != nullptr) {
             saveCanvasLayout(_canvas->manualPositions());
         }
-        setStatus(text("ui.editor.game_flow.status.saved", L"Saved ")
-            + ayt::ui::decodeUtf8Text(_document->title()));
+        if (_document->isValid()) {
+            setStatus(text("ui.editor.game_flow.status.saved", L"Saved ")
+                + ayt::ui::decodeUtf8Text(_document->title()));
+        } else {
+            setStatus(text("ui.editor.game_flow.status.saved_with_issues",
+                L"Saved with validation issues: ")
+                + ayt::ui::decodeUtf8Text(_document->title()));
+        }
         return true;
     }
 
@@ -2401,7 +2648,7 @@ private:
                   : L"GameFlow validation failed.", !valid);
     }
 
-    void applyInspector()
+    bool applyInspector()
     {
         EditorGameFlowProperties properties = _document->selectedProperties();
         const auto labels = _document->selectedPropertyLabels();
@@ -2444,7 +2691,7 @@ private:
             setLocalizedStatus(
                 "ui.editor.game_flow.status.invalid_number",
                 L"Inspector number or integer is invalid.", true);
-            return;
+            return false;
         }
         if (_document->selection().kind
             == EditorGameFlowObjectKind::IntentField) {
@@ -2460,13 +2707,16 @@ private:
                 setLocalizedStatus(
                     "ui.editor.game_flow.status.value_type_mismatch",
                     L"Inspector value does not match its type.", true);
-                return;
+                return false;
             }
         }
         std::string error;
         if (!_document->applySelectedProperties(properties, &error)) {
             setStatus(error, true);
+            return false;
         }
+        _inspectorDraftDirty = false;
+        return true;
     }
 
     void selectArgument(int index)
@@ -2475,26 +2725,38 @@ private:
             || static_cast<std::size_t>(index) >= _argumentItems.size()) {
             return;
         }
+        if (!commitArgumentDraft()) return;
         const auto current = _document->selection();
         const auto& argument = _argumentItems[static_cast<std::size_t>(index)];
         if (current.kind == EditorGameFlowObjectKind::Guard
             || current.kind == EditorGameFlowObjectKind::Action
             || current.kind == EditorGameFlowObjectKind::ActionArgument) {
-            (void)_document->select({EditorGameFlowObjectKind::ActionArgument,
+            (void)selectObject({EditorGameFlowObjectKind::ActionArgument,
                 argument.id, current.ownerId, current.index});
         }
     }
 
-    void setArgument()
+    bool setArgument()
     {
-        const int index = _arguments == nullptr
-            ? -1 : _arguments->getSelectedIndex();
+        int index = -1;
+        if (!_argumentDraftId.empty()) {
+            const auto found = std::find_if(_argumentItems.begin(),
+                _argumentItems.end(), [this](const auto& value) {
+                    return value.id == _argumentDraftId;
+                });
+            if (found != _argumentItems.end()) {
+                index = static_cast<int>(std::distance(
+                    _argumentItems.begin(), found));
+            }
+        } else if (_arguments != nullptr) {
+            index = _arguments->getSelectedIndex();
+        }
         if (index < 0
             || static_cast<std::size_t>(index) >= _argumentItems.size()) {
             setLocalizedStatus(
                 "ui.editor.game_flow.status.select_parameter",
                 L"Select a parameter before setting its value.", true);
-            return;
+            return false;
         }
         const auto& argument = _argumentItems[static_cast<std::size_t>(index)];
         bool valid = true;
@@ -2515,7 +2777,10 @@ private:
                 argument.id, std::move(value), &error)) {
             setStatus(valid ? error : "Parameter value has the wrong type.",
                 true);
+            return false;
         }
+        _argumentDraftDirty = false;
+        return true;
     }
 
     void configureArgumentEditor(const EditorGameFlowArgumentView* argument)
@@ -2539,7 +2804,11 @@ private:
                         : text("ui.editor.game_flow.contract_default",
                             L"Contract default")));
         }
-        if (argument == nullptr) return;
+        if (argument == nullptr) {
+            if (!_argumentDraftDirty) _argumentDraftId.clear();
+            return;
+        }
+        _argumentDraftId = argument->id;
         if (argument->type == ayt::app::GameFlowValueType::Boolean) {
             _argumentBool->setVisible(true);
             const bool* value = std::get_if<bool>(&argument->value.data);
@@ -2575,6 +2844,7 @@ private:
 
     void clearArgument()
     {
+        _argumentDraftDirty = false;
         const int index = _arguments == nullptr
             ? -1 : _arguments->getSelectedIndex();
         std::string error;
@@ -2654,7 +2924,7 @@ private:
         return true;
     }
 
-    void restartPreview()
+    bool restartPreview()
     {
         std::string error;
         if (!_preview.rebuild(
@@ -2667,13 +2937,14 @@ private:
             setStatus(text("ui.editor.game_flow.status.preview_failed",
                 L"Preview failed: ") + ayt::ui::decodeUtf8Text(error), true);
             syncPreviewPresentation();
-            return;
+            return false;
         }
         _previewStale = false;
         syncPreviewPresentation();
         setLocalizedStatus(
             "ui.editor.game_flow.status.preview_restarted",
             L"GameFlow preview restarted.");
+        return true;
     }
 
     void sendIntent()
@@ -2686,10 +2957,7 @@ private:
             return;
         }
         if (_previewStale) {
-            setLocalizedStatus("ui.editor.game_flow.status.preview_stale",
-                L"Preview is stale. Restart it before sending an Intent.",
-                true);
-            return;
+            if (!restartPreview()) return;
         }
         ayt::app::GameFlowPayload payload;
         if (const auto* definition = _document->flow().findIntent(intent)) {
@@ -2784,6 +3052,74 @@ private:
         return row.choice != nullptr && row.choice->isVisible()
             ? encodeUtf8(row.choice->getSelectedItem())
             : encodeUtf8(row.input->getText());
+    }
+
+    void updateAuthoringControls()
+    {
+        const auto& selection = _document->selection();
+        const std::string transitionId = selectedTransition();
+        const auto foundTransition = std::find_if(
+            _document->flow().transitions.begin(),
+            _document->flow().transitions.end(),
+            [&](const auto& value) { return value.id == transitionId; });
+        const auto* transition = foundTransition
+                == _document->flow().transitions.end()
+            ? nullptr : &*foundTransition;
+        const bool hasTransition = transition != nullptr;
+        const bool actionSelected = selection.kind
+                == EditorGameFlowObjectKind::Action
+            || selection.kind == EditorGameFlowObjectKind::ActionArgument;
+        const bool validActionIndex = actionSelected && transition != nullptr
+            && selection.index < transition->actions.size();
+        const bool intentSelected = selection.kind
+                == EditorGameFlowObjectKind::Intent
+            || selection.kind == EditorGameFlowObjectKind::IntentField;
+
+        if (_saveButton != nullptr) {
+            _saveButton->setEnabled(_document->isDirty()
+                || _document->path().empty() || _inspectorDraftDirty
+                || _argumentDraftDirty);
+        }
+        if (_undoButton != nullptr) {
+            _undoButton->setEnabled(_document->canUndo());
+        }
+        if (_redoButton != nullptr) {
+            _redoButton->setEnabled(_document->canRedo());
+        }
+        if (_deleteButton != nullptr) {
+            _deleteButton->setEnabled(selection.kind
+                != EditorGameFlowObjectKind::Document);
+        }
+        if (_addActionButton != nullptr) {
+            _addActionButton->setEnabled(hasTransition
+                && _actionPalette != nullptr
+                && !_actionPalette->selectedActionId().empty());
+        }
+        if (_moveActionUpButton != nullptr) {
+            _moveActionUpButton->setEnabled(validActionIndex
+                && selection.index > 0u);
+        }
+        if (_moveActionDownButton != nullptr) {
+            _moveActionDownButton->setEnabled(validActionIndex
+                && selection.index + 1u < transition->actions.size());
+        }
+        if (_addSubflowButton != nullptr) {
+            _addSubflowButton->setEnabled(hasTransition
+                && _subflowPicker != nullptr
+                && !_subflowPicker->getSelectedItem().empty());
+        }
+        if (_setGuardButton != nullptr) {
+            _setGuardButton->setEnabled(hasTransition
+                && _guardPalette != nullptr
+                && !_guardPalette->getSelectedItem().empty());
+        }
+        if (_clearGuardButton != nullptr) {
+            _clearGuardButton->setEnabled(hasTransition
+                && !transition->guard.guard.empty());
+        }
+        if (_addFieldButton != nullptr) {
+            _addFieldButton->setEnabled(intentSelected);
+        }
     }
 
     void refresh()
@@ -2940,6 +3276,9 @@ private:
         refreshDiagnostics(_document->diagnostics());
         populateIntentPicker();
         if (_canvas != nullptr) _canvas->markDirty();
+        _inspectorDraftDirty = false;
+        _argumentDraftDirty = false;
+        updateAuthoringControls();
         _refreshing = false;
         _host.requestRepaint();
     }
@@ -3189,7 +3528,7 @@ private:
             target = {};
             resolved = true;
         }
-        if (resolved) (void)_document->select(std::move(target));
+        if (resolved) (void)selectObject(std::move(target));
         setStatus((resolved ? "Located diagnostic: " : "Diagnostic: ")
             + diagnostic.message,
             diagnostic.severity
@@ -3270,9 +3609,24 @@ private:
     EditorGameFlowCanvas* _canvas = nullptr;
     ayt::ui::Menu* _canvasMenu = nullptr;
     ayt::ui::Menu* _transitionMenu = nullptr;
+    std::unique_ptr<ayt::ui::ModalDialog> _templateDialog;
+    ayt::ui::Button* _saveButton = nullptr;
+    ayt::ui::Button* _undoButton = nullptr;
+    ayt::ui::Button* _redoButton = nullptr;
+    ayt::ui::Button* _deleteButton = nullptr;
+    ayt::ui::Button* _addActionButton = nullptr;
+    ayt::ui::Button* _moveActionUpButton = nullptr;
+    ayt::ui::Button* _moveActionDownButton = nullptr;
+    ayt::ui::Button* _addSubflowButton = nullptr;
+    ayt::ui::Button* _setGuardButton = nullptr;
+    ayt::ui::Button* _clearGuardButton = nullptr;
+    ayt::ui::Button* _addFieldButton = nullptr;
     ayt::ui::Button* _completePreview = nullptr;
     ayt::ui::Button* _failPreview = nullptr;
     ayt::ui::Button* _cancelPreview = nullptr;
+    ayt::ui::Button* _previewDetailsButton = nullptr;
+    ayt::ui::HBox* _previewPayloadBar = nullptr;
+    ayt::ui::HBox* _previewGuardBar = nullptr;
     ayt::ui::ListView* _outline = nullptr;
     EditorGameFlowActionPalette* _actionPalette = nullptr;
     ayt::ui::ComboBox* _guardPalette = nullptr;
@@ -3311,6 +3665,7 @@ private:
     std::vector<LocalizedBinding> _localizedBindings;
     std::vector<EditorGameFlowOutlineItem> _outlineItems;
     std::vector<EditorGameFlowArgumentView> _argumentItems;
+    std::string _argumentDraftId;
     std::vector<ayt::app::GameFlowFieldDefinition> _previewIntentFields;
     std::unordered_map<std::string, ayt::app::GameFlowPayload>
         _previewPayloads;
@@ -3321,6 +3676,9 @@ private:
     std::size_t _lastTraceSize = 0u;
     bool _refreshPending = false;
     bool _refreshing = false;
+    bool _inspectorDraftDirty = false;
+    bool _argumentDraftDirty = false;
+    bool _previewDetailsVisible = false;
     bool _previewStale = true;
     bool _controlDown = false;
 };

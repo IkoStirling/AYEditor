@@ -398,7 +398,7 @@ TEST_CASE(save_recovery_and_reload_keep_document_identity_and_dirty_state)
     CHECK(document.flow().intents.size() == 1u);
 }
 
-TEST_CASE(normal_save_rejects_known_schema_errors_but_recovery_preserves_them)
+TEST_CASE(normal_save_preserves_incomplete_registered_action_arguments)
 {
     editor_game_flow_document_test::TempFile saved("validation_gate");
     editor_game_flow_document_test::TempFile recovery("invalid_recovery");
@@ -415,16 +415,18 @@ TEST_CASE(normal_save_rejects_known_schema_errors_but_recovery_preserves_them)
     CHECK(document.addAction(transitionId, "test.required", &error));
     CHECK_FALSE(document.isValid());
 
-    CHECK_FALSE(document.saveAs(saved.path.string(), &error));
-    CHECK(error.find("Required authored argument") != std::string::npos);
-    CHECK(document.path().empty());
+    CHECK(document.saveAs(saved.path.string(), &error));
+    CHECK(error.empty());
+    CHECK(document.path() == saved.path.string());
+    CHECK(ayt::io::File::exists(saved.path.string()));
+    CHECK_FALSE(document.isDirty());
     CHECK(document.writeRecoveryCopy(recovery.path.string(), &error));
     CHECK(ayt::io::File::exists(recovery.path.string()));
 
     CHECK(document.setSelectedArgument(
         "token", GameFlowValue("ready"), &error));
     CHECK(document.isValid());
-    CHECK(document.saveAs(saved.path.string(), &error));
+    CHECK(document.save(&error));
     CHECK_FALSE(document.isDirty());
 }
 

@@ -318,13 +318,10 @@ bool EditorGameFlowDocument::save(std::string* error)
         if (error != nullptr) *error = "GameFlow has no destination path.";
         return false;
     }
-    if (hasError(_diagnostics)) {
-        if (error != nullptr) {
-            *error = firstDiagnostic(
-                _diagnostics, "GameFlow has validation errors.");
-        }
-        return false;
-    }
+    // Keep authoring and execution gates separate. Registered action/guard
+    // diagnostics can describe an intentionally incomplete work in progress;
+    // the structural serializer below remains the authority on whether the
+    // document is safe to persist. Preview/build still require buildPlan().
     if (!writeToPath(_path, error)) return false;
     (void)_history.markSaved();
     return true;
@@ -335,13 +332,6 @@ bool EditorGameFlowDocument::saveAs(
 {
     if (path.empty()) {
         if (error != nullptr) *error = "Save As path is empty.";
-        return false;
-    }
-    if (hasError(_diagnostics)) {
-        if (error != nullptr) {
-            *error = firstDiagnostic(
-                _diagnostics, "GameFlow has validation errors.");
-        }
         return false;
     }
     if (!writeToPath(path, error)) return false;
