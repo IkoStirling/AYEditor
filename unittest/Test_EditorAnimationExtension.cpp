@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <limits>
 #include <memory>
 
 namespace {
@@ -196,6 +197,59 @@ TEST_CASE(animation_tracks_and_timeline_are_editable_undoable_and_persistent)
         ayt::editor::EditorOpenRequest{path.string()}, error));
     CHECK(reopened.timelineTracks().size() == 3u);
     CHECK(reopened.timelineKeyframes().size() == 5u);
+}
+
+TEST_CASE(animation_keyframe_components_are_editable_normalized_and_undoable)
+{
+    const auto path = writeAnimationEditorClip();
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize(ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string(), &error));
+
+    std::vector<float> values;
+    ayt::resource::AnimTrackType type{};
+    CHECK(document.animationKeyframeValues("key.0.1", values, &type));
+    CHECK(type == ayt::resource::AnimTrackType::Vector3);
+    const std::vector<float> original{0.0f, 2.0f, 0.0f};
+    const std::vector<float> edited{3.0f, 4.0f, 5.0f};
+    CHECK(values == original);
+    CHECK(document.setAnimationKeyframeValues("key.0.1", edited));
+    CHECK(document.animationKeyframeValues("key.0.1", values));
+    CHECK(values == edited);
+    CHECK(document.setTimelinePositionSeconds(1.0));
+    const auto editedPosition = document.preview().poseWorldMatrices()[1]
+        .transformPoint({0, 0, 0});
+    CHECK(std::fabs(editedPosition.x - 3.0f) < 1.0e-5f);
+    CHECK(std::fabs(editedPosition.y - 4.0f) < 1.0e-5f);
+    CHECK(std::fabs(editedPosition.z - 5.0f) < 1.0e-5f);
+    const std::vector<float> wrongWidth{1.0f, 2.0f};
+    const std::vector<float> nonFinite{
+        1.0f, std::numeric_limits<float>::infinity(), 2.0f};
+    CHECK_FALSE(document.setAnimationKeyframeValues("key.0.1", wrongWidth));
+    CHECK_FALSE(document.setAnimationKeyframeValues("key.0.1", nonFinite));
+    CHECK(document.timelineUndo());
+    CHECK(document.animationKeyframeValues("key.0.1", values));
+    CHECK(values == original);
+    CHECK(document.timelineRedo());
+    CHECK(document.save(&error));
+
+    ayt::editor::EditorAnimationDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(reopened.animationKeyframeValues("key.0.1", values));
+    CHECK(values == edited);
+
+    CHECK(reopened.addAnimationTrack("hips", "rotation",
+        ayt::resource::AnimTrackType::Quaternion));
+    const std::vector<float> quaternionInput{0.0f, 0.0f, 0.0f, 2.0f};
+    const std::vector<float> quaternionExpected{0.0f, 0.0f, 0.0f, 1.0f};
+    const std::vector<float> zeroQuaternion{0.0f, 0.0f, 0.0f, 0.0f};
+    CHECK(reopened.setAnimationKeyframeValues("key.1.0", quaternionInput));
+    CHECK(reopened.animationKeyframeValues("key.1.0", values));
+    CHECK(values == quaternionExpected);
+    CHECK_FALSE(reopened.setAnimationKeyframeValues(
+        "key.1.0", zeroQuaternion));
 }
 
 TEST_CASE(animation_preview_bindings_use_project_editor_metadata)

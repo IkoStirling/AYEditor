@@ -6,7 +6,7 @@
 **Owner:** AYEditor
 
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
-> **2026-09-21 动画编辑状态**：独立 `.ayanm` 动画页面已从只读预览升级为第一版轨道/时间轴作者工具：可新增/删除 TRS 或 Float 轨道，在播放头新增、移动、删除关键帧，使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。每次内存 revision 直接驱动现有模型/骨架预览；`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。关键帧分量值、曲线/切线、多选和 Notify 编辑留后续阶段。
+> **2026-09-21 动画编辑状态**：独立 `.ayanm` 动画页面已从只读预览升级为轨道/时间轴作者工具：可新增/删除 TRS 或 Float 轨道，在播放头新增、移动、删除关键帧，并编辑关键帧各分量值；Quaternion 写入时统一归一化并拒绝零长度输入。所有修改使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。每次内存 revision 直接驱动现有模型/骨架预览；`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。曲线/切线、多选和 Notify 编辑留后续阶段。
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -530,12 +530,14 @@ control frames continue through the network subsystem independently.
   拒绝同一 node/property 重复轨道。新轨道在当前播放头创建一个类型安全默认关键帧。
 - 关键帧选择器与播放头协作完成新增、移动和删除。新增 TRS key 从相邻 key 采样以保持曲线连续；
   Float key 使用调用方给定值；移动保持原值并按时间重新排序，拒绝同轨同时间重复 key。
+- 选中关键帧后按轨道类型展示 1、3 或 4 个可编辑分量；提交前拒绝非有限数值，Quaternion
+  拒绝零长度并归一化。数值修改与时间修改一样形成完整可撤销 revision，并立即刷新正式预览姿势。
 - 时间单位边界保持明确：UI 使用秒，`.ayanm` track times 仍保存 source ticks，并通过
   `ticksPerSecond` 双向换算。时间轴公开的代表值读取每个 key 的首分量，不再误把扁平数组索引当 key 索引。
 - 所有编辑接入公共 `EditorCommandHistory`、全局 Save/Undo/Redo、dirty 状态与 recovery copy。
   保存从当前完整 revision 生成二进制，先回读验证再原子替换；派生 `.baked.ayanm` 和兼容别名
   `.ayanim` 禁止就地保存。
-- 第一阶段不包含分量值 Inspector、曲线/切线、框选/批量变换、轨道重命名、Notify 作者和压缩设置。
+- 当前阶段不包含曲线/切线、框选/批量变换、轨道重命名、Notify 作者和压缩设置。
 
 ## 5. Editor chrome (AYUI)
 
@@ -1333,6 +1335,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-21 | 动画关键帧分量编辑已接入：Float/Vector3/Quaternion 按类型展示与写回，非有限值和零 Quaternion 被拒绝，旋转自动归一化；修改继续复用完整 revision、即时预览、Undo/Redo 和原子保存。 |
 | 2026-09-21 | `.ayanm` 动画预览页升级为第一版轨道/时间轴作者工具：轨道与关键帧增删、关键帧移动、即时模型/骨架预览、公共 Undo/Redo、dirty/recovery 及验证后原子保存已接通；baked/Legacy 输出保持只读，曲线和值编辑留后续。 |
 | 2026-09-21 | Skeleton Editor 发起的生产 bake 已升级为事务式完整引用改写：覆盖骨架、动画、网格 palette/joint 与 Mask，receipt v2 最后切换；发布端复验精确依赖闭包和源修订，失败/取消不替换有效输出。跨骨架蒙皮几何 rebind 未实现时显式阻止。 |
 | 2026-09-21 | `BakeToTarget` 接入 AYAnimation 的统一 source→target pose/clip 求解；编辑器预检直接报告未映射动画骨、不支持的 TRS 或加法轨道，不再使用“求解器未实现”占位错误。 |

@@ -18,11 +18,13 @@
 #include <AYUI/Widget.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <filesystem>
 #include <functional>
 #include <iomanip>
 #include <memory>
+#include <optional>
 #include <sstream>
 
 namespace ayt::editor {
@@ -47,6 +49,20 @@ std::string encodeUtf8(const std::wstring& value)
         }
     }
     return result;
+}
+
+std::optional<float> parseFiniteFloat(const std::wstring& value)
+{
+    try {
+        std::size_t consumed = 0u;
+        const float result = std::stof(value, &consumed);
+        if (consumed != value.size() || !std::isfinite(result)) {
+            return std::nullopt;
+        }
+        return result;
+    } catch (...) {
+        return std::nullopt;
+    }
 }
 
 class EditorAnimationWorkspaceView final
@@ -313,8 +329,26 @@ private:
             if (_syncing || index < 0
                 || index >= static_cast<int>(_keyIds.size())) return;
             _selectedKeyId = _keyIds[static_cast<std::size_t>(index)];
+            refreshAuthoring();
         });
         inspector->addWidget(_keyPicker, 28.0f);
+        auto* valueRow = new ayt::ui::HBox();
+        valueRow->setSpacing(4.0f);
+        static constexpr const wchar_t* componentNames[] = {
+            L"X", L"Y", L"Z", L"W"
+        };
+        for (std::size_t component = 0u; component < 4u; ++component) {
+            _keyValues[component] = new ayt::ui::TextInput();
+            _keyValues[component]->setId(
+                "animation_key_value_" + std::to_string(component));
+            _keyValues[component]->setPlaceholder(componentNames[component]);
+            _keyValues[component]->setNumericScrubEnabled(true);
+            _keyValues[component]->setOnSubmit([this](const std::wstring&) {
+                applyKeyValues();
+            });
+            valueRow->addWidget(_keyValues[component], 0.0f);
+        }
+        inspector->addWidget(valueRow, 28.0f);
         auto* keyActions = new ayt::ui::HBox();
         keyActions->setSpacing(4.0f);
         keyActions->addWidget(makeButton(L"Add Key", [this]() {
@@ -326,6 +360,9 @@ private:
         keyActions->addWidget(makeButton(L"Delete Key", [this]() {
             deleteKey();
         }), 78.0f);
+        keyActions->addWidget(makeButton(L"Apply Value", [this]() {
+            applyKeyValues();
+        }), 82.0f);
         inspector->addWidget(keyActions, 28.0f);
 
         inspector->addWidget(makeHeader(L"TRACKS / EVENTS"), 20.0f);
@@ -544,6 +581,22 @@ private:
         _trackPicker->setSelectedIndex(trackIndex);
         _keyPicker->setItems(keyItems);
         _keyPicker->setSelectedIndex(keyIndex);
+        std::vector<float> values;
+        ayt::resource::AnimTrackType valueType{};
+        const bool hasValues = !_selectedKeyId.empty()
+            && _document->animationKeyframeValues(
+                _selectedKeyId, values, &valueType);
+        const std::size_t width = hasValues ? values.size() : 0u;
+        for (std::size_t component = 0u; component < 4u; ++component) {
+            _keyValues[component]->setVisible(component < width);
+            if (component < width) {
+                std::wostringstream text;
+                text << std::setprecision(7) << values[component];
+                _keyValues[component]->setText(text.str());
+            } else {
+                _keyValues[component]->setText(L"");
+            }
+        }
         _syncing = false;
         _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
     }
@@ -627,6 +680,30 @@ private:
         refreshAll();
     }
 
+    void applyKeyValues()
+    {
+        if (_selectedKeyId.empty()) return;
+        std::vector<float> current;
+        if (!_document->animationKeyframeValues(_selectedKeyId, current)) return;
+        std::vector<float> values;
+        values.reserve(current.size());
+        for (std::size_t component = 0u; component < current.size(); ++component) {
+            const auto parsed = parseFiniteFloat(_keyValues[component]->getText());
+            if (!parsed) {
+                _host.setStatusText(L"Key value must contain finite numbers");
+                return;
+            }
+            values.push_back(*parsed);
+        }
+        if (!_document->setAnimationKeyframeValues(_selectedKeyId, values)) {
+            _host.setStatusText(L"Key value was unchanged or invalid");
+            refreshAuthoring();
+            return;
+        }
+        _host.setStatusText(L"Animation key value updated");
+        refreshAll();
+    }
+
     void refreshDiagnostics()
     {
         std::wostringstream text;
@@ -682,6 +759,7 @@ private:
     ayt::ui::TextInput* _trackNode = nullptr;
     ayt::ui::ComboBox* _trackProperty = nullptr;
     ayt::ui::ComboBox* _keyPicker = nullptr;
+    std::array<ayt::ui::TextInput*, 4> _keyValues{};
     ayt::ui::TextLabel* _editState = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::Slider* _playhead = nullptr;

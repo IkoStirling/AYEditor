@@ -60,6 +60,11 @@ public:
                            const std::string& property,
                            ayt::resource::AnimTrackType type);
     bool removeAnimationTrack(const std::string& trackId);
+    bool animationKeyframeValues(
+        const std::string& keyframeId, std::vector<float>& values,
+        ayt::resource::AnimTrackType* type = nullptr) const;
+    bool setAnimationKeyframeValues(const std::string& keyframeId,
+                                    const std::vector<float>& values);
 
     ayt::anim::editor::AnimationPreviewSession& preview() noexcept {
         return _preview;

@@ -561,6 +561,60 @@ bool EditorAnimationDocument::removeAnimationTrack(const std::string& trackId)
     return commitEditedAnimation(buildAnimation(clip));
 }
 
+bool EditorAnimationDocument::animationKeyframeValues(
+    const std::string& keyframeId, std::vector<float>& values,
+    ayt::resource::AnimTrackType* type) const
+{
+    std::size_t trackIndex = 0u;
+    std::size_t keyIndex = 0u;
+    const auto* animation = _preview.animation();
+    if (!parseKeyId(keyframeId, trackIndex, keyIndex) || animation == nullptr
+        || trackIndex >= animation->getTrackCount()
+        || keyIndex >= animation->getTrackKeyframeCount(
+            static_cast<std::uint32_t>(trackIndex))) return false;
+    const auto trackType = animation->getTrackType(
+        static_cast<std::uint32_t>(trackIndex));
+    const std::size_t width = valueWidth(trackType);
+    const float* raw = animation->getTrackValues(
+        static_cast<std::uint32_t>(trackIndex));
+    if (raw == nullptr) return false;
+    values.assign(raw + keyIndex * width, raw + (keyIndex + 1u) * width);
+    if (type != nullptr) *type = trackType;
+    return true;
+}
+
+bool EditorAnimationDocument::setAnimationKeyframeValues(
+    const std::string& keyframeId, const std::vector<float>& values)
+{
+    std::size_t trackIndex = 0u;
+    std::size_t keyIndex = 0u;
+    const auto* animation = _preview.animation();
+    if (!parseKeyId(keyframeId, trackIndex, keyIndex) || animation == nullptr
+        || trackIndex >= animation->getTrackCount()
+        || keyIndex >= animation->getTrackKeyframeCount(
+            static_cast<std::uint32_t>(trackIndex))) return false;
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[trackIndex];
+    const std::size_t width = valueWidth(track.valueType);
+    if (values.size() != width
+        || !std::all_of(values.begin(), values.end(), [](float value) {
+            return std::isfinite(value);
+        })) return false;
+
+    std::vector<float> normalized = values;
+    if (track.valueType == ayt::resource::AnimTrackType::Quaternion) {
+        float lengthSquared = 0.0f;
+        for (const float value : normalized) lengthSquared += value * value;
+        if (lengthSquared <= 1.0e-12f) return false;
+        const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+        for (float& value : normalized) value *= inverseLength;
+    }
+    const auto first = track.values.begin() + keyIndex * width;
+    if (std::equal(normalized.begin(), normalized.end(), first)) return false;
+    std::copy(normalized.begin(), normalized.end(), first);
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
 bool EditorAnimationDocument::bindSkeleton(const std::string& path,
                                            std::string* error)
 {
