@@ -12,6 +12,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 
@@ -119,13 +120,82 @@ TEST_CASE(animation_descriptor_opens_full_preview_document)
     CHECK(document->timelineTracks().size() == 2u);
     CHECK(document->timelineKeyframes().size() == 4u);
     CHECK_FALSE(document->isDirty());
-    CHECK_FALSE(document->save(&error));
-    CHECK(error.find("read-only") != std::string::npos);
+    CHECK(document->save(&error));
+    CHECK(error.empty());
 
     AnimationExtensionHost host(animationExtensionFixtureRoot().string());
     const auto view = descriptor.createView(base, host);
     CHECK(view != nullptr);
     CHECK(view != nullptr && view->rootWidget() != nullptr);
+    CHECK(view != nullptr && view->commandTarget() != nullptr);
+}
+
+TEST_CASE(animation_tracks_and_timeline_are_editable_undoable_and_persistent)
+{
+    const auto path = writeAnimationEditorClip();
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize(ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string(), &error));
+    CHECK(document.timelineTracks().size() == 2u);
+    CHECK(document.timelineKeyframes().size() == 4u);
+
+    CHECK(document.timelineAddKeyframe("animation.0", 0.25, 0.0));
+    CHECK(document.isDirty());
+    auto keys = document.timelineKeyframes();
+    auto inserted = std::find_if(keys.begin(), keys.end(), [](const auto& key) {
+        return key.trackId == "animation.0"
+            && std::fabs(key.timeSeconds - 0.25) < 1.0e-6;
+    });
+    CHECK(inserted != keys.end());
+    const std::string insertedId = inserted != keys.end() ? inserted->id : "";
+    CHECK(document.timelineMoveKeyframe(insertedId, 0.75));
+    CHECK(document.setTimelinePositionSeconds(0.75));
+    CHECK(document.preview().poseWorldMatrices()[1]
+        .transformPoint({0, 0, 0}).y < 1.5f);
+    keys = document.timelineKeyframes();
+    CHECK(std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+            return key.trackId == "animation.0"
+                && std::fabs(key.timeSeconds - 0.75) < 1.0e-6;
+        }));
+    CHECK(document.timelineCanUndo());
+    CHECK(document.timelineUndo());
+    keys = document.timelineKeyframes();
+    CHECK(std::any_of(keys.begin(), keys.end(), [](const auto& key) {
+            return key.trackId == "animation.0"
+                && std::fabs(key.timeSeconds - 0.25) < 1.0e-6;
+        }));
+    CHECK(document.timelineRedo());
+
+    keys = document.timelineKeyframes();
+    inserted = std::find_if(keys.begin(), keys.end(), [](const auto& key) {
+        return key.trackId == "animation.0"
+            && std::fabs(key.timeSeconds - 0.75) < 1.0e-6;
+    });
+    CHECK(inserted != keys.end());
+    CHECK(document.timelineRemoveKeyframe(
+        inserted != keys.end() ? inserted->id : ""));
+    CHECK(document.addAnimationTrack("hips", "scale",
+        ayt::resource::AnimTrackType::Vector3));
+    CHECK(document.timelineTracks().size() == 3u);
+    CHECK_FALSE(document.addAnimationTrack("hips", "scale",
+        ayt::resource::AnimTrackType::Vector3));
+    CHECK(document.removeAnimationTrack("animation.1"));
+    CHECK(document.timelineTracks().size() == 2u);
+    CHECK(document.timelineUndo());
+    CHECK(document.timelineTracks().size() == 3u);
+
+    const auto recovery = animationExtensionFixtureRoot() / "walk.recovery.ayanm";
+    CHECK(document.writeRecoveryCopy(recovery.string(), &error));
+    CHECK(std::filesystem::is_regular_file(recovery));
+    CHECK(document.save(&error));
+    CHECK_FALSE(document.isDirty());
+
+    ayt::editor::EditorAnimationDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(reopened.timelineTracks().size() == 3u);
+    CHECK(reopened.timelineKeyframes().size() == 5u);
 }
 
 TEST_CASE(animation_preview_bindings_use_project_editor_metadata)

@@ -6,6 +6,7 @@
 **Owner:** AYEditor
 
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
+> **2026-09-21 动画编辑状态**：独立 `.ayanm` 动画页面已从只读预览升级为第一版轨道/时间轴作者工具：可新增/删除 TRS 或 Float 轨道，在播放头新增、移动、删除关键帧，使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。每次内存 revision 直接驱动现有模型/骨架预览；`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。关键帧分量值、曲线/切线、多选和 Notify 编辑留后续阶段。
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
@@ -518,6 +519,23 @@ control frames continue through the network subsystem independently.
 标志读取统一校验/构建记录，以文字和图形共同表达，不只依靠颜色或维护 UI 私有布尔值。
 当前已具备 Skeleton Editor 第一版与规范 `.ayrig` Rig Profile 作者资源；编辑器仍可读取 Legacy `.aysmap`，但会醒目标记并在保存时迁移为 `.ayrig`，旧文件不被静默覆盖。源/目标骨映射支持选择与源骨树拖放，逐角色源参考姿势、目标参考姿势和骨轴四元数修正纳入文档级撤销、保存及 profile 指纹；早期不含目标角色表的最小 retarget profile 会按规范骨名迁移。UI-free source→target 核心已接入真实 `BakeToTarget`，不支持的加法轨道、未映射动画骨和未知 TRS 会明确阻止。骨架画布在存在目标时拆分为 Source/Target 两个视口，目标侧播放正式转换 clip，播放、暂停、停止与时间拖动保持同步；目前不声明模型蒙皮并排预览。生产清理烘焙已覆盖骨架、动画、蒙皮 palette/joint 和 Skeleton Mask，并通过 receipt v2 与 AYResource 的精确闭包门禁保障引用安全；跨骨架蒙皮几何 rebind 尚未实现时任务会明确失败。
 项目元数据 `.ayeditor/skeleton-profile-bindings.json` 现以工程相对路径保存骨架到默认 mapping/retarget profile 的显式绑定；同一骨架可在工作区切换多个 `.ayrig`，同名 sidecar 仅保留为首次建议。`kind=template` 的 `.ayrig` 可被发现、预览命中/保留/缺失/冲突计数并显式应用，已有手工槽不会被模板静默覆盖。骨树支持按名称/索引搜索，角色槽显示左右侧、必需、缺失和重复占用。`kind=retarget` 保存目标骨架、目标角色、逐角色修正、`BakeToTarget` 和 platform；这些输入进入 profile 指纹和输出 scope，真实求解器已替代 `retargetSolverUnavailable` 占位门禁。普通资源 Inspector 与 Content Browser 读取同一 authoring/build 状态来源展示 Mapping/Bake 两个状态及 retarget 目标/platform。
+
+### 4.3.animation 动画轨道与时间轴作者工具（第一阶段已实现）
+
+`.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
+序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
+因此预览不会观察到半修改的 `times/values` 数组，撤销/重做也恢复完整 clip 而不是零散 UI 状态。
+
+- 轨道选择器展示 bone/node 与 property；可新增或删除 Position、Rotation、Scale、Float 轨道，
+  拒绝同一 node/property 重复轨道。新轨道在当前播放头创建一个类型安全默认关键帧。
+- 关键帧选择器与播放头协作完成新增、移动和删除。新增 TRS key 从相邻 key 采样以保持曲线连续；
+  Float key 使用调用方给定值；移动保持原值并按时间重新排序，拒绝同轨同时间重复 key。
+- 时间单位边界保持明确：UI 使用秒，`.ayanm` track times 仍保存 source ticks，并通过
+  `ticksPerSecond` 双向换算。时间轴公开的代表值读取每个 key 的首分量，不再误把扁平数组索引当 key 索引。
+- 所有编辑接入公共 `EditorCommandHistory`、全局 Save/Undo/Redo、dirty 状态与 recovery copy。
+  保存从当前完整 revision 生成二进制，先回读验证再原子替换；派生 `.baked.ayanm` 和兼容别名
+  `.ayanim` 禁止就地保存。
+- 第一阶段不包含分量值 Inspector、曲线/切线、框选/批量变换、轨道重命名、Notify 作者和压缩设置。
 
 ## 5. Editor chrome (AYUI)
 
@@ -1315,6 +1333,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-21 | `.ayanm` 动画预览页升级为第一版轨道/时间轴作者工具：轨道与关键帧增删、关键帧移动、即时模型/骨架预览、公共 Undo/Redo、dirty/recovery 及验证后原子保存已接通；baked/Legacy 输出保持只读，曲线和值编辑留后续。 |
 | 2026-09-21 | Skeleton Editor 发起的生产 bake 已升级为事务式完整引用改写：覆盖骨架、动画、网格 palette/joint 与 Mask，receipt v2 最后切换；发布端复验精确依赖闭包和源修订，失败/取消不替换有效输出。跨骨架蒙皮几何 rebind 未实现时显式阻止。 |
 | 2026-09-21 | `BakeToTarget` 接入 AYAnimation 的统一 source→target pose/clip 求解；编辑器预检直接报告未映射动画骨、不支持的 TRS 或加法轨道，不再使用“求解器未实现”占位错误。 |
 | 2026-09-21 | Skeleton Editor 增加源骨树拖放、目标角色映射，以及逐角色源/目标参考姿势和骨轴修正；修正参与撤销、保存和 profile 指纹，早期最小 retarget profile 可迁移。 |

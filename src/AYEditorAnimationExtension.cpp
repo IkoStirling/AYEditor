@@ -49,7 +49,8 @@ std::string encodeUtf8(const std::wstring& value)
     return result;
 }
 
-class EditorAnimationWorkspaceView final : public IEditorView {
+class EditorAnimationWorkspaceView final
+    : public IEditorView, public IEditorCommandTarget {
 public:
     EditorAnimationWorkspaceView(std::shared_ptr<EditorAnimationDocument> document,
                                  IEditorHostServices& host)
@@ -71,6 +72,20 @@ public:
         _root = nullptr;
         return result;
     }
+    IEditorCommandTarget* commandTarget() noexcept override { return this; }
+    bool handlesCommand(const std::string& commandId) const override {
+        return _document != nullptr && _document->handlesCommand(commandId);
+    }
+    bool canExecuteCommand(const std::string& commandId) const override {
+        return _document != nullptr && _document->canExecuteCommand(commandId);
+    }
+    bool executeCommand(const std::string& commandId) override {
+        if (_document == nullptr || !_document->executeCommand(commandId)) {
+            return false;
+        }
+        refreshAll();
+        return true;
+    }
     void tick(float dt) override
     {
         if (_document == nullptr) return;
@@ -88,6 +103,7 @@ public:
             refreshInspector();
             refreshDiagnostics();
             refreshTransport();
+            refreshAuthoring();
             if (_canvas != nullptr) _canvas->markDirty();
             _host.requestRepaint();
         }
@@ -157,6 +173,28 @@ private:
         toolbar->addWidget(makeButton(L"Frame", [this]() {
             if (_canvas != nullptr) _canvas->framePreview();
         }), 54.0f);
+        toolbar->addWidget(makeButton(L"Undo", [this]() {
+            if (_document->timelineUndo()) {
+                _host.setStatusText(L"Animation edit undone");
+                refreshAll();
+            }
+        }), 52.0f);
+        toolbar->addWidget(makeButton(L"Redo", [this]() {
+            if (_document->timelineRedo()) {
+                _host.setStatusText(L"Animation edit redone");
+                refreshAll();
+            }
+        }), 52.0f);
+        toolbar->addWidget(makeButton(L"Save", [this]() {
+            std::string error;
+            if (!_document->save(&error)) {
+                _host.setStatusText(L"Animation save failed: "
+                    + ayt::ui::decodeUtf8Text(error));
+            } else {
+                _host.setStatusText(L"Animation clip saved");
+                refreshAll();
+            }
+        }), 52.0f);
         _loop = makeButton(L"Loop: On", [this]() {
             _document->setLooping(!_document->preview().looping());
             refreshTransport();
@@ -234,6 +272,62 @@ private:
         }), 82.0f);
         inspector->addWidget(bindingActions, 28.0f);
 
+        inspector->addWidget(makeHeader(L"TRACK AUTHORING"), 20.0f);
+        _trackPicker = new ayt::ui::ComboBox();
+        _trackPicker->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_trackIds.size())) return;
+            _selectedTrackId = _trackIds[static_cast<std::size_t>(index)];
+            _selectedKeyId.clear();
+            refreshAuthoring();
+        });
+        inspector->addWidget(_trackPicker, 28.0f);
+
+        auto* trackDefinition = new ayt::ui::HBox();
+        trackDefinition->setSpacing(4.0f);
+        _trackNode = new ayt::ui::TextInput();
+        trackDefinition->addWidget(_trackNode, 0.0f);
+        _trackProperty = new ayt::ui::ComboBox();
+        _trackProperty->setItems({L"Position", L"Rotation", L"Scale", L"Float"});
+        _trackProperty->setSelectedIndex(0);
+        trackDefinition->addWidget(_trackProperty, 92.0f);
+        inspector->addWidget(trackDefinition, 28.0f);
+
+        auto* trackActions = new ayt::ui::HBox();
+        trackActions->setSpacing(4.0f);
+        trackActions->addWidget(makeButton(L"Add Track", [this]() {
+            addTrack();
+        }), 76.0f);
+        trackActions->addWidget(makeButton(L"Remove Track", [this]() {
+            removeTrack();
+        }), 92.0f);
+        _editState = new ayt::ui::TextLabel();
+        _editState->setFontSize(11);
+        _editState->setVerticalAlignment(
+            ayt::ui::TextLabel::VAlignment::Center);
+        trackActions->addWidget(_editState, 0.0f);
+        inspector->addWidget(trackActions, 28.0f);
+
+        _keyPicker = new ayt::ui::ComboBox();
+        _keyPicker->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_keyIds.size())) return;
+            _selectedKeyId = _keyIds[static_cast<std::size_t>(index)];
+        });
+        inspector->addWidget(_keyPicker, 28.0f);
+        auto* keyActions = new ayt::ui::HBox();
+        keyActions->setSpacing(4.0f);
+        keyActions->addWidget(makeButton(L"Add Key", [this]() {
+            addKey();
+        }), 66.0f);
+        keyActions->addWidget(makeButton(L"Move Here", [this]() {
+            moveKey();
+        }), 78.0f);
+        keyActions->addWidget(makeButton(L"Delete Key", [this]() {
+            deleteKey();
+        }), 78.0f);
+        inspector->addWidget(keyActions, 28.0f);
+
         inspector->addWidget(makeHeader(L"TRACKS / EVENTS"), 20.0f);
         _tracks = new ayt::ui::TextArea();
         _tracks->setReadOnly(true);
@@ -263,11 +357,11 @@ private:
         _time->setFontSize(11);
         _time->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
         timeline->addWidget(_time, 120.0f);
-        auto* readOnly = new ayt::ui::TextLabel();
-        readOnly->setText(L"Cooked clip - read-only");
-        readOnly->setFontSize(11);
-        readOnly->setTextColor({0.82f, 0.62f, 0.30f, 1.0f});
-        timeline->addWidget(readOnly, 150.0f);
+        auto* editable = new ayt::ui::TextLabel();
+        editable->setText(L"Editable tracks + keys");
+        editable->setFontSize(11);
+        editable->setTextColor({0.42f, 0.78f, 0.50f, 1.0f});
+        timeline->addWidget(editable, 150.0f);
         root->addWidget(timeline, 30.0f);
     }
 
@@ -321,6 +415,7 @@ private:
         refreshInspector();
         refreshDiagnostics();
         refreshTransport();
+        refreshAuthoring();
         _lastRevision = _document->preview().revision();
         _lastPoseRevision = _document->preview().poseRevision();
         if (_canvas != nullptr) _canvas->markDirty();
@@ -397,6 +492,141 @@ private:
         if (_tracks->getText() != trackText) _tracks->setText(trackText);
     }
 
+    void refreshAuthoring()
+    {
+        const auto tracks = _document->timelineTracks();
+        _trackIds.clear();
+        std::vector<std::wstring> trackItems;
+        for (const auto& track : tracks) {
+            if (track.kind != EditorTimelineTrackKind::Animation) continue;
+            _trackIds.push_back(track.id);
+            trackItems.push_back(ayt::ui::decodeUtf8Text(track.name));
+        }
+        if (!_selectedTrackId.empty()
+            && std::find(_trackIds.begin(), _trackIds.end(), _selectedTrackId)
+                == _trackIds.end()) {
+            _selectedTrackId.clear();
+        }
+        if (_selectedTrackId.empty() && !_trackIds.empty()) {
+            _selectedTrackId = _trackIds.front();
+        }
+        const auto selectedTrack = std::find(
+            _trackIds.begin(), _trackIds.end(), _selectedTrackId);
+        const int trackIndex = selectedTrack == _trackIds.end() ? -1
+            : static_cast<int>(selectedTrack - _trackIds.begin());
+
+        _keyIds.clear();
+        std::vector<std::wstring> keyItems;
+        for (const auto& key : _document->timelineKeyframes()) {
+            if (key.trackId != _selectedTrackId) continue;
+            _keyIds.push_back(key.id);
+            std::wostringstream label;
+            label << L"Key " << _keyIds.size() << L"   @ "
+                  << std::fixed << std::setprecision(3)
+                  << key.timeSeconds << L" s";
+            keyItems.push_back(label.str());
+        }
+        if (!_selectedKeyId.empty()
+            && std::find(_keyIds.begin(), _keyIds.end(), _selectedKeyId)
+                == _keyIds.end()) {
+            _selectedKeyId.clear();
+        }
+        if (_selectedKeyId.empty() && !_keyIds.empty()) {
+            _selectedKeyId = _keyIds.front();
+        }
+        const auto selectedKey = std::find(
+            _keyIds.begin(), _keyIds.end(), _selectedKeyId);
+        const int keyIndex = selectedKey == _keyIds.end() ? -1
+            : static_cast<int>(selectedKey - _keyIds.begin());
+
+        _syncing = true;
+        _trackPicker->setItems(trackItems);
+        _trackPicker->setSelectedIndex(trackIndex);
+        _keyPicker->setItems(keyItems);
+        _keyPicker->setSelectedIndex(keyIndex);
+        _syncing = false;
+        _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
+    }
+
+    void addTrack()
+    {
+        std::string node = encodeUtf8(_trackNode->getText());
+        if (node.empty()) {
+            const int selected = _document->selectedBone();
+            if (selected >= 0
+                && selected < static_cast<int>(_document->preview().bones().size())) {
+                node = _document->preview().bones()[selected].name;
+                _trackNode->setText(ayt::ui::decodeUtf8Text(node));
+            }
+        }
+        const int propertyIndex = std::max(0, _trackProperty->getSelectedIndex());
+        const char* property = propertyIndex == 1 ? "rotation"
+            : propertyIndex == 2 ? "scale"
+            : propertyIndex == 3 ? "value" : "position";
+        const auto type = propertyIndex == 1
+            ? ayt::resource::AnimTrackType::Quaternion
+            : propertyIndex == 3 ? ayt::resource::AnimTrackType::Float
+                                 : ayt::resource::AnimTrackType::Vector3;
+        if (!_document->addAnimationTrack(node, property, type)) {
+            _host.setStatusText(L"Track was not added; choose a bone/name and a unique property");
+            return;
+        }
+        const auto tracks = _document->timelineTracks();
+        const auto last = std::find_if(tracks.rbegin(), tracks.rend(),
+            [](const auto& track) {
+                return track.kind == EditorTimelineTrackKind::Animation;
+            });
+        if (last != tracks.rend()) _selectedTrackId = last->id;
+        _selectedKeyId.clear();
+        _host.setStatusText(L"Animation track added");
+        refreshAll();
+    }
+
+    void removeTrack()
+    {
+        if (_selectedTrackId.empty()
+            || !_document->removeAnimationTrack(_selectedTrackId)) return;
+        _selectedTrackId.clear();
+        _selectedKeyId.clear();
+        _host.setStatusText(L"Animation track removed");
+        refreshAll();
+    }
+
+    void addKey()
+    {
+        if (_selectedTrackId.empty()
+            || !_document->timelineAddKeyframe(_selectedTrackId,
+                _document->timelinePositionSeconds(), 0.0)) {
+            _host.setStatusText(L"Key was not added; the track may already have a key here");
+            return;
+        }
+        _selectedKeyId.clear();
+        _host.setStatusText(L"Animation key added at playhead");
+        refreshAll();
+    }
+
+    void moveKey()
+    {
+        if (_selectedKeyId.empty()
+            || !_document->timelineMoveKeyframe(_selectedKeyId,
+                _document->timelinePositionSeconds())) {
+            _host.setStatusText(L"Key was not moved; another key may occupy this time");
+            return;
+        }
+        _selectedKeyId.clear();
+        _host.setStatusText(L"Animation key moved to playhead");
+        refreshAll();
+    }
+
+    void deleteKey()
+    {
+        if (_selectedKeyId.empty()
+            || !_document->timelineRemoveKeyframe(_selectedKeyId)) return;
+        _selectedKeyId.clear();
+        _host.setStatusText(L"Animation key deleted");
+        refreshAll();
+    }
+
     void refreshDiagnostics()
     {
         std::wostringstream text;
@@ -448,10 +678,19 @@ private:
     ayt::ui::TextInput* _materialPath = nullptr;
     ayt::ui::TextArea* _info = nullptr;
     ayt::ui::TextArea* _tracks = nullptr;
+    ayt::ui::ComboBox* _trackPicker = nullptr;
+    ayt::ui::TextInput* _trackNode = nullptr;
+    ayt::ui::ComboBox* _trackProperty = nullptr;
+    ayt::ui::ComboBox* _keyPicker = nullptr;
+    ayt::ui::TextLabel* _editState = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::Slider* _playhead = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
     ayt::ui::TextLabel* _transportStatus = nullptr;
+    std::vector<std::string> _trackIds;
+    std::vector<std::string> _keyIds;
+    std::string _selectedTrackId;
+    std::string _selectedKeyId;
     std::uint64_t _lastRevision = 0u;
     std::uint64_t _lastPoseRevision = 0u;
     bool _syncing = false;
