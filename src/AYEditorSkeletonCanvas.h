@@ -17,6 +17,9 @@ public:
         std::shared_ptr<EditorSkeletonDocument> document);
 
     void frameSkeleton();
+    [[nodiscard]] bool hasSideBySidePreview() const noexcept {
+        return !_targetProjected.empty();
+    }
     void setOnBoneSelected(std::function<void(int)> callback) {
         _onBoneSelected = std::move(callback);
     }
@@ -39,6 +42,8 @@ private:
     std::shared_ptr<EditorSkeletonDocument> _document;
     std::vector<ayt::math::FVector3> _worldPoints;
     std::vector<ProjectedPoint> _projected;
+    std::vector<ayt::math::FVector3> _targetWorldPoints;
+    std::vector<ProjectedPoint> _targetProjected;
     ayt::math::FRectangle _projectedBounds{};
     std::uint64_t _projectedPoseRevision = 0u;
     float _projectedYaw = 0.0f;

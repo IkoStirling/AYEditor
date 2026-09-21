@@ -27,7 +27,8 @@ std::filesystem::path skeletonExtensionFixtureRoot()
     return root;
 }
 
-std::filesystem::path writeEditorSkeletonFixture()
+std::filesystem::path writeEditorSkeletonFixture(
+    const char* fileName = "editor_fixture.ayskel", float size = 1.0f)
 {
     ayt::resource::Skeleton skeleton;
     const struct BoneDef { const char* name; int parent; float x; float y; } defs[] = {
@@ -44,7 +45,7 @@ std::filesystem::path writeEditorSkeletonFixture()
         ayt::resource::Bone bone;
         bone.name = def.name;
         bone.parentIndex = def.parent;
-        bone.localPosition = {def.x, def.y, 0.0f};
+        bone.localPosition = {def.x * size, def.y * size, 0.0f};
         bone.localRotation = ayt::math::FQuaternion::identity();
         bone.localScale = {1, 1, 1};
         bone.inverseBindMatrix = ayt::math::Float4x4::identity();
@@ -52,7 +53,7 @@ std::filesystem::path writeEditorSkeletonFixture()
     }
     std::vector<ayt::math::UInt8> bytes;
     CHECK(skeleton.saveToBinary(bytes));
-    const auto path = skeletonExtensionFixtureRoot() / "editor_fixture.ayskel";
+    const auto path = skeletonExtensionFixtureRoot() / fileName;
     CHECK(ayt::io::File::writeAllBytes(path.string(), bytes));
     return path;
 }
@@ -291,6 +292,12 @@ TEST_CASE(skeleton_canvas_batches_bones_and_retains_static_presentation)
     CHECK(document->initialize(
         ayt::editor::EditorOpenRequest{writeEditorSkeletonFixture().string()},
         error));
+    CHECK(document->core().applyCanonicalNameTemplate());
+    CHECK(document->core().configureRetarget(
+        writeEditorSkeletonFixture("editor_target.ayskel", 2.0f).string(),
+        "test", &error));
+    CHECK(document->core().attachAnimation(
+        writeEditorAnimationFixture().string(), &error));
 
     ayt::editor::EditorSkeletonCanvas canvas(document);
     canvas.setSize({640.0f, 480.0f});
@@ -309,9 +316,11 @@ TEST_CASE(skeleton_canvas_batches_bones_and_retains_static_presentation)
         [](const ayt::ui::MockRenderer::DrawCall& call) {
             return call.type == ayt::ui::MockRenderer::DrawCall::Rect;
         });
-    CHECK(pathCalls == 1);
+    CHECK(canvas.hasSideBySidePreview());
+    CHECK(pathCalls == 2);
     CHECK(rectCalls <= static_cast<std::ptrdiff_t>(
-        document->core().bones().size() + 1u));
+        document->core().bones().size()
+            + document->core().targetBones().size() + 3u));
     CHECK(canvas.hasCachedDisplayList());
 }
 

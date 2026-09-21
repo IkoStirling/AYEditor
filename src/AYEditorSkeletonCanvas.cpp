@@ -46,6 +46,8 @@ void EditorSkeletonCanvas::rebuildProjection()
     if (_document == nullptr) {
         _worldPoints.clear();
         _projected.clear();
+        _targetWorldPoints.clear();
+        _targetProjected.clear();
         _projectionValid = false;
         return;
     }
@@ -71,40 +73,62 @@ void EditorSkeletonCanvas::rebuildProjection()
     _projectedBounds = bounds;
     _worldPoints.clear();
     _projected.clear();
+    _targetWorldPoints.clear();
+    _targetProjected.clear();
     const auto& world = _document->core().poseWorldMatrices();
     if (world.empty()) return;
-
-    _worldPoints.reserve(world.size());
-    ayt::math::FVector3 minimum = world.front().transformPoint({0, 0, 0});
-    ayt::math::FVector3 maximum = minimum;
-    for (const auto& matrix : world) {
-        const ayt::math::FVector3 point = matrix.transformPoint({0, 0, 0});
-        _worldPoints.push_back(point);
-        minimum.x = std::min(minimum.x, point.x);
-        minimum.y = std::min(minimum.y, point.y);
-        minimum.z = std::min(minimum.z, point.z);
-        maximum.x = std::max(maximum.x, point.x);
-        maximum.y = std::max(maximum.y, point.y);
-        maximum.z = std::max(maximum.z, point.z);
-    }
-    const ayt::math::FVector3 center = (minimum + maximum) * 0.5f;
-    const float extent = std::max({maximum.x - minimum.x,
-        maximum.y - minimum.y, maximum.z - minimum.z, 0.01f});
-    const float width = std::max(1.0f, bounds.maxX - bounds.minX);
-    const float height = std::max(1.0f, bounds.maxY - bounds.minY);
-    const float scale = std::min(width, height) * 0.72f / extent * _zoom;
     const float cy = std::cos(_yaw), sy = std::sin(_yaw);
     const float cp = std::cos(_pitch), sp = std::sin(_pitch);
-    _projected.reserve(_worldPoints.size());
-    for (ayt::math::FVector3 point : _worldPoints) {
-        point -= center;
-        const float x1 = cy * point.x + sy * point.z;
-        const float z1 = -sy * point.x + cy * point.z;
-        const float y2 = cp * point.y - sp * z1;
-        const float z2 = sp * point.y + cp * z1;
-        _projected.push_back({(bounds.minX + bounds.maxX) * 0.5f + x1 * scale,
-                              (bounds.minY + bounds.maxY) * 0.5f - y2 * scale,
-                              z2});
+    const auto project = [&](const std::vector<ayt::math::Float4x4>& matrices,
+                             const ayt::math::FRectangle& viewport,
+                             std::vector<ayt::math::FVector3>& worldPoints,
+                             std::vector<ProjectedPoint>& projected) {
+        if (matrices.empty()) return;
+        worldPoints.reserve(matrices.size());
+        ayt::math::FVector3 minimum =
+            matrices.front().transformPoint({0, 0, 0});
+        ayt::math::FVector3 maximum = minimum;
+        for (const auto& matrix : matrices) {
+            const ayt::math::FVector3 point =
+                matrix.transformPoint({0, 0, 0});
+            worldPoints.push_back(point);
+            minimum.x = std::min(minimum.x, point.x);
+            minimum.y = std::min(minimum.y, point.y);
+            minimum.z = std::min(minimum.z, point.z);
+            maximum.x = std::max(maximum.x, point.x);
+            maximum.y = std::max(maximum.y, point.y);
+            maximum.z = std::max(maximum.z, point.z);
+        }
+        const ayt::math::FVector3 center = (minimum + maximum) * 0.5f;
+        const float extent = std::max({maximum.x - minimum.x,
+            maximum.y - minimum.y, maximum.z - minimum.z, 0.01f});
+        const float width = std::max(1.0f, viewport.maxX - viewport.minX);
+        const float height = std::max(1.0f, viewport.maxY - viewport.minY);
+        const float scale = std::min(width, height) * 0.68f / extent * _zoom;
+        projected.reserve(worldPoints.size());
+        for (ayt::math::FVector3 point : worldPoints) {
+            point -= center;
+            const float x1 = cy * point.x + sy * point.z;
+            const float z1 = -sy * point.x + cy * point.z;
+            const float y2 = cp * point.y - sp * z1;
+            const float z2 = sp * point.y + cp * z1;
+            projected.push_back({
+                (viewport.minX + viewport.maxX) * 0.5f + x1 * scale,
+                (viewport.minY + viewport.maxY) * 0.5f - y2 * scale,
+                z2});
+        }
+    };
+    const auto& targetWorld =
+        _document->core().targetPoseWorldMatrices();
+    if (targetWorld.empty()) {
+        project(world, bounds, _worldPoints, _projected);
+    } else {
+        const float midpoint = (bounds.minX + bounds.maxX) * 0.5f;
+        project(world, {bounds.minX, bounds.minY, midpoint, bounds.maxY},
+            _worldPoints, _projected);
+        project(targetWorld,
+            {midpoint, bounds.minY, bounds.maxX, bounds.maxY},
+            _targetWorldPoints, _targetProjected);
     }
 }
 
@@ -189,37 +213,47 @@ void EditorSkeletonCanvas::onRender(ayt::ui::IRenderBackend& renderer)
     rebuildProjection();
     if (_document == nullptr) return;
     const auto& bones = _document->core().bones();
-    const ayt::math::FVector4 boneColor{0.34f, 0.72f, 0.96f, 1.0f};
-    const auto path = renderer.createPath();
-    if (path.id >= 0) {
-        for (std::size_t index = 0; index < bones.size()
-             && index < _projected.size(); ++index) {
-            const int parent = bones[index].parentIndex;
-            if (parent < 0
-                || parent >= static_cast<int>(_projected.size())) continue;
-            const ayt::math::FVector2 segment[] = {
-                {_projected[static_cast<std::size_t>(parent)].x,
-                 _projected[static_cast<std::size_t>(parent)].y},
-                {_projected[index].x, _projected[index].y},
-            };
-            renderer.addPathContour(path, segment, 2, false);
+    const auto drawSkeleton = [&renderer](
+        const std::vector<ayt::anim::editor::SkeletonBoneView>& views,
+        const std::vector<ProjectedPoint>& projected,
+        const ayt::math::FVector4& color) {
+        const auto path = renderer.createPath();
+        if (path.id >= 0) {
+            for (std::size_t index = 0; index < views.size()
+                 && index < projected.size(); ++index) {
+                const int parent = views[index].parentIndex;
+                if (parent < 0
+                    || parent >= static_cast<int>(projected.size())) continue;
+                const ayt::math::FVector2 segment[] = {
+                    {projected[static_cast<std::size_t>(parent)].x,
+                     projected[static_cast<std::size_t>(parent)].y},
+                    {projected[index].x, projected[index].y},
+                };
+                renderer.addPathContour(path, segment, 2, false);
+            }
+            renderer.setPathStrokeColor(path, color);
+            renderer.setPathStrokeWidth(path, 2.0f);
+            renderer.setPathStrokeStyle(path, ayt::ui::PathStrokeCap::Round,
+                                        ayt::ui::PathStrokeJoin::Round);
+            renderer.drawPath(path, ayt::ui::PathFillMode::Stroke);
+            renderer.releasePath(path);
+        } else {
+            for (std::size_t index = 0; index < views.size()
+                 && index < projected.size(); ++index) {
+                const int parent = views[index].parentIndex;
+                if (parent < 0
+                    || parent >= static_cast<int>(projected.size())) continue;
+                const auto& a = projected[static_cast<std::size_t>(parent)];
+                const auto& b = projected[index];
+                drawFallbackLine(renderer, a.x, a.y, b.x, b.y, color);
+            }
         }
-        renderer.setPathStrokeColor(path, boneColor);
-        renderer.setPathStrokeWidth(path, 2.0f);
-        renderer.setPathStrokeStyle(path, ayt::ui::PathStrokeCap::Round,
-                                    ayt::ui::PathStrokeJoin::Round);
-        renderer.drawPath(path, ayt::ui::PathFillMode::Stroke);
-        renderer.releasePath(path);
-    } else {
-        for (std::size_t index = 0; index < bones.size()
-             && index < _projected.size(); ++index) {
-            const int parent = bones[index].parentIndex;
-            if (parent < 0
-                || parent >= static_cast<int>(_projected.size())) continue;
-            const auto& a = _projected[static_cast<std::size_t>(parent)];
-            const auto& b = _projected[index];
-            drawFallbackLine(renderer, a.x, a.y, b.x, b.y, boneColor);
-        }
+    };
+    drawSkeleton(bones, _projected,
+        {0.34f, 0.72f, 0.96f, 1.0f});
+    if (!_targetProjected.empty()) {
+        drawSkeleton(_document->core().targetBones(), _targetProjected,
+            {0.38f, 0.88f, 0.58f, 1.0f});
     }
     const int selected = _document->core().selectedBone();
     for (std::size_t index = 0; index < _projected.size(); ++index) {
@@ -230,6 +264,26 @@ void EditorSkeletonCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             : ayt::math::FVector4{0.82f, 0.88f, 0.96f, 1.0f};
         renderer.drawRect({point.x - radius, point.y - radius,
                            point.x + radius, point.y + radius}, color);
+    }
+    for (const auto& point : _targetProjected) {
+        constexpr float radius = 3.0f;
+        renderer.drawRect({point.x - radius, point.y - radius,
+                           point.x + radius, point.y + radius},
+            {0.76f, 0.96f, 0.82f, 1.0f});
+    }
+    if (!_targetProjected.empty()) {
+        const float midpoint = (bounds.minX + bounds.maxX) * 0.5f;
+        renderer.drawRect({midpoint - 0.5f, bounds.minY + 4.0f,
+                           midpoint + 0.5f, bounds.maxY - 4.0f},
+            {0.18f, 0.22f, 0.28f, 1.0f});
+        renderer.drawText({bounds.minX + 8.0f, bounds.minY + 26.0f,
+                           midpoint - 8.0f, bounds.minY + 46.0f},
+            L"SOURCE", 11,
+            ayt::math::FVector4{0.34f, 0.72f, 0.96f, 1.0f});
+        renderer.drawText({midpoint + 8.0f, bounds.minY + 26.0f,
+                           bounds.maxX - 8.0f, bounds.minY + 46.0f},
+            L"TARGET", 11,
+            ayt::math::FVector4{0.38f, 0.88f, 0.58f, 1.0f});
     }
     renderer.drawText({bounds.minX + 8.0f, bounds.minY + 6.0f,
                        bounds.maxX - 8.0f, bounds.minY + 26.0f},
