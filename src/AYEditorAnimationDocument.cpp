@@ -59,6 +59,7 @@ EditableClip readEditableClip(const ayt::resource::IAnimation& source)
             ? source.getTrackProperty(index) : "";
         track.valueType = source.getTrackType(index);
         track.blendMode = source.getTrackBlendMode(index);
+        track.interpolation = source.getTrackInterpolation(index);
         const std::size_t keyCount = source.getTrackKeyframeCount(index);
         if (const float* times = source.getTrackTimes(index)) {
             track.times.assign(times, times + keyCount);
@@ -66,6 +67,12 @@ EditableClip readEditableClip(const ayt::resource::IAnimation& source)
         const std::size_t count = keyCount * valueWidth(track.valueType);
         if (const float* values = source.getTrackValues(index)) {
             track.values.assign(values, values + count);
+        }
+        if (const float* tangents = source.getTrackInTangents(index)) {
+            track.inTangents.assign(tangents, tangents + count);
+        }
+        if (const float* tangents = source.getTrackOutTangents(index)) {
+            track.outTangents.assign(tangents, tangents + count);
         }
         result.tracks.push_back(std::move(track));
     }
@@ -164,6 +171,29 @@ std::vector<float> sampledValue(const ayt::resource::AnimTrack& track,
         result[component] = a + (b - a) * alpha;
     }
     return result;
+}
+
+void generateAutoTangents(ayt::resource::AnimTrack& track,
+                          float ticksPerSecond)
+{
+    const std::size_t width = valueWidth(track.valueType);
+    const std::size_t count = track.times.size();
+    track.inTangents.assign(track.values.size(), 0.0f);
+    track.outTangents.assign(track.values.size(), 0.0f);
+    if (count < 2u || track.values.size() != count * width) return;
+    const float safeTps = ticksPerSecond > 0.0f ? ticksPerSecond : 1.0f;
+    for (std::size_t key = 0u; key < count; ++key) {
+        const std::size_t left = key == 0u ? 0u : key - 1u;
+        const std::size_t right = key + 1u < count ? key + 1u : count - 1u;
+        const float seconds = (track.times[right] - track.times[left]) / safeTps;
+        if (seconds <= 1.0e-6f) continue;
+        for (std::size_t component = 0u; component < width; ++component) {
+            const float slope = (track.values[right * width + component]
+                - track.values[left * width + component]) / seconds;
+            track.inTangents[key * width + component] = slope;
+            track.outTangents[key * width + component] = slope;
+        }
+    }
 }
 
 class AppliedAnimationRevisionCommand final : public IEditorCommand {
@@ -446,6 +476,14 @@ bool EditorAnimationDocument::timelineAddKeyframe(
     track.times.insert(position, tick);
     track.values.insert(track.values.begin() + key * width,
                         sampled.begin(), sampled.end());
+    if (!track.inTangents.empty()) {
+        track.inTangents.insert(track.inTangents.begin() + key * width,
+                                width, 0.0f);
+    }
+    if (!track.outTangents.empty()) {
+        track.outTangents.insert(track.outTangents.begin() + key * width,
+                                 width, 0.0f);
+    }
     return commitEditedAnimation(buildAnimation(clip));
 }
 
@@ -474,6 +512,18 @@ bool EditorAnimationDocument::timelineMoveKeyframe(
     const std::size_t width = valueWidth(track.valueType);
     const auto valueFirst = track.values.begin() + keyIndex * width;
     const std::vector<float> stored(valueFirst, valueFirst + width);
+    std::vector<float> storedIn;
+    std::vector<float> storedOut;
+    if (!track.inTangents.empty()) {
+        const auto first = track.inTangents.begin() + keyIndex * width;
+        storedIn.assign(first, first + width);
+        track.inTangents.erase(first, first + width);
+    }
+    if (!track.outTangents.empty()) {
+        const auto first = track.outTangents.begin() + keyIndex * width;
+        storedOut.assign(first, first + width);
+        track.outTangents.erase(first, first + width);
+    }
     track.values.erase(valueFirst, valueFirst + width);
     track.times.erase(track.times.begin() + keyIndex);
     const auto position = std::lower_bound(track.times.begin(), track.times.end(), tick);
@@ -482,6 +532,14 @@ bool EditorAnimationDocument::timelineMoveKeyframe(
     track.times.insert(position, tick);
     track.values.insert(track.values.begin() + destination * width,
                         stored.begin(), stored.end());
+    if (!storedIn.empty()) {
+        track.inTangents.insert(track.inTangents.begin() + destination * width,
+                                storedIn.begin(), storedIn.end());
+    }
+    if (!storedOut.empty()) {
+        track.outTangents.insert(track.outTangents.begin() + destination * width,
+                                 storedOut.begin(), storedOut.end());
+    }
     return commitEditedAnimation(buildAnimation(clip));
 }
 
@@ -501,6 +559,14 @@ bool EditorAnimationDocument::timelineRemoveKeyframe(
     track.times.erase(track.times.begin() + keyIndex);
     track.values.erase(track.values.begin() + keyIndex * width,
                        track.values.begin() + (keyIndex + 1u) * width);
+    if (!track.inTangents.empty()) {
+        track.inTangents.erase(track.inTangents.begin() + keyIndex * width,
+            track.inTangents.begin() + (keyIndex + 1u) * width);
+    }
+    if (!track.outTangents.empty()) {
+        track.outTangents.erase(track.outTangents.begin() + keyIndex * width,
+            track.outTangents.begin() + (keyIndex + 1u) * width);
+    }
     return commitEditedAnimation(buildAnimation(clip));
 }
 
@@ -612,6 +678,123 @@ bool EditorAnimationDocument::setAnimationKeyframeValues(
     const auto first = track.values.begin() + keyIndex * width;
     if (std::equal(normalized.begin(), normalized.end(), first)) return false;
     std::copy(normalized.begin(), normalized.end(), first);
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
+bool EditorAnimationDocument::animationTrackInterpolation(
+    const std::string& trackId,
+    ayt::resource::AnimInterpolation& interpolation) const
+{
+    const auto index = parseIndex(trackId, "animation.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getTrackCount()) {
+        return false;
+    }
+    interpolation = animation->getTrackInterpolation(
+        static_cast<std::uint32_t>(*index));
+    return true;
+}
+
+bool EditorAnimationDocument::setAnimationTrackInterpolation(
+    const std::string& trackId,
+    ayt::resource::AnimInterpolation interpolation)
+{
+    const auto index = parseIndex(trackId, "animation.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getTrackCount()) {
+        return false;
+    }
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[*index];
+    if (track.interpolation == interpolation) return false;
+    track.interpolation = interpolation;
+    if (interpolation == ayt::resource::AnimInterpolation::CubicHermite
+        && (track.inTangents.size() != track.values.size()
+            || track.outTangents.size() != track.values.size())) {
+        generateAutoTangents(track, clip.ticksPerSecond);
+    }
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
+bool EditorAnimationDocument::animationKeyframeTangents(
+    const std::string& keyframeId, std::vector<float>& inTangents,
+    std::vector<float>& outTangents) const
+{
+    std::size_t trackIndex = 0u;
+    std::size_t keyIndex = 0u;
+    const auto* animation = _preview.animation();
+    if (!parseKeyId(keyframeId, trackIndex, keyIndex) || animation == nullptr
+        || trackIndex >= animation->getTrackCount()
+        || keyIndex >= animation->getTrackKeyframeCount(
+            static_cast<std::uint32_t>(trackIndex))) return false;
+    const std::size_t width = valueWidth(animation->getTrackType(
+        static_cast<std::uint32_t>(trackIndex)));
+    const float* incoming = animation->getTrackInTangents(
+        static_cast<std::uint32_t>(trackIndex));
+    const float* outgoing = animation->getTrackOutTangents(
+        static_cast<std::uint32_t>(trackIndex));
+    inTangents.assign(width, 0.0f);
+    outTangents.assign(width, 0.0f);
+    if (incoming != nullptr) {
+        std::copy_n(incoming + keyIndex * width, width, inTangents.begin());
+    }
+    if (outgoing != nullptr) {
+        std::copy_n(outgoing + keyIndex * width, width, outTangents.begin());
+    }
+    return true;
+}
+
+bool EditorAnimationDocument::setAnimationKeyframeTangents(
+    const std::string& keyframeId, const std::vector<float>& inTangents,
+    const std::vector<float>& outTangents)
+{
+    std::size_t trackIndex = 0u;
+    std::size_t keyIndex = 0u;
+    const auto* animation = _preview.animation();
+    if (!parseKeyId(keyframeId, trackIndex, keyIndex) || animation == nullptr
+        || trackIndex >= animation->getTrackCount()
+        || keyIndex >= animation->getTrackKeyframeCount(
+            static_cast<std::uint32_t>(trackIndex))) return false;
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[trackIndex];
+    const std::size_t width = valueWidth(track.valueType);
+    const auto finite = [](const std::vector<float>& values) {
+        return std::all_of(values.begin(), values.end(), [](float value) {
+            return std::isfinite(value);
+        });
+    };
+    if (inTangents.size() != width || outTangents.size() != width
+        || !finite(inTangents) || !finite(outTangents)) return false;
+    if (track.inTangents.size() != track.values.size()) {
+        track.inTangents.assign(track.values.size(), 0.0f);
+    }
+    if (track.outTangents.size() != track.values.size()) {
+        track.outTangents.assign(track.values.size(), 0.0f);
+    }
+    const auto incoming = track.inTangents.begin() + keyIndex * width;
+    const auto outgoing = track.outTangents.begin() + keyIndex * width;
+    if (std::equal(inTangents.begin(), inTangents.end(), incoming)
+        && std::equal(outTangents.begin(), outTangents.end(), outgoing)) {
+        return false;
+    }
+    std::copy(inTangents.begin(), inTangents.end(), incoming);
+    std::copy(outTangents.begin(), outTangents.end(), outgoing);
+    track.interpolation = ayt::resource::AnimInterpolation::CubicHermite;
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
+bool EditorAnimationDocument::autoAnimationTrackTangents(
+    const std::string& trackId)
+{
+    const auto index = parseIndex(trackId, "animation.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getTrackCount()) {
+        return false;
+    }
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[*index];
+    generateAutoTangents(track, clip.ticksPerSecond);
+    track.interpolation = ayt::resource::AnimInterpolation::CubicHermite;
     return commitEditedAnimation(buildAnimation(clip));
 }
 

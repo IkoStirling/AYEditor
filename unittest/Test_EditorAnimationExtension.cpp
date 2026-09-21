@@ -242,14 +242,88 @@ TEST_CASE(animation_keyframe_components_are_editable_normalized_and_undoable)
 
     CHECK(reopened.addAnimationTrack("hips", "rotation",
         ayt::resource::AnimTrackType::Quaternion));
-    const std::vector<float> quaternionInput{0.0f, 0.0f, 0.0f, 2.0f};
-    const std::vector<float> quaternionExpected{0.0f, 0.0f, 0.0f, 1.0f};
+    const std::vector<float> quaternionInput{0.0f, 0.0f, 2.0f, 0.0f};
+    const std::vector<float> quaternionExpected{0.0f, 0.0f, 1.0f, 0.0f};
     const std::vector<float> zeroQuaternion{0.0f, 0.0f, 0.0f, 0.0f};
     CHECK(reopened.setAnimationKeyframeValues("key.1.0", quaternionInput));
     CHECK(reopened.animationKeyframeValues("key.1.0", values));
     CHECK(values == quaternionExpected);
     CHECK_FALSE(reopened.setAnimationKeyframeValues(
         "key.1.0", zeroQuaternion));
+}
+
+TEST_CASE(animation_curve_modes_and_tangents_drive_preview_and_persist)
+{
+    const auto path = writeAnimationEditorClip();
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize(ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string(), &error));
+
+    ayt::resource::AnimInterpolation interpolation{};
+    CHECK(document.animationTrackInterpolation("animation.0", interpolation));
+    CHECK(interpolation == ayt::resource::AnimInterpolation::Linear);
+    CHECK(document.setAnimationTrackInterpolation(
+        "animation.0", ayt::resource::AnimInterpolation::Step));
+    CHECK(document.setTimelinePositionSeconds(0.5));
+    CHECK(std::fabs(document.preview().poseWorldMatrices()[1]
+        .transformPoint({0, 0, 0}).y - 1.0f) < 1.0e-5f);
+
+    CHECK(document.setAnimationTrackInterpolation(
+        "animation.0", ayt::resource::AnimInterpolation::CubicHermite));
+    std::vector<float> incoming;
+    std::vector<float> outgoing;
+    CHECK(document.animationKeyframeTangents(
+        "key.0.0", incoming, outgoing));
+    CHECK(incoming.size() == 3u);
+    const std::vector<float> zero{0.0f, 0.0f, 0.0f};
+    const std::vector<float> fastUp{0.0f, 8.0f, 0.0f};
+    CHECK(document.setAnimationKeyframeTangents(
+        "key.0.0", zero, fastUp));
+    CHECK(document.animationKeyframeTangents("key.0.1", incoming, outgoing));
+    CHECK(incoming == zero);
+    CHECK(document.setTimelinePositionSeconds(0.5));
+    CHECK(std::fabs(document.preview().poseWorldMatrices()[1]
+        .transformPoint({0, 0, 0}).y - 2.5f) < 1.0e-5f);
+    CHECK(document.autoAnimationTrackTangents("animation.0"));
+    CHECK(document.timelineUndo());
+    CHECK(document.setTimelinePositionSeconds(0.5));
+    CHECK(std::fabs(document.preview().poseWorldMatrices()[1]
+        .transformPoint({0, 0, 0}).y - 2.5f) < 1.0e-5f);
+    CHECK(document.save(&error));
+
+    ayt::editor::EditorAnimationDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    CHECK(reopened.animationTrackInterpolation("animation.0", interpolation));
+    CHECK(interpolation == ayt::resource::AnimInterpolation::CubicHermite);
+    CHECK(reopened.animationKeyframeTangents(
+        "key.0.0", incoming, outgoing));
+    CHECK(outgoing == fastUp);
+    CHECK(reopened.timelineAddKeyframe("animation.0", 0.25, 0.0));
+    auto keys = reopened.timelineKeyframes();
+    auto inserted = std::find_if(keys.begin(), keys.end(), [](const auto& key) {
+        return key.trackId == "animation.0"
+            && std::fabs(key.timeSeconds - 0.25) < 1.0e-6;
+    });
+    CHECK(inserted != keys.end());
+    std::string insertedId = inserted != keys.end() ? inserted->id : "";
+    CHECK(reopened.animationKeyframeTangents(
+        insertedId, incoming, outgoing));
+    CHECK(incoming == zero);
+    CHECK(outgoing == zero);
+    CHECK(reopened.timelineMoveKeyframe(insertedId, 0.75));
+    keys = reopened.timelineKeyframes();
+    inserted = std::find_if(keys.begin(), keys.end(), [](const auto& key) {
+        return key.trackId == "animation.0"
+            && std::fabs(key.timeSeconds - 0.75) < 1.0e-6;
+    });
+    CHECK(inserted != keys.end());
+    insertedId = inserted != keys.end() ? inserted->id : "";
+    CHECK(reopened.timelineRemoveKeyframe(insertedId));
+    CHECK(reopened.animationKeyframeTangents(
+        "key.0.0", incoming, outgoing));
+    CHECK(outgoing == fastUp);
 }
 
 TEST_CASE(animation_preview_bindings_use_project_editor_metadata)

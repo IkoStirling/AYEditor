@@ -65,6 +65,20 @@ public:
         ayt::resource::AnimTrackType* type = nullptr) const;
     bool setAnimationKeyframeValues(const std::string& keyframeId,
                                     const std::vector<float>& values);
+    bool animationTrackInterpolation(
+        const std::string& trackId,
+        ayt::resource::AnimInterpolation& interpolation) const;
+    bool setAnimationTrackInterpolation(
+        const std::string& trackId,
+        ayt::resource::AnimInterpolation interpolation);
+    bool animationKeyframeTangents(const std::string& keyframeId,
+                                   std::vector<float>& inTangents,
+                                   std::vector<float>& outTangents) const;
+    bool setAnimationKeyframeTangents(
+        const std::string& keyframeId,
+        const std::vector<float>& inTangents,
+        const std::vector<float>& outTangents);
+    bool autoAnimationTrackTangents(const std::string& trackId);
 
     ayt::anim::editor::AnimationPreviewSession& preview() noexcept {
         return _preview;

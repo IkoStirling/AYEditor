@@ -365,6 +365,59 @@ private:
         }), 82.0f);
         inspector->addWidget(keyActions, 28.0f);
 
+        inspector->addWidget(makeHeader(L"CURVE / TANGENTS"), 20.0f);
+        _curveMode = new ayt::ui::ComboBox();
+        _curveMode->setItems({L"Linear", L"Step", L"Cubic Hermite"});
+        _curveMode->setOnSelectionChanged([this](int index) {
+            if (_syncing || _selectedTrackId.empty() || index < 0) return;
+            const auto mode = index == 1
+                ? ayt::resource::AnimInterpolation::Step
+                : index == 2
+                    ? ayt::resource::AnimInterpolation::CubicHermite
+                    : ayt::resource::AnimInterpolation::Linear;
+            if (_document->setAnimationTrackInterpolation(
+                    _selectedTrackId, mode)) {
+                _host.setStatusText(L"Animation curve interpolation updated");
+                refreshAll();
+            }
+        });
+        inspector->addWidget(_curveMode, 28.0f);
+        static constexpr const wchar_t* tangentLabels[] = {L"In", L"Out"};
+        for (std::size_t direction = 0u; direction < 2u; ++direction) {
+            auto* row = new ayt::ui::HBox();
+            row->setSpacing(4.0f);
+            _tangentRows[direction] = row;
+            auto* label = new ayt::ui::TextLabel();
+            label->setText(tangentLabels[direction]);
+            label->setFontSize(11);
+            label->setVerticalAlignment(
+                ayt::ui::TextLabel::VAlignment::Center);
+            row->addWidget(label, 28.0f);
+            for (std::size_t component = 0u; component < 4u; ++component) {
+                auto*& input = direction == 0u
+                    ? _inTangents[component] : _outTangents[component];
+                input = new ayt::ui::TextInput();
+                input->setId((direction == 0u
+                    ? "animation_in_tangent_" : "animation_out_tangent_")
+                    + std::to_string(component));
+                input->setNumericScrubEnabled(true);
+                input->setOnSubmit([this](const std::wstring&) {
+                    applyTangents();
+                });
+                row->addWidget(input, 0.0f);
+            }
+            inspector->addWidget(row, 28.0f);
+        }
+        auto* tangentActions = new ayt::ui::HBox();
+        tangentActions->setSpacing(4.0f);
+        tangentActions->addWidget(makeButton(L"Apply Tangents", [this]() {
+            applyTangents();
+        }), 106.0f);
+        tangentActions->addWidget(makeButton(L"Auto Tangents", [this]() {
+            autoTangents();
+        }), 98.0f);
+        inspector->addWidget(tangentActions, 28.0f);
+
         inspector->addWidget(makeHeader(L"TRACKS / EVENTS"), 20.0f);
         _tracks = new ayt::ui::TextArea();
         _tracks->setReadOnly(true);
@@ -581,6 +634,15 @@ private:
         _trackPicker->setSelectedIndex(trackIndex);
         _keyPicker->setItems(keyItems);
         _keyPicker->setSelectedIndex(keyIndex);
+        ayt::resource::AnimInterpolation interpolation =
+            ayt::resource::AnimInterpolation::Linear;
+        const bool hasInterpolation = !_selectedTrackId.empty()
+            && _document->animationTrackInterpolation(
+                _selectedTrackId, interpolation);
+        _curveMode->setSelectedIndex(!hasInterpolation ? -1
+            : interpolation == ayt::resource::AnimInterpolation::Step ? 1
+            : interpolation == ayt::resource::AnimInterpolation::CubicHermite
+                ? 2 : 0);
         std::vector<float> values;
         ayt::resource::AnimTrackType valueType{};
         const bool hasValues = !_selectedKeyId.empty()
@@ -595,6 +657,29 @@ private:
                 _keyValues[component]->setText(text.str());
             } else {
                 _keyValues[component]->setText(L"");
+            }
+        }
+        std::vector<float> incoming;
+        std::vector<float> outgoing;
+        const bool hasTangents = hasValues
+            && _document->animationKeyframeTangents(
+                _selectedKeyId, incoming, outgoing);
+        const bool showTangents = hasTangents
+            && interpolation == ayt::resource::AnimInterpolation::CubicHermite;
+        for (std::size_t direction = 0u; direction < 2u; ++direction) {
+            _tangentRows[direction]->setVisible(showTangents);
+            const auto& source = direction == 0u ? incoming : outgoing;
+            auto& inputs = direction == 0u ? _inTangents : _outTangents;
+            for (std::size_t component = 0u; component < 4u; ++component) {
+                inputs[component]->setVisible(
+                    showTangents && component < source.size());
+                if (showTangents && component < source.size()) {
+                    std::wostringstream text;
+                    text << std::setprecision(7) << source[component];
+                    inputs[component]->setText(text.str());
+                } else {
+                    inputs[component]->setText(L"");
+                }
             }
         }
         _syncing = false;
@@ -704,6 +789,43 @@ private:
         refreshAll();
     }
 
+    void applyTangents()
+    {
+        if (_selectedKeyId.empty()) return;
+        std::vector<float> incoming;
+        std::vector<float> outgoing;
+        if (!_document->animationKeyframeTangents(
+                _selectedKeyId, incoming, outgoing)) return;
+        for (std::size_t component = 0u; component < incoming.size(); ++component) {
+            const auto parsedIn = parseFiniteFloat(
+                _inTangents[component]->getText());
+            const auto parsedOut = parseFiniteFloat(
+                _outTangents[component]->getText());
+            if (!parsedIn || !parsedOut) {
+                _host.setStatusText(L"Tangents must contain finite numbers");
+                return;
+            }
+            incoming[component] = *parsedIn;
+            outgoing[component] = *parsedOut;
+        }
+        if (!_document->setAnimationKeyframeTangents(
+                _selectedKeyId, incoming, outgoing)) {
+            _host.setStatusText(L"Tangents were unchanged or invalid");
+            refreshAuthoring();
+            return;
+        }
+        _host.setStatusText(L"Animation key tangents updated");
+        refreshAll();
+    }
+
+    void autoTangents()
+    {
+        if (_selectedTrackId.empty()
+            || !_document->autoAnimationTrackTangents(_selectedTrackId)) return;
+        _host.setStatusText(L"Animation track tangents generated");
+        refreshAll();
+    }
+
     void refreshDiagnostics()
     {
         std::wostringstream text;
@@ -761,6 +883,10 @@ private:
     ayt::ui::ComboBox* _keyPicker = nullptr;
     std::array<ayt::ui::TextInput*, 4> _keyValues{};
     ayt::ui::TextLabel* _editState = nullptr;
+    ayt::ui::ComboBox* _curveMode = nullptr;
+    std::array<ayt::ui::HBox*, 2> _tangentRows{};
+    std::array<ayt::ui::TextInput*, 4> _inTangents{};
+    std::array<ayt::ui::TextInput*, 4> _outTangents{};
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::Slider* _playhead = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
