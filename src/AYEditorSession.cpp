@@ -6207,6 +6207,16 @@ void EditorSession::bindRenderSettingsPanel()
         }
     });
 
+    if (auto* w = _ui.findById("chk_auto_exposure")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            chk->setOnToggled([rendererOrNull](bool on) {
+                if (ayt::render::Renderer* r = rendererOrNull()) {
+                    r->setAutoExposureEnabled(on);
+                }
+            });
+        }
+    }
+
     bindSlider("sld_bloom", [this, rendererOrNull](float v) {
         char buf[64];
         std::snprintf(buf, sizeof(buf), "%.2f", static_cast<double>(v));
@@ -6654,6 +6664,11 @@ void EditorSession::applyRenderSettingsFromPanel()
 
     r.setPostProcessGamma(sliderValue("sld_gamma", 2.2f));
     r.setPostProcessExposure(sliderValue("sld_exposure", 1.0f));
+    if (auto* w = _ui.findById("chk_auto_exposure")) {
+        if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
+            r.setAutoExposureEnabled(chk->isChecked());
+        }
+    }
     bool bloomOn = true;
     if (auto* w = _ui.findById("chk_bloom")) {
         if (auto* chk = dynamic_cast<ayt::ui::CheckBox*>(w)) {
@@ -6843,6 +6858,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
 
     setSlider("sld_gamma", preferences.gamma);
     setSlider("sld_exposure", preferences.exposure);
+    setCheck("chk_auto_exposure", preferences.autoExposureEnabled);
     setCheck("chk_bloom", preferences.bloomEnabled);
     setSlider("sld_bloom", preferences.bloomStrength);
     setCheck("chk_depth_haze", preferences.depthHazeEnabled);
@@ -6957,6 +6973,8 @@ EditorPreferences EditorSession::capturePreferences() const
     };
     out.gamma = sliderValue("sld_gamma", out.gamma);
     out.exposure = sliderValue("sld_exposure", out.exposure);
+    out.autoExposureEnabled = checkValue(
+        "chk_auto_exposure", out.autoExposureEnabled);
     out.bloomEnabled = checkValue("chk_bloom", out.bloomEnabled);
     out.bloomStrength = sliderValue("sld_bloom", out.bloomStrength);
     out.depthHazeEnabled = checkValue("chk_depth_haze", out.depthHazeEnabled);

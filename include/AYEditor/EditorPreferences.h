@@ -81,6 +81,7 @@ struct EditorPreferences {
     bool taaEnabled = false;
     // "system" selects the closest packaged locale at process startup.
     std::string language = "system";
+    bool autoExposureEnabled = false;
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -134,7 +135,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.shadowsEnabled == b.shadowsEnabled
         && a.shadowPcfEnabled == b.shadowPcfEnabled
         && a.taaEnabled == b.taaEnabled
-        && a.language == b.language;
+        && a.language == b.language
+        && a.autoExposureEnabled == b.autoExposureEnabled;
 }
 
 inline bool operator!=(const EditorPreferences& a,

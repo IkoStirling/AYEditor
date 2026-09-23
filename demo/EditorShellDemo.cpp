@@ -319,6 +319,8 @@ ayt::editor::EditorPreferences loadEditorPreferences(
     out.gamma = preferenceFloat(saved, "Editor.Render.Gamma", out.gamma);
     out.exposure = preferenceFloat(
         saved, "Editor.Render.Exposure", out.exposure);
+    out.autoExposureEnabled = saved.getBool(
+        "Editor.Render.AutoExposure.Enabled", out.autoExposureEnabled);
     out.bloomEnabled = saved.getBool(
         "Editor.Render.Bloom.Enabled", out.bloomEnabled);
     out.bloomStrength = preferenceFloat(
@@ -407,6 +409,8 @@ bool saveEditorPreferences(const std::string& path,
     config.setBool("Editor.Viewport.Wireframe", value.wireframeView);
     config.setFloat("Editor.Render.Gamma", value.gamma);
     config.setFloat("Editor.Render.Exposure", value.exposure);
+    config.setBool("Editor.Render.AutoExposure.Enabled",
+                   value.autoExposureEnabled);
     config.setBool("Editor.Render.Bloom.Enabled", value.bloomEnabled);
     config.setFloat("Editor.Render.Bloom.Strength", value.bloomStrength);
     config.setBool("Editor.Render.DepthHaze.Enabled", value.depthHazeEnabled);

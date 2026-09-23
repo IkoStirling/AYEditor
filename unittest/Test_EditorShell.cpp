@@ -317,6 +317,7 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<Button*>(
         session.ui().findById("btn_tool_2d")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_auto_exposure")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_depth_haze")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
@@ -1995,6 +1996,7 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     requested.uiScale = 0.90f;
     requested.language = "en-US";
     requested.gamma = 2.0f;
+    requested.autoExposureEnabled = true;
     requested.bloomEnabled = false;
 
     EditorPreferences persisted;
@@ -2029,14 +2031,18 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     auto* toolLabel = dynamic_cast<TextLabel*>(
         session.ui().findById("lbl_active_tool"));
     auto* gamma = dynamic_cast<Slider*>(session.ui().findById("sld_gamma"));
+    auto* autoExposure = dynamic_cast<CheckBox*>(
+        session.ui().findById("chk_auto_exposure"));
     auto* bloom = dynamic_cast<CheckBox*>(session.ui().findById("chk_bloom"));
     CHECK(network != nullptr);
     CHECK(toolLabel != nullptr);
     CHECK(gamma != nullptr);
+    CHECK(autoExposure != nullptr);
     CHECK(bloom != nullptr);
     if (network != nullptr) CHECK(network->isVisible());
     if (toolLabel != nullptr) CHECK(toolLabel->getText() == L"Universal");
     if (gamma != nullptr) CHECK_FLOAT_EQ(gamma->getValue(), 2.0f, 1.0e-5f);
+    if (autoExposure != nullptr) CHECK(autoExposure->isChecked());
     if (bloom != nullptr) CHECK_FALSE(bloom->isChecked());
 
     session.savePreferencesNow();
@@ -2044,6 +2050,7 @@ TEST_CASE(editor_preferences_restore_workspace_camera_tool_and_render_state)
     CHECK(persisted.activeTool == EditorTool::Move);
     CHECK(persisted.localTransformSpace);
     CHECK(persisted.panelNetworkVisible);
+    CHECK(persisted.autoExposureEnabled);
     CHECK_FALSE(persisted.bloomEnabled);
     CHECK(persisted.themeName == kAliyatEditorDarkTheme);
     CHECK(persisted.density == EditorDensity::Compact);
