@@ -28,6 +28,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
     Test_EditorProjectWorkflow.cpp
+    Test_EditorNewProject.cpp
     Test_EditorUiFlowProjectDescriptor.cpp
     Test_EditorUiFlowEditor.cpp
     Test_EditorGameFlowAssetIntegration.cpp
@@ -46,6 +47,7 @@ target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource
 
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../AYEntity
     ${CMAKE_CURRENT_SOURCE_DIR}/../../AYEntity/include
 )

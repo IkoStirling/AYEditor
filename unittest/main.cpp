@@ -34,6 +34,7 @@
 #include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
 #include "Test_EditorFramework.cpp"             // unified editor workspace foundation
 #include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
+#include "Test_EditorNewProject.cpp"            // shared project initializer adapter
 #include "Test_EditorUiFlowProjectDescriptor.cpp" // project Flow contract + legacy migration
 #include "Test_EditorUiFlowEditor.cpp"          // UI Flow authoring + production-runtime preview
 #include "Test_EditorUiDesignerWorkflow.cpp"    // cross-document UI authoring workflow
@@ -44,7 +45,7 @@
 
 namespace {
 
-constexpr std::array<const char*, 26> kEditorTestSuites{
+constexpr std::array<const char*, 27> kEditorTestSuites{
     "AYEditor_Shell",
     "AYEditor_Importer",
     "AYEditor_PlayRuntime",
@@ -64,6 +65,7 @@ constexpr std::array<const char*, 26> kEditorTestSuites{
     "Editor2DToolsTests",
     "AYEditor_Framework",
     "AYEditor_ProjectWorkflow",
+    "AYEditor_NewProject",
     "AYEditor_UIFlowProjectContract",
     "AYEditor_UIFlowAuthoring",
     "EditorUiDesignerWorkflowTests",

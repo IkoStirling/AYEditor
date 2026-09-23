@@ -33,6 +33,7 @@
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEditorProjectSettingsController.h"
+#include "AYEditorNewProjectController.h"
 #include "AYEntity.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Button.h"
@@ -127,11 +128,42 @@
 #endif
 #include <Windows.h>
 #include <commdlg.h>
+#include <shobjidl.h>
 #include <vector>
+
+#ifndef AY_ENGINE_SOURCE_ROOT_HINT
+#define AY_ENGINE_SOURCE_ROOT_HINT ""
+#endif
 
 namespace ayt::editor {
 
 namespace {
+
+bool isGameProjectSdkRoot(const std::filesystem::path& candidate)
+{
+    if (candidate.empty()) return false;
+    std::error_code error;
+    return std::filesystem::is_regular_file(
+        candidate / "cmake" / "AYGameApplication.cmake", error);
+}
+
+std::filesystem::path resolveGameProjectSdkRoot(
+    const std::string& engineAssetsRoot)
+{
+    if (const char* configured = std::getenv("AY_ENGINE_SOURCE_ROOT");
+        configured != nullptr && configured[0] != '\0') {
+        const std::filesystem::path candidate(configured);
+        if (isGameProjectSdkRoot(candidate)) return candidate;
+    }
+
+    const std::filesystem::path besideAssets =
+        std::filesystem::path(engineAssetsRoot).parent_path();
+    if (isGameProjectSdkRoot(besideAssets)) return besideAssets;
+
+    const std::filesystem::path buildSourceHint(AY_ENGINE_SOURCE_ROOT_HINT);
+    if (isGameProjectSdkRoot(buildSourceHint)) return buildSourceHint;
+    return besideAssets;
+}
 
 bool editorUiTimingsEnabled()
 {
@@ -802,6 +834,13 @@ std::string resolveProjectSettingsChromePath(
         / "AYEditor" / "ui" / "project_settings.ui.json").string();
 }
 
+std::string resolveNewProjectChromePath(
+    const std::string& engineAssetsRoot)
+{
+    return (std::filesystem::path(engineAssetsRoot)
+        / "AYEditor" / "ui" / "new_project.ui.json").string();
+}
+
 std::string resolveProjectAssetRoot(const std::string& projectRoot)
 {
     std::string error;
@@ -1337,6 +1376,93 @@ std::string wideToUtf8(const std::wstring& text)
         CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
         result.data(), required, nullptr, nullptr);
     return result;
+}
+
+std::string showProjectParentFolderDialog(
+    HWND owner, const std::string& initialDirectory)
+{
+    const HRESULT initialized = ::CoInitializeEx(
+        nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool uninitialize = SUCCEEDED(initialized);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) return {};
+
+    IFileDialog* dialog = nullptr;
+    HRESULT result = ::CoCreateInstance(
+        CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&dialog));
+    if (FAILED(result) || dialog == nullptr) {
+        if (uninitialize) ::CoUninitialize();
+        return {};
+    }
+
+    DWORD options = 0;
+    if (SUCCEEDED(dialog->GetOptions(&options))) {
+        (void)dialog->SetOptions(options | FOS_PICKFOLDERS
+            | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+    }
+    dialog->SetTitle(L"Choose the parent folder for the new project");
+
+    if (!initialDirectory.empty()) {
+        IShellItem* initialFolder = nullptr;
+        const std::wstring initial =
+            std::filesystem::u8path(initialDirectory).wstring();
+        if (SUCCEEDED(::SHCreateItemFromParsingName(
+                initial.c_str(), nullptr, IID_PPV_ARGS(&initialFolder)))) {
+            (void)dialog->SetFolder(initialFolder);
+            initialFolder->Release();
+        }
+    }
+
+    std::string selected;
+    result = dialog->Show(owner);
+    if (SUCCEEDED(result)) {
+        IShellItem* item = nullptr;
+        if (SUCCEEDED(dialog->GetResult(&item)) && item != nullptr) {
+            PWSTR path = nullptr;
+            if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path))
+                && path != nullptr) {
+                selected = wideToUtf8(path);
+                ::CoTaskMemFree(path);
+            }
+            item->Release();
+        }
+    }
+    dialog->Release();
+    if (uninitialize) ::CoUninitialize();
+    return selected;
+}
+
+bool launchEditorForProject(const std::string& projectRoot,
+                            std::string* error)
+{
+    std::wstring executable(32768u, L'\0');
+    const DWORD length = ::GetModuleFileNameW(
+        nullptr, executable.data(), static_cast<DWORD>(executable.size()));
+    if (length == 0u || length >= executable.size()) {
+        if (error != nullptr) *error = "Cannot resolve the Editor executable.";
+        return false;
+    }
+    executable.resize(length);
+    const std::wstring project =
+        std::filesystem::u8path(projectRoot).wstring();
+    std::wstring commandLine = L"\"" + executable
+        + L"\" --project=\"" + project + L"\"";
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (::CreateProcessW(executable.c_str(), commandLine.data(),
+            nullptr, nullptr, FALSE, 0, nullptr, nullptr,
+            &startup, &process) == FALSE) {
+        if (error != nullptr) {
+            *error = "Cannot start the Editor process (Windows error "
+                + std::to_string(::GetLastError()) + ").";
+        }
+        return false;
+    }
+    ::CloseHandle(process.hThread);
+    ::CloseHandle(process.hProcess);
+    return true;
 }
 
 std::string systemLanguageTag()
@@ -2024,6 +2150,7 @@ void EditorSession::shutdown() {
     // avoids an UAF cleanup race against the primary.
     _audioEditor.reset();
     _audioEditorHandle = nullptr;
+    releaseNewProject();
     releaseProjectSettings();
     if (_tilemapDockViewHost != nullptr) {
         _tilemapDockViewHost->prepareForUiShutdown();
@@ -2192,6 +2319,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     if (_uiFlowDesigner != nullptr) {
         _uiFlowDesigner->tick(dt);
     }
+    syncNewProjectLifetime();
     syncProjectSettingsLifetime();
     if (_projectSettings != nullptr) {
         _projectSettings->tick(dt);
@@ -8022,6 +8150,11 @@ void EditorSession::bindMenuBar() {
 
     ayt::ui::Menu* fileMenu = addLocalizedMenu("ui.editor.menu.file._label", L"File");
     if (fileMenu != nullptr) {
+        if (auto* item = addLocalizedItem(fileMenu,
+                "ui.editor.menu.file.new_project", L"New Project...")) {
+            item->setOnActivate([this]() { (void)openNewProject(); });
+        }
+        fileMenu->addSeparator();
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_empty_scene", L"New Empty Scene")) {
             item->setOnActivate([this]() {
                 (void)newSceneFromTemplate(EditorSceneTemplate::Empty);
@@ -8902,6 +9035,107 @@ bool EditorSession::openLayoutForFlowScreen(
     }
     message = "Opened UI Layout " + path.filename().string();
     return true;
+}
+
+bool EditorSession::openNewProject()
+{
+    if (_childWindows == nullptr) {
+        setAssetBrowserStatus(
+            L"New Project requires the editor child-window host", true);
+        return false;
+    }
+    syncNewProjectLifetime();
+    if (_newProject != nullptr && _newProjectHandle != nullptr) {
+        (void)_childWindows->activateChildWindow(_newProjectHandle);
+        return true;
+    }
+
+    const std::filesystem::path engineSource =
+        resolveGameProjectSdkRoot(_engineAssetsRoot);
+    std::filesystem::path initialParent;
+    if (!_projectRoot.empty()) {
+        initialParent = std::filesystem::path(_projectRoot).parent_path();
+    }
+    if (initialParent.empty()) {
+        std::error_code error;
+        initialParent = std::filesystem::current_path(error);
+    }
+
+    EditorNewProjectConfig config;
+    config.engineSourceRoot = engineSource.string();
+    config.initialParentDirectory = initialParent.string();
+    config.chooseParentDirectory = [this]() {
+        HWND owner = _newProjectHandle != nullptr
+            ? static_cast<HWND>(_newProjectHandle)
+            : static_cast<HWND>(_hostWindow);
+        return showProjectParentFolderDialog(owner,
+            _projectRoot.empty()
+                ? std::string{}
+                : std::filesystem::path(_projectRoot)
+                    .parent_path().string());
+    };
+    config.openProject = [this](const std::string& projectRoot,
+                                std::string* error) {
+        if (!launchEditorForProject(projectRoot, error)) return false;
+        requestHostClose();
+        return true;
+    };
+    config.localize = [this](std::string_view key,
+                             std::wstring_view fallback) {
+        return localizedText(key, fallback);
+    };
+    _newProject = std::make_unique<EditorNewProjectController>(
+        std::move(config));
+
+    ChildWindowConfig cfg;
+    cfg.title = wideToUtf8(localizedText(
+        "ui.editor.new_project.title", "Create a Game Project"));
+    cfg.layoutPath = resolveNewProjectChromePath(_engineAssetsRoot);
+    cfg.x = 180;
+    cfg.y = 110;
+    cfg.width = 760;
+    cfg.height = 500;
+    cfg.showOnOpen = false;
+    cfg.beforeClose = [this](ayt::ui::UIManager&) {
+        releaseNewProject();
+    };
+
+    EditorChildWindowManager::Handle handle = nullptr;
+    if (!_childWindows->openChildWindow(cfg, handle) || handle == nullptr) {
+        releaseNewProject();
+        setAssetBrowserStatus(L"New Project window creation failed", true);
+        return false;
+    }
+    _newProjectHandle = handle;
+    ayt::ui::UIManager* childUi = _childWindows->uiForHandle(handle);
+    std::string error;
+    if (childUi == nullptr || !_newProject->attach(*childUi, &error)) {
+        (void)_childWindows->closeChildWindow(handle);
+        setAssetBrowserStatus(L"New Project could not load: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return false;
+    }
+    childUi->invalidateLayout();
+    childUi->layout();
+    (void)_childWindows->showChildWindow(handle);
+    setAssetBrowserStatus(L"New Project opened");
+    return true;
+}
+
+void EditorSession::syncNewProjectLifetime()
+{
+    if (_newProjectHandle == nullptr || _childWindows == nullptr) return;
+    for (const auto& entry : _childWindows->entries()) {
+        if (entry.handle == _newProjectHandle) return;
+    }
+    releaseNewProject();
+}
+
+void EditorSession::releaseNewProject()
+{
+    if (_newProject != nullptr) _newProject->detach();
+    _newProject.reset();
+    _newProjectHandle = nullptr;
 }
 
 bool EditorSession::openProjectSettings()

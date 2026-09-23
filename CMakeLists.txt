@@ -10,9 +10,9 @@ set(AY_RESOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYResource")
 set(AY_SHADER_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../AYShader")
 include("${AY_SHADER_ROOT}/cmake/AYBgfx.cmake")
 
+get_filename_component(_ay_engine_superproject_root
+    "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
 if(NOT DEFINED AY_ENGINE_ASSETS_SOURCE_DIR)
-    get_filename_component(_ay_engine_superproject_root
-        "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
     set(AY_ENGINE_ASSETS_SOURCE_DIR
         "${_ay_engine_superproject_root}/EngineAssets"
         CACHE PATH "Versioned engine assets installed with AYEditor")
@@ -96,6 +96,7 @@ set(SRC_FILES
     src/AYEditorProjectRunner.cpp
     src/AYEditorProjectRuntimeValidator.cpp
     src/AYEditorProjectSettingsController.cpp
+    src/AYEditorNewProjectController.cpp
     src/AYEditorRecoveryStore.cpp
     src/AYEditorBuiltInExtensions.cpp
     src/AYEditorTilemapCanvas.cpp
@@ -213,12 +214,15 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=22)
+    AYEDITOR_SOURCE_ABI_VERSION=23)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)
+file(TO_CMAKE_PATH "${_ay_engine_superproject_root}"
+    AY_ENGINE_SOURCE_ROOT_HINT_PATH)
 target_compile_definitions(${MODULE_NAME} PRIVATE
     AY_ENGINE_ASSETS_SOURCE_HINT="${AY_ENGINE_ASSETS_SOURCE_HINT_PATH}"
+    AY_ENGINE_SOURCE_ROOT_HINT="${AY_ENGINE_SOURCE_ROOT_HINT_PATH}"
 )
 
 target_include_directories(${MODULE_NAME} PUBLIC
@@ -269,7 +273,7 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
 # and shutdown-repro targets inherit the link transitively.
 if(WIN32)
     target_link_libraries(${MODULE_NAME} PRIVATE
-        comdlg32 user32 gdi32 msimg32 ole32 windowscodecs)
+        comdlg32 user32 gdi32 msimg32 ole32 shell32 windowscodecs)
 endif()
 
 add_executable(AYEditorProjectValidator
