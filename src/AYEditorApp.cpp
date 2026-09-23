@@ -59,6 +59,113 @@ constexpr int kEditorChromeDragLeft = 360;
 constexpr int kEditorChromeButtonsWidth = 92;
 constexpr int kEditorResizeBorder = 6;
 
+// Minimal prefix of RenderDoc's public in-application API.  The validation
+// path requests API 1.0.0, whose function-table prefix is ABI-stable.  Keeping
+// this tiny declaration here avoids making the product build depend on a
+// machine-local RenderDoc SDK; it is used only when RenderDoc has already
+// injected renderdoc.dll and AY_EDITOR_R6_CAPTURE_BASE is set.
+using RenderDocAnyFn = void(__cdecl*)();
+using RenderDocSetCapturePathFn = void(__cdecl*)(const char*);
+using RenderDocTriggerCaptureFn = void(__cdecl*)();
+struct RenderDocApiPrefix {
+    RenderDocAnyFn getApiVersion = nullptr;
+    RenderDocAnyFn setCaptureOptionU32 = nullptr;
+    RenderDocAnyFn setCaptureOptionF32 = nullptr;
+    RenderDocAnyFn getCaptureOptionU32 = nullptr;
+    RenderDocAnyFn getCaptureOptionF32 = nullptr;
+    RenderDocAnyFn setFocusToggleKeys = nullptr;
+    RenderDocAnyFn setCaptureKeys = nullptr;
+    RenderDocAnyFn getOverlayBits = nullptr;
+    RenderDocAnyFn maskOverlayBits = nullptr;
+    RenderDocAnyFn removeHooks = nullptr;
+    RenderDocAnyFn unloadCrashHandler = nullptr;
+    RenderDocSetCapturePathFn setCaptureFilePathTemplate = nullptr;
+    RenderDocAnyFn getCaptureFilePathTemplate = nullptr;
+    RenderDocAnyFn getNumCaptures = nullptr;
+    RenderDocAnyFn getCapture = nullptr;
+    RenderDocTriggerCaptureFn triggerCapture = nullptr;
+};
+
+class RenderDocValidationCapture {
+public:
+    bool initialize(std::string base)
+    {
+        if (base.empty()) return false;
+        HMODULE module = ::GetModuleHandleW(L"renderdoc.dll");
+        if (module == nullptr) {
+            std::fprintf(stderr,
+                "[EditorR6Capture] renderdoc.dll is not injected; "
+                "launch through renderdoccmd capture\n");
+            return false;
+        }
+
+        using GetApiFn = int(__cdecl*)(int, void**);
+        const auto getApi = reinterpret_cast<GetApiFn>(
+            ::GetProcAddress(module, "RENDERDOC_GetAPI"));
+        void* api = nullptr;
+        constexpr int kRenderDocApiVersion100 = 10000;
+        if (getApi == nullptr || getApi(kRenderDocApiVersion100, &api) != 1
+            || api == nullptr) {
+            std::fprintf(stderr,
+                "[EditorR6Capture] RENDERDOC_GetAPI(1.0.0) failed\n");
+            return false;
+        }
+
+        _api = static_cast<RenderDocApiPrefix*>(api);
+        if (_api->setCaptureFilePathTemplate == nullptr
+            || _api->triggerCapture == nullptr) {
+            std::fprintf(stderr,
+                "[EditorR6Capture] capture API is incomplete\n");
+            _api = nullptr;
+            return false;
+        }
+
+        _base = std::move(base);
+        std::error_code error;
+        const std::filesystem::path parent =
+            std::filesystem::path(_base).parent_path();
+        if (!parent.empty()) {
+            std::filesystem::create_directories(parent, error);
+        }
+        std::fprintf(stderr,
+            "[EditorR6Capture] deterministic RenderDoc sequence armed: %s_*\n",
+            _base.c_str());
+        return true;
+    }
+
+    bool queue(const char* suffix) const
+    {
+        if (_api == nullptr || suffix == nullptr) return false;
+        const std::string path = _base + suffix;
+        _api->setCaptureFilePathTemplate(path.c_str());
+        _api->triggerCapture();
+        std::fprintf(stderr,
+            "[EditorR6Capture] queued next frame: %s\n", path.c_str());
+        return true;
+    }
+
+private:
+    RenderDocApiPrefix* _api = nullptr;
+    std::string _base;
+};
+
+void reportRendererStartupFailure(HWND owner)
+{
+    std::fprintf(stderr,
+        "[EditorApp] renderer startup failed; see "
+        "logs/AYEditorShell_Demo.log for backend diagnostics\n");
+    std::fflush(stderr);
+    ::ShowWindow(owner, SW_SHOW);
+    ::MessageBoxW(
+        owner,
+        L"The renderer could not be initialized.\n\n"
+        L"The editor stopped safely before entering the frame loop. "
+        L"Backend diagnostics were written to "
+        L"logs/AYEditorShell_Demo.log.",
+        L"AY Editor - Renderer startup failed",
+        MB_OK | MB_ICONERROR | MB_TASKMODAL);
+}
+
 void installEditorWindowIcon(HWND hwnd)
 {
     if (hwnd == nullptr) {
@@ -848,6 +955,8 @@ void EditorApp::run()
     startupSplash.update(0.66f, L"Initializing renderer...");
     if (!session.ensurePresentationReady()) {
         std::fprintf(stderr, "[EditorApp] presentation bootstrap failed\n");
+        startupSplash.close();
+        reportRendererStartupFailure(hwnd);
         session.shutdown();
         _devices->shutdown();
         return;
@@ -858,6 +967,7 @@ void EditorApp::run()
         session.autoEnterNetClientPlay();
     } else if (ayt::io::env::get("AY_EDITOR_SELECTION_CAPTURE_BASE")
                    .has_value()
+               || ayt::io::env::get("AY_EDITOR_R6_CAPTURE_BASE").has_value()
                || (_autoPlayImportedAnimation
                && importedCharacter.isValid()
                && !importedCharacter.animationPath.empty())) {
@@ -1021,6 +1131,32 @@ void EditorApp::run()
     // and production pass graph rather than a headless contract-only test.
     const std::string selectionCaptureBase =
         ayt::io::env::get("AY_EDITOR_SELECTION_CAPTURE_BASE").value_or("");
+    // R6-6 real-GPU gate.  This opt-in sequence is intentionally hosted by
+    // AYEditorShell_Demo because it needs the production editor viewport,
+    // transparent reference cube, resize messages, camera ownership, and the
+    // complete pass chain.  It emits RenderDoc captures only when injection is
+    // already active; ordinary editor runs retain zero behavior.
+    const std::string r6CaptureBase =
+        ayt::io::env::get("AY_EDITOR_R6_CAPTURE_BASE").value_or("");
+    RenderDocValidationCapture r6Capture;
+    const bool r6CaptureEnabled = r6Capture.initialize(r6CaptureBase);
+    // The normal reference scene deliberately has one shadow caster plus
+    // three unshadowed fill lights.  R6-6 also needs a real multi-region atlas
+    // capture, so the opt-in sequence owns a two-caster light set whose
+    // lifetime spans the complete frame loop.
+    ayt::render::SceneLights r6MultiShadowLights;
+    if (r6CaptureEnabled) {
+        const ayt::math::FVector3 keyDirection(0.35f, -0.85f, -0.40f);
+        ayt::render::Light key = ayt::render::Light::directional(
+            keyDirection, {1.35f, 1.28f, 1.15f});
+        key.castShadow = true;
+        r6MultiShadowLights.add(key);
+        ayt::render::Light spot = ayt::render::Light::spot(
+            {-0.8f, 2.4f, 1.2f}, {0.25f, -1.0f, -0.35f},
+            7.0f, 2.8f, 0.92f, 0.75f, {0.55f, 0.70f, 1.0f});
+        spot.castShadow = true;
+        r6MultiShadowLights.add(spot);
+    }
     if (!passCaptureBase.empty()) {
         ayt::render::Renderer& validationRenderer = rendererSub->renderer();
         validationRenderer.setDepthHazeEnabled(false);
@@ -1083,6 +1219,28 @@ void EditorApp::run()
         const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};
 
         if (rendererSub != nullptr) {
+            // The RenderDoc request is queued at the end of the preceding
+            // frame. Override the host camera only for the captured frame so
+            // TAAPass sees a genuine discontinuity without mutating persisted
+            // editor camera preferences.
+            if (r6CaptureEnabled) {
+                if (frameIndex == 61) {
+                    rendererSub->setCameraLookAt(
+                        {-5.0f, 4.0f, -7.0f}, {0.0f, 0.8f, 0.0f},
+                        {0.0f, 1.0f, 0.0f});
+                } else if (frameIndex >= 96 && frameIndex <= 107) {
+                    rendererSub->setCameraLookAt(
+                        {4.0f, 2.3f, 4.5f}, {1.4f, 1.0f, 1.2f},
+                        {0.0f, 1.0f, 0.0f});
+                } else if (frameIndex >= 108 && frameIndex <= 115) {
+                    // Small lateral move across the glass/opaque boundary.
+                    // Transparent color participates in TAA while its depth
+                    // and motion still come from the opaque surface behind it.
+                    rendererSub->setCameraLookAt(
+                        {3.85f, 2.3f, 4.5f}, {1.4f, 1.0f, 1.2f},
+                        {0.0f, 1.0f, 0.0f});
+                }
+            }
             const bool renderScene = session.shouldCompositeViewport();
             const auto tRenderBegin = frameTiming ? Clock::now() : Clock::time_point{};
             // Inner timing: measure just the UI render pass (uiPass
@@ -1131,7 +1289,112 @@ void EditorApp::run()
                     tRenderEnd - tRenderBegin).count();
             }
 
-            if (!selectionCaptureBase.empty()) {
+            if (r6CaptureEnabled) {
+                ayt::render::Renderer& validationRenderer =
+                    rendererSub->renderer();
+                auto selectValidationTarget = [&](const char* materialNeedle) {
+                    ayt::entity::World* world = session.worldContext().world(
+                        EditorWorldSlot::Play, true);
+                    ayt::entity::Entity* target = nullptr;
+                    if (world != nullptr) {
+                        for (ayt::entity::Entity* entity : world->getAllEntities()) {
+                            auto* mesh = entity != nullptr
+                                ? entity->getComponent<ayt::entity::MeshComponent>()
+                                : nullptr;
+                            if (mesh == nullptr) continue;
+                            mesh->outlineHull = false;
+                            if (materialNeedle != nullptr
+                                && mesh->materialPath.find(materialNeedle)
+                                    != std::string::npos) {
+                                target = entity;
+                            }
+                        }
+                    }
+                    if (target != nullptr) {
+                        target->getComponent<ayt::entity::MeshComponent>()
+                            ->outlineHull = true;
+                    }
+                    std::fprintf(stderr,
+                        "[EditorR6Capture] selection target '%s': %s\n",
+                        materialNeedle != nullptr ? materialNeedle : "none",
+                        target != nullptr ? "found" : "not found");
+                };
+
+                if (frameIndex == 20) {
+                    selectValidationTarget("cube_shadow.aymat");
+                    ayt::game::GameLoop::instance().pause();
+                } else if (frameIndex == 30) {
+                    r6Capture.queue("_selection_taa_settled");
+                } else if (frameIndex == 40) {
+                    // Queue before the resize: RenderDoc records the first
+                    // frame after WM_SIZE and renderer generation replacement.
+                    r6Capture.queue("_resize_first_frame");
+                    ::ShowWindow(hwnd, SW_RESTORE);
+                    window.setSize(1180, 760);
+                } else if (frameIndex == 50) {
+                    r6Capture.queue("_resize_settled");
+                } else if (frameIndex == 60) {
+                    r6Capture.queue("_camera_cut");
+                } else if (frameIndex == 70) {
+                    validationRenderer.setTaaEnabled(false);
+                    validationRenderer.setSsaoEnabled(false);
+                    validationRenderer.setDepthHazeEnabled(false);
+                    validationRenderer.setPostProcessBloomStrength(0.0f);
+                    r6Capture.queue("_effects_off");
+                } else if (frameIndex == 80) {
+                    validationRenderer.setPostProcessBloomStrength(0.30f);
+                    validationRenderer.setDepthHazeStrength(0.35f);
+                    validationRenderer.setDepthHazeDensity(0.025f);
+                    validationRenderer.setDepthHazeEnabled(true);
+                    validationRenderer.setSsaoStrength(0.45f);
+                    validationRenderer.setSsaoParams(0.4f, 0.04f);
+                    validationRenderer.setSsaoEnabled(true);
+                    validationRenderer.setTaaEnabled(true);
+                    r6Capture.queue("_effects_reopen_first_frame");
+                } else if (frameIndex == 90) {
+                    r6Capture.queue("_effects_reopen_settled");
+                } else if (frameIndex == 104) {
+                    r6Capture.queue("_transparent_boundary_static");
+                } else if (frameIndex == 109) {
+                    r6Capture.queue("_transparent_boundary_motion");
+                } else if (frameIndex == 118) {
+                    validationRenderer.setSceneLights(&r6MultiShadowLights);
+                    validationRenderer.setDirectionalLight(
+                        {0.35f, -0.85f, -0.40f},
+                        {1.35f, 1.28f, 1.15f});
+                } else if (frameIndex >= 120 && frameIndex <= 165
+                           && ((frameIndex - 120) % 5) == 0) {
+                    static constexpr const char* kResourceChannelNames[] = {
+                        "albedo", "normal", "world_position", "material",
+                        "depth", "material_model", "motion", "ssao",
+                        "taa_history", "shadow_atlas_multi_light",
+                    };
+                    const uint8_t channel = static_cast<uint8_t>(
+                        (frameIndex - 120) / 5);
+                    validationRenderer.setTaaDebugView(0);
+                    validationRenderer.setGBufferDebugChannel(channel);
+                    validationRenderer.setGBufferDebugEnabled(true);
+                    const std::string suffix = std::string("_resource_")
+                        + kResourceChannelNames[channel];
+                    r6Capture.queue(suffix.c_str());
+                } else if (frameIndex >= 170 && frameIndex <= 190
+                           && ((frameIndex - 170) % 5) == 0) {
+                    static constexpr const char* kTaaDiagnosticNames[] = {
+                        "history_rejection", "history_weight",
+                        "clipping_difference", "motion_vectors",
+                        "reprojected_history",
+                    };
+                    const uint8_t mode = static_cast<uint8_t>(
+                        1 + (frameIndex - 170) / 5);
+                    validationRenderer.setGBufferDebugEnabled(false);
+                    validationRenderer.setTaaDebugView(mode);
+                    const std::string suffix = std::string("_taa_")
+                        + kTaaDiagnosticNames[mode - 1];
+                    r6Capture.queue(suffix.c_str());
+                } else if (frameIndex == 200) {
+                    running = false;
+                }
+            } else if (!selectionCaptureBase.empty()) {
                 ayt::render::Renderer& validationRenderer =
                     rendererSub->renderer();
                 auto queueSelectionCapture = [&](const char* suffix) {

@@ -7,6 +7,7 @@
 
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
 > **2026-09-21 动画编辑状态**：独立 `.ayanm` 动画页面已从只读预览升级为轨道/时间轴作者工具：可新增/删除 TRS 或 Float 轨道，在播放头新增、移动、删除关键帧，编辑关键帧各分量值，并选择 Linear/Step/Cubic Hermite 曲线及编辑逐分量入/出切线或生成自动切线；Quaternion 写入时统一归一化并拒绝零长度输入。所有修改使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。每次内存 revision 直接驱动现有模型/骨架预览；`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。框选、多关键帧操作和 Notify 编辑留后续阶段。
+> **2026-09-23 渲染收尾状态**：`AYEditorShell_Demo` 增加仅在 `AY_EDITOR_R6_CAPTURE_BASE` 存在且 RenderDoc 已注入时启用的 R6-6 自动验证序列，普通产品运行零行为变化；序列覆盖 resize、camera cut、效果关闭/重开、透明边界、raw resource/TAA diagnostics 和双阴影灯。Renderer presentation bootstrap 失败时关闭 splash、写入持久日志位置、显示模态错误并安全 shutdown。新构建的 D3D12 后端已通过 15 秒启动烟测；完整跨后端画面对齐仍由 Renderer 后续专项负责。
 
 > The editor is a **cross-module system**, not a single UI library.  
 > Chrome is drawn by [AYUI](../AYUI/design.md); simulation control follows [AYExtension §3](../AYExtension/design.md) and [AYApplication §3](../AYApplication/design.md).
