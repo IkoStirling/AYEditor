@@ -2,6 +2,16 @@
 #include "AYGameLoop.h"
 #include <AYEntity/EntityModule.h>
 
+#include <array>
+#include <cstdio>
+
+#if defined(_WIN32)
+#include <process.h>
+#else
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #include "Test_EditorShell.cpp"
 #include "Test_EditorImporter.cpp"
 #include "Test_EditorPlayRuntime.cpp"
@@ -32,6 +42,57 @@
 #include "Test_EditorGameFlowPreview.cpp"       // production coordinator preview diagnostics
 #include "Test_EditorRecoveryAndTrash.cpp"      // selective recovery + trash browser services
 
+namespace {
+
+constexpr std::array<const char*, 26> kEditorTestSuites{
+    "AYEditor_Shell",
+    "AYEditor_Importer",
+    "AYEditor_PlayRuntime",
+    "AYEditor_WorldContext",
+    "AYEditor_ChildWindowManager",
+    "AYEditor_ImportedCharacterMapper",
+    "AYEditor_TransportDirtyPrompt",
+    "AYEditor_Hierarchy",
+    "AYEditor_SceneBridge",
+    "AYEditor_P0Core",
+    "AYEditor_TransformGizmo",
+    "AYEditor_AssetBrowser",
+    "AYEditor_AssetTilePresenter",
+    "AYEditor_SkeletonExtension",
+    "AYEditor_AnimationExtension",
+    "AYEditor_DslDocument",
+    "Editor2DToolsTests",
+    "AYEditor_Framework",
+    "AYEditor_ProjectWorkflow",
+    "AYEditor_UIFlowProjectContract",
+    "AYEditor_UIFlowAuthoring",
+    "EditorUiDesignerWorkflowTests",
+    "AYEditor_GameFlowAssetIntegration",
+    "AYEditor_GameFlowDocument",
+    "AYEditor_GameFlowPreview",
+    "AYEditor_RecoveryAndTrash",
+};
+
+int runIsolatedSuite(const char* executable, const char* suite)
+{
+#if defined(_WIN32)
+    const char* arguments[]{executable, suite, nullptr};
+    return static_cast<int>(_spawnv(_P_WAIT, executable, arguments));
+#else
+    const pid_t child = fork();
+    if (child == 0) {
+        execl(executable, executable, suite, static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    if (child < 0) return -1;
+    int status = 0;
+    if (waitpid(child, &status, 0) < 0) return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
+#endif
+}
+
+} // namespace
+
 int main(int argc, char* argv[]) {
     // This executable is the host for Editor/Entity integration tests.
     // Register component metadata up front so typed addComponent<T>() calls
@@ -39,9 +100,28 @@ int main(int argc, char* argv[]) {
     // of the test entry point; individual cases own that lifecycle explicitly.
     ayt::entity::registerEntityComponents();
 
-    const int result = argc > 1
-        ? ayt::test::runSuite(argv[1])
-        : ayt::test::runAllTests("AYEditor");
+    if (argc > 1) {
+        const int result = ayt::test::runSuite(argv[1]);
+        ayt::game::GameLoop::instance().shutdown();
+        return result;
+    }
+
+    // Editor integration suites own process-wide UI, native-window, and
+    // runtime singletons. Reusing those singletons across unrelated suites
+    // creates order-dependent state that cannot occur in a real editor
+    // process. Keep the aggregate CTest entry, but isolate each suite in a
+    // child process so every suite receives the production startup baseline.
+    int result = 0;
+    for (const char* suite : kEditorTestSuites) {
+        std::printf("\n[ISOLATED SUITE] %s\n", suite);
+        const int suiteResult = runIsolatedSuite(argv[0], suite);
+        if (suiteResult != 0) {
+            std::fprintf(stderr,
+                "[AYEditor tests] suite '%s' exited with code %d\n",
+                suite, suiteResult);
+            result = 1;
+        }
+    }
     ayt::game::GameLoop::instance().shutdown();
     return result;
 }

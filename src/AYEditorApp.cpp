@@ -997,6 +997,10 @@ void EditorApp::run()
     //   uiPass(Flush). This replaces the pre-AI-1 path where the
     //   flush lived entirely in the host lambda.
     rendererSub->renderer().setUiBackend(uiBackend.get());
+    // Publish the Editor-owned device stack through the same typed Host
+    // service used by standalone clients. EngineRuntimeScope clears/restores
+    // this non-owning pointer before _devices is destroyed.
+    ayt::app::provideDeviceManager(engineHost(), _devices.get());
     AY_EDITOR_HEAP_CHECK("after_full_init");
     startupSplash.update(0.93f, L"Connecting editor input...");
 
