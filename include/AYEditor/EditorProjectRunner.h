@@ -30,13 +30,20 @@ enum class EditorProjectProcessState : std::uint8_t {
     Exited,
 };
 
+enum class EditorProjectResolveFailure : std::uint8_t {
+    None,
+    MissingExecutable,
+    InvalidConfiguration,
+};
+
 // Resolves an app executable from a project-local run manifest or conventional
 // CMake output folders, then launches it without coupling app code to editor
 // startup. The same service works for BSimmer and future projects.
 class EditorProjectRunner final {
 public:
     static EditorProjectRunConfig resolve(
-        const std::string& projectRoot, std::string* error = nullptr);
+        const std::string& projectRoot, std::string* error = nullptr,
+        EditorProjectResolveFailure* failure = nullptr);
     static EditorProjectLaunchResult launch(
         const EditorProjectRunConfig& config);
     static EditorProjectProcessState processState(

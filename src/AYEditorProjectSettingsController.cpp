@@ -822,6 +822,33 @@ struct EditorProjectSettingsController::Impl {
                                   : "Building project...");
     }
 
+    bool buildAndRun(std::string* error)
+    {
+        if (!attached) {
+            if (error != nullptr) {
+                *error = "Project Settings is not attached.";
+            }
+            return false;
+        }
+        if (isBusy()) {
+            if (error != nullptr) {
+                *error = "A project build is already running.";
+            }
+            return false;
+        }
+        startBuild({}, true);
+        if (asyncState == nullptr) {
+            if (error != nullptr) {
+                *error = lastError.empty()
+                    ? "Project build could not start." : lastError;
+            }
+            return false;
+        }
+        refreshNavigation(6);
+        if (error != nullptr) error->clear();
+        return true;
+    }
+
     bool isBusy() const noexcept
     {
         return buildFuture.valid()
@@ -1253,6 +1280,11 @@ void EditorProjectSettingsController::tick(float)
 bool EditorProjectSettingsController::save(std::string* error)
 {
     return _impl != nullptr && _impl->saveAll(error);
+}
+
+bool EditorProjectSettingsController::buildAndRun(std::string* error)
+{
+    return _impl != nullptr && _impl->buildAndRun(error);
 }
 
 bool EditorProjectSettingsController::isAttached() const noexcept

@@ -5105,9 +5105,23 @@ bool EditorSession::runCurrentProject()
     }
 
     std::string error;
+    EditorProjectResolveFailure resolveFailure =
+        EditorProjectResolveFailure::None;
     const EditorProjectRunConfig config = EditorProjectRunner::resolve(
-        _assetDatabase.projectRoot(), &error);
+        _assetDatabase.projectRoot(), &error, &resolveFailure);
     if (!config) {
+        if (resolveFailure == EditorProjectResolveFailure::MissingExecutable
+            && openProjectSettings()
+            && _projectSettings != nullptr) {
+            std::string buildError;
+            if (_projectSettings->buildAndRun(&buildError)) {
+                setProjectRunStatus(L"Project: Building",
+                    L"No executable exists yet. Building the project, then "
+                    L"it will start automatically.", true);
+                return true;
+            }
+            if (!buildError.empty()) error = std::move(buildError);
+        }
         const std::wstring message = L"Run project: "
             + ayt::ui::decodeUtf8Text(error);
         setProjectRunStatus(L"Project: Not runnable", message, true);

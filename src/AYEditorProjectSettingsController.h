@@ -45,6 +45,10 @@ public:
     void detach();
     void tick(float dtSeconds);
     bool save(std::string* error = nullptr);
+    // Starts the same asynchronous Build & Run operation as the settings
+    // window button. EditorSession uses this when Run is requested before a
+    // generated project has produced its first executable.
+    bool buildAndRun(std::string* error = nullptr);
 
     bool isAttached() const noexcept;
     bool isBusy() const noexcept;

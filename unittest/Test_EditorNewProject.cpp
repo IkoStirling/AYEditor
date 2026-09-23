@@ -1,4 +1,6 @@
 #include "AYEditorNewProjectController.h"
+#include "AYEditor/EditorProjectDescriptor.h"
+#include "AYEditor/EditorSceneDocument.h"
 
 #include <AYTest.h>
 #include <AYUI/ComboBox.h>
@@ -71,6 +73,23 @@ TEST_CASE(editor_adapter_uses_shared_identity_and_2d_template)
         fs::path(created.projectRoot) / "project.ayproject.json"));
     CHECK(readText(fs::path(created.projectRoot) / "CMakeLists.txt")
         .find("PROFILE CLIENT_2D") != std::string::npos);
+
+    std::string descriptorError;
+    const EditorProjectDescriptor descriptor = EditorProjectDescriptor::load(
+        created.projectRoot, &descriptorError);
+    CHECK(static_cast<bool>(descriptor));
+    CHECK(descriptorError.empty());
+    CHECK(descriptor.defaultSceneView == "2D");
+    const auto* startupWorld = descriptor.findWorld(descriptor.startupWorld);
+    CHECK(startupWorld != nullptr);
+    EditorSceneDocument startupScene;
+    std::string sceneError;
+    CHECK(startupWorld != nullptr && startupScene.open(
+        (fs::path(created.projectRoot) / descriptor.assetRoot
+            / startupWorld->scene).string(), &sceneError));
+    CHECK(sceneError.empty());
+    CHECK(startupScene.scene().world().findEntity("2D Camera") != nullptr);
+    CHECK(startupScene.scene().world().findEntity("Gameplay Root") != nullptr);
 
     const EditorNewProjectResult duplicate = createEditorGameProject({
         .parentDirectory = sandbox.parent.string(),

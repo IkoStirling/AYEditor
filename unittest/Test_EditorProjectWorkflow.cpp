@@ -164,7 +164,7 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 23u);
+    CHECK(kEditorSourceAbiVersion == 24u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
 }
 
@@ -464,6 +464,27 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
         == "project.ayproject.json");
 }
 
+TEST_CASE(project_runner_marks_a_first_build_as_recoverable)
+{
+    ProjectWorkflowCleanup cleanup{
+        projectWorkflowRoot("project_runner_first_build")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    writeWorkflowFile(cleanup.root / "project.ayproject.json",
+        "{\"schemaVersion\":1,\"id\":\"project\","
+        "\"run\":{\"executable\":"
+        "\"out/build/windows-client-debug/ProjectApp.exe\","
+        "\"workingDirectory\":\".\",\"arguments\":[]}}\n");
+
+    std::string error;
+    EditorProjectResolveFailure failure = EditorProjectResolveFailure::None;
+    const EditorProjectRunConfig config = EditorProjectRunner::resolve(
+        cleanup.root.string(), &error, &failure);
+    CHECK_FALSE(static_cast<bool>(config));
+    CHECK_FALSE(error.empty());
+    CHECK(failure == EditorProjectResolveFailure::MissingExecutable);
+}
+
 TEST_CASE(project_runner_resolves_last_successful_project_build)
 {
     ProjectWorkflowCleanup cleanup{
@@ -529,10 +550,12 @@ TEST_CASE(project_runner_rejects_executable_outside_project_root)
         (std::string("{\"executable\":\"") + hostile
          + "\",\"workingDirectory\":\".\",\"arguments\":[]}").c_str());
     std::string error;
+    EditorProjectResolveFailure failure = EditorProjectResolveFailure::None;
     const EditorProjectRunConfig config = EditorProjectRunner::resolve(
-        cleanup.root.string(), &error);
+        cleanup.root.string(), &error, &failure);
     CHECK(!config);
     CHECK(!error.empty());
+    CHECK(failure == EditorProjectResolveFailure::InvalidConfiguration);
     CHECK(error.find("project root") != std::string::npos
           || error.find("outside") != std::string::npos);
 }

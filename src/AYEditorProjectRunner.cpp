@@ -17,6 +17,16 @@ namespace {
 
 namespace fs = std::filesystem;
 
+void classifyResolveFailure(
+    const std::string& message,
+    EditorProjectResolveFailure* failure) noexcept
+{
+    if (failure == nullptr) return;
+    *failure = message.find("does not exist") != std::string::npos
+        ? EditorProjectResolveFailure::MissingExecutable
+        : EditorProjectResolveFailure::InvalidConfiguration;
+}
+
 std::string normalized(const fs::path& path)
 {
     std::error_code error;
@@ -42,6 +52,31 @@ bool isInsidePath(const fs::path& child, const fs::path& parent)
         && *relative.begin() != "..";
 }
 
+bool resolveForContainment(const fs::path& input, fs::path& output,
+                           std::error_code& error)
+{
+    fs::path probe = fs::absolute(input, error).lexically_normal();
+    if (error) return false;
+
+    fs::path missingSuffix;
+    while (true) {
+        error.clear();
+        if (fs::exists(probe, error)) break;
+        if (error || probe.empty() || probe == probe.parent_path()) {
+            return false;
+        }
+        missingSuffix = probe.filename() / missingSuffix;
+        probe = probe.parent_path();
+    }
+
+    const fs::path resolvedPrefix = fs::canonical(probe, error);
+    if (error) return false;
+    output = missingSuffix.empty()
+        ? resolvedPrefix.lexically_normal()
+        : (resolvedPrefix / missingSuffix).lexically_normal();
+    return true;
+}
+
 // H-17 (ayeditor audit 2026-09-14): run.json and project descriptors
 // are loaded from inside the project root, but the "executable" path
 // was previously only canonicalized -- a hostile or accidental entry
@@ -54,16 +89,16 @@ bool isRunConfigContained(const fs::path& root,
                           std::string* error)
 {
     std::error_code canonicalError;
-    const fs::path canonicalRoot = fs::weakly_canonical(root, canonicalError);
-    if (canonicalError) {
+    fs::path canonicalRoot;
+    if (!resolveForContainment(root, canonicalRoot, canonicalError)) {
         if (error != nullptr) *error = "Could not resolve project root: "
             + canonicalError.message();
         return false;
     }
     std::error_code executableError;
-    const fs::path canonicalExecutable = fs::weakly_canonical(
-        fs::path(executable), executableError);
-    if (executableError) {
+    fs::path canonicalExecutable;
+    if (!resolveForContainment(
+            fs::path(executable), canonicalExecutable, executableError)) {
         if (error != nullptr) *error = "Could not resolve run.json "
             "executable path: " + executableError.message();
         return false;
@@ -76,9 +111,9 @@ bool isRunConfigContained(const fs::path& root,
     }
     if (!workingDirectory.empty()) {
         std::error_code workingError;
-        const fs::path canonicalWorking = fs::weakly_canonical(
-            fs::path(workingDirectory), workingError);
-        if (workingError) {
+        fs::path canonicalWorking;
+        if (!resolveForContainment(
+                fs::path(workingDirectory), canonicalWorking, workingError)) {
             if (error != nullptr) *error = "Could not resolve run.json "
                 "working directory: " + workingError.message();
             return false;
@@ -288,27 +323,32 @@ BOOL CALLBACK findProcessWindow(HWND window, LPARAM parameter)
 } // namespace
 
 EditorProjectRunConfig EditorProjectRunner::resolve(
-    const std::string& projectRoot, std::string* error)
+    const std::string& projectRoot, std::string* error,
+    EditorProjectResolveFailure* failure)
 {
     if (error != nullptr) error->clear();
+    if (failure != nullptr) *failure = EditorProjectResolveFailure::None;
     const fs::path root = normalized(projectRoot.empty()
         ? fs::current_path() : fs::path(projectRoot));
     std::string manifestError;
     EditorProjectRunConfig configured = loadRunOverride(root, &manifestError);
     if (configured) return configured;
     if (!manifestError.empty()) {
+        classifyResolveFailure(manifestError, failure);
         if (error != nullptr) *error = manifestError;
         return {};
     }
     configured = loadLastSuccessfulBuild(root, &manifestError);
     if (configured) return configured;
     if (!manifestError.empty()) {
+        classifyResolveFailure(manifestError, failure);
         if (error != nullptr) *error = manifestError;
         return {};
     }
     configured = loadProjectDescriptor(root, &manifestError);
     if (configured) return configured;
     if (!manifestError.empty()) {
+        classifyResolveFailure(manifestError, failure);
         if (error != nullptr) *error = manifestError;
         return {};
     }
@@ -348,6 +388,9 @@ EditorProjectRunConfig EditorProjectRunner::resolve(
         *error = "No runnable " + executableName
             + " was found. Configure project.ayproject.json or "
               ".ayeditor/run.json.";
+    }
+    if (failure != nullptr) {
+        *failure = EditorProjectResolveFailure::MissingExecutable;
     }
     return {};
 }
