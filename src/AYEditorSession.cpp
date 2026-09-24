@@ -1432,6 +1432,88 @@ std::string showProjectParentFolderDialog(
     return selected;
 }
 
+std::string showProjectManifestDialog(
+    HWND owner, const std::string& initialDirectory)
+{
+    std::wstring selected(32768u, L'\0');
+    const std::wstring initial = std::filesystem::u8path(
+        initialDirectory).wstring();
+    constexpr wchar_t filter[] =
+        L"Aliyat Project (project.ayproject.json)\0project.ayproject.json\0"
+        L"JSON Files (*.json)\0*.json\0\0";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = owner;
+    dialog.lpstrFile = selected.data();
+    dialog.nMaxFile = static_cast<DWORD>(selected.size());
+    dialog.lpstrFilter = filter;
+    dialog.nFilterIndex = 1u;
+    dialog.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
+    dialog.lpstrTitle = L"Open Aliyat Project";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST
+        | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
+    if (::GetOpenFileNameW(&dialog) == FALSE) return {};
+    selected.resize(std::wcslen(selected.c_str()));
+    return wideToUtf8(selected);
+}
+
+bool sameProjectRoot(const std::string& left, const std::string& right)
+{
+    std::string lhs = std::filesystem::u8path(left).lexically_normal()
+        .generic_string();
+    std::string rhs = std::filesystem::u8path(right).lexically_normal()
+        .generic_string();
+#if defined(_WIN32)
+    std::transform(lhs.begin(), lhs.end(), lhs.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+    std::transform(rhs.begin(), rhs.end(), rhs.begin(), [](unsigned char value) {
+        return static_cast<char>(std::tolower(value));
+    });
+#endif
+    return lhs == rhs;
+}
+
+bool touchRecentProject(std::vector<std::string>& projects,
+                        const std::string& projectRoot)
+{
+    if (projectRoot.empty()) return false;
+    const std::vector<std::string> before = projects;
+    projects.erase(std::remove_if(projects.begin(), projects.end(),
+        [&projectRoot](const std::string& candidate) {
+            return sameProjectRoot(candidate, projectRoot);
+        }), projects.end());
+    projects.insert(projects.begin(), projectRoot);
+    constexpr std::size_t kMaximumRecentProjects = 8u;
+    if (projects.size() > kMaximumRecentProjects) {
+        projects.resize(kMaximumRecentProjects);
+    }
+    return projects != before;
+}
+
+void forgetRecentProject(std::vector<std::string>& projects,
+                         const std::string& projectRoot)
+{
+    projects.erase(std::remove_if(projects.begin(), projects.end(),
+        [&projectRoot](const std::string& candidate) {
+            return sameProjectRoot(candidate, projectRoot);
+        }), projects.end());
+}
+
+std::wstring recentProjectLabel(const std::string& projectRoot)
+{
+    std::string ignored;
+    const EditorProjectDescriptor descriptor =
+        EditorProjectDescriptor::load(projectRoot, &ignored);
+    if (descriptor && !descriptor.displayName.empty()) {
+        return ayt::ui::decodeUtf8Text(descriptor.displayName);
+    }
+    const std::filesystem::path root = std::filesystem::u8path(projectRoot);
+    const std::string fallback = root.filename().string().empty()
+        ? root.string() : root.filename().string();
+    return ayt::ui::decodeUtf8Text(fallback);
+}
+
 bool launchEditorForProject(const std::string& projectRoot,
                             std::string* error)
 {
@@ -1792,6 +1874,12 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
                      shortcutError.c_str());
     }
     _preferences = desc.preferences;
+    std::string recentProjectError;
+    const std::string recentProjectRoot = resolveEditorProjectRoot(
+        _projectRoot, &recentProjectError);
+    const bool recentProjectChanged = !recentProjectRoot.empty()
+        && touchRecentProject(
+            _preferences.recentProjectRoots, recentProjectRoot);
     _localization =
         std::make_unique<ayt::localization::Localization>();
     _localization->loadAllFromDirectory(
@@ -2003,6 +2091,10 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     applyPreferences(_preferences);
     _lastObservedPreferences = capturePreferences();
     _preferences = _lastObservedPreferences;
+    if (recentProjectChanged) {
+        _preferencesDirty = true;
+        _preferencesSaveCountdown = 0.0f;
+    }
     AY_EDITOR_TRACE("initialize: toolbar bound");
 
     setModeLabel(L"EDIT");
@@ -7292,6 +7384,7 @@ void EditorSession::resetWorkspacePreferences()
     defaults.density = _preferences.density;
     defaults.uiScale = _preferences.uiScale;
     defaults.language = _preferences.language;
+    defaults.recentProjectRoots = _preferences.recentProjectRoots;
     applyPreferences(defaults);
     savePreferencesNow();
 }
@@ -8167,6 +8260,33 @@ void EditorSession::bindMenuBar() {
         if (auto* item = addLocalizedItem(fileMenu,
                 "ui.editor.menu.file.new_project", L"New Project...")) {
             item->setOnActivate([this]() { (void)openNewProject(); });
+        }
+        if (auto* item = addLocalizedItem(fileMenu,
+                "ui.editor.menu.file.open_project", L"Open Project...")) {
+            item->setOnActivate([this]() { (void)openProject(); });
+        }
+        if (auto* item = addLocalizedItem(fileMenu,
+                "ui.editor.menu.file.recent_projects", L"Recent Projects")) {
+            auto* recent = new ayt::ui::Menu();
+            fileMenu->attachSubmenu(item, recent);
+            if (_preferences.recentProjectRoots.empty()) {
+                if (auto* empty = addLocalizedItem(recent,
+                        "ui.editor.menu.file.no_recent_projects",
+                        L"No Recent Projects")) {
+                    empty->setEnabled(false);
+                }
+            } else {
+                for (const std::string& projectRoot :
+                     _preferences.recentProjectRoots) {
+                    ayt::ui::MenuItem* recentItem = recent->addItem(
+                        recentProjectLabel(projectRoot));
+                    if (recentItem != nullptr) {
+                        recentItem->setOnActivate([this, projectRoot]() {
+                            (void)openProject(projectRoot);
+                        });
+                    }
+                }
+            }
         }
         fileMenu->addSeparator();
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_empty_scene", L"New Empty Scene")) {
@@ -9133,6 +9253,49 @@ bool EditorSession::openNewProject()
     childUi->layout();
     (void)_childWindows->showChildWindow(handle);
     setAssetBrowserStatus(L"New Project opened");
+    return true;
+}
+
+bool EditorSession::openProject(const std::string& selectedPath)
+{
+    std::string selection = selectedPath;
+    if (selection.empty()) {
+        const std::filesystem::path initial = _projectRoot.empty()
+            ? std::filesystem::path{}
+            : std::filesystem::path(_projectRoot).parent_path();
+        selection = showProjectManifestDialog(
+            static_cast<HWND>(_hostWindow), initial.string());
+        if (selection.empty()) return false;
+    }
+
+    std::string error;
+    const std::string projectRoot = resolveEditorProjectRoot(selection, &error);
+    if (projectRoot.empty()) {
+        forgetRecentProject(_preferences.recentProjectRoots, selectedPath);
+        savePreferencesNow();
+        setAssetBrowserStatus(L"Project could not be opened: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return false;
+    }
+    if (!_projectRoot.empty() && sameProjectRoot(projectRoot, _projectRoot)) {
+        if (touchRecentProject(_preferences.recentProjectRoots, projectRoot)) {
+            savePreferencesNow();
+        }
+        setAssetBrowserStatus(L"This project is already open.");
+        return true;
+    }
+
+    if (touchRecentProject(_preferences.recentProjectRoots, projectRoot)) {
+        savePreferencesNow();
+    }
+    if (!launchEditorForProject(projectRoot, &error)) {
+        forgetRecentProject(_preferences.recentProjectRoots, projectRoot);
+        savePreferencesNow();
+        setAssetBrowserStatus(L"Project could not be opened: "
+            + ayt::ui::decodeUtf8Text(error), true);
+        return false;
+    }
+    requestHostClose();
     return true;
 }
 

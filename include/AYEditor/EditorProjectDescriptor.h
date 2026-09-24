@@ -77,6 +77,13 @@ struct EditorProjectDescriptor {
         std::string* error = nullptr);
 };
 
+// Accept a project directory or its project.ayproject.json file, validate the
+// descriptor, and return the normalized absolute project root. This is the
+// shared boundary for command-line, Open Project and Recent Projects hosts.
+std::string resolveEditorProjectRoot(
+    const std::string& selectedPath,
+    std::string* error = nullptr);
+
 // Resolves the project startup World into one absolute Scene path without
 // mutating editor state. `projectDescriptorPresent` deliberately remains true
 // for malformed descriptors so product sessions never fall back to demo-only

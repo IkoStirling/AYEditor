@@ -76,6 +76,20 @@ undo/redo edits, scrub, and save a portable `<asset>.timeline.json` sidecar.
 Imported PCM audio registers a real AYAudio clip; its device voice-frame
 cursor drives the playhead and supports exact seek when the user scrubs.
 
+## Opening an existing project
+
+Use **File -> Open Project...** and choose the project's
+`project.ayproject.json`. The editor validates the descriptor before switching
+projects, starts a fresh editor process rooted at the selected project, and
+then closes the previous project window. This keeps project-owned assets,
+document state, caches, and services from leaking across project sessions.
+
+The eight most recently opened valid projects appear under **File -> Recent
+Projects**. The list is stored in the user editor preferences, is shared by
+`AYEditor` and `AYEditorShell_Demo`, and is preserved by **Reset Workspace
+Layout**. Selecting a missing or invalid recent project removes it from the
+list and reports the descriptor error without disturbing the current project.
+
 ## Project Settings and Build
 
 Use **File -> Project Settings...** for the canonical visual project workflow,
@@ -187,7 +201,7 @@ cooked file; the editor keeps `.aytilemap.json` as the editable source.
 
 ## Interface compatibility
 
-AYEditor 0.2.0 publishes source ABI version 20. AYUI 1.1.0 publishes source ABI
+AYEditor 0.2.0 publishes source ABI version 25. AYUI 1.1.0 publishes source ABI
 version 128. MSVC object files embed link mismatch records and the public
 headers statically check the target-provided version, so a public layout or
 vtable change requires a full rebuild instead of allowing mixed stale objects.

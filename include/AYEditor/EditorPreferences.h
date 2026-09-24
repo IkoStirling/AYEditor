@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace ayt::editor {
 
@@ -22,7 +23,7 @@ enum class EditorDensity : uint8_t {
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 4;
+    static constexpr int kCurrentSchemaVersion = 5;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -82,6 +83,9 @@ struct EditorPreferences {
     // "system" selects the closest packaged locale at process startup.
     std::string language = "system";
     bool autoExposureEnabled = false;
+    // Global project history used by File > Recent Projects. Paths are
+    // normalized absolute project roots and never written into project data.
+    std::vector<std::string> recentProjectRoots;
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -136,7 +140,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.shadowPcfEnabled == b.shadowPcfEnabled
         && a.taaEnabled == b.taaEnabled
         && a.language == b.language
-        && a.autoExposureEnabled == b.autoExposureEnabled;
+        && a.autoExposureEnabled == b.autoExposureEnabled
+        && a.recentProjectRoots == b.recentProjectRoots;
 }
 
 inline bool operator!=(const EditorPreferences& a,

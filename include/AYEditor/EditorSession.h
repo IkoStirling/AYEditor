@@ -259,6 +259,7 @@ public:
     bool openGameFlowEditor(const std::string& path = {});
     std::size_t openGameFlowDocumentCount() const noexcept;
     bool openNewProject();
+    bool openProject(const std::string& selectedPath = {});
     bool openProjectSettings();
     bool createProjectAsset(EditorAssetType type);
     bool restoreLastDeletedAssets();

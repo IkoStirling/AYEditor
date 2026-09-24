@@ -495,6 +495,74 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
     }
 }
 
+std::string resolveEditorProjectRoot(
+    const std::string& selectedPath, std::string* error)
+{
+    if (error != nullptr) error->clear();
+    if (selectedPath.empty()) {
+        if (error != nullptr) *error = "Choose a project folder or project manifest.";
+        return {};
+    }
+
+    try {
+        std::error_code filesystemError;
+        fs::path selected = fs::absolute(
+            fs::u8path(selectedPath), filesystemError).lexically_normal();
+        if (filesystemError) {
+            if (error != nullptr) {
+                *error = "Cannot resolve the selected project path: "
+                    + filesystemError.message();
+            }
+            return {};
+        }
+
+        fs::path root;
+        if (fs::is_directory(selected, filesystemError)) {
+            root = selected;
+        } else if (!filesystemError
+                   && fs::is_regular_file(selected, filesystemError)) {
+            if (selected.filename() != kEditorProjectDescriptorFile) {
+                if (error != nullptr) {
+                    *error = "Select project.ayproject.json or its containing folder.";
+                }
+                return {};
+            }
+            root = selected.parent_path();
+        } else {
+            if (error != nullptr) {
+                *error = filesystemError
+                    ? "Cannot inspect the selected project path: "
+                        + filesystemError.message()
+                    : "The selected project path does not exist.";
+            }
+            return {};
+        }
+
+        filesystemError.clear();
+        const fs::path canonical = fs::weakly_canonical(root, filesystemError);
+        if (!filesystemError) root = canonical;
+
+        std::string descriptorError;
+        const EditorProjectDescriptor descriptor =
+            EditorProjectDescriptor::load(root.string(), &descriptorError);
+        if (!descriptor) {
+            if (error != nullptr) {
+                *error = descriptorError.empty()
+                    ? "The selected folder is not a valid Aliyat project."
+                    : descriptorError;
+            }
+            return {};
+        }
+        return root.string();
+    } catch (const std::exception& exception) {
+        if (error != nullptr) {
+            *error = std::string("Cannot open the selected project: ")
+                + exception.what();
+        }
+        return {};
+    }
+}
+
 EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
     const std::string& projectRoot)
 {

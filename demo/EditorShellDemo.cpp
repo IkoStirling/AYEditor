@@ -371,6 +371,13 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Render.Shadows.Enabled", out.shadowsEnabled);
     out.shadowPcfEnabled = saved.getBool(
         "Editor.Render.Shadows.PCF", out.shadowPcfEnabled);
+    const int recentProjectCount = std::clamp(static_cast<int>(saved.getInt(
+        "Editor.RecentProjects.Count", 0)), 0, 8);
+    for (int index = 0; index < recentProjectCount; ++index) {
+        const std::string projectRoot = saved.getString(
+            "Editor.RecentProjects." + std::to_string(index));
+        if (!projectRoot.empty()) out.recentProjectRoots.push_back(projectRoot);
+    }
     return out;
 }
 
@@ -434,6 +441,14 @@ bool saveEditorPreferences(const std::string& path,
                     value.colorGradingStrength);
     config.setBool("Editor.Render.Shadows.Enabled", value.shadowsEnabled);
     config.setBool("Editor.Render.Shadows.PCF", value.shadowPcfEnabled);
+    const std::size_t recentProjectCount = std::min<std::size_t>(
+        value.recentProjectRoots.size(), 8u);
+    config.setInt("Editor.RecentProjects.Count",
+                  static_cast<std::int64_t>(recentProjectCount));
+    for (std::size_t index = 0; index < recentProjectCount; ++index) {
+        config.setString("Editor.RecentProjects." + std::to_string(index),
+                         value.recentProjectRoots[index]);
+    }
 
     std::error_code ec;
     const std::filesystem::path parent =

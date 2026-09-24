@@ -164,8 +164,36 @@ TEST_SUITE(AYEditor_ProjectWorkflow)
 
 TEST_CASE(editor_source_abi_is_explicit)
 {
-    CHECK(kEditorSourceAbiVersion == 24u);
+    CHECK(kEditorSourceAbiVersion == 25u);
     CHECK(std::string(kEditorVersion) == "0.2.0");
+}
+
+TEST_CASE(project_selection_accepts_a_directory_or_manifest)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("project_selection")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    writeWorkflowFile(cleanup.root / "project.ayproject.json",
+        "{\"schemaVersion\":1,\"id\":\"selection\","
+        "\"paths\":{\"assets\":\"Assets\"},\"worlds\":[]}\n");
+
+    std::string error;
+    const std::string fromDirectory = resolveEditorProjectRoot(
+        cleanup.root.string(), &error);
+    CHECK_FALSE(fromDirectory.empty());
+    CHECK(error.empty());
+    CHECK(std::filesystem::path(fromDirectory).lexically_normal()
+          == std::filesystem::absolute(cleanup.root).lexically_normal());
+
+    const std::string fromManifest = resolveEditorProjectRoot(
+        (cleanup.root / "project.ayproject.json").string(), &error);
+    CHECK(fromManifest == fromDirectory);
+    CHECK(error.empty());
+
+    writeWorkflowFile(cleanup.root / "not-a-project.json", "{}\n");
+    CHECK(resolveEditorProjectRoot(
+        (cleanup.root / "not-a-project.json").string(), &error).empty());
+    CHECK_FALSE(error.empty());
 }
 
 TEST_CASE(project_descriptor_exposes_authoring_world_and_run_contract)
