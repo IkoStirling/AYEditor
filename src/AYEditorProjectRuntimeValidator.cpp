@@ -3,7 +3,7 @@
 #include "AYEditor/EditorProjectDescriptor.h"
 #include "AYEditor/EditorProjectUiFlow.h"
 
-#include <AYApplication/ProjectContentValidator.h>
+#include <AYApplication/ProjectDoctor.h>
 #include <AYApplication/UIFlowAssetValidation.h>
 
 #include <AYUI/UIFlow.h>
@@ -317,12 +317,14 @@ EditorRuntimeValidationResult EditorProjectRuntimeValidator::validate(
         profile == EditorRuntimeValidationProfile::Headless
         ? ayt::app::ProjectContentValidationProfile::Headless
         : ayt::app::ProjectContentValidationProfile::FullClient;
-    ayt::app::ProjectContentValidationOptions applicationOptions;
-    applicationOptions.enableGameFlowUIActions = true;
-    ayt::app::ProjectContentValidationResult validated;
+    ayt::app::ProjectDoctorOptions doctorOptions;
+    doctorOptions.profile = applicationProfile;
+    doctorOptions.content.enableGameFlowUIActions = true;
+    doctorOptions.requireProjectManifest = descriptorExists;
+    ayt::app::ProjectDoctorResult doctor;
     try {
-        validated = ayt::app::validateProjectContent(
-            root.string(), applicationProfile, std::move(applicationOptions));
+        doctor = ayt::app::diagnoseProject(
+            root.string(), std::move(doctorOptions));
     } catch (const std::exception& exception) {
         result.issues.push_back({projectRoot,
             std::string("Project content validation failed: ")
@@ -331,13 +333,14 @@ EditorRuntimeValidationResult EditorProjectRuntimeValidator::validate(
         result.issues.push_back({projectRoot,
             "Project content validation failed."});
     }
+    const ayt::app::ProjectContentValidationResult& validated = doctor.content;
     result.scenes = validated.scenes;
     result.uiLayouts = validated.uiLayouts;
     result.tilemaps = validated.tilemaps;
     result.gameFlows = validated.gameFlows;
-    result.issues.reserve(validated.issues.size());
-    for (const ayt::app::ProjectContentValidationIssue& issue :
-         validated.issues) {
+    result.issues.reserve(doctor.issues.size());
+    for (const ayt::app::ProjectDoctorIssue& issue : doctor.issues) {
+        if (issue.severity != ayt::app::ProjectDoctorSeverity::Error) continue;
         result.issues.push_back({issue.path, issue.message});
     }
     result.gameFlowDependencies.reserve(

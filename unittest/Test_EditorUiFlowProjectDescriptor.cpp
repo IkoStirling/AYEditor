@@ -31,9 +31,19 @@ struct ProjectRoot {
 
     void writeDescriptor(const std::string& source) const
     {
+        std::string current = source;
+        const std::string schema = "\"schemaVersion\":1";
+        if (const auto position = current.find(schema);
+            position != std::string::npos) {
+            current.replace(position, schema.size(), "\"schemaVersion\":2");
+            const auto object = current.find('{');
+            current.insert(object + 1u,
+                "\n        \"templateVersion\":1,"
+                "\n        \"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},");
+        }
         std::ofstream output(path / "project.ayproject.json",
                              std::ios::binary | std::ios::trunc);
-        output << source;
+        output << current;
     }
 
     void writeAsset(const fs::path& relative, const std::string& source) const

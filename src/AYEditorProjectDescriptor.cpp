@@ -1,6 +1,8 @@
 #include "AYEditor/EditorProjectDescriptor.h"
 
+#include <AYApplication/ProjectMigration.h>
 #include <AYIO/File.h>
+#include <AYProject/ProjectContract.h>
 #include <nlohmann/json.hpp>
 
 #include <cctype>
@@ -13,6 +15,9 @@ namespace ayt::editor {
 namespace {
 
 namespace fs = std::filesystem;
+
+static_assert(kEditorProjectDescriptorSchemaVersion
+    == ayt::project::kGameProjectManifestSchemaVersion);
 
 bool hasWindowsDrivePrefix(std::string_view value) noexcept
 {
@@ -158,6 +163,11 @@ bool EditorProjectDescriptor::serialize(
     try {
         nlohmann::json root = {
             {"schemaVersion", schemaVersion},
+            {"templateVersion", ayt::project::kGameProjectTemplateVersion},
+            {"engineCompatibility", {
+                {"minimum", ayt::project::kEngineProjectContractVersion},
+                {"tested", ayt::project::kEngineProjectContractVersion},
+            }},
             {"id", id},
             {"displayName", displayName},
             {"engineProfile", engineProfile},
@@ -264,6 +274,22 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
         if (!fs::is_regular_file(path)) {
             if (error != nullptr) {
                 *error = "Project descriptor was not found: " + path.string();
+            }
+            return {};
+        }
+        std::string contractError;
+        const ayt::project::GameProjectContractInfo contract =
+            ayt::project::inspectGameProjectContract(root.string(),
+                                                     &contractError);
+        if (!contract) {
+            if (error != nullptr) {
+                *error = contract.migrationRequired
+                    ? "Project descriptor schemaVersion "
+                        + std::to_string(contract.schemaVersion)
+                        + " requires migration before it can be opened."
+                    : (contractError.empty()
+                        ? "Project descriptor compatibility envelope is invalid."
+                        : std::move(contractError));
             }
             return {};
         }
@@ -543,6 +569,16 @@ std::string resolveEditorProjectRoot(
         if (!filesystemError) root = canonical;
 
         std::string descriptorError;
+        const ayt::app::ProjectMigrationReport migration =
+            ayt::app::migrateProjectToCurrent(root.string());
+        if (!migration) {
+            if (error != nullptr) {
+                *error = migration.diagnostics.empty()
+                    ? "Project migration preflight failed."
+                    : migration.diagnostics.front();
+            }
+            return {};
+        }
         const EditorProjectDescriptor descriptor =
             EditorProjectDescriptor::load(root.string(), &descriptorError);
         if (!descriptor) {
@@ -587,6 +623,14 @@ EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
         if (!fs::is_regular_file(descriptorPath, fileError) || fileError) {
             result.error = "Project descriptor is not a regular file: "
                 + descriptorPath.string();
+            return result;
+        }
+        const ayt::app::ProjectMigrationReport migration =
+            ayt::app::migrateProjectToCurrent(root.string());
+        if (!migration) {
+            result.error = migration.diagnostics.empty()
+                ? "Project migration preflight failed."
+                : migration.diagnostics.front();
             return result;
         }
         std::string descriptorError;

@@ -333,7 +333,7 @@ TEST_CASE(project_descriptor_requires_an_exact_integer_schema_version)
         const EditorProjectDescriptor descriptor =
             EditorProjectDescriptor::load(root.path.string(), &error);
         CHECK_FALSE(static_cast<bool>(descriptor));
-        CHECK(error.find("integer schemaVersion 1") != std::string::npos);
+        CHECK(error.find("schemaVersion") != std::string::npos);
     }
 }
 
@@ -435,7 +435,9 @@ TEST_CASE(editor_runtime_validation_reports_editor_descriptor_errors)
     writeGameFlowAssetTestFile(root.path / "Assets/placeholder.txt", "ok");
     writeGameFlowAssetTestFile(root.path / kEditorProjectDescriptorFile,
         R"json({
-          "schemaVersion": 1,
+          "schemaVersion": 2,
+          "templateVersion": 1,
+          "engineCompatibility": { "minimum": "1", "tested": "1" },
           "id": "invalid-editor-settings",
           "paths": { "assets": "Assets" },
           "editor": { "defaultSceneView": "Diagonal" },

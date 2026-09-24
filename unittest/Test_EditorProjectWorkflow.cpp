@@ -203,7 +203,9 @@ TEST_CASE(project_descriptor_exposes_authoring_world_and_run_contract)
     std::filesystem::remove_all(cleanup.root, ignored);
     writeWorkflowFile(cleanup.root / "project.ayproject.json",
         "{\n"
-        "  \"schemaVersion\": 1,\n"
+        "  \"schemaVersion\": 2,\n"
+        "  \"templateVersion\": 1,\n"
+        "  \"engineCompatibility\": {\"minimum\":\"1\",\"tested\":\"1\"},\n"
         "  \"id\": \"sample\",\n"
         "  \"displayName\": \"Sample\",\n"
         "  \"engineProfile\": \"CLIENT_2D\",\n"
@@ -478,7 +480,8 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
 #endif
     writeWorkflowFile(cleanup.root / executable, "placeholder");
     writeWorkflowFile(cleanup.root / "project.ayproject.json",
-        (std::string("{\"schemaVersion\":1,\"id\":\"project\","
+        (std::string("{\"schemaVersion\":2,\"templateVersion\":1,"
+         "\"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},\"id\":\"project\","
          "\"run\":{\"executable\":\"") + executable
          + "\",\"workingDirectory\":\".\",\"arguments\":[\"--smoke\"]}}").c_str());
     std::string error;
@@ -499,7 +502,8 @@ TEST_CASE(project_runner_marks_a_first_build_as_recoverable)
     std::error_code ignored;
     std::filesystem::remove_all(cleanup.root, ignored);
     writeWorkflowFile(cleanup.root / "project.ayproject.json",
-        "{\"schemaVersion\":1,\"id\":\"project\","
+        "{\"schemaVersion\":2,\"templateVersion\":1,"
+        "\"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},\"id\":\"project\","
         "\"run\":{\"executable\":"
         "\"out/build/windows-client-debug/ProjectApp.exe\","
         "\"workingDirectory\":\".\",\"arguments\":[]}}\n");

@@ -179,6 +179,14 @@ contract and staged runtime boundary are documented in
 [AYUI Flow Contract](../../AYUI/docs/UIFlow.md).
 
 When the editor opens a directory containing `project.ayproject.json`, it
+first calls the shared project migration preflight. Schema-1 manifests and
+older supported Scene/GameFlow files are backed up beside their sources and
+atomically upgraded only after the whole project passes preflight. A newer
+manifest or content schema is rejected without mutation. The current manifest
+schema is 2 and requires `templateVersion` plus an `engineCompatibility`
+minimum/tested contract envelope.
+
+The editor then
 resolves `startupWorld` through the descriptor's `worlds` entry and opens that
 Scene as the initial Edit document. Project sessions never seed the
 `AYEditorShell_Demo` Character/Ground/Cube/Glass fixture. A missing or malformed
@@ -188,7 +196,10 @@ editor Console; it does not replace project content with validation objects.
 ## Validation profiles
 
 `AYProjectContentValidationCore` is an application-layer tool library kept out
-of `AYApplication` itself. `AYProjectContentValidator` loads every `.ayscene`,
+of `AYApplication` itself. `AYProjectDoctor`, the Editor runtime validator and
+CI use the same project-level API for manifests, content, Build Profiles,
+CMake presets and runtime artifacts. `AYProjectContentValidator` remains the
+content-only adapter and loads every `.ayscene`,
 `.ui.json`, and `.aytilemap`/`.aytilemap.json` from an actual selected build
 profile. Headless validation checks UI structure without constructing widgets;
 Full Client validation also builds the tree through `UILayoutLoader`.

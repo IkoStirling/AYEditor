@@ -11,7 +11,7 @@ namespace ayt::editor {
 
 inline constexpr std::string_view kEditorProjectDescriptorFile =
     "project.ayproject.json";
-inline constexpr std::uint32_t kEditorProjectDescriptorSchemaVersion = 1u;
+inline constexpr std::uint32_t kEditorProjectDescriptorSchemaVersion = 2u;
 
 struct EditorProjectRunDescriptor {
     std::string executable;
