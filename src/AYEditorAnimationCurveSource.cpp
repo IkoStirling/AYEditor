@@ -24,7 +24,7 @@ struct ScalarChannel {
 class AnimationCurveSource final : public ICurveEditorSource {
 public:
     explicit AnimationCurveSource(std::shared_ptr<EditorAnimationDocument> document)
-        : _document(std::move(document)) {}
+        : _document(std::move(document)) { _document->bindAuthoringSelection(selectionState()); }
     std::uint64_t revision() const noexcept override { return _document->revision(); }
     double durationSeconds() const noexcept override { return _document->timelineDurationSeconds(); }
     double positionSeconds() const noexcept override { return _document->timelinePositionSeconds(); }

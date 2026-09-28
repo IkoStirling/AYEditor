@@ -136,6 +136,13 @@ public:
         if (success && commandId != "edit.copy" && commandId != "file.save"
             && commandId != "edit.undo" && commandId != "edit.redo")
             selectAuthoringKeys(ids);
+        if (success && (commandId == "edit.undo" || commandId == "edit.redo") && _curveSource) {
+            const auto& selection = *_curveSource->selectionState();
+            _selectionCleared = selection.keyIds.empty();
+            _selectedKeyId = selection.primaryKeyId.starts_with("key.") ? selection.primaryKeyId : "";
+            _selectedNotifyId = selection.primaryKeyId.starts_with("notify.") ? selection.primaryKeyId : "";
+            if (_selectedNotifyId.empty() && !selection.trackId.empty()) _selectedTrackId = selection.trackId;
+        }
         if (!success) { _host.setStatusText(L"Animation command failed: " + ayt::ui::decodeUtf8Text(error)); return false; }
         _host.setStatusText(L"Animation command completed");
         refreshAll(); return true;
@@ -144,6 +151,8 @@ public:
     {
         if (_document == nullptr) return;
         _commands.refresh();
+        if (_lastPlayRate != _document->preview().playRate()
+            || _lastLooping != _document->preview().looping()) refreshTransport();
         if (_document->timelinePlaying()) _document->timelineTick(dt);
         const auto changes = _refreshGate.consume(stateStamp());
         if (!changes.content && (changes.pose || changes.transport)) {
@@ -1106,6 +1115,8 @@ private:
     {
         _transport->refresh();
         _scrubBar->refresh();
+        _lastPlayRate = _document->preview().playRate();
+        _lastLooping = _document->preview().looping();
     }
 
     std::shared_ptr<EditorAnimationDocument> _document;
@@ -1114,6 +1125,8 @@ private:
     EditorAuthoringSelectionBridge _selectionBridge;
     std::shared_ptr<ayt::ui::authoring::ICurveEditorSource> _curveSource;
     bool _selectionCleared = false;
+    float _lastPlayRate = 1;
+    bool _lastLooping = true;
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;

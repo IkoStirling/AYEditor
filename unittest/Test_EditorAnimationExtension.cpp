@@ -8,12 +8,16 @@
 #include "../src/AYEditorAnimationCurveSource.h"
 #include "../src/AYEditorAnimationDopeSheet.h"
 #include "../src/AYEditorTimelinePlaybackSource.h"
+#include <AYAnimationEditor/SkeletonEditorCore.h>
+#include <AYAnimationEditor/SkeletonBakeJob.h>
 
 #include <AYIO/File.h>
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Mesh.h>
 #include <AYResource/assetsImpl/Skeleton.h>
 #include <AYUI/MockRenderer.h>
+#include <AYUI/Authoring/TimelineSelectionOps.h>
+#include <AYTestFixtures.h>
 #include <AYUI/TextInput.h>
 #include <AYEditor/EditorCommandButtons.h>
 #include <AYEditor/EditorAuthoringSelectionBridge.h>
@@ -121,6 +125,135 @@ ayt::ui::Widget* findAuthoringWidget(ayt::ui::Widget* root, const std::string& i
 } // namespace
 
 TEST_SUITE(AYEditor_AnimationExtension)
+
+TEST_CASE(session_clipboard_survives_source_close_and_pastes_compatible_clip) {
+    ayt::test::ScratchDirectory scratch("cross-clip-authoring");
+    const auto data = ayt::io::File::readAllBytes(writeAnimationEditorClip().string());
+    const auto sourcePath = scratch.path() / "source.ayanm";
+    const auto targetPath = scratch.path() / "target.ayanm";
+    CHECK(ayt::io::File::writeAllBytes(sourcePath.string(), data));
+    CHECK(ayt::io::File::writeAllBytes(targetPath.string(), data));
+    const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
+    std::string error;
+    AnimationExtensionHost host(scratch.path().string());
+    std::weak_ptr<ayt::editor::IEditorDocument> sourceLifetime;
+    {
+        const auto source = descriptor.createDocument({sourcePath.string()}, error);
+        sourceLifetime = source;
+        const auto sourceView = descriptor.createView(source, host);
+        CHECK(sourceView->commandTarget()->executeCommand("edit.copy"));
+    }
+    CHECK(sourceLifetime.expired());
+    const auto target = descriptor.createDocument({targetPath.string()}, error);
+    const auto targetView = descriptor.createView(target, host);
+    auto document = std::dynamic_pointer_cast<ayt::editor::EditorAnimationDocument>(target);
+    CHECK(document->setTimelinePositionSeconds(.5));
+    CHECK(targetView->commandTarget()->executeCommand("edit.paste"));
+    CHECK(document->preview().animation()->getTrackKeyframeCount(0) == 4);
+    CHECK(document->save(&error));
+    CHECK(document->reload(&error));
+    CHECK(document->preview().animation()->getTrackTimes(0)[1] == 1);
+}
+
+TEST_CASE(insert_key_uses_formal_cubic_and_shortest_arc_sampler) {
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize({writeAnimationEditorClip().string()}, error));
+    CHECK(document.setAnimationTrackInterpolation("animation.0", ayt::resource::AnimInterpolation::CubicHermite));
+    CHECK(document.setAnimationKeyframeTangents("key.0.0", {0, 0, 0}, {0, 4, 0}));
+    // Unspecified tangents are already zero; setting them again is a no-op.
+    const auto source = ayt::editor::makeAnimationCurveSource(
+        std::shared_ptr<ayt::editor::EditorAnimationDocument>(&document, [](auto*) {}));
+    const auto old = source->curveTrack("animation.0");
+    const auto expected = old->sample(1, .5);
+    CHECK(document.timelineAddKeyframe("animation.0", .5, 0));
+    std::vector<float> values;
+    CHECK(document.animationKeyframeValues("key.0.1", values));
+    CHECK(std::fabs(values[1] - expected) < 1e-5f);
+    CHECK(document.addAnimationTrack("hips", "rotation", ayt::resource::AnimTrackType::Quaternion));
+    CHECK(document.timelineAddKeyframe("animation.1", 2, 0));
+    CHECK(document.setAnimationKeyframeValues("key.1.1", {0, 0, 0, -1}));
+    CHECK(document.timelineAddKeyframe("animation.1", 1, 0));
+    CHECK(document.animationKeyframeValues("key.1.1", values));
+    CHECK(std::fabs(std::fabs(values[3]) - 1) < 1e-5f);
+    CHECK(std::fabs(values[0]) + std::fabs(values[1]) + std::fabs(values[2]) < 1e-5f);
+}
+
+TEST_CASE(large_clip_playback_reuses_snapshots_and_old_samples_survive_edit) {
+    ayt::test::ScratchDirectory scratch("large-authoring");
+    ayt::resource::Animation clip;
+    clip.setDuration(100); clip.setTicksPerSecond(30);
+    for (int row = 0; row < 64; ++row) {
+        ayt::resource::AnimTrack track;
+        track.nodeName = "bone-" + std::to_string(row);
+        track.property = "weight"; track.valueType = ayt::resource::AnimTrackType::Float;
+        for (int key = 0; key < 500; ++key) {
+            track.times.push_back(key * 3.f); track.values.push_back(static_cast<float>(key));
+        }
+        clip.addTrack(track);
+    }
+    const auto path = scratch.path() / "large.ayanm";
+    std::vector<ayt::math::UInt8> bytes;
+    CHECK(clip.saveToBinary(bytes)); CHECK(ayt::io::File::writeAllBytes(path.string(), bytes));
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize({path.string()}, error));
+    CHECK(!document->preview().skeleton());
+    const auto source = ayt::editor::makeAnimationCurveSource(document);
+    const auto timeline = source->timelineSnapshot();
+    const auto curve = source->curveTrack("animation.0");
+    CHECK(timeline->keys.size() == 32000);
+    const auto revision = document->revision();
+    document->setLooping(false); document->setPlayRate(2);
+    document->timelinePlay();
+    for (int frame = 0; frame < 100; ++frame) {
+        document->timelineTick(.01);
+        CHECK(source->timelineSnapshot() == timeline);
+        CHECK(source->curveTrack("animation.0") == curve);
+    }
+    CHECK(document->revision() == revision);
+    CHECK(document->timelinePositionSeconds() > 1.9);
+    CHECK(document->setAnimationKeyframeValues("key.0.10", {999}));
+    const auto changed = source->curveTrack("animation.0");
+    CHECK(changed != curve);
+    CHECK(std::fabs(changed->sample(0, 1) - 999) < 1e-4f);
+    CHECK(std::fabs(curve->sample(0, 1) - 10) < 1e-4f);
+    CHECK(document->timelineUndo());
+    CHECK(std::fabs(source->curveTrack("animation.0")->sample(0, 1) - 10) < 1e-4f);
+}
+
+TEST_CASE(batch_history_restores_selection_and_coalesces_drag_revisions) {
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize({writeAnimationEditorClip().string()}, error));
+    CHECK(document->setAnimationKeyframeValues("key.0.2", {0, 3, 0}));
+    const auto source = ayt::editor::makeAnimationCurveSource(document);
+    using namespace ayt::ui::authoring;
+    TimelineSelectionOps::keys(*source->selectionState(), "animation.0", {"key.0.0", "key.0.1", "key.0.2"});
+    auto ids = source->selectionState()->keyIds;
+    const auto beforeIds = ids;
+    CHECK(document->reverseAnimationKeyframes(ids, &error));
+    TimelineSelectionOps::remap(*source->selectionState(), beforeIds, ids);
+    CHECK(source->selectionState()->primaryKeyId == "key.0.2");
+    CHECK(document->timelineUndo());
+    CHECK(source->selectionState()->primaryKeyId == "key.0.0");
+    CHECK(document->timelineRedo());
+    CHECK(source->selectionState()->primaryKeyId == "key.0.2");
+    CHECK(document->timelineUndo());
+    TimelineSelectionOps::keys(*source->selectionState(), "animation.0", {"key.0.1"});
+    CHECK(source->beginEdit("many updates"));
+    for (int update = 0; update < 100; ++update) {
+        auto selected = source->selectionState()->keyIds;
+        CHECK(source->transformKeys(selected, .001, 0, 0));
+    }
+    CHECK(source->endEdit(false));
+    const auto beforeUndo = document->revision();
+    CHECK(document->timelineUndo());
+    CHECK(document->revision() == beforeUndo + 1); // One retained baseline, not 100 snapshots.
+    CHECK(document->preview().animation()->getTrackTimes(0)[1] == 2);
+    CHECK(document->timelineRedo());
+    CHECK(document->preview().animation()->getTrackTimes(0)[1] > 2.19f);
+}
 
 TEST_CASE(time_transform_document_and_view_are_undoable_and_persistent) {
     const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();

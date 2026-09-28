@@ -5,6 +5,7 @@
 
 #include <AYAnimationEditor/AnimationPreviewSession.h>
 #include <AYAnimationEditor/AnimationClipboard.h>
+#include <AYUI/Authoring/TimelineModel.h>
 #include <AYEditorCommand/EditorCommandHistory.h>
 
 #include <cstdint>
@@ -127,6 +128,9 @@ public:
     bool removeAnimationKeyframes(
         const std::vector<std::string>& keyframeIds);
     bool authoringReadOnly() const;
+    void bindAuthoringSelection(std::shared_ptr<ayt::ui::authoring::TimelineSelection> selection) {
+        _authoringSelection = std::move(selection);
+    }
     bool copyAnimationKeyframes(const std::vector<std::string>& ids,
         EditorAnimationClipboard& clipboard, std::string* error = nullptr) const;
     bool cutAnimationKeyframes(const std::vector<std::string>& ids,
@@ -179,7 +183,9 @@ private:
     bool resetEditHistory(std::string* error = nullptr);
     bool commitEditedAnimation(
         std::shared_ptr<ayt::resource::Animation> animation,
-        std::string* error = nullptr);
+        std::string* error = nullptr,
+        const std::vector<std::string>* afterIds = nullptr,
+        const std::vector<std::string>* beforeIds = nullptr);
     bool applySerializedRevision(const std::vector<std::uint8_t>& bytes,
                                  std::string* error = nullptr);
     bool writeAnimationBytes(const std::string& path,
@@ -194,6 +200,8 @@ private:
     int _selectedBone = -1;
     std::vector<std::uint8_t> _currentBytes;
     EditorCommandHistory _history;
+    std::weak_ptr<ayt::ui::authoring::TimelineSelection> _authoringSelection;
+    std::uint64_t _gestureGeneration = 0;
 };
 
 } // namespace ayt::editor
