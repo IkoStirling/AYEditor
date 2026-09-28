@@ -42,23 +42,9 @@ namespace {
 
 using ayt::anim::editor::AnimationPreviewMode;
 
-std::string encodeUtf8(const std::wstring& value)
+std::string encodeUtf8(const std::wstring& text)
 {
-    if (value.empty()) return {};
-    std::string result;
-    for (wchar_t raw : value) {
-        const std::uint32_t code = static_cast<std::uint32_t>(raw);
-        if (code <= 0x7fu) result.push_back(static_cast<char>(code));
-        else if (code <= 0x7ffu) {
-            result.push_back(static_cast<char>(0xc0u | (code >> 6u)));
-            result.push_back(static_cast<char>(0x80u | (code & 0x3fu)));
-        } else {
-            result.push_back(static_cast<char>(0xe0u | (code >> 12u)));
-            result.push_back(static_cast<char>(0x80u | ((code >> 6u) & 0x3fu)));
-            result.push_back(static_cast<char>(0x80u | (code & 0x3fu)));
-        }
-    }
-    return result;
+    return ayt::ui::encodeUtf8Text(text);
 }
 
 using ayt::ui::authoring::parseFiniteFloat;

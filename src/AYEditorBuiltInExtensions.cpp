@@ -602,53 +602,10 @@ private:
     ayt::ay2d::editor::TilemapEditorModel _model;
 };
 
-void appendUtf8CodePoint(std::string& output, uint32_t codePoint)
-{
-    if (codePoint <= 0x7fu) {
-        output.push_back(static_cast<char>(codePoint));
-    } else if (codePoint <= 0x7ffu) {
-        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else if (codePoint <= 0xffffu) {
-        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
-        output.push_back(static_cast<char>(
-            0x80u | ((codePoint >> 6u) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else {
-        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
-        output.push_back(static_cast<char>(
-            0x80u | ((codePoint >> 12u) & 0x3fu)));
-        output.push_back(static_cast<char>(
-            0x80u | ((codePoint >> 6u) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    }
-}
 
 std::string encodeUtf8(const std::wstring& text)
 {
-    std::string output;
-    output.reserve(text.size());
-    for (size_t index = 0u; index < text.size(); ++index) {
-        uint32_t codePoint = static_cast<uint32_t>(text[index]);
-        if constexpr (sizeof(wchar_t) == 2) {
-            if (codePoint >= 0xd800u && codePoint <= 0xdbffu
-                && index + 1u < text.size()) {
-                const uint32_t low = static_cast<uint32_t>(text[index + 1u]);
-                if (low >= 0xdc00u && low <= 0xdfffu) {
-                    codePoint = 0x10000u
-                        + ((codePoint - 0xd800u) << 10u)
-                        + (low - 0xdc00u);
-                    ++index;
-                }
-            }
-        }
-        if (codePoint >= 0xd800u && codePoint <= 0xdfffu) {
-            codePoint = 0xfffdu;
-        }
-        appendUtf8CodePoint(
-            output, std::min(codePoint, uint32_t{0x10ffffu}));
-    }
-    return output;
+    return ayt::ui::encodeUtf8Text(text);
 }
 
 bool parseUint32(const std::wstring& text, uint32_t& value)

@@ -1366,16 +1366,7 @@ ayt::ui::Widget* findDescendantById(ayt::ui::Widget* root,
 
 std::string wideToUtf8(const std::wstring& text)
 {
-    if (text.empty()) return {};
-    const int required = ::WideCharToMultiByte(
-        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
-        nullptr, 0, nullptr, nullptr);
-    if (required <= 0) return {};
-    std::string result(static_cast<std::size_t>(required), '\0');
-    (void)::WideCharToMultiByte(
-        CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
-        result.data(), required, nullptr, nullptr);
-    return result;
+    return ayt::ui::encodeUtf8Text(text);
 }
 
 std::string showProjectParentFolderDialog(

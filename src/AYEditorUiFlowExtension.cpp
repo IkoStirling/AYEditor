@@ -34,48 +34,10 @@ using ayt::math::FRectangle;
 using ayt::math::FVector2;
 using ayt::math::FVector4;
 
-void appendUtf8(std::string& output, std::uint32_t codePoint)
-{
-    if (codePoint <= 0x7fu) {
-        output.push_back(static_cast<char>(codePoint));
-    } else if (codePoint <= 0x7ffu) {
-        output.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else if (codePoint <= 0xffffu) {
-        output.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    } else {
-        output.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 12u) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-        output.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-    }
-}
 
 std::string encodeUtf8(const std::wstring& text)
 {
-    std::string output;
-    output.reserve(text.size());
-    for (std::size_t index = 0; index < text.size(); ++index) {
-        std::uint32_t codePoint = static_cast<std::uint32_t>(text[index]);
-        if constexpr (sizeof(wchar_t) == 2) {
-            if (codePoint >= 0xd800u && codePoint <= 0xdbffu
-                && index + 1 < text.size()) {
-                const auto low = static_cast<std::uint32_t>(text[index + 1]);
-                if (low >= 0xdc00u && low <= 0xdfffu) {
-                    codePoint = 0x10000u + ((codePoint - 0xd800u) << 10u)
-                        + (low - 0xdc00u);
-                    ++index;
-                }
-            }
-        }
-        if (codePoint >= 0xd800u && codePoint <= 0xdfffu) {
-            codePoint = 0xfffdu;
-        }
-        appendUtf8(output, (std::min)(codePoint, std::uint32_t{0x10ffffu}));
-    }
-    return output;
+    return ayt::ui::encodeUtf8Text(text);
 }
 
 bool inside(const FRectangle& rect, const FVector2& point)

@@ -1,4 +1,5 @@
 #include "AYEditor/EditorChildWindowManager.h"
+#include <AYUI/UnicodeText.h>
 
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
@@ -85,47 +86,9 @@ ChildWindowConfig parseOneConfig(const nlohmann::json& j) {
     return cfg;
 }
 
-std::string wideToUtf8(const std::wstring& text) {
-    if (text.empty()) return {};
-#if defined(_WIN32)
-    const int required = ::WideCharToMultiByte(
-        CP_UTF8, 0, text.data(),
-        static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
-    if (required <= 0) return {};
-    std::string result(static_cast<std::size_t>(required), '\0');
-    const int written = ::WideCharToMultiByte(
-        CP_UTF8, 0, text.data(),
-        static_cast<int>(text.size()), result.data(), required,
-        nullptr, nullptr);
-    if (written != required) return {};
-    return result;
-#else
-    std::string result;
-    result.reserve(text.size());
-    for (wchar_t value : text) {
-        auto codePoint = static_cast<std::uint32_t>(value);
-        if ((codePoint >= 0xd800u && codePoint <= 0xdfffu) ||
-            codePoint > 0x10ffffu) {
-            codePoint = 0xfffdu;
-        }
-        if (codePoint <= 0x7fu) {
-            result.push_back(static_cast<char>(codePoint));
-        } else if (codePoint <= 0x7ffu) {
-            result.push_back(static_cast<char>(0xc0u | (codePoint >> 6u)));
-            result.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        } else if (codePoint <= 0xffffu) {
-            result.push_back(static_cast<char>(0xe0u | (codePoint >> 12u)));
-            result.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-            result.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        } else {
-            result.push_back(static_cast<char>(0xf0u | (codePoint >> 18u)));
-            result.push_back(static_cast<char>(0x80u | ((codePoint >> 12u) & 0x3fu)));
-            result.push_back(static_cast<char>(0x80u | ((codePoint >> 6u) & 0x3fu)));
-            result.push_back(static_cast<char>(0x80u | (codePoint & 0x3fu)));
-        }
-    }
-    return result;
-#endif
+std::string wideToUtf8(const std::wstring& text)
+{
+    return ayt::ui::encodeUtf8Text(text);
 }
 
 } // namespace
