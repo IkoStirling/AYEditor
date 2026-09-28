@@ -32,3 +32,10 @@ pwsh -NoProfile -File scripts/tests/verify-module-test-inventory.ps1 -Module AYE
 CTest 注册项数量不是用例数；主报告使用用例通过/失败/跳过，断言数单独显示。
 2026-09-28 Windows Debug 迁移基线：主入口 28 个套件、281 个用例，模块装配
 另 1 个用例，完整层共 282 个；主入口实际断言 4106 个，全部通过、无跳过。
+
+2026-09-29 动画作者加固后：主入口 292 + 装配 1 = full 293 用例，全部通过。
+新增覆盖跨轨操作、会话 Clipboard/只读、时间变换、历史选择/100 次拖动合并、
+3.2 万键快照复用与正式 Hermite/Quaternion 插入；其他 suite 不重复纳入 full。
+独立 `AYAnimationEditorCore` 另有 45 用例：fast 13 / integration 31 / stress 1，
+不与 Editor 的 UI 适配测试混计。作者核心快速门禁用 `animation-editor-fast`，
+full 用 `animation-editor-full`；源码/运行时审计必须检查完整层，无遗漏、无重复。
