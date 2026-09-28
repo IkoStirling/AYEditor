@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
+#include <AYUI/Authoring/ResourceReferenceField.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include <AYUI/Authoring/AuthoringPrimitives.h>
 
@@ -382,15 +383,10 @@ private:
         _properties->setWordWrap(false);
         inspector->addWidget(_properties, 124.0f);
         inspector->addWidget(makeHeader(L"AYHUMANOID MAPPING"), 20.0f);
-        auto* targetRow = new ayt::ui::HBox();
-        targetRow->setSpacing(4.0f);
-        _targetSkeletonPath = new ayt::ui::TextInput();
-        _targetSkeletonPath->setId("skeleton_retarget_target");
-        _targetSkeletonPath->setPlaceholder(L"Target .ayskel path");
-        targetRow->addWidget(_targetSkeletonPath, 0.0f);
-        targetRow->addWidget(makeButton(L"Set target", [this]() {
-            configureRetarget();
-        }), 78.0f);
+        auto* targetRow = new ayt::ui::authoring::ResourceReferenceField(
+            {L"", L"Target .ayskel path", L"Set target", "skeleton_retarget_target", 0, 78});
+        _targetSkeletonPath = targetRow->input();
+        targetRow->setOnLoad([this](const auto&) { return configureRetarget(); });
         inspector->addWidget(targetRow, 28.0f);
         auto* platformRow = new ayt::ui::HBox();
         platformRow->setSpacing(4.0f);
@@ -539,10 +535,10 @@ private:
         auto* animation = new ayt::ui::HBox();
         animation->setSpacing(4.0f);
         animation->addWidget(makeHeader(L"ANIMATION"), 76.0f);
-        _animationPath = new ayt::ui::TextInput();
-        _animationPath->setText(L"");
-        animation->addWidget(_animationPath, 0.0f);
-        animation->addWidget(makeButton(L"Load", [this]() { loadAnimation(); }), 48.0f);
+        auto* animationField = new ayt::ui::authoring::ResourceReferenceField();
+        _animationPath = animationField->input();
+        animationField->setOnLoad([this](const auto&) { return loadAnimation(); });
+        animation->addWidget(animationField, 0.0f);
         const auto owner = _document;
         auto playback = std::make_shared<TimelinePlaybackSource>([owner] { return owner; });
         _transport = new ayt::ui::authoring::PlaybackControls(playback,
@@ -630,19 +626,17 @@ private:
         refreshAll();
     }
 
-    void configureRetarget()
+    ayt::ui::authoring::ResourceReferenceResult configureRetarget()
     {
         std::string error;
         if (!_document->configureRetarget(
                 encodeUtf8(_targetSkeletonPath->getText()),
                 encodeUtf8(_platform->getText()), &error)) {
-            _host.setStatusText(L"Retarget target rejected: "
-                + ayt::ui::decodeUtf8Text(error));
-            return;
+            const auto message = L"Retarget target rejected: " + ayt::ui::decodeUtf8Text(error);
+            _host.setStatusText(message); return {false, message};
         }
-        _host.setStatusText(
-            L"Retarget target configured; bake remains blocked until the solver is implemented");
-        refreshAll();
+        _host.setStatusText(L"Retarget target configured");
+        refreshAll(); return {true, L"Retarget target configured"};
     }
 
     void clearRetarget()
@@ -1090,18 +1084,18 @@ private:
         refreshStatus();
     }
 
-    void loadAnimation()
+    ayt::ui::authoring::ResourceReferenceResult loadAnimation()
     {
         std::string error;
         if (!_document->core().attachAnimation(
                 encodeUtf8(_animationPath->getText()), &error)) {
-            _host.setStatusText(L"Animation load failed: "
-                + ayt::ui::decodeUtf8Text(error));
-            return;
+            const auto message = L"Animation load failed: " + ayt::ui::decodeUtf8Text(error);
+            _host.setStatusText(message); return {false, message};
         }
         _host.setStatusText(L"Animation attached to skeleton preview");
         refreshTransport();
         if (_canvas != nullptr) _canvas->markDirty();
+        return {true, L"Animation attached"};
     }
 
     std::shared_ptr<EditorSkeletonDocument> _document;

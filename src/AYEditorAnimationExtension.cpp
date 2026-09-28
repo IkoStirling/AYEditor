@@ -14,6 +14,7 @@
 #include <AYUI/Box.h>
 #include <AYUI/Authoring/AuthoringPrimitives.h>
 #include <AYUI/Authoring/NumericFields.h>
+#include <AYUI/Authoring/ResourceReferenceField.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Slider.h>
@@ -152,21 +153,17 @@ private:
         return label;
     }
 
-    ayt::ui::HBox* makeBindingRow(const wchar_t* name,
-                                  ayt::ui::TextInput*& input,
-                                  std::function<void()> load)
+    ayt::ui::authoring::ResourceReferenceField* makeBindingRow(const wchar_t* name,
+        ayt::ui::TextInput*& input, std::function<ayt::ui::authoring::ResourceReferenceResult()> load,
+        bool picker = false)
     {
-        auto* row = new ayt::ui::HBox();
-        row->setSpacing(4.0f);
-        auto* label = new ayt::ui::TextLabel();
-        label->setText(name);
-        label->setFontSize(11);
-        label->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
-        row->addWidget(label, 64.0f);
-        input = new ayt::ui::TextInput();
-        row->addWidget(input, 0.0f);
-        row->addWidget(makeButton(L"Load", std::move(load)), 48.0f);
-        return row;
+        auto* field = new ayt::ui::authoring::ResourceReferenceField({name});
+        input = field->input();
+        field->setOnLoad([load = std::move(load)](const auto&) { return load(); });
+        if (picker) field->setPicker([] {
+            return ayt::ui::decodeUtf8Text(ImportDialog::showOpenAssetFileDialog(nullptr));
+        });
+        return field;
     }
 
     void build()
@@ -338,11 +335,11 @@ private:
 
         inspector->addWidget(makeHeader(L"PREVIEW BINDINGS"), 20.0f);
         inspector->addWidget(makeBindingRow(L"Skeleton", _skeletonPath,
-            [this]() { loadSkeleton(); }), 28.0f);
+            [this]() { return loadSkeleton(); }, true), 28.0f);
         inspector->addWidget(makeBindingRow(L"Mesh", _meshPath,
-            [this]() { loadMesh(); }), 28.0f);
+            [this]() { return loadMesh(); }, true), 28.0f);
         inspector->addWidget(makeBindingRow(L"Material", _materialPath,
-            [this]() { loadMaterial(); }), 28.0f);
+            [this]() { return loadMaterial(); }), 28.0f);
         auto* bindingActions = new ayt::ui::HBox();
         bindingActions->setSpacing(4.0f);
         bindingActions->addWidget(makeButton(L"Auto Resolve", [this]() {
@@ -357,12 +354,6 @@ private:
                 refreshAll();
             }
         }), 96.0f);
-        bindingActions->addWidget(makeButton(L"Pick Skeleton", [this]() {
-            pickAndBind(true);
-        }), 96.0f);
-        bindingActions->addWidget(makeButton(L"Pick Mesh", [this]() {
-            pickAndBind(false);
-        }), 82.0f);
         inspector->addWidget(bindingActions, 28.0f);
 
         inspector->addWidget(makeHeader(L"TRACK AUTHORING"), 20.0f);
@@ -543,48 +534,33 @@ private:
         root->addWidget(timeline, 30.0f);
     }
 
-    void loadSkeleton()
+    ayt::ui::authoring::ResourceReferenceResult loadSkeleton()
     {
         std::string error;
         if (!_document->bindSkeleton(encodeUtf8(_skeletonPath->getText()), &error)) {
-            _host.setStatusText(L"Skeleton binding failed: "
-                + ayt::ui::decodeUtf8Text(error));
-            return;
+            const auto message = L"Skeleton binding failed: " + ayt::ui::decodeUtf8Text(error);
+            _host.setStatusText(message); return {false, message};
         }
         _host.setStatusText(L"Skeleton bound to animation preview");
-        refreshAll();
+        refreshAll(); return {true, L"Skeleton bound"};
     }
 
-    void loadMesh()
+    ayt::ui::authoring::ResourceReferenceResult loadMesh()
     {
         std::string error;
         if (!_document->bindMesh(encodeUtf8(_meshPath->getText()), &error)) {
-            _host.setStatusText(L"Mesh binding failed: "
-                + ayt::ui::decodeUtf8Text(error));
-            return;
+            const auto message = L"Mesh binding failed: " + ayt::ui::decodeUtf8Text(error);
+            _host.setStatusText(message); return {false, message};
         }
         _host.setStatusText(L"Mesh bound to animation preview");
-        refreshAll();
+        refreshAll(); return {true, L"Mesh bound"};
     }
 
-    void loadMaterial()
+    ayt::ui::authoring::ResourceReferenceResult loadMaterial()
     {
         _document->setMaterialPath(encodeUtf8(_materialPath->getText()));
         _host.setStatusText(L"Preview material binding saved");
-        refreshAll();
-    }
-
-    void pickAndBind(bool skeleton)
-    {
-        const std::string path = ImportDialog::showOpenAssetFileDialog(nullptr);
-        if (path.empty()) return;
-        if (skeleton) {
-            _skeletonPath->setText(ayt::ui::decodeUtf8Text(path));
-            loadSkeleton();
-        } else {
-            _meshPath->setText(ayt::ui::decodeUtf8Text(path));
-            loadMesh();
-        }
+        refreshAll(); return {true, L"Material reference saved"};
     }
 
     void refreshAll()
