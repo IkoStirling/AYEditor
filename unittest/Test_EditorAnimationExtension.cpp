@@ -4,6 +4,7 @@
 #include "AYEditor/EditorWorkspace.h"
 #include "../src/AYEditorAnimationCanvas.h"
 #include "../src/AYEditorAnimationCurveCanvas.h"
+#include "../src/AYEditorAnimationDopeSheet.h"
 
 #include <AYIO/File.h>
 #include <AYResource/assetsImpl/Animation.h>
@@ -460,6 +461,30 @@ TEST_CASE(animation_curve_multi_key_edits_are_atomic_and_conflict_safe)
     CHECK(document->timelineUndo());
     CHECK(document->animationCurveTrack("animation.0", track));
     CHECK(track.keys.size() == 3u);
+}
+
+TEST_CASE(animation_dope_sheet_drags_keys_with_one_undo_step)
+{
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize(
+        ayt::editor::EditorOpenRequest{writeAnimationEditorClip().string()}, error));
+    ayt::editor::EditorAnimationDopeSheet sheet(document);
+    sheet.setSize({640.0f, 150.0f});
+    ayt::ui::MockRenderer renderer;
+    renderer.beginFrame();
+    sheet.render(renderer);
+    CHECK(!renderer.getDrawCalls().empty());
+
+    CHECK(sheet.onMouseButtonDown({{404.0f, 34.0f}, 0}));
+    CHECK(sheet.onMouseMove({{522.0f, 34.0f}, 0}));
+    CHECK(sheet.onMouseButtonUp({{522.0f, 34.0f}, 0}));
+    ayt::editor::EditorAnimationCurveTrack track;
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.5) < 1.0e-6);
+    CHECK(document->timelineUndo());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.0) < 1.0e-6);
 }
 
 TEST_SUITE_END

@@ -5,6 +5,7 @@
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
 #include "AYEditorAnimationCurveCanvas.h"
+#include "AYEditorAnimationDopeSheet.h"
 
 #include <AYResource/assetsDefs/IAnimation.h>
 #include <AYResource/assetsImpl/Mesh.h>
@@ -112,6 +113,8 @@ public:
             _lastPoseRevision = preview.poseRevision();
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
+            if (_curveCanvas != nullptr) _curveCanvas->markDirty();
+            if (_dopeSheet != nullptr) _dopeSheet->markDirty();
             _host.requestRepaint();
         }
         if (_lastRevision != preview.revision()) {
@@ -122,6 +125,8 @@ public:
             refreshTransport();
             refreshAuthoring();
             if (_canvas != nullptr) _canvas->markDirty();
+            if (_curveCanvas != nullptr) _curveCanvas->markDirty();
+            if (_dopeSheet != nullptr) _dopeSheet->markDirty();
             _host.requestRepaint();
         }
     }
@@ -302,6 +307,23 @@ private:
             _host.requestRepaint();
         });
         previewColumn->addWidget(_curveCanvas, 230.0f);
+        _dopeSheet = new EditorAnimationDopeSheet(_document);
+        _dopeSheet->setOnSelectionChanged(
+            [this](const std::string& trackId, const std::string& keyId) {
+                _selectedTrackId = trackId;
+                _selectedKeyId = keyId;
+                if (_curveCanvas != nullptr) {
+                    _curveCanvas->setTrackId(trackId);
+                }
+                refreshAuthoring();
+            });
+        _dopeSheet->setOnEdited([this]() {
+            refreshInspector();
+            refreshAuthoring();
+            refreshTransport();
+            _host.requestRepaint();
+        });
+        previewColumn->addWidget(_dopeSheet, 170.0f);
         body->addWidget(previewColumn, 0.0f);
 
         auto* inspector = new ayt::ui::VBox();
@@ -657,6 +679,9 @@ private:
         if (_curveCanvas != nullptr) {
             _curveCanvas->setTrackId(_selectedTrackId);
         }
+        if (_dopeSheet != nullptr) {
+            _dopeSheet->setSelection(_selectedTrackId, _selectedKeyId);
+        }
         const auto selectedTrack = std::find(
             _trackIds.begin(), _trackIds.end(), _selectedTrackId);
         const int trackIndex = selectedTrack == _trackIds.end() ? -1
@@ -940,6 +965,7 @@ private:
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;
+    EditorAnimationDopeSheet* _dopeSheet = nullptr;
     std::array<ayt::ui::Button*, 4> _curveComponents{};
     ayt::ui::Button* _loop = nullptr;
     ayt::ui::ComboBox* _mode = nullptr;
