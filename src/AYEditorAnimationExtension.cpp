@@ -340,6 +340,25 @@ private:
         _info->setWordWrap(false);
         inspector->addWidget(_info, 164.0f);
 
+        inspector->addWidget(makeHeader(L"CLIP PROPERTIES"), 20.0f);
+        auto* clipProperties = new ayt::ui::HBox();
+        clipProperties->setSpacing(4.0f);
+        _clipName = new ayt::ui::TextInput();
+        _clipName->setPlaceholder(L"Clip name");
+        clipProperties->addWidget(_clipName, 0.0f);
+        _clipDuration = new ayt::ui::TextInput();
+        _clipDuration->setPlaceholder(L"Seconds");
+        _clipDuration->setNumericScrubEnabled(true);
+        clipProperties->addWidget(_clipDuration, 76.0f);
+        _clipTicksPerSecond = new ayt::ui::TextInput();
+        _clipTicksPerSecond->setPlaceholder(L"Ticks/s");
+        _clipTicksPerSecond->setNumericScrubEnabled(true);
+        clipProperties->addWidget(_clipTicksPerSecond, 72.0f);
+        clipProperties->addWidget(makeButton(L"Apply", [this]() {
+            applyClipProperties();
+        }), 56.0f);
+        inspector->addWidget(clipProperties, 28.0f);
+
         inspector->addWidget(makeHeader(L"PREVIEW BINDINGS"), 20.0f);
         inspector->addWidget(makeBindingRow(L"Skeleton", _skeletonPath,
             [this]() { loadSkeleton(); }), 28.0f);
@@ -751,6 +770,18 @@ private:
             : static_cast<int>(selectedKey - _keyIds.begin());
 
         _syncing = true;
+        const auto clip = _document->animationClipProperties();
+        _clipName->setText(ayt::ui::decodeUtf8Text(clip.name));
+        {
+            std::wostringstream value;
+            value << std::setprecision(7) << clip.durationSeconds;
+            _clipDuration->setText(value.str());
+        }
+        {
+            std::wostringstream value;
+            value << std::setprecision(7) << clip.ticksPerSecond;
+            _clipTicksPerSecond->setText(value.str());
+        }
         _trackPicker->setItems(trackItems);
         _trackPicker->setSelectedIndex(trackIndex);
         _keyPicker->setItems(keyItems);
@@ -1000,6 +1031,33 @@ private:
         refreshAll();
     }
 
+    void applyClipProperties()
+    {
+        const auto duration = parseFiniteFloat(_clipDuration->getText());
+        const auto ticks = parseFiniteFloat(_clipTicksPerSecond->getText());
+        const std::string name = encodeUtf8(_clipName->getText());
+        if (name.empty() || !duration || *duration <= 0.0f
+            || !ticks || *ticks <= 0.0f) {
+            _host.setStatusText(
+                L"Clip name, duration and ticks/s must be valid positive values");
+            return;
+        }
+        std::string error;
+        if (!_document->setAnimationClipProperties(
+                {name, *duration, *ticks}, &error)) {
+            _host.setStatusText(error.empty()
+                ? L"Clip properties were unchanged"
+                : L"Clip properties rejected: "
+                    + ayt::ui::decodeUtf8Text(error));
+            refreshAuthoring();
+            return;
+        }
+        if (_curveCanvas != nullptr) _curveCanvas->frameAll();
+        if (_dopeSheet != nullptr) _dopeSheet->frameAll();
+        _host.setStatusText(L"Animation clip properties updated");
+        refreshAll();
+    }
+
     void addNotify()
     {
         const std::string name = encodeUtf8(_notifyName->getText());
@@ -1103,6 +1161,9 @@ private:
     ayt::ui::TextInput* _meshPath = nullptr;
     ayt::ui::TextInput* _materialPath = nullptr;
     ayt::ui::TextArea* _info = nullptr;
+    ayt::ui::TextInput* _clipName = nullptr;
+    ayt::ui::TextInput* _clipDuration = nullptr;
+    ayt::ui::TextInput* _clipTicksPerSecond = nullptr;
     ayt::ui::TextArea* _tracks = nullptr;
     ayt::ui::ComboBox* _trackPicker = nullptr;
     ayt::ui::TextInput* _trackNode = nullptr;

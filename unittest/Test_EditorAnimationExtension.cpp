@@ -541,4 +541,50 @@ TEST_CASE(animation_notifies_are_authored_dragged_undoable_and_persistent)
     CHECK(std::fabs(notifies[1].timeSeconds - 1.75) < 1.0e-6);
 }
 
+TEST_CASE(animation_clip_properties_preserve_seconds_and_guard_content)
+{
+    const auto path = writeAnimationEditorClip();
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    auto properties = document.animationClipProperties();
+    CHECK(properties.name == "walk");
+    CHECK(properties.durationSeconds == 2.0);
+    CHECK(properties.ticksPerSecond == 2.0);
+    CHECK_FALSE(document.setAnimationClipProperties(
+        {"walk", 1.5, 2.0}, &error));
+    CHECK(!error.empty());
+
+    CHECK(document.setAnimationClipProperties(
+        {"walk_extended", 3.0, 4.0}, &error));
+    CHECK(error.empty());
+    properties = document.animationClipProperties();
+    CHECK(properties.name == "walk_extended");
+    CHECK(properties.durationSeconds == 3.0);
+    CHECK(properties.ticksPerSecond == 4.0);
+    ayt::editor::EditorAnimationCurveTrack track;
+    CHECK(document.animationCurveTrack("animation.0", track));
+    CHECK(track.ticksPerSecond == 4.0);
+    CHECK(std::fabs(track.keys[0].timeSeconds) < 1.0e-6);
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.0) < 1.0e-6);
+    CHECK(std::fabs(track.keys[2].timeSeconds - 2.0) < 1.0e-6);
+    CHECK(document.timelineDurationSeconds() == 3.0);
+    CHECK(document.timelineUndo());
+    CHECK(document.animationClipProperties().ticksPerSecond == 2.0);
+    CHECK(document.timelineRedo());
+    CHECK(document.save(&error));
+
+    ayt::editor::EditorAnimationDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    properties = reopened.animationClipProperties();
+    CHECK(properties.name == "walk_extended");
+    CHECK(properties.durationSeconds == 3.0);
+    CHECK(properties.ticksPerSecond == 4.0);
+    CHECK(reopened.animationNotifies().size() == 1u);
+    CHECK(std::fabs(reopened.animationNotifies()[0].timeSeconds - 0.5)
+        < 1.0e-6);
+}
+
 TEST_SUITE_END

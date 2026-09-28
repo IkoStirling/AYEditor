@@ -1145,6 +1145,77 @@ bool EditorAnimationDocument::removeAnimationNotify(
     return commitEditedAnimation(buildAnimation(clip));
 }
 
+EditorAnimationClipProperties
+EditorAnimationDocument::animationClipProperties() const
+{
+    const auto* animation = _preview.animation();
+    if (animation == nullptr) return {};
+    return {animation->getName() != nullptr ? animation->getName() : "",
+            animation->getDuration(),
+            animation->getTicksPerSecond() > 0.0f
+                ? animation->getTicksPerSecond() : 1.0};
+}
+
+bool EditorAnimationDocument::setAnimationClipProperties(
+    const EditorAnimationClipProperties& properties, std::string* error)
+{
+    const auto* animation = _preview.animation();
+    if (animation == nullptr) {
+        if (error != nullptr) *error = "No animation clip is open.";
+        return false;
+    }
+    if (properties.name.empty() || !std::isfinite(properties.durationSeconds)
+        || properties.durationSeconds <= 0.0
+        || !std::isfinite(properties.ticksPerSecond)
+        || properties.ticksPerSecond <= 0.0) {
+        if (error != nullptr) {
+            *error = "Clip name must be non-empty and duration/rate must be positive finite values.";
+        }
+        return false;
+    }
+    EditableClip clip = readEditableClip(*animation);
+    const double oldRate = clip.ticksPerSecond > 0.0f
+        ? clip.ticksPerSecond : 1.0;
+    double latestContent = 0.0;
+    for (const auto& track : clip.tracks) {
+        if (!track.times.empty()) {
+            latestContent = std::max(latestContent,
+                static_cast<double>(track.times.back()) / oldRate);
+        }
+    }
+    for (const auto& notify : clip.notifies) {
+        latestContent = std::max(latestContent,
+                                 static_cast<double>(notify.time));
+    }
+    if (properties.durationSeconds + 1.0e-6 < latestContent) {
+        if (error != nullptr) {
+            *error = "Clip duration cannot end before its last keyframe or notify.";
+        }
+        return false;
+    }
+    const bool same = clip.name == properties.name
+        && std::fabs(static_cast<double>(clip.duration)
+            - properties.durationSeconds) < 1.0e-6
+        && std::fabs(static_cast<double>(clip.ticksPerSecond)
+            - properties.ticksPerSecond) < 1.0e-6;
+    if (same) {
+        if (error != nullptr) error->clear();
+        return false;
+    }
+    const double tickScale = properties.ticksPerSecond / oldRate;
+    if (std::fabs(tickScale - 1.0) > 1.0e-9) {
+        for (auto& track : clip.tracks) {
+            for (float& tick : track.times) {
+                tick = static_cast<float>(static_cast<double>(tick) * tickScale);
+            }
+        }
+    }
+    clip.name = properties.name;
+    clip.duration = static_cast<float>(properties.durationSeconds);
+    clip.ticksPerSecond = static_cast<float>(properties.ticksPerSecond);
+    return commitEditedAnimation(buildAnimation(clip), error);
+}
+
 bool EditorAnimationDocument::beginAnimationEditGesture(
     const std::string& label)
 {

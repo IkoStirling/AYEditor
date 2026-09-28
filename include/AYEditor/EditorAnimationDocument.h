@@ -37,6 +37,12 @@ struct EditorAnimationNotify {
     float payload = 0.0f;
 };
 
+struct EditorAnimationClipProperties {
+    std::string name;
+    double durationSeconds = 0.0;
+    double ticksPerSecond = 1.0;
+};
+
 class EditorAnimationDocument final
     : public IEditorDocument, public IEditorTimelineSource,
       public IEditorCommandTarget {
@@ -118,6 +124,10 @@ public:
     bool updateAnimationNotify(std::string& notifyId, const std::string& name,
                                double timeSeconds, float payload);
     bool removeAnimationNotify(const std::string& notifyId);
+    EditorAnimationClipProperties animationClipProperties() const;
+    bool setAnimationClipProperties(
+        const EditorAnimationClipProperties& properties,
+        std::string* error = nullptr);
     bool beginAnimationEditGesture(const std::string& label);
     bool commitAnimationEditGesture();
     bool cancelAnimationEditGesture();
