@@ -755,6 +755,7 @@ private:
     ayt::ui::MenuItem* _saveAsMenuItem = nullptr;
     ayt::ui::MenuItem* _undoMenuItem = nullptr;
     ayt::ui::MenuItem* _redoMenuItem = nullptr;
+    std::vector<std::pair<std::string, ayt::ui::MenuItem*>> _authoringCommandMenuItems;
     ayt::ui::MenuItem* _restoreDeletedMenuItem = nullptr;
     ayt::ui::MenuItem* _restoreRecoveryMenuItem = nullptr;
     ayt::ui::MenuItem* _viewportOrientationAxisMenuItem = nullptr;

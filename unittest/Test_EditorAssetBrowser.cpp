@@ -307,6 +307,11 @@ TEST_CASE(editor_shortcut_registry_loads_overrides_and_rejects_conflicts)
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_F5, 0) == "play.toggle");
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_Z, 0x02u) == "edit.undo");
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_Y, 0x02u) == "edit.redo");
+    CHECK(shortcuts.commandFor('C', 0x02u) == "edit.copy");
+    CHECK(shortcuts.commandFor('X', 0x02u) == "edit.cut");
+    CHECK(shortcuts.commandFor('V', 0x02u) == "edit.paste");
+    CHECK(shortcuts.commandFor('D', 0x02u) == "edit.duplicate");
+    CHECK(shortcuts.commandFor('C', 0).empty());
     CHECK(shortcuts.commandFor(ayt::ui::UIKey_Z, 0x03u) == "edit.redo");
     std::string error;
     CHECK(shortcuts.setShortcut("play.toggle", L"Ctrl+P", &error));

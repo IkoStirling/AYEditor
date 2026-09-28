@@ -50,6 +50,13 @@ std::string encodeUtf8(const std::wstring& text)
 
 using ayt::ui::authoring::parseFiniteFloat;
 
+// Authoring-only session buffer, accessed on the Editor UI thread. It owns
+// values rather than source documents; closing a page cannot dangle payloads.
+EditorAnimationClipboard& animationSessionClipboard() {
+    static EditorAnimationClipboard clipboard;
+    return clipboard;
+}
+
 class EditorAnimationWorkspaceView final
     : public IEditorView, public IEditorCommandTarget {
 public:
@@ -79,17 +86,42 @@ public:
     EditorSelectionContext* selectionContext() noexcept override { return _selectionBridge.context(); }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     bool handlesCommand(const std::string& commandId) const override {
-        return commandId == "edit.delete" || (_document && _document->handlesCommand(commandId));
+        return commandId == "edit.delete" || commandId == "edit.copy"
+            || commandId == "edit.cut" || commandId == "edit.paste"
+            || commandId == "edit.duplicate" || (_document && _document->handlesCommand(commandId));
     }
     bool canExecuteCommand(const std::string& commandId) const override {
-        if (commandId == "edit.delete") return _curveCanvas && _curveCanvas->selectedKeyCount() > 0u;
+        const bool selected = _curveSource && !_curveSource->selectionState()->keyIds.empty();
+        if (commandId == "edit.copy") return selected;
+        if (commandId == "edit.paste") return _document && !_document->authoringReadOnly()
+            && !animationSessionClipboard().data.empty();
+        if (commandId == "edit.delete" || commandId == "edit.cut" || commandId == "edit.duplicate")
+            return selected && _document && !_document->authoringReadOnly();
         return _document && _document->canExecuteCommand(commandId);
     }
     bool executeCommand(const std::string& commandId) override {
         if (!canExecuteCommand(commandId)) return false;
         std::string error;
-        const bool success = commandId == "file.save" ? _document->save(&error)
-            : commandId == "edit.delete" ? _curveCanvas->deleteSelectedKeys() : _document->executeCommand(commandId);
+        bool success = false;
+        auto ids = _curveSource ? _curveSource->selectionState()->keyIds : std::vector<std::string>{};
+        if (commandId == "edit.copy") {
+            success = _document->copyAnimationKeyframes(ids, animationSessionClipboard(), &error);
+        } else if (commandId == "edit.cut") {
+            success = _document->cutAnimationKeyframes(ids, animationSessionClipboard(), &error);
+            if (success) ids.clear();
+        } else if (commandId == "edit.delete") {
+            success = _document->removeAnimationKeyframes(ids);
+            if (success) ids.clear();
+        } else if (commandId == "edit.paste") {
+            success = _document->pasteAnimationKeyframes(animationSessionClipboard(),
+                _document->timelinePositionSeconds(), ids, &error);
+        } else if (commandId == "edit.duplicate") {
+            success = _document->duplicateAnimationKeyframes(ids, &error);
+        } else success = commandId == "file.save" ? _document->save(&error)
+            : _document->executeCommand(commandId);
+        if (success && commandId != "edit.copy" && commandId != "file.save"
+            && commandId != "edit.undo" && commandId != "edit.redo")
+            selectAuthoringKeys(ids);
         if (!success) { _host.setStatusText(L"Animation command failed: " + ayt::ui::decodeUtf8Text(error)); return false; }
         _host.setStatusText(L"Animation command completed");
         refreshAll(); return true;
@@ -124,6 +156,18 @@ public:
     }
 
 private:
+    void selectAuthoringKeys(const std::vector<std::string>& ids) {
+        if (!_curveSource) return;
+        std::string track;
+        const auto snapshot = _curveSource->timelineSnapshot();
+        if (snapshot && !ids.empty()) for (const auto& key : snapshot->keys)
+            if (key.id == ids.front()) { track = key.trackId; break; }
+        ayt::ui::authoring::TimelineSelectionOps::keys(*_curveSource->selectionState(), track, ids);
+        _selectionCleared = ids.empty();
+        _selectedNotifyId = !ids.empty() && ids.front().starts_with("notify.") ? ids.front() : "";
+        _selectedKeyId = !ids.empty() && ids.front().starts_with("key.") ? ids.front() : "";
+        if (_selectedNotifyId.empty() && !track.empty()) _selectedTrackId = track;
+    }
     ayt::ui::authoring::AuthoringStateStamp stateStamp() const {
         const auto& preview = _document->preview();
         return {preview.revision(), 0u, preview.poseRevision(),
@@ -240,6 +284,13 @@ private:
         curveHelp->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
         curveToolbar->addWidget(curveHelp, 0.0f);
         previewColumn->addWidget(curveToolbar, 26.0f);
+        auto* clipboardActions = new ayt::ui::HBox();
+        clipboardActions->setSpacing(4);
+        _commands.add(*clipboardActions, L"Copy", "edit.copy", 54);
+        _commands.add(*clipboardActions, L"Cut", "edit.cut", 48);
+        _commands.add(*clipboardActions, L"Paste at Playhead", "edit.paste", 116);
+        _commands.add(*clipboardActions, L"Duplicate After", "edit.duplicate", 110);
+        previewColumn->addWidget(clipboardActions, 26);
         const auto curveSource = _curveSource = makeAnimationCurveSource(_document);
         _curveCanvas = new EditorAnimationCurveCanvas(curveSource);
         _curveCanvas->setOnSelectionChanged(
@@ -258,6 +309,7 @@ private:
         _dopeSheet = new EditorAnimationDopeSheet(curveSource);
         _dopeSheet->setOnSelectionChanged(
             [this](const std::string& trackId, const std::string& keyId) {
+                _selectionCleared = keyId.empty();
                 if (keyId.rfind("notify.", 0u) == 0u) {
                     _selectedNotifyId = keyId;
                     refreshAuthoring();

@@ -2305,6 +2305,7 @@ void EditorSession::shutdown() {
     _saveMenuItem = nullptr;
     _saveAsMenuItem = nullptr;
     _undoMenuItem = nullptr;
+    _authoringCommandMenuItems.clear();
     _redoMenuItem = nullptr;
     _restoreDeletedMenuItem = nullptr;
     _restoreRecoveryMenuItem = nullptr;
@@ -3279,6 +3280,11 @@ bool EditorSession::onKeyDown(int keyCode)
         if (command == "file.save") {
             return executeDocumentCommand(command);
         }
+    }
+    if (!textEditing && (command == "edit.copy" || command == "edit.cut"
+        || command == "edit.paste" || command == "edit.duplicate")
+        && commandTarget && commandTarget->handlesCommand(command)) {
+        return executeDocumentCommand(command);
     }
     if (!textEditing && command == "edit.delete") {
         if (!_selectedAssetIds.empty() && _assetTileView != nullptr
@@ -8082,6 +8088,10 @@ bool EditorSession::executeDocumentCommand(const std::string& commandId)
 
 void EditorSession::syncDocumentCommandMenu()
 {
+    const auto* focused = _ui.getFocusedWidget();
+    const bool textEditing = focused && focused->isTextEditingWidget();
+    for (const auto& [id, item] : _authoringCommandMenuItems)
+        if (item) item->setEnabled(!textEditing && canExecuteDocumentCommand(id));
     if (_saveMenuItem != nullptr) {
         _saveMenuItem->setEnabled(canExecuteDocumentCommand("file.save"));
     }
@@ -8219,6 +8229,7 @@ void EditorSession::deleteSelectedEntity()
 }
 
 void EditorSession::bindMenuBar() {
+    _authoringCommandMenuItems.clear();
     auto* widget = _ui.findById("menubar");
     auto* menuBar = dynamic_cast<ayt::ui::MenuBar*>(widget);
     if (menuBar == nullptr) {
@@ -8414,6 +8425,19 @@ void EditorSession::bindMenuBar() {
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_2d_camera", L"Create 2D Camera")) {
             item->setOnActivate([this]() {
                 (void)createTwoDEntity(Editor2DEntityKind::Camera);
+            });
+        }
+        for (const auto& binding : std::array<std::pair<const char*, const wchar_t*>, 4>{{
+                {"edit.copy", L"Copy Keys"}, {"edit.cut", L"Cut Keys"},
+                {"edit.paste", L"Paste Keys"}, {"edit.duplicate", L"Duplicate Keys"}}}) {
+            auto* item = editMenu->addItem(binding.second);
+            if (!item) continue;
+            const std::string id = binding.first;
+            _authoringCommandMenuItems.emplace_back(id, item);
+            item->setShortcut(EditorShortcutRegistry::instance().shortcutFor(id));
+            item->setOnActivate([this, id] {
+                const auto* focused = _ui.getFocusedWidget();
+                if (!focused || !focused->isTextEditingWidget()) (void)executeDocumentCommand(id);
             });
         }
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.delete_selected", L"Delete Selected")) {

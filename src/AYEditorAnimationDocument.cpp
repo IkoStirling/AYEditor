@@ -939,6 +939,82 @@ EditorAnimationDocument::animationNotifies() const
     return result;
 }
 
+bool EditorAnimationDocument::authoringReadOnly() const
+{
+    const std::filesystem::path resourcePath(_path);
+    return resourcePath.extension() != ".ayanm"
+        || resourcePath.filename().string().find(".baked.") != std::string::npos;
+}
+
+bool EditorAnimationDocument::copyAnimationKeyframes(
+    const std::vector<std::string>& ids, EditorAnimationClipboard& clipboard,
+    std::string* error) const
+{
+    const auto* animation = _preview.animation();
+    std::vector<ayt::anim::editor::AnimationKeyReference> keys;
+    if (!animation || !parseAuthoringKeys(ids, keys)) {
+        if (error) *error = "No valid animation keys selected.";
+        return false;
+    }
+    auto data = ayt::anim::editor::copyAnimationKeys(*animation, keys, error);
+    if (!data) return false;
+    clipboard = {std::move(*data), _preview.skeletonPath()};
+    return true;
+}
+
+bool EditorAnimationDocument::cutAnimationKeyframes(
+    const std::vector<std::string>& ids, EditorAnimationClipboard& clipboard,
+    std::string* error)
+{
+    EditorAnimationClipboard prepared;
+    if (authoringReadOnly()) {
+        if (error) *error = "Animation is read-only.";
+        return false;
+    }
+    if (!copyAnimationKeyframes(ids, prepared, error)) return false;
+    if (!removeAnimationKeyframes(ids)) {
+        if (error) *error = "Unable to commit cut.";
+        return false;
+    }
+    clipboard = std::move(prepared);
+    if (error) error->clear();
+    return true;
+}
+
+bool EditorAnimationDocument::pasteAnimationKeyframes(
+    const EditorAnimationClipboard& clipboard, double seconds,
+    std::vector<std::string>& pastedIds, std::string* error)
+{
+    const auto* animation = _preview.animation();
+    if (!animation || authoringReadOnly()
+        || clipboard.skeletonPath != _preview.skeletonPath()) {
+        if (error) *error = "Read-only or incompatible skeleton binding; retarget explicitly first.";
+        return false;
+    }
+    auto edit = ayt::anim::editor::pasteAnimationKeys(*animation, clipboard.data, seconds);
+    if (!edit) {
+        if (error) *error = edit.error;
+        return false;
+    }
+    if (!commitEditedAnimation(edit.animation, error)) return false;
+    pastedIds = authoringKeyIds(edit.keys);
+    return true;
+}
+
+bool EditorAnimationDocument::duplicateAnimationKeyframes(
+    std::vector<std::string>& ids, std::string* error)
+{
+    EditorAnimationClipboard clipboard;
+    if (!copyAnimationKeyframes(ids, clipboard, error)) return false;
+    double first = timelineDurationSeconds();
+    for (const auto& key : timelineKeyframes())
+        if (std::find(ids.begin(), ids.end(), key.id) != ids.end())
+            first = std::min(first, key.timeSeconds);
+    const double rate = animationClipProperties().ticksPerSecond;
+    return pasteAnimationKeyframes(clipboard,
+        first + clipboard.data.spanSeconds + (rate > 0 ? 1 / rate : 1), ids, error);
+}
+
 bool EditorAnimationDocument::addAnimationNotify(
     const std::string& name, double timeSeconds, float payload)
 {
@@ -1155,6 +1231,10 @@ bool EditorAnimationDocument::resetEditHistory(std::string* error)
 bool EditorAnimationDocument::commitEditedAnimation(
     std::shared_ptr<ayt::resource::Animation> animation, std::string* error)
 {
+    if (authoringReadOnly()) {
+        if (error) *error = "Animation is read-only; edit the canonical source .ayanm clip.";
+        return false;
+    }
     std::vector<std::uint8_t> bytes;
     if (animation == nullptr || !animation->saveToBinary(bytes)) {
         if (error != nullptr) *error = "Unable to serialize edited animation.";

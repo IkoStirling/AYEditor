@@ -114,6 +114,79 @@ public:
 
 TEST_SUITE(AYEditor_AnimationExtension)
 
+TEST_CASE(clipboard_document_cut_paste_and_duplicate_are_atomic_undoable) {
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize({writeAnimationEditorClip().string()}, error));
+    ayt::editor::EditorAnimationClipboard clipboard;
+    std::vector<std::string> ids{"key.0.1", "notify.0"};
+    CHECK(document.copyAnimationKeyframes(ids, clipboard, &error));
+    CHECK(!document.isDirty());
+    CHECK(document.cutAnimationKeyframes(ids, clipboard, &error));
+    CHECK(document.preview().animation()->getNotifyCount() == 0);
+    CHECK(document.timelineUndo());
+    CHECK(document.preview().animation()->getNotifyCount() == 1);
+    std::vector<std::string> pasted{"unchanged"};
+    CHECK(!document.pasteAnimationKeyframes(clipboard, .5, pasted, &error));
+    CHECK(pasted == std::vector<std::string>({"unchanged"}));
+    CHECK(!document.isDirty());
+    CHECK(document.pasteAnimationKeyframes(clipboard, .75, pasted, &error));
+    CHECK(pasted.size() == 2);
+    CHECK(document.preview().animation()->getNotifyCount() == 2);
+    CHECK(document.timelineUndo());
+    CHECK(document.preview().animation()->getNotifyCount() == 1);
+    std::vector<std::string> duplicate{"key.0.1"};
+    CHECK(document.duplicateAnimationKeyframes(duplicate, &error));
+    CHECK(duplicate == std::vector<std::string>({"key.0.2"}));
+    CHECK(document.save(&error));
+    CHECK(document.reload(&error));
+    CHECK(document.preview().animation()->getTrackTimes(0)[2] == 3);
+}
+
+TEST_CASE(clipboard_binding_and_readonly_guards_never_mutate) {
+    ayt::editor::EditorAnimationDocument document;
+    std::string error;
+    CHECK(document.initialize({writeAnimationEditorClip().string()}, error));
+    ayt::editor::EditorAnimationClipboard clipboard;
+    CHECK(document.copyAnimationKeyframes({"key.0.1"}, clipboard, &error));
+    clipboard.skeletonPath = "different-skeleton";
+    std::vector<std::string> ids{"keep"};
+    CHECK(!document.pasteAnimationKeyframes(clipboard, .5, ids, &error));
+    CHECK(!document.isDirty());
+    const auto baked = animationExtensionFixtureRoot() / "Assets" / "readonly.baked.ayanm";
+    CHECK(ayt::io::File::writeAllBytes(baked.string(),
+        ayt::io::File::readAllBytes(document.path())));
+    ayt::editor::EditorAnimationDocument readonly;
+    CHECK(readonly.initialize({baked.string()}, error));
+    CHECK(readonly.authoringReadOnly());
+    CHECK(readonly.copyAnimationKeyframes({"key.0.1"}, clipboard, &error));
+    const auto before = clipboard.data;
+    CHECK(!readonly.cutAnimationKeyframes({"key.0.1"}, clipboard, &error));
+    CHECK(clipboard.data.tracks.size() == before.tracks.size());
+    CHECK(!readonly.setAnimationKeyframeValues("key.0.1", {1, 2, 3}));
+    CHECK(!readonly.removeAnimationKeyframes({"key.0.1"}));
+    CHECK(!readonly.isDirty());
+}
+
+TEST_CASE(clipboard_view_commands_route_to_shared_authoring_selection) {
+    const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
+    std::string error;
+    const auto base = descriptor.createDocument({writeAnimationEditorClip().string()}, error);
+    auto document = std::dynamic_pointer_cast<ayt::editor::EditorAnimationDocument>(base);
+    AnimationExtensionHost host(animationExtensionFixtureRoot().string());
+    const auto view = descriptor.createView(base, host);
+    auto* target = view->commandTarget();
+    CHECK(target->handlesCommand("edit.copy"));
+    CHECK(target->executeCommand("edit.copy"));
+    CHECK(document->setTimelinePositionSeconds(.5));
+    CHECK(target->executeCommand("edit.paste"));
+    CHECK(document->preview().animation()->getTrackKeyframeCount(0) == 4);
+    CHECK(target->executeCommand("edit.cut"));
+    CHECK(document->preview().animation()->getTrackKeyframeCount(0) == 3);
+    CHECK(target->executeCommand("edit.undo"));
+    CHECK(document->preview().animation()->getTrackKeyframeCount(0) == 4);
+}
+
 TEST_CASE(batch_cross_track_notify_edit_is_one_revision_and_undo) {
     auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
     std::string error;

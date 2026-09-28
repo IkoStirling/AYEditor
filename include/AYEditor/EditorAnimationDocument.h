@@ -4,6 +4,7 @@
 #include "AYEditor/EditorExtension.h"
 
 #include <AYAnimationEditor/AnimationPreviewSession.h>
+#include <AYAnimationEditor/AnimationClipboard.h>
 #include <AYEditorCommand/EditorCommandHistory.h>
 
 #include <cstdint>
@@ -41,6 +42,13 @@ struct EditorAnimationClipProperties {
     std::string name;
     double durationSeconds = 0.0;
     double ticksPerSecond = 1.0;
+};
+
+struct EditorAnimationClipboard {
+    ayt::anim::editor::AnimationClipboard data;
+    // Conservative binding identity: cross-skeleton paste requires explicit
+    // retargeting before authoring, never an implicit name-only conversion.
+    std::string skeletonPath;
 };
 
 class EditorAnimationDocument final
@@ -118,6 +126,15 @@ public:
         double deltaTimeSeconds, std::size_t component, float deltaValue);
     bool removeAnimationKeyframes(
         const std::vector<std::string>& keyframeIds);
+    bool authoringReadOnly() const;
+    bool copyAnimationKeyframes(const std::vector<std::string>& ids,
+        EditorAnimationClipboard& clipboard, std::string* error = nullptr) const;
+    bool cutAnimationKeyframes(const std::vector<std::string>& ids,
+        EditorAnimationClipboard& clipboard, std::string* error = nullptr);
+    bool pasteAnimationKeyframes(const EditorAnimationClipboard& clipboard,
+        double seconds, std::vector<std::string>& pastedIds, std::string* error = nullptr);
+    bool duplicateAnimationKeyframes(std::vector<std::string>& ids,
+        std::string* error = nullptr);
     std::vector<EditorAnimationNotify> animationNotifies() const;
     bool addAnimationNotify(const std::string& name, double timeSeconds,
                             float payload);
