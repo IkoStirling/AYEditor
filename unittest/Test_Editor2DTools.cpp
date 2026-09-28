@@ -22,12 +22,21 @@
 #include <AYUI/UIKeyCode.h>
 #include <AYScene.h>
 #include <AYTest.h>
+#include <AYApplication/IEngineHost.h>
+#include <AYUI/MockRenderer.h>
+#include <AYUI/Image.h>
+#include <AYEntity/World.h>
+#include <AYEntity.h>
+#include <AYEntity/components/MeshComponent.h>
+#include "fixtures/EditorShellLayout.h"
 
 #include <cstdio>
 #include <filesystem>
 #include <string>
 
 using namespace ayt::editor;
+using namespace ayt::ui;
+using ayt::editor::testfixtures::resolveEditorShellLayoutPath;
 
 TEST_SUITE(Editor2DToolsTests)
 

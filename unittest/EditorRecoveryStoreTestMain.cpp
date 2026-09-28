@@ -10,9 +10,7 @@
 
 #include "AYTest.h"
 
-#include "Test_EditorRecoveryAndTrash.cpp"
-
-int main()
+int main(int argc, char* argv[])
 {
-    return ayt::test::runSuite("AYEditor_RecoveryAndTrash");
+    return ayt::test::runTests("AYEditor recovery", argc, argv);
 }

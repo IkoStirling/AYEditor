@@ -3,6 +3,8 @@
 #include "AYEditor/EditorSceneDocument.h"
 
 #include <AYTest.h>
+#include <AYScene.h>
+#include <AYEntity.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/MockRenderer.h>
 #include <AYUI/TextLabel.h>

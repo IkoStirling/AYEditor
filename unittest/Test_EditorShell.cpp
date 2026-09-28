@@ -1,4 +1,5 @@
 #include "AYTest.h"
+#include "fixtures/EditorShellLayout.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
@@ -61,6 +62,7 @@
 
 using namespace ayt::ui;
 using namespace ayt::editor;
+using ayt::editor::testfixtures::resolveEditorShellLayoutPath;
 
 namespace {
 
@@ -68,17 +70,6 @@ bool fileExists(const std::string& path)
 {
     struct stat st;
     return !path.empty() && ::stat(path.c_str(), &st) == 0;
-}
-
-std::string resolveEditorShellLayoutPath()
-{
-    const std::string candidates[] = {
-        AY_EDITOR_TEST_SOURCE_DIR "/ui/editor_shell.ui.json",
-    };
-    for (const std::string& path : candidates) {
-        if (fileExists(path)) return path;
-    }
-    return {};
 }
 
 std::string resolveEditorEngineAssetsRoot()

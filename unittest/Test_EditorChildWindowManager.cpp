@@ -14,6 +14,7 @@
 // =============================================================================
 
 #include "AYTest.h"
+#include "AYUI/Button.h"
 
 #include "AYEditor/EditorChildWindowManager.h"
 #include "AYEditor/EditorBuiltInExtensions.h"

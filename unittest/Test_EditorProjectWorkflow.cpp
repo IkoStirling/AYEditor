@@ -1,4 +1,6 @@
 #include "AYTest.h"
+#include <AYEntity/World.h>
+#include <AYEntity.h>
 
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"

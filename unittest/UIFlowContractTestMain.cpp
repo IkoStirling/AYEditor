@@ -1,9 +1,6 @@
 #include "AYTest.h"
 
-#include "Test_EditorUiFlowProjectDescriptor.cpp"
-#include "Test_EditorUiFlowEditor.cpp"
-
-int main()
+int main(int argc, char* argv[])
 {
-    return ayt::test::runAllTests("AYEditor UI Flow contracts");
+    return ayt::test::runTests("AYEditor UI Flow contracts", argc, argv);
 }

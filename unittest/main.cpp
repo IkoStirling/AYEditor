@@ -1,130 +1,91 @@
 #include "AYTest.h"
+#include "AYTestJson.h"
+#include "AYTestProcess.h"
 #include "AYGameLoop.h"
 #include <AYEntity/EntityModule.h>
-
-#include <array>
-#include <cstdio>
-
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <sys/wait.h>
-#include <unistd.h>
-#endif
-
-#include "Test_EditorShell.cpp"
-#include "Test_EditorImporter.cpp"
-#include "Test_EditorPlayRuntime.cpp"
-#include "Test_EditorWorldContext.cpp"
-// AYTest discovers cases through static registration. Aggregate every Editor
-// test source into this one translation unit so MSVC cannot discard otherwise
-// unreferenced registration initializers. CMake must compile only main.cpp.
-#include "Test_EditorChildWindowManager.cpp"   // D5+.5 case definitions
-#include "Test_ImportedCharacterMapper.cpp"     // master test cases
-#include "Test_EditorTransportDirtyPrompt.cpp"  // v0.3 PR-4 case definitions
-#include "Test_EditorHierarchy.cpp"            // v0.3+ PR-5 case definitions
-#include "Test_EditorSceneBridge.cpp"          // v0.4 PR-1 Scene runtime bridge
-#include "Test_EditorP0Core.cpp"               // P0 document/selection/command core
-#include "Test_EditorTransformGizmo.cpp"        // transform gizmo ray/constraint math
-#include "Test_EditorAssetBrowser.cpp"          // project asset index/browser/drag-drop
-#include "Test_EditorAssetTilePresenter.cpp"    // asset tile display-only mapping
-#include "Test_EditorSkeletonExtension.cpp"     // skeleton core thin-adapter integration
-#include "Test_EditorAnimationExtension.cpp"    // animation preview + binding integration
-#include "Test_EditorDslDocument.cpp"           // Phoskia/Logia dock editor
-#include "Test_Editor2DTools.cpp"               // 2D viewport + tilemap authoring model
-#include "Test_EditorFramework.cpp"             // unified editor workspace foundation
-#include "Test_EditorProjectWorkflow.cpp"       // project creation/trash/tool registration
-#include "Test_EditorNewProject.cpp"            // shared project initializer adapter
-#include "Test_EditorUiFlowProjectDescriptor.cpp" // project Flow contract + legacy migration
-#include "Test_EditorUiFlowEditor.cpp"          // UI Flow authoring + production-runtime preview
-#include "Test_EditorUiDesignerWorkflow.cpp"    // cross-document UI authoring workflow
-#include "Test_EditorGameFlowAssetIntegration.cpp" // GameFlow asset/project contract
-#include "Test_EditorGameFlowDocument.cpp"      // GameFlow authoring model + validation
-#include "Test_EditorGameFlowPreview.cpp"       // production coordinator preview diagnostics
-#include "Test_EditorRecoveryAndTrash.cpp"      // selective recovery + trash browser services
+#include <nlohmann/json.hpp>
+#include <fstream>
+#include <algorithm>
+#include <set>
 
 namespace {
-
-constexpr std::array<const char*, 28> kEditorTestSuites{
-    "AYEditor_Shell",
-    "AYEditor_Importer",
-    "AYEditor_PlayRuntime",
-    "AYEditor_WorldContext",
-    "AYEditor_ChildWindowManager",
-    "AYEditor_ImportedCharacterMapper",
-    "AYEditor_TransportDirtyPrompt",
-    "AYEditor_Hierarchy",
-    "AYEditor_SceneBridge",
-    "AYEditor_P0Core",
-    "AYEditor_TransformGizmo",
-    "AYEditor_AssetBrowser",
-    "AYEditor_AssetTilePresenter",
-    "AYEditor_SkeletonExtension",
-    "AYEditor_AnimationExtension",
-    "AYEditor_PlaybackAdapter",
-    "AYEditor_DslDocument",
-    "Editor2DToolsTests",
-    "AYEditor_Framework",
-    "AYEditor_ProjectWorkflow",
-    "AYEditor_NewProject",
-    "AYEditor_UIFlowProjectContract",
-    "AYEditor_UIFlowAuthoring",
-    "EditorUiDesignerWorkflowTests",
-    "AYEditor_GameFlowAssetIntegration",
-    "AYEditor_GameFlowDocument",
-    "AYEditor_GameFlowPreview",
-    "AYEditor_RecoveryAndTrash",
-};
-
-int runIsolatedSuite(const char* executable, const char* suite)
-{
-#if defined(_WIN32)
-    const char* arguments[]{executable, suite, nullptr};
-    return static_cast<int>(_spawnv(_P_WAIT, executable, arguments));
-#else
-    const pid_t child = fork();
-    if (child == 0) {
-        execl(executable, executable, suite, static_cast<char*>(nullptr));
-        _exit(127);
-    }
-    if (child < 0) return -1;
-    int status = 0;
-    if (waitpid(child, &status, 0) < 0) return -1;
-    return WIFEXITED(status) ? WEXITSTATUS(status) : 1;
-#endif
+std::string utf8Path(const std::filesystem::path& path) {
+    const auto bytes = path.u8string();
+    return std::string(bytes.begin(), bytes.end());
 }
-
-} // namespace
-
-int main(int argc, char* argv[]) {
-    // This executable is the host for Editor/Entity integration tests.
-    // Register component metadata up front so typed addComponent<T>() calls
-    // may create their World storage. Keep runtime subsystem registration out
-    // of the test entry point; individual cases own that lifecycle explicitly.
-    ayt::entity::registerEntityComponents();
-
-    if (argc > 1) {
-        const int result = ayt::test::runSuite(argv[1]);
-        ayt::game::GameLoop::instance().shutdown();
-        return result;
-    }
-
-    // Editor integration suites own process-wide UI, native-window, and
-    // runtime singletons. Reusing those singletons across unrelated suites
-    // creates order-dependent state that cannot occur in a real editor
-    // process. Keep the aggregate CTest entry, but isolate each suite in a
-    // child process so every suite receives the production startup baseline.
-    int result = 0;
-    for (const char* suite : kEditorTestSuites) {
-        std::printf("\n[ISOLATED SUITE] %s\n", suite);
-        const int suiteResult = runIsolatedSuite(argv[0], suite);
-        if (suiteResult != 0) {
-            std::fprintf(stderr,
-                "[AYEditor tests] suite '%s' exited with code %d\n",
-                suite, suiteResult);
-            result = 1;
+int runIsolatedEditor(const std::filesystem::path& executable, const ayt::test::RunOptions& options) {
+    using namespace ayt::test;
+    const auto selected = selectTests(options);
+    if (selected.empty() || options.list) return runTests("AYEditor", options);
+    const auto finalPath = options.report_json.empty() ? std::filesystem::path{} :
+        std::filesystem::absolute(options.report_json);
+    const auto reportRoot = testTmpDir() / "reports";
+    std::filesystem::create_directories(reportRoot);
+    TestReport combined;
+    combined.module = "AYEditor isolated suites";
+    combined.completed = true;
+    std::set<std::string> suites;
+    for (const auto* test : selected) suites.insert(test->suite);
+    const double started = getTimeMs();
+    for (const auto& suite : suites) {
+        const auto childPath = reportRoot / (suite + ".json");
+        std::vector<std::string> args{"--aytest-child", "--suite", suite, "--report-json", utf8Path(childPath)};
+        if (!options.case_name.empty()) { args.push_back("--case"); args.push_back(options.case_name); }
+        for (const auto& excluded : options.exclude_cases) { args.push_back("--exclude-case"); args.push_back(excluded); }
+        if (options.verbose) args.push_back("--verbose");
+        printf("\n[ISOLATED SUITE] %s\n", suite.c_str());
+        fflush(stdout);
+        const auto process = runIsolatedProcess(executable, args, std::chrono::seconds(120));
+        TestReport child;
+        child.module = suite;
+        std::string error;
+        try {
+            std::ifstream file(childPath);
+            if (!readJsonReport(nlohmann::json::parse(file), child, error)) child.errors.push_back(error);
+        } catch (const std::exception& e) { child.errors.push_back(std::string("Missing or invalid child report: ") + e.what()); }
+        std::set<std::pair<std::string, std::string>> expected, actual;
+        for (const auto* test : selected) if (suite == test->suite) expected.emplace(test->suite, test->name);
+        for (const auto& result : child.results) actual.emplace(result.suite, result.name);
+        if (child.has_active_case) actual.emplace(child.active_case.suite, child.active_case.name);
+        if (child.selected_cases != static_cast<int>(expected.size()) ||
+            (child.completed && actual != expected) ||
+            !std::includes(expected.begin(), expected.end(), actual.begin(), actual.end())) {
+            child.completed = false;
+            child.errors.push_back("Child selection differs from registered inventory: " + suite);
+        }
+        // Retain the parent's known selected count even if startup produced no report.
+        child.selected_cases = static_cast<int>(expected.size());
+        resolveProcessReport(child, process);
+        if (!appendReport(combined, child, error)) {
+            combined.completed = false;
+            combined.errors.push_back(error);
         }
     }
+    combined.elapsed_ms = getTimeMs() - started;
+    if (!finalPath.empty()) {
+        std::string error;
+        if (!writeJsonReport(finalPath, combined, error)) {
+            combined.completed = false;
+            combined.errors.push_back(error);
+        }
+    }
+    printReport(combined);
+    printf("Child report directory: %s\n", utf8Path(reportRoot).c_str());
+    return !combined.completed || !combined.errors.empty() || summarizeReport(combined).failed_cases ? 1 : 0;
+}
+}
+int main(int argc, char* argv[]) {
+    using namespace ayt::test;
+    bool child = argc > 1 && std::string(argv[1]) == "--aytest-child";
+    std::vector<char*> arguments{argv[0]};
+    for (int i = child ? 2 : 1; i < argc; ++i) arguments.push_back(argv[i]);
+    RunOptions options;
+    bool help = false;
+    if (parseRunOptions(static_cast<int>(arguments.size()), arguments.data(), options, help)) return 2;
+    if (help || options.list) return runTests("AYEditor", static_cast<int>(arguments.size()), arguments.data());
+    if (!child) return runIsolatedEditor(std::filesystem::absolute(argv[0]), options);
+    ayt::entity::registerEntityComponents();
+    const int result = runTests("AYEditor", options);
     ayt::game::GameLoop::instance().shutdown();
     return result;
 }

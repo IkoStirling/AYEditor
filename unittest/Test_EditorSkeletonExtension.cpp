@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetTilePresenter.h"
+#include "AYTest.h"
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditor/EditorSkeletonExtension.h"
 #include "AYEditor/EditorWorkspace.h"

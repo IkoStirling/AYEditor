@@ -10,11 +10,7 @@
 
 #include "AYTest.h"
 
-#include "Test_EditorGameFlowDocument.cpp"
-#include "Test_EditorGameFlowPreview.cpp"
-#include "Test_EditorGameFlowAssetIntegration.cpp"
-
-int main()
+int main(int argc, char* argv[])
 {
-    return ayt::test::runAllTests("AYEditor GameFlow document");
+    return ayt::test::runTests("AYEditor GameFlow document", argc, argv);
 }

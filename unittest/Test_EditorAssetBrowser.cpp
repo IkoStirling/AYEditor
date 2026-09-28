@@ -1,4 +1,8 @@
 #include "AYTest.h"
+#include <AYScene.h>
+#include <AYEntity/World.h>
+#include <AYEntity.h>
+#include <AYEntity/components/MeshComponent.h>
 
 #include "AYEditor/EditorAssetDatabase.h"
 #include "AYEditor/EditorAssetDeleteAnalysis.h"

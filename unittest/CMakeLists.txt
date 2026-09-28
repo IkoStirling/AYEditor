@@ -4,10 +4,7 @@ set(MODULE_NAME AYEditor_UnitTests)
 
 add_executable(${MODULE_NAME} main.cpp)
 
-# The test sources are intentionally included by main.cpp so AYTest's static
-# registration cannot be discarded by MSVC. Ninja does not reliably emit
-# dependency edges for included files whose extension is .cpp, so make those
-# edges explicit; editing any case must rebuild the aggregation unit.
+# Direct executable sources retain registrars without textual inclusion or unity builds.
 set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorShell.cpp
     Test_EditorImporter.cpp
@@ -39,8 +36,15 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
      PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
-set_property(SOURCE main.cpp APPEND PROPERTY
-    OBJECT_DEPENDS "${AY_EDITOR_EMBEDDED_TEST_SOURCES}")
+target_sources(${MODULE_NAME} PRIVATE ${AY_EDITOR_EMBEDDED_TEST_SOURCES})
+set_target_properties(${MODULE_NAME} PROPERTIES UNITY_BUILD OFF)
+file(GLOB discovered CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Test_*.cpp")
+list(REMOVE_ITEM discovered "${CMAKE_CURRENT_SOURCE_DIR}/Test_DefaultEditorModuleAssembly.cpp")
+list(SORT discovered)
+list(SORT AY_EDITOR_EMBEDDED_TEST_SOURCES)
+if(NOT "${discovered}" STREQUAL "${AY_EDITOR_EMBEDDED_TEST_SOURCES}")
+    message(FATAL_ERROR "Assign every Editor test source exactly once to the aggregate inventory")
+endif()
 
 target_link_libraries(${MODULE_NAME} PRIVATE AYEditor AYUI AYTest AYResource
     AYIO AYProject AYEntity AYScene)
@@ -63,12 +67,14 @@ target_compile_definitions(${MODULE_NAME} PRIVATE
 # Keep registration symbols in this test-only binary. Production binaries keep
 # their normal linker optimization settings.
 if(MSVC)
-    # Static case registration is aggregated in one translation unit.
-    target_compile_options(${MODULE_NAME} PRIVATE /bigobj)
     target_link_options(${MODULE_NAME} PRIVATE "/OPT:NOREF")
 endif()
 
-ay_add_test(${MODULE_NAME})
+ay_add_test(${MODULE_NAME} LABELS "ayeditor;editor-full" TIMEOUT 600 RUN_SERIAL)
+ay_add_test(${MODULE_NAME} NAME AYEditor_FastTests
+    ARGS --include-suite AYEditor_P0Core --include-suite AYEditor_TransformGizmo
+         --include-suite AYEditor_AssetTilePresenter --include-suite AYEditor_Framework
+    LABELS "ayeditor;editor-fast;unit" TIMEOUT 60 RUN_SERIAL)
 ay_add_test(${MODULE_NAME}
     NAME AYEditor_2DToolsBaseline
     SUITE Editor2DToolsTests
@@ -83,9 +89,10 @@ ay_add_test(${MODULE_NAME}
     LABELS "2d-3d-mixed;ayeditor")
 
 # Keep the project/Flow wire contract independently buildable. The broad
-# aggregation target intentionally includes integration suites and can be
+# inventory intentionally includes integration suites and can be
 # blocked by an unrelated Scene API transition.
-add_executable(AYEditor_UIFlowContractTests UIFlowContractTestMain.cpp)
+add_executable(AYEditor_UIFlowContractTests UIFlowContractTestMain.cpp
+    Test_EditorUiFlowProjectDescriptor.cpp Test_EditorUiFlowEditor.cpp)
 target_link_libraries(AYEditor_UIFlowContractTests PRIVATE AYEditor AYUI AYTest)
 target_include_directories(AYEditor_UIFlowContractTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include)
@@ -99,14 +106,9 @@ ay_add_test(AYEditor_UIFlowContractTests
     LABELS "ui-flow;ayeditor")
 
 # Keep GameFlow authoring independently buildable while other editor surfaces
-# are changing. The source test file is included by the small registration
-# main, matching the aggregate test binary's static-registration strategy.
-add_executable(AYEditor_GameFlowTests EditorGameFlowDocumentTestMain.cpp)
-set_property(SOURCE EditorGameFlowDocumentTestMain.cpp APPEND PROPERTY
-    OBJECT_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/Test_EditorGameFlowDocument.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/Test_EditorGameFlowPreview.cpp"
-        "${CMAKE_CURRENT_SOURCE_DIR}/Test_EditorGameFlowAssetIntegration.cpp")
+# are changing. Test sources are independently compiled in every target.
+add_executable(AYEditor_GameFlowTests EditorGameFlowDocumentTestMain.cpp
+    Test_EditorGameFlowDocument.cpp Test_EditorGameFlowPreview.cpp Test_EditorGameFlowAssetIntegration.cpp)
 target_link_libraries(AYEditor_GameFlowTests PRIVATE
     AYEditor AYApplicationGameFlow AYTest AYIO)
 target_include_directories(AYEditor_GameFlowTests PRIVATE
@@ -120,10 +122,7 @@ ay_add_test(AYEditor_GameFlowTests LABELS "game-flow;ayeditor")
 
 # Crash recovery has a small standalone target so suffix/restore regressions
 # remain testable while unrelated editor integration surfaces are in flight.
-add_executable(AYEditor_RecoveryStoreTests EditorRecoveryStoreTestMain.cpp)
-set_property(SOURCE EditorRecoveryStoreTestMain.cpp APPEND PROPERTY
-    OBJECT_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/Test_EditorRecoveryAndTrash.cpp")
+add_executable(AYEditor_RecoveryStoreTests EditorRecoveryStoreTestMain.cpp Test_EditorRecoveryAndTrash.cpp)
 target_link_libraries(AYEditor_RecoveryStoreTests PRIVATE AYEditor AYTest)
 target_include_directories(AYEditor_RecoveryStoreTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include)
@@ -157,4 +156,4 @@ if(MSVC)
         "/IGNORE:4006")
 endif()
 
-ay_add_test(DefaultEditorModuleAssemblyTest)
+ay_add_test(DefaultEditorModuleAssemblyTest LABELS "ayeditor;editor-full" TIMEOUT 30 RUN_SERIAL)

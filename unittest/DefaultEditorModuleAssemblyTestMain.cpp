@@ -1,6 +1,6 @@
 #include <AYTest.h>
 
-int main()
+int main(int argc, char* argv[])
 {
-    return ayt::test::runAllTests("DefaultEditorModuleAssembly");
+    return ayt::test::runTests("DefaultEditorModuleAssembly", argc, argv);
 }

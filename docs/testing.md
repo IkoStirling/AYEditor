@@ -1,0 +1,34 @@
+# Editor 测试运行与报告
+
+27 个主测试源文件独立编译，不再通过 main.cpp 文本包含；CMake 核验源码归属。
+主运行器通过 AYTest 元数据发现套件，保留逐套件子进程隔离，不依赖手写套件名数组。
+每个子进程限时 120 秒，结束时清理所属进程；完整 CTest 限时 600 秒。
+
+```text
+AYEditor_UnitTests --list
+AYEditor_UnitTests --suite AYEditor_AnimationExtension --case NAME
+AYEditor_UnitTests --report-json editor-report.json
+ctest --test-dir out/build/windows-debug -L "^editor-fast$" --output-on-failure
+ctest --test-dir out/build/windows-debug -L "^editor-full$" --output-on-failure
+```
+
+`--list`、`--help` 不注册 Entity 组件、初始化运行时或创建临时目录。
+筛选与 AYTest 公共入口一致；位置参数 suite 仍可用。实际执行即使只选一个套件也
+使用子进程隔离。报告目录为本次独占 `testTmpDir()/reports`，每个套件有 schema 1
+JSON；主进程核验子报告身份与数量后合并，结尾输出统一用例统计和问题表。
+子进程失败不阻止其他套件执行；缺报告、清理超时与退出码不一致均视为失败。
+异常/崩溃的精确位置未知时明确标注；用例声明位置只作辅助定位。
+
+`editor-fast` 覆盖 P0 核心、Gizmo、资源瓦片展示和工作区框架。`editor-full` 覆盖
+完整主入口及独立模块装配测试。UIFlow/GameFlow/Recovery 与 2D 专项门禁保留，
+但不另加 full 标签，避免完整层重复执行。当前部分夹具仍访问固定平台资源，故
+Editor 分区保留串行；该迁移不代表所有 Editor 夹具均已可安全并行。
+
+```powershell
+pwsh -NoProfile -File scripts/tests/verify-module-test-inventory.ps1 -Module AYEditor
+```
+
+核验比较源码身份与完整层实际注册，重复、遗漏和筛选拼错都会失败。
+CTest 注册项数量不是用例数；主报告使用用例通过/失败/跳过，断言数单独显示。
+2026-09-28 Windows Debug 迁移基线：主入口 28 个套件、281 个用例，模块装配
+另 1 个用例，完整层共 282 个；主入口实际断言 4106 个，全部通过、无跳过。

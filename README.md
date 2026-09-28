@@ -1,5 +1,7 @@
 # AYEditor
 
+测试入口、隔离策略与用例报告见 [测试维护文档](docs/testing.md)。
+
 AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play 会话、场景隔离、视口合成、导入流程和编辑器工具窗口。
 
 **当前状态：** v0.3 编辑器壳层，包含 Edit/Play Scene、Transport Bar、网络客户端、

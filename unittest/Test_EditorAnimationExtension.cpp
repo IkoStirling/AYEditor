@@ -1,3 +1,4 @@
+#include "AYTest.h"
 #include "AYEditor/EditorAnimationDocument.h"
 #include "AYEditor/EditorAnimationExtension.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
