@@ -1,4 +1,6 @@
 #include "AYEditor/EditorSkeletonExtension.h"
+#include <AYUI/Authoring/DragSourceList.h>
+#include <AYUI/Authoring/StableListRows.h>
 
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
@@ -118,95 +120,7 @@ ayt::ui::authoring::JobStatusSnapshot bakePresentationSnapshot(
     return result;
 }
 
-class SkeletonBoneDragList final : public ayt::ui::ListView {
-public:
-    using PayloadProvider = std::function<ayt::ui::DragPayload(int)>;
-
-    SkeletonBoneDragList()
-    {
-        setDraggable(true);
-        setOnDragEnd([this](bool) { resetDrag(); });
-    }
-
-    void setPayloadProvider(PayloadProvider provider)
-    {
-        _payloadProvider = std::move(provider);
-    }
-
-    ayt::ui::Widget* hitTest(const ayt::math::FVector2& worldPos) override
-    {
-        ayt::ui::Widget* hit = ayt::ui::ListView::hitTest(worldPos);
-        if (hit == nullptr || hit == getVerticalScrollBar()) return hit;
-        return this;
-    }
-
-    bool onMouseButtonDown(const ayt::ui::UIMouseEvent& event) override
-    {
-        (void)ayt::ui::ListView::onMouseButtonDown(event);
-        if (event.mouseButton != 0) return false;
-        const auto bounds = getWorldBounds();
-        if (!bounds.contains(event.mousePos)) return false;
-        const float localY = event.mousePos.y - bounds.minY
-            + getScrollOffset().y;
-        const int row = static_cast<int>(std::floor(
-            localY / (std::max)(1.0f, getItemHeight())));
-        if (row < 0 || static_cast<std::size_t>(row) >= getItemCount()) {
-            resetDrag();
-            return false;
-        }
-        const ayt::ui::DragPayload payload = _payloadProvider
-            ? _payloadProvider(row) : ayt::ui::DragPayload{};
-        if (payload.isEmpty()) {
-            resetDrag();
-            return false;
-        }
-        setSelectedIndex(row);
-        setDragPayload(payload);
-        _pressPoint = event.mousePos;
-        _pressed = true;
-        return true;
-    }
-
-    bool onMouseMove(const ayt::ui::UIMouseEvent& event) override
-    {
-        if (!_pressed || _dragging) return false;
-        const auto delta = event.mousePos - _pressPoint;
-        if (delta.x * delta.x + delta.y * delta.y < 25.0f) return true;
-        if (auto* manager = ayt::ui::UIManager::tryGet();
-            manager != nullptr && manager->beginDrag(this)) {
-            _dragging = true;
-            return true;
-        }
-        resetDrag();
-        return false;
-    }
-
-    bool onMouseButtonUp(const ayt::ui::UIMouseEvent& event) override
-    {
-        if (_dragging) {
-            resetDrag();
-            return true;
-        }
-        const bool handled = ayt::ui::ListView::onMouseButtonUp(event);
-        resetDrag();
-        return handled;
-    }
-
-    void onCaptureCancelled() override { resetDrag(); }
-
-private:
-    void resetDrag()
-    {
-        _pressed = false;
-        _dragging = false;
-        setDragPayload({});
-    }
-
-    PayloadProvider _payloadProvider;
-    ayt::math::FVector2 _pressPoint{};
-    bool _pressed = false;
-    bool _dragging = false;
-};
+using SkeletonBoneDragList = ayt::ui::authoring::DragSourceList;
 
 class EditorSkeletonWorkspaceView final : public IEditorView, public IEditorCommandTarget {
 public:
@@ -360,21 +274,19 @@ private:
         _boneList->setId("skeleton_bone_list");
         _boneList->setItemHeight(20.0f);
         _boneList->setOnSelectionChanged([this](int index) {
-            if (_syncing || index < 0
-                || static_cast<std::size_t>(index) >= _visibleBoneIndices.size()) {
-                return;
-            }
-            (void)_document->core().selectBone(_visibleBoneIndices[index]);
+            const auto* selected = _visibleBoneRows.idAt(index);
+            if (_syncing || !selected) return;
+            const int boneIndex = *selected;
+            (void)_document->core().selectBone(boneIndex);
             refreshBoneProperties();
             if (_canvas != nullptr) _canvas->markDirty();
         });
         boneList->setPayloadProvider([this](int row) {
             ayt::ui::DragPayload payload;
-            if (row < 0
-                || static_cast<std::size_t>(row) >= _visibleBoneIndices.size()) {
-                return payload;
-            }
-            const int boneIndex = _visibleBoneIndices[static_cast<std::size_t>(row)];
+            const auto* selected = _visibleBoneRows.idAt(row);
+            if (!selected) return payload;
+            const int boneIndex = *selected;
+            if (boneIndex < 0 || static_cast<std::size_t>(boneIndex) >= _document->core().bones().size()) return payload;
             payload.kind = "SkeletonBone";
             payload.userData = boneIndex;
             payload.text = ayt::ui::decodeUtf8Text(
@@ -387,11 +299,7 @@ private:
         _canvas = new EditorSkeletonCanvas(_document);
         _canvas->setOnBoneSelected([this](int index) {
             _syncing = true;
-            const auto found = std::find(
-                _visibleBoneIndices.begin(), _visibleBoneIndices.end(), index);
-            _boneList->setSelectedIndex(found == _visibleBoneIndices.end()
-                ? -1 : static_cast<int>(std::distance(
-                    _visibleBoneIndices.begin(), found)));
+            _boneList->setSelectedIndex(_visibleBoneRows.indexOf(index));
             _syncing = false;
             refreshBoneProperties();
         });
@@ -723,7 +631,7 @@ private:
     void refreshHierarchy()
     {
         std::vector<std::wstring> items;
-        _visibleBoneIndices.clear();
+        std::vector<int> visibleBoneIds;
         const std::wstring filter = _boneSearch != nullptr
             ? lowerText(_boneSearch->getText()) : std::wstring{};
         std::vector<std::vector<std::string>> rolesByBone(
@@ -758,15 +666,13 @@ private:
                 if (mappedRoles.size() > 1u) label += L"  [DUPLICATE]";
             }
             items.push_back(std::move(label));
-            _visibleBoneIndices.push_back(bone.index);
+            visibleBoneIds.push_back(bone.index);
         }
         _syncing = true;
+        _boneList->cancelPendingDrag();
+        if (!_visibleBoneRows.replace(std::move(visibleBoneIds))) { _syncing = false; return; }
         _boneList->setItems(items);
-        const auto selected = std::find(_visibleBoneIndices.begin(),
-            _visibleBoneIndices.end(), _document->core().selectedBone());
-        _boneList->setSelectedIndex(selected == _visibleBoneIndices.end()
-            ? -1 : static_cast<int>(std::distance(
-                _visibleBoneIndices.begin(), selected)));
+        _boneList->setSelectedIndex(_visibleBoneRows.indexOf(_document->core().selectedBone()));
         std::vector<std::wstring> choices{L"<Unmapped>"};
         for (const auto& bone : _document->core().bones()) {
             choices.push_back(ayt::ui::decodeUtf8Text(bone.name)
@@ -1116,7 +1022,7 @@ private:
     EditorAuthoringSelectionBridge _selectionBridge;
     ayt::ui::Widget* _root = nullptr;
     EditorSkeletonCanvas* _canvas = nullptr;
-    ayt::ui::ListView* _boneList = nullptr;
+    ayt::ui::authoring::DragSourceList* _boneList = nullptr;
     ayt::ui::TextInput* _boneSearch = nullptr;
     ayt::ui::ListView* _roleList = nullptr;
     ayt::ui::ComboBox* _bonePicker = nullptr;
@@ -1136,7 +1042,7 @@ private:
     ayt::ui::TextLabel* _status = nullptr;
     ayt::ui::Button* _nativeButton = nullptr;
     ayt::ui::Button* _customButton = nullptr;
-    std::vector<int> _visibleBoneIndices;
+    ayt::ui::authoring::StableListRows<int> _visibleBoneRows;
     ayt::anim::editor::SkeletonBakeJob _bakeJob;
     ayt::ui::authoring::JobPresentation _bakePresentation;
     ayt::ui::authoring::AuthoringRefreshGate _refreshGate;

@@ -1449,6 +1449,9 @@ UnicodeText。骨骼烘焙/导入状态共用 JobPresentation 的进度展示与
 任务执行器、指纹校验及结果写入保持领域所有权。EditorSession 成员布局改变，
 AYEditor Source ABI 升至 26，必须重编译消费者。
 
+骨骼列表与 GameFlow 动作面板共用 StableListRows/DragSourceList；刷新保留当前 ID
+对应的选择并取消旧手势，领域过滤和拖放载荷校验保留在页面适配器。
+
 - [AYUI/design.md §13 Editor chrome](../AYUI/design.md#13-editor-chrome)
 - [AYExtension/design.md §3 Editor Integration](../AYExtension/design.md)
 - [AYApplication/design.md §3 BuildType / subsystems](../AYApplication/design.md)

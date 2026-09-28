@@ -3,6 +3,8 @@
 #endif
 
 #include "AYEditor/EditorGameFlowExtension.h"
+#include <AYUI/Authoring/DragSourceList.h>
+#include <AYUI/Authoring/StableListRows.h>
 #include <AYUI/Authoring/PropertyField.h>
 
 #include "AYEditor/EditorGameFlowDocument.h"
@@ -279,92 +281,35 @@ std::uint64_t flowFingerprint(const ayt::app::GameFlowDocument& flow)
     return hash;
 }
 
-class EditorGameFlowActionPalette final : public ayt::ui::ListView
+class EditorGameFlowActionPalette final : public ayt::ui::authoring::DragSourceList
 {
 public:
-    EditorGameFlowActionPalette()
-    {
+    EditorGameFlowActionPalette() {
         setItemHeight(22.0f);
-        setDraggable(true);
-        setOnDragEnd([this](bool) { _dragging = false; });
-    }
-
-    void setActions(std::vector<std::wstring> labels,
-                    std::vector<std::string> ids)
-    {
-        _actionIds = std::move(ids);
-        setItems(labels);
-        setSelectedIndex(_actionIds.empty() ? -1 : 0);
-    }
-
-    std::string selectedActionId() const
-    {
-        const int index = getSelectedIndex();
-        return index < 0 || static_cast<std::size_t>(index) >= _actionIds.size()
-            ? std::string{} : _actionIds[static_cast<std::size_t>(index)];
-    }
-
-    ayt::ui::Widget* hitTest(const FVector2& worldPos) override
-    {
-        ayt::ui::Widget* hit = ayt::ui::ListView::hitTest(worldPos);
-        if (hit == nullptr || hit == getVerticalScrollBar()) return hit;
-        // Route row presses through the palette itself so it can distinguish
-        // click selection from a threshold-crossing Action drag gesture.
-        return this;
-    }
-
-    bool onMouseButtonDown(const ayt::ui::UIMouseEvent& event) override
-    {
-        if (event.mouseButton == 0) {
-            const FRectangle bounds = getWorldBounds();
-            const float localY = event.mousePos.y - bounds.minY
-                + getScrollOffset().y;
-            const int index = static_cast<int>(std::floor(
-                localY / (std::max)(1.0f, getItemHeight())));
-            if (index >= 0 && static_cast<std::size_t>(index) < getItemCount()) {
-                setSelectedIndex(index);
-                _pressed = true;
-                _pressPoint = event.mousePos;
+        setPayloadProvider([this](int row) {
+            ayt::ui::DragPayload payload;
+            if (const auto* id = _rows.idAt(row); id && !id->empty()) {
+                payload.kind = "GameFlowAction";
+                payload.text = ayt::ui::decodeUtf8Text(*id);
             }
-        }
-        return ayt::ui::ListView::onMouseButtonDown(event) || _pressed;
+            return payload;
+        });
     }
-
-    bool onMouseMove(const ayt::ui::UIMouseEvent& event) override
-    {
-        if (!_pressed || _dragging || getSelectedIndex() < 0) return false;
-        const FVector2 delta = event.mousePos - _pressPoint;
-        if (delta.x * delta.x + delta.y * delta.y < 25.0f) return false;
-        ayt::ui::DragPayload payload;
-        payload.kind = "GameFlowAction";
-        payload.text = ayt::ui::decodeUtf8Text(selectedActionId());
-        setDragPayload(payload);
-        if (auto* manager = ayt::ui::UIManager::tryGet();
-            manager != nullptr && manager->beginDrag(this)) {
-            _dragging = true;
-            return true;
-        }
-        return false;
+    void setActions(std::vector<std::wstring> labels, std::vector<std::string> ids) {
+        if (labels.size() != ids.size()) return;
+        const std::string selected = selectedActionId();
+        cancelPendingDrag();
+        if (!_rows.replace(std::move(ids))) return;
+        setItems(labels);
+        const int row = _rows.indexOf(selected);
+        setSelectedIndex(row >= 0 ? row : (_rows.size() == 0 ? -1 : 0));
     }
-
-    bool onMouseButtonUp(const ayt::ui::UIMouseEvent& event) override
-    {
-        _pressed = false;
-        if (_dragging) return true;
-        return event.mouseButton == 0;
+    std::string selectedActionId() const {
+        const auto* id = _rows.idAt(getSelectedIndex());
+        return id ? *id : std::string{};
     }
-
-    void onCaptureCancelled() override
-    {
-        _pressed = false;
-        _dragging = false;
-    }
-
 private:
-    std::vector<std::string> _actionIds;
-    FVector2 _pressPoint{};
-    bool _pressed = false;
-    bool _dragging = false;
+    ayt::ui::authoring::StableListRows<std::string> _rows;
 };
 
 struct EditorGameFlowCanvasModel
