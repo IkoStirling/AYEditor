@@ -13,6 +13,7 @@
 #include <AYResource/assetsImpl/Mesh.h>
 #include <AYResource/assetsImpl/Skeleton.h>
 #include <AYUI/MockRenderer.h>
+#include <AYUI/TextInput.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -201,6 +202,61 @@ TEST_CASE(animation_tracks_and_timeline_are_editable_undoable_and_persistent)
         ayt::editor::EditorOpenRequest{path.string()}, error));
     CHECK(reopened.timelineTracks().size() == 3u);
     CHECK(reopened.timelineKeyframes().size() == 5u);
+}
+
+TEST_CASE(shared_numeric_fields_submit_to_document_and_reject_partial_input)
+{
+    const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
+    std::string error;
+    auto base = descriptor.createDocument(
+        ayt::editor::EditorOpenRequest{writeAnimationEditorClip().string()}, error);
+    auto document = std::dynamic_pointer_cast<ayt::editor::EditorAnimationDocument>(base);
+    CHECK(document != nullptr);
+    if (!document) return;
+    AnimationExtensionHost host(animationExtensionFixtureRoot().string());
+    auto view = descriptor.createView(base, host);
+    CHECK(view != nullptr);
+    if (!view) return;
+    std::function<ayt::ui::Widget*(ayt::ui::Widget*, const std::string&)> findInput;
+    findInput = [&](ayt::ui::Widget* root, const std::string& id) -> ayt::ui::Widget* {
+        if (root->getId() == id) return root;
+        for (auto* child : root->getChildren()) if (auto* found = findInput(child, id)) return found;
+        return nullptr;
+    };
+    auto* x = dynamic_cast<ayt::ui::TextInput*>(findInput(view->rootWidget(), "animation_key_value_0"));
+    CHECK(x != nullptr);
+    if (!x) return;
+    const auto id = document->timelineKeyframes().front().id;
+    std::vector<float> before, values;
+    CHECK(document->animationKeyframeValues(id, before));
+    x->setFocus(true);
+    x->setText(L"3.25");
+    CHECK(x->onKeyDown(13));
+    CHECK(document->animationKeyframeValues(id, values));
+    CHECK(values[0] == 3.25f);
+    CHECK(document->timelineUndo());
+    view->tick(0);
+    CHECK(document->animationKeyframeValues(id, values));
+    CHECK(values == before);
+    const auto revision = document->revision();
+    x->setText(L"invalid");
+    CHECK(x->onKeyDown(13));
+    CHECK(document->revision() == revision);
+    CHECK(document->animationKeyframeValues(id, values));
+    CHECK(values == before);
+    CHECK(document->setAnimationTrackInterpolation("animation.0", ayt::resource::AnimInterpolation::CubicHermite));
+    view->tick(0);
+    auto* tangent = dynamic_cast<ayt::ui::TextInput*>(findInput(view->rootWidget(), "animation_in_tangent_0"));
+    CHECK(tangent != nullptr);
+    if (!tangent) return;
+    x->setFocus(false);
+    tangent->setFocus(true);
+    tangent->setText(L"1.75");
+    CHECK(tangent->onKeyDown(13));
+    std::vector<float> incoming, outgoing;
+    CHECK(document->animationKeyframeTangents(id, incoming, outgoing));
+    CHECK(incoming[0] == 1.75f);
+    CHECK(outgoing[0] == 0.0f);
 }
 
 TEST_CASE(animation_keyframe_components_are_editable_normalized_and_undoable)

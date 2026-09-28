@@ -13,6 +13,7 @@
 #include <AYResource/assetsImpl/Mesh.h>
 #include <AYUI/Box.h>
 #include <AYUI/Authoring/AuthoringPrimitives.h>
+#include <AYUI/Authoring/NumericFields.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Slider.h>
@@ -56,19 +57,7 @@ std::string encodeUtf8(const std::wstring& value)
     return result;
 }
 
-std::optional<float> parseFiniteFloat(const std::wstring& value)
-{
-    try {
-        std::size_t consumed = 0u;
-        const float result = std::stof(value, &consumed);
-        if (consumed != value.size() || !std::isfinite(result)) {
-            return std::nullopt;
-        }
-        return result;
-    } catch (...) {
-        return std::nullopt;
-    }
-}
+using ayt::ui::authoring::parseFiniteFloat;
 
 class EditorAnimationWorkspaceView final
     : public IEditorView, public IEditorCommandTarget {
@@ -422,23 +411,11 @@ private:
             refreshAuthoring();
         });
         inspector->addWidget(_keyPicker, 28.0f);
-        auto* valueRow = new ayt::ui::HBox();
-        valueRow->setSpacing(4.0f);
-        static constexpr const wchar_t* componentNames[] = {
-            L"X", L"Y", L"Z", L"W"
-        };
-        for (std::size_t component = 0u; component < 4u; ++component) {
-            _keyValues[component] = new ayt::ui::TextInput();
-            _keyValues[component]->setId(
-                "animation_key_value_" + std::to_string(component));
-            _keyValues[component]->setPlaceholder(componentNames[component]);
-            _keyValues[component]->setNumericScrubEnabled(true);
-            _keyValues[component]->setOnSubmit([this](const std::wstring&) {
-                applyKeyValues();
-            });
-            valueRow->addWidget(_keyValues[component], 0.0f);
-        }
-        inspector->addWidget(valueRow, 28.0f);
+        _keyFields = new ayt::ui::authoring::NumericFields(
+            {"animation_key_value_0", "animation_key_value_1", "animation_key_value_2", "animation_key_value_3"},
+            {L"X", L"Y", L"Z", L"W"});
+        _keyFields->setOnSubmitted([this] { applyKeyValues(); });
+        inspector->addWidget(_keyFields, 28.0f);
         auto* keyActions = new ayt::ui::HBox();
         keyActions->setSpacing(4.0f);
         keyActions->addWidget(makeButton(L"Add Key", [this]() {
@@ -472,30 +449,23 @@ private:
             }
         });
         inspector->addWidget(_curveMode, 28.0f);
-        static constexpr const wchar_t* tangentLabels[] = {L"In", L"Out"};
         for (std::size_t direction = 0u; direction < 2u; ++direction) {
             auto* row = new ayt::ui::HBox();
             row->setSpacing(4.0f);
             _tangentRows[direction] = row;
             auto* label = new ayt::ui::TextLabel();
-            label->setText(tangentLabels[direction]);
+            label->setText(direction == 0u ? L"In" : L"Out");
             label->setFontSize(11);
-            label->setVerticalAlignment(
-                ayt::ui::TextLabel::VAlignment::Center);
+            label->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
             row->addWidget(label, 28.0f);
-            for (std::size_t component = 0u; component < 4u; ++component) {
-                auto*& input = direction == 0u
-                    ? _inTangents[component] : _outTangents[component];
-                input = new ayt::ui::TextInput();
-                input->setId((direction == 0u
-                    ? "animation_in_tangent_" : "animation_out_tangent_")
-                    + std::to_string(component));
-                input->setNumericScrubEnabled(true);
-                input->setOnSubmit([this](const std::wstring&) {
-                    applyTangents();
-                });
-                row->addWidget(input, 0.0f);
-            }
+            const std::string prefix = direction == 0u ? "animation_in_tangent_" : "animation_out_tangent_";
+            auto* fields = new ayt::ui::authoring::NumericFields(
+                {prefix + "0", prefix + "1", prefix + "2", prefix + "3"},
+                {L"X", L"Y", L"Z", L"W"});
+            fields->setUnit(L"value/s");
+            fields->setOnSubmitted([this] { applyTangents(); });
+            (direction == 0u ? _inFields : _outFields) = fields;
+            row->addWidget(fields, 0.0f);
             inspector->addWidget(row, 28.0f);
         }
         auto* tangentActions = new ayt::ui::HBox();
@@ -772,17 +742,7 @@ private:
         const bool hasValues = !_selectedKeyId.empty()
             && _document->animationKeyframeValues(
                 _selectedKeyId, values, &valueType);
-        const std::size_t width = hasValues ? values.size() : 0u;
-        for (std::size_t component = 0u; component < 4u; ++component) {
-            _keyValues[component]->setVisible(component < width);
-            if (component < width) {
-                std::wostringstream text;
-                text << std::setprecision(7) << values[component];
-                _keyValues[component]->setText(text.str());
-            } else {
-                _keyValues[component]->setText(L"");
-            }
-        }
+        (void)_keyFields->setValues(hasValues ? values : std::vector<float>{}, !hasValues);
         std::vector<float> incoming;
         std::vector<float> outgoing;
         const bool hasTangents = hasValues
@@ -790,22 +750,9 @@ private:
                 _selectedKeyId, incoming, outgoing);
         const bool showTangents = hasTangents
             && interpolation == ayt::resource::AnimInterpolation::CubicHermite;
-        for (std::size_t direction = 0u; direction < 2u; ++direction) {
-            _tangentRows[direction]->setVisible(showTangents);
-            const auto& source = direction == 0u ? incoming : outgoing;
-            auto& inputs = direction == 0u ? _inTangents : _outTangents;
-            for (std::size_t component = 0u; component < 4u; ++component) {
-                inputs[component]->setVisible(
-                    showTangents && component < source.size());
-                if (showTangents && component < source.size()) {
-                    std::wostringstream text;
-                    text << std::setprecision(7) << source[component];
-                    inputs[component]->setText(text.str());
-                } else {
-                    inputs[component]->setText(L"");
-                }
-            }
-        }
+        for (auto* row : _tangentRows) row->setVisible(showTangents);
+        (void)_inFields->setValues(showTangents ? incoming : std::vector<float>{}, !showTangents);
+        (void)_outFields->setValues(showTangents ? outgoing : std::vector<float>{}, !showTangents);
 
         const auto notifies = _document->animationNotifies();
         _notifyIds.clear();
@@ -948,14 +895,9 @@ private:
         std::vector<float> current;
         if (!_document->animationKeyframeValues(_selectedKeyId, current)) return;
         std::vector<float> values;
-        values.reserve(current.size());
-        for (std::size_t component = 0u; component < current.size(); ++component) {
-            const auto parsed = parseFiniteFloat(_keyValues[component]->getText());
-            if (!parsed) {
-                _host.setStatusText(L"Key value must contain finite numbers");
-                return;
-            }
-            values.push_back(*parsed);
+        if (!_keyFields->readValues(current.size(), values)) {
+            _host.setStatusText(L"Key value must contain finite numbers");
+            return;
         }
         if (!_document->setAnimationKeyframeValues(_selectedKeyId, values)) {
             _host.setStatusText(L"Key value was unchanged or invalid");
@@ -973,17 +915,10 @@ private:
         std::vector<float> outgoing;
         if (!_document->animationKeyframeTangents(
                 _selectedKeyId, incoming, outgoing)) return;
-        for (std::size_t component = 0u; component < incoming.size(); ++component) {
-            const auto parsedIn = parseFiniteFloat(
-                _inTangents[component]->getText());
-            const auto parsedOut = parseFiniteFloat(
-                _outTangents[component]->getText());
-            if (!parsedIn || !parsedOut) {
-                _host.setStatusText(L"Tangents must contain finite numbers");
-                return;
-            }
-            incoming[component] = *parsedIn;
-            outgoing[component] = *parsedOut;
+        if (!_inFields->readValues(incoming.size(), incoming)
+            || !_outFields->readValues(outgoing.size(), outgoing)) {
+            _host.setStatusText(L"Tangents must contain finite numbers");
+            return;
         }
         if (!_document->setAnimationKeyframeTangents(
                 _selectedKeyId, incoming, outgoing)) {
@@ -1125,12 +1060,12 @@ private:
     ayt::ui::TextInput* _trackNode = nullptr;
     ayt::ui::ComboBox* _trackProperty = nullptr;
     ayt::ui::ComboBox* _keyPicker = nullptr;
-    std::array<ayt::ui::TextInput*, 4> _keyValues{};
+    ayt::ui::authoring::NumericFields* _keyFields = nullptr;
     ayt::ui::TextLabel* _editState = nullptr;
     ayt::ui::ComboBox* _curveMode = nullptr;
     std::array<ayt::ui::HBox*, 2> _tangentRows{};
-    std::array<ayt::ui::TextInput*, 4> _inTangents{};
-    std::array<ayt::ui::TextInput*, 4> _outTangents{};
+    ayt::ui::authoring::NumericFields* _inFields = nullptr;
+    ayt::ui::authoring::NumericFields* _outFields = nullptr;
     ayt::ui::ComboBox* _notifyPicker = nullptr;
     ayt::ui::TextInput* _notifyName = nullptr;
     ayt::ui::TextInput* _notifyPayload = nullptr;

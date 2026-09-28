@@ -540,6 +540,10 @@ Notify 命名、source ticks 换算、验证、事务和保存只存在于文档
 公共控件不会 tick，保留文档原播放推进权。上下文桥接每次获取当前 shared 文档，
 关闭/切换后无旧裸指针；程序化 refresh 不会反向 seek 或改速率。
 
+关键帧数值和两方向切线面板使用公共 `NumericFields`（保持原字段 ID），
+完整有限值解析、分量显隐和单位标签由公共层负责；维度、Quaternion 归一化、
+源资源合法性和原子保存仍通过 `EditorAnimationDocument`。
+
 `.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
 序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
 因此预览不会观察到半修改的 `times/values` 数组，撤销/重做也恢复完整 clip 而不是零散 UI 状态。
