@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <future>
+#include <AYTask/BackgroundJob.h>
 #include <memory>
 #include <optional>
 #include <string>
@@ -154,7 +155,8 @@ private:
     };
 
     static Snapshot scanRoots(const std::filesystem::path& sourceRoot,
-                              const std::filesystem::path& derivedRoot);
+                              const std::filesystem::path& derivedRoot,
+                              const ayt::task::CancellationToken* cancellation = nullptr);
     void applySnapshot(Snapshot snapshot);
     void rebuildLookupsAndPersist();
     void refreshDirectoryWatches();
@@ -168,7 +170,7 @@ private:
     std::vector<EditorAssetFolder> _folders;
     std::unordered_map<EditorAssetId, std::size_t> _recordById;
     std::unordered_map<std::string, std::size_t> _recordByLogicalPath;
-    std::future<Snapshot> _scanFuture;
+    ayt::task::BackgroundJob<Snapshot> _scanFuture;
     std::unique_ptr<WatchState> _watchState;
     bool _scanPending = false;
     bool _loadedFromIndex = false;

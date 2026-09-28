@@ -103,7 +103,8 @@ void appendRoot(SnapshotT& snapshot,
                 const std::filesystem::path& root,
                 const char* virtualRoot,
                 EditorAssetOrigin origin,
-                const std::filesystem::path& importSidecarRoot = {})
+                const std::filesystem::path& importSidecarRoot = {},
+                const ayt::task::CancellationToken* cancellation = nullptr)
 {
     snapshot.folders.push_back(EditorAssetFolder{
         virtualRoot, virtualRoot, {}, origin});
@@ -114,6 +115,7 @@ void appendRoot(SnapshotT& snapshot,
         root, std::filesystem::directory_options::skip_permission_denied, ec);
     const std::filesystem::recursive_directory_iterator end;
     for (; !ec && it != end; it.increment(ec)) {
+        if (cancellation != nullptr && cancellation->requested()) return;
         const std::filesystem::directory_entry& entry = *it;
         const std::filesystem::path relative =
             std::filesystem::relative(entry.path(), root, ec);
@@ -455,22 +457,8 @@ void EditorAssetDatabase::close()
         _watchState->watcher.stop();
         _watchState.reset();
     }
-    if (_scanPending && _scanFuture.valid()) {
-        // B-3/B-4 (ayeditor audit 2026-09-14): bound the join so a slow
-        // scan over a huge project tree cannot stretch the visible
-        // shutdown path. After the budget expires we drop the future;
-        // the worker keeps running in the background and its result is
-        // discarded at process exit. (std::async cannot be forcibly
-        // aborted — the std::future destructor will still block — but
-        // only after the editor UI is gone.)
-        constexpr auto kShutdownDrainBudget = std::chrono::milliseconds(250);
-        if (_scanFuture.wait_for(kShutdownDrainBudget)
-                != std::future_status::ready) {
-            _scanFuture = {};
-        } else {
-            try { (void)_scanFuture.get(); } catch (...) {}
-        }
-    }
+    // Read-only scans own their inputs; cancellation/reset never joins.
+    _scanFuture = {};
     _scanPending = false;
     _projectRoot.clear();
     _sourceRoot.clear();
@@ -486,12 +474,19 @@ void EditorAssetDatabase::close()
 
 EditorAssetDatabase::Snapshot EditorAssetDatabase::scanRoots(
     const std::filesystem::path& sourceRoot,
-    const std::filesystem::path& derivedRoot)
+    const std::filesystem::path& derivedRoot,
+    const ayt::task::CancellationToken* cancellation)
 {
     Snapshot snapshot;
     appendRoot(snapshot, sourceRoot, "Assets", EditorAssetOrigin::Source,
-               derivedRoot);
-    appendRoot(snapshot, derivedRoot, "Imported", EditorAssetOrigin::Imported);
+               derivedRoot, cancellation);
+    if (cancellation != nullptr) {
+        if (cancellation->requested()) return snapshot;
+        cancellation->report(0.5f, "Scanning imported assets");
+    }
+    appendRoot(snapshot, derivedRoot, "Imported", EditorAssetOrigin::Imported,
+               {}, cancellation);
+    if (cancellation != nullptr && cancellation->requested()) return snapshot;
     auto byPath = [](const auto& a, const auto& b) {
         return lowerAscii(a.logicalPath) < lowerAscii(b.logicalPath);
     };
@@ -502,6 +497,7 @@ EditorAssetDatabase::Snapshot EditorAssetDatabase::scanRoots(
                 return lowerAscii(a.logicalPath) == lowerAscii(b.logicalPath);
             }), snapshot.folders.end());
     std::sort(snapshot.records.begin(), snapshot.records.end(), byPath);
+    if (cancellation != nullptr) cancellation->report(1.0f, "Asset scan completed");
     return snapshot;
 }
 
@@ -591,8 +587,11 @@ bool EditorAssetDatabase::requestScan()
     if (_projectRoot.empty() || _scanPending) return false;
     const std::filesystem::path source(_sourceRoot);
     const std::filesystem::path derived(_derivedRoot);
-    _scanFuture = std::async(std::launch::async,
-        [source, derived]() { return scanRoots(source, derived); });
+    _scanFuture = ayt::task::launchBackground(
+        [source, derived](ayt::task::CancellationToken token) {
+            token.report(0.0f, "Scanning source assets");
+            return scanRoots(source, derived, &token);
+        });
     _scanPending = true;
     return true;
 }

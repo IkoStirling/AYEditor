@@ -19,6 +19,7 @@
 #include <chrono>
 #include <filesystem>
 #include <future>
+#include <AYTask/BackgroundJob.h>
 #include <iterator>
 #include <mutex>
 #include <sstream>
@@ -215,6 +216,19 @@ struct EditorProjectSettingsController::Impl {
 
     explicit Impl(EditorProjectSettingsConfig value)
         : config(std::move(value)) {}
+
+    ~Impl() { drainBuild(); }
+
+    void drainBuild() noexcept
+    {
+        // Publishing resources is not yet interruptible. Never let a closing
+        // page abandon writes or overlap them with a replacement controller.
+        if (buildFuture.valid()) {
+            try { buildFuture.get(); } catch (...) {}
+        }
+        asyncState.reset();
+        runWhenFinished = false;
+    }
 
     template <typename T>
     T* find(const char* id) const
@@ -770,14 +784,21 @@ struct EditorProjectSettingsController::Impl {
         }
         const auto state = asyncState;
         const auto buildPlan = plan;
-        buildFuture = std::async(std::launch::async,
+        buildFuture = ayt::task::launchBackground(
             [state, buildPlan, options]() {
-                auto result = ayt::resource::ProjectBuildExecutor::execute(
-                    buildPlan, options,
-                    [state](const ayt::resource::ProjectBuildProgress& value) {
-                        std::lock_guard lock(state->mutex);
-                        state->progress = value;
-                    });
+                ayt::resource::ProjectBuildResult result;
+                try {
+                    result = ayt::resource::ProjectBuildExecutor::execute(
+                        buildPlan, options,
+                        [state](const ayt::resource::ProjectBuildProgress& value) {
+                            std::lock_guard lock(state->mutex);
+                            state->progress = value;
+                        });
+                } catch (const std::exception& error) {
+                    result.error = std::string("Project build failed: ") + error.what();
+                } catch (...) {
+                    result.error = "Project build failed with an unknown exception.";
+                }
                 std::lock_guard lock(state->mutex);
                 state->result = std::move(result);
                 state->finished = true;
@@ -1179,6 +1200,7 @@ struct EditorProjectSettingsController::Impl {
 
     void detach()
     {
+        drainBuild();
         attached = false;
         ui = nullptr;
         nav = nullptr;
@@ -1199,7 +1221,7 @@ struct EditorProjectSettingsController::Impl {
     int selectedRule = -1;
     ayt::resource::ProjectBuildPlan plan;
     std::shared_ptr<AsyncState> asyncState;
-    std::future<void> buildFuture;
+    ayt::task::BackgroundJob<void> buildFuture;
     bool runWhenFinished = false;
 
     ayt::ui::UIManager* ui = nullptr;

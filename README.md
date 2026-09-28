@@ -72,4 +72,11 @@ Project Safe Rename 面板：可以选择引用类型、预览文件级改动及
 
 主要依赖 AYUI、AYGameLoop、AYDevice、AYApplication；运行时集成还使用 AYEntity、AYRenderer、AYResource、AYScene、AYPhysics、AYAudio、AYScript 与 AYNetwork。
 
+扫描、缩略图、导入和项目构建统一使用 AYTask 的 owned 后台任务。
+扫描/预览关闭时取消并丢弃观察者，不再由 future 析构隐式等待；worker 独立拥有
+路径和 CPU 数据，纹理上传/释放保持在编辑器线程。generation 隔离重开后的结果。
+导入/构建尚不能安全中断资源写入，关闭时显式等待收尾，不允许遗留写入与新页面冲突。
+后台取消是协作信号，解码库或外部构建自身不可取消的阶段不保证立即停止。
+既有 UIJobPresentation 仍只负责显示，Foundation 不依赖 UI。
+
 阶段、模式矩阵和编辑器 UI 契约见 [design.md](design.md)。

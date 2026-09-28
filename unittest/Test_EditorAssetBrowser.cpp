@@ -1,4 +1,5 @@
 #include "AYTest.h"
+#include "AYTestFixtures.h"
 #include <AYScene.h>
 #include <AYEntity/World.h>
 #include <AYEntity.h>
@@ -251,6 +252,28 @@ TEST_CASE(editor_asset_database_applies_file_watcher_changes_incrementally)
     CHECK(database.records().size() == 1u);
 }
 
+TEST_CASE(editor_asset_scan_reopen_discards_previous_project_results)
+{
+    AssetBrowserTempCleanup oldProject{assetBrowserTempRoot("old_scan")};
+    AssetBrowserTempCleanup newProject{assetBrowserTempRoot("new_scan")};
+    writeAssetBrowserFile(oldProject.root / "Assets/Old.aymesh");
+    writeAssetBrowserFile(newProject.root / "Assets/New.aymesh");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(oldProject.root.string(), &error));
+    CHECK(database.requestScan());
+    database.close();
+    CHECK_FALSE(database.scanPending());
+    CHECK_FALSE(database.pollScan());
+    CHECK(database.open(newProject.root.string(), &error));
+    CHECK(database.requestScan());
+    CHECK(ayt::test::waitUntil([&] { return database.pollScan(); }));
+    CHECK(database.findByLogicalPath("Assets/New.aymesh") != nullptr);
+    CHECK(database.findByLogicalPath("Assets/Old.aymesh") == nullptr);
+    database.close();
+    ayt::task::ITaskScheduler::defaultScheduler().waitAll();
+}
+
 TEST_CASE(editor_asset_delete_analysis_reports_text_asset_references)
 {
     AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("delete_analysis")};
@@ -329,6 +352,31 @@ TEST_CASE(editor_asset_preview_cache_builds_semantic_mesh_thumbnail_once)
     CHECK(uploads == 1);
     cache.clear();
     CHECK(releases == 1);
+}
+
+TEST_CASE(editor_asset_preview_clear_discards_pending_uploads)
+{
+    int uploads = 0;
+    EditorAssetPreviewCache cache(
+        [&](std::uint16_t, std::uint16_t, const void*) {
+            ++uploads;
+            return reinterpret_cast<void*>(static_cast<std::uintptr_t>(1));
+        }, [](void*) {});
+    EditorAssetRecord record;
+    record.absolutePath = "semantic-preview/cancelled.aymesh";
+    record.type = EditorAssetType::Mesh;
+    record.size = 42u;
+    CHECK_FALSE(cache.request(record).isValid());
+    cache.clear();
+    ayt::task::ITaskScheduler::defaultScheduler().waitAll();
+    (void)cache.poll();
+    CHECK(uploads == 0);
+    CHECK_FALSE(cache.request(record).isValid());
+    CHECK(ayt::test::waitUntil([&] {
+        (void)cache.poll();
+        return uploads == 1;
+    }));
+    cache.clear();
 }
 
 TEST_CASE(editor_asset_preview_cache_reuses_persisted_thumbnail_after_restart)

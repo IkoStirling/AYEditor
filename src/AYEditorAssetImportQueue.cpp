@@ -126,7 +126,7 @@ void EditorAssetImportQueue::startNext()
         return;
     }
     _running = queuedId;
-    _future = std::async(std::launch::async,
+    _future = ayt::task::launchBackground(
         [source, destination, force]() {
             return Importer::importAssetFile(source, destination, {}, force);
         });

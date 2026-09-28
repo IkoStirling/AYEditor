@@ -445,14 +445,15 @@ ayt::ui::ImageTextureHandle EditorAssetPreviewCache::request(
     const std::string cachePath = cachePathFor(path);
     const std::uintmax_t sourceSize = record.size;
     const std::int64_t sourceModified = record.lastModified;
-    entry.future = std::async(std::launch::async,
-        [path, type, cachePath, sourceSize, sourceModified]() {
+    entry.future = ayt::task::launchBackground(
+        [path, type, cachePath, sourceSize, sourceModified](ayt::task::CancellationToken token) {
         DecodedImage image = loadDiskPreview(
             cachePath, sourceSize, sourceModified);
         if (!image.bgra.empty()) return image;
+        if (token.requested()) return DecodedImage{};
         image = type == EditorAssetType::Texture
             ? decode(path) : renderResourcePreview(path, type);
-        storeDiskPreview(cachePath, sourceSize, sourceModified, image);
+        if (!token.requested()) storeDiskPreview(cachePath, sourceSize, sourceModified, image);
         return image;
     });
     _entries.emplace(path, std::move(entry));
@@ -606,45 +607,9 @@ void EditorAssetPreviewCache::erase(const std::string& absolutePath)
 
 void EditorAssetPreviewCache::clear()
 {
-    // B-3 (ayeditor audit 2026-09-14): entries that were kicked off but
-    // have not finished decoding hold an std::future whose destructor
-    // blocks until the worker thread completes. Cold starts with a full
-    // _entries map (after importing hundreds of FBX/GLTF sources) used
-    // to make the editor shutdown hang for the worst-case decode time of
-    // the largest pending entry — perceived as the window freezing on
-    // close.
-    //
-    // std::async (std::launch::async) returns a future whose destructor
-    // blocks by design (C++17/20); the only way to truly bound shutdown
-    // time is to swap the worker to std::thread + atomic abort flag. The
-    // minimal stop-gap that ships with this commit is to wait for each
-    // entry with a bounded budget so the visible shutdown makes progress
-    // even if some heavy decodes exceed it. Workers that exceed the cap
-    // still block when the future is finally destroyed (when the entry
-    // leaves the map), but only after the editor UI has already been
-    // torn down — that block happens in OS process teardown, not in the
-    // user-visible shutdown path.
-    constexpr auto kShutdownDrainBudget = std::chrono::milliseconds(250);
-    for (auto& pair : _entries) {
-        Entry& entry = pair.second;
-        if (entry.future.valid()) {
-            const auto status = entry.future.wait_for(kShutdownDrainBudget);
-            if (status == std::future_status::ready) {
-                try {
-                    entry.decoded = entry.future.get();
-                } catch (...) {
-                    entry.failed = true;
-                }
-                entry.pending = false;
-            }
-            // Out-of-budget entries are left with a valid future; their
-            // ~Entry will still block, but the user-visible shutdown path
-            // has already returned by then. The TODO note for a future
-            // commit is to replace std::async with std::thread + atomic
-            // so the budget becomes truly authoritative.
-        }
-        release(entry);
-    }
+    // Jobs own decoded CPU data only; uploads/releases stay on this thread.
+    // Dropping the observation cancels/discards old results without joining.
+    for (auto& pair : _entries) release(pair.second);
     _entries.clear();
     for (auto& pair : _authoringEntries) release(pair.second);
     _authoringEntries.clear();

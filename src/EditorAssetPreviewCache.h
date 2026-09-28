@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <future>
+#include <AYTask/BackgroundJob.h>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -51,7 +52,7 @@ private:
     struct Entry {
         std::uintmax_t fileSize = 0;
         std::int64_t lastModified = 0;
-        std::future<DecodedImage> future;
+        ayt::task::BackgroundJob<DecodedImage> future;
         DecodedImage decoded;
         ayt::ui::ImageTextureHandle texture;
         bool pending = false;

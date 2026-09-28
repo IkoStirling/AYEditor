@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <future>
+#include <AYTask/BackgroundJob.h>
 #include <optional>
 #include <string>
 #include <vector>
@@ -82,7 +83,7 @@ private:
     // stored on every element of _jobs, so the consumer re-resolves it
     // through findMutable() right before it touches the element.
     std::optional<EditorAssetImportJobId> _running;
-    std::future<Importer::Result> _future;
+    ayt::task::BackgroundJob<Importer::Result> _future;
     EditorAssetImportJobId _nextId = 1;
 };
 
