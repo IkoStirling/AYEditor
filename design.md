@@ -531,6 +531,10 @@ revision 缓存不可变曲线/时间轴快照，持有采样数据而非借用�
 Notify 命名、source ticks 换算、验证、事务和保存只存在于文档/适配层。
 其他页面的接入入口见 [公共曲线作者契约](../AYUI/docs/curve-editor.md)。
 
+动画/骨骼视图现共用 `AuthoringRefreshGate` 的内容/姿势/播放分流；
+连续 key/tangent 拖动复用 `EditGestureSession`，时间标尺和吸附复用公共秒制基础。
+刷新检测不发起资源重建，也不改变各文档既有 command/history 和保存行为。
+
 `.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
 序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
 因此预览不会观察到半修改的 `times/values` 数组，撤销/重做也恢复完整 clip 而不是零散 UI 状态。

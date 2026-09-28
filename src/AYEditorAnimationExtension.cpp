@@ -11,6 +11,7 @@
 #include <AYResource/assetsDefs/IAnimation.h>
 #include <AYResource/assetsImpl/Mesh.h>
 #include <AYUI/Box.h>
+#include <AYUI/Authoring/AuthoringPrimitives.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Slider.h>
@@ -110,16 +111,15 @@ public:
         if (_document == nullptr) return;
         if (_document->timelinePlaying()) _document->timelineTick(dt);
         const auto& preview = _document->preview();
-        if (_lastPoseRevision != preview.poseRevision()) {
-            _lastPoseRevision = preview.poseRevision();
+        const auto changes = _refreshGate.consume(stateStamp());
+        if (!changes.content && (changes.pose || changes.transport)) {
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
             if (_curveCanvas != nullptr) _curveCanvas->markDirty();
             if (_dopeSheet != nullptr) _dopeSheet->markDirty();
             _host.requestRepaint();
         }
-        if (_lastRevision != preview.revision()) {
-            _lastRevision = preview.revision();
+        if (changes.content) {
             refreshBindings();
             refreshInspector();
             refreshDiagnostics();
@@ -136,6 +136,11 @@ public:
     }
 
 private:
+    ayt::ui::authoring::AuthoringStateStamp stateStamp() const {
+        const auto& preview = _document->preview();
+        return {preview.revision(), 0u, preview.poseRevision(),
+                _document->timelinePositionSeconds(), _document->timelinePlaying()};
+    }
     ayt::ui::Button* makeButton(const wchar_t* text,
                                 std::function<void()> callback,
                                 float horizontalPadding = 7.0f)
@@ -645,8 +650,7 @@ private:
         refreshTransport();
         refreshAuthoring();
         refreshCurveControls();
-        _lastRevision = _document->preview().revision();
-        _lastPoseRevision = _document->preview().poseRevision();
+        _refreshGate.acknowledge(stateStamp());
         if (_canvas != nullptr) _canvas->markDirty();
         _host.requestRepaint();
     }
@@ -1190,8 +1194,7 @@ private:
     std::string _selectedTrackId;
     std::string _selectedKeyId;
     std::string _selectedNotifyId;
-    std::uint64_t _lastRevision = 0u;
-    std::uint64_t _lastPoseRevision = 0u;
+    ayt::ui::authoring::AuthoringRefreshGate _refreshGate;
     bool _syncing = false;
 };
 

@@ -1,6 +1,7 @@
 #include "AYEditorAnimationCurveSource.h"
 #include "AYEditor/EditorAnimationDocument.h"
 #include <AYAnimation/KeySampler.h>
+#include <AYUI/Authoring/AuthoringPrimitives.h>
 
 #include <cmath>
 #include <limits>
@@ -30,7 +31,7 @@ public:
     bool seek(double seconds) override { return _document->setTimelinePositionSeconds(seconds); }
     double snapTime(const std::string&, double seconds) const override {
         const double rate = _document->animationClipProperties().ticksPerSecond;
-        return rate > 0.0 ? std::round(seconds * rate) / rate : seconds;
+        return snapTimeToInterval(seconds, rate > 0.0 ? 1.0 / rate : 0.0);
     }
     bool beginEdit(const std::string& label) override {
         return _document->beginAnimationEditGesture(label);

@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
+#include <AYUI/Authoring/AuthoringPrimitives.h>
 
 #include <AYAnimation/HumanoidSkeleton.h>
 #include <AYAnimationEditor/SkeletonBakeJob.h>
@@ -227,14 +228,13 @@ public:
         if (_document->timelinePlaying()) {
             _document->timelineTick(dt);
         }
-        if (_lastPoseRevision != _document->core().poseRevision()) {
-            _lastPoseRevision = _document->core().poseRevision();
+        const auto changes = _refreshGate.consume(stateStamp());
+        if (changes.pose || changes.transport) {
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
             _host.requestRepaint();
         }
-        if (_lastRevision != _document->revision()) {
-            _lastRevision = _document->revision();
+        if (changes.content) {
             refreshStatus();
             refreshPreflight();
         }
@@ -246,6 +246,10 @@ public:
     }
 
 private:
+    ayt::ui::authoring::AuthoringStateStamp stateStamp() const {
+        return {_document->revision(), 0u, _document->core().poseRevision(),
+                _document->timelinePositionSeconds(), _document->timelinePlaying()};
+    }
     ayt::ui::Button* makeButton(const wchar_t* text,
                                 std::function<void()> callback)
     {
@@ -573,8 +577,7 @@ private:
         refreshStatus();
         refreshPreflight();
         refreshTransport();
-        _lastRevision = _document->revision();
-        _lastPoseRevision = _document->core().poseRevision();
+        _refreshGate.acknowledge(stateStamp());
         _host.requestRepaint();
     }
 
@@ -1155,8 +1158,7 @@ private:
     ayt::anim::editor::SkeletonBakeJob _bakeJob;
     std::uint64_t _activeBakeGeneration = 0u;
     std::uint64_t _handledBakeGeneration = 0u;
-    std::uint64_t _lastRevision = 0u;
-    std::uint64_t _lastPoseRevision = 0u;
+    ayt::ui::authoring::AuthoringRefreshGate _refreshGate;
     bool _syncing = false;
 };
 
