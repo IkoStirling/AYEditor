@@ -117,6 +117,7 @@ set(SRC_FILES
     src/AYEditorGameFlowPreview.cpp
     src/AYEditorGameFlowExtension.cpp
     src/AYEditorAnimationDocument.cpp
+    src/AYEditorAnimationCurveSource.cpp
     src/AYEditorAnimationCanvas.cpp
     src/AYEditorAnimationCurveCanvas.cpp
     src/AYEditorAnimationDopeSheet.cpp
@@ -245,7 +246,7 @@ target_include_directories(${MODULE_NAME} PRIVATE
 )
 
 target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
-    PUBLIC AYUI AYGameLoop AYDevice AYApplication
+    PUBLIC AYUI AYUICurveEditor AYGameLoop AYDevice AYApplication
     PUBLIC AY2DEditorCore AYApplicationGameFlow
     PRIVATE AYUILayoutEditorCore AYProjectContentValidationCore
     PRIVATE AYApplicationUI

@@ -4,6 +4,7 @@
 #include "AYEditor/EditorWorkspace.h"
 #include "../src/AYEditorAnimationCanvas.h"
 #include "../src/AYEditorAnimationCurveCanvas.h"
+#include "../src/AYEditorAnimationCurveSource.h"
 #include "../src/AYEditorAnimationDopeSheet.h"
 
 #include <AYIO/File.h>
@@ -585,6 +586,38 @@ TEST_CASE(animation_clip_properties_preserve_seconds_and_guard_content)
     CHECK(reopened.animationNotifies().size() == 1u);
     CHECK(std::fabs(reopened.animationNotifies()[0].timeSeconds - 0.5)
         < 1.0e-6);
+}
+
+TEST_CASE(common_curve_source_caches_immutable_revisions_and_samples_rotation)
+{
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize({writeAnimationEditorClip().string()}, error));
+    CHECK(document->bindSkeleton(writeAnimationEditorSkeleton().string(), &error));
+    CHECK(document->addAnimationTrack("hips", "rotation", ayt::resource::AnimTrackType::Quaternion));
+    CHECK(document->timelineAddKeyframe("animation.1", 1.0, 0.0));
+    const float half = std::sqrt(0.5f);
+    CHECK(document->setAnimationKeyframeValues("key.1.1", {0, 0, half, half}));
+    const auto source = ayt::editor::makeAnimationCurveSource(document);
+    const auto first = source->curveTrack("animation.1");
+    CHECK(first != nullptr);
+    CHECK(source->curveTrack("animation.1") == first);
+    const auto timeline = source->timelineSnapshot();
+    CHECK(source->seek(0.25));
+    CHECK(source->timelineSnapshot() == timeline);
+    CHECK(source->curveTrack("animation.1") == first);
+    const float z = first->sample(2u, 0.5);
+    const float w = first->sample(3u, 0.5);
+    CHECK(std::fabs(z - std::sin(3.1415926535f / 8.0f)) < 1e-5f);
+    CHECK(std::fabs(z * z + w * w - 1.0f) < 1e-5f);
+    CHECK(document->setAnimationKeyframeValues("key.1.1", {0, 0, 0, 1}));
+    const auto changed = source->curveTrack("animation.1");
+    CHECK(changed != first);
+    CHECK(source->timelineSnapshot() != timeline);
+    CHECK(std::fabs(changed->sample(2u, 0.5)) < 1e-5f);
+    CHECK(std::fabs(first->sample(2u, 0.5) - z) < 1e-5f);
+    CHECK(document->timelineUndo());
+    CHECK(std::fabs(source->curveTrack("animation.1")->sample(2u, 0.5) - z) < 1e-5f);
 }
 
 TEST_SUITE_END

@@ -523,6 +523,14 @@ control frames continue through the network subsystem independently.
 
 ### 4.3.animation 动画轨道、曲线与时间轴作者工具（核心阶段已实现）
 
+2026-09-28 公共部分已抽至 AYUI 的独立 `AYUITimelineCore` / `AYUICurveEditor` 目标。
+`AYEditorAnimationCurveCanvas` 和 `AYEditorAnimationDopeSheet` 仅保留兼容薄包装；
+同一页面共享 `makeAnimationCurveSource` 创建的资源适配器与选中状态。适配器按文档
+revision 缓存不可变曲线/时间轴快照，持有采样数据而非借用资源指针，撤销后旧快照仍安全。
+曲线绘制调用正式 `KeySampler`（含 Quaternion 最短弧/归一化），播放头刷新不重建快照或采样。
+Notify 命名、source ticks 换算、验证、事务和保存只存在于文档/适配层。
+其他页面的接入入口见 [公共曲线作者契约](../AYUI/docs/curve-editor.md)。
+
 `.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
 序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
 因此预览不会观察到半修改的 `times/values` 数组，撤销/重做也恢复完整 clip 而不是零散 UI 状态。

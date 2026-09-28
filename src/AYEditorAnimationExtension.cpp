@@ -5,6 +5,7 @@
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
 #include "AYEditorAnimationCurveCanvas.h"
+#include "AYEditorAnimationCurveSource.h"
 #include "AYEditorAnimationDopeSheet.h"
 
 #include <AYResource/assetsDefs/IAnimation.h>
@@ -294,7 +295,8 @@ private:
         curveHelp->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
         curveToolbar->addWidget(curveHelp, 0.0f);
         previewColumn->addWidget(curveToolbar, 26.0f);
-        _curveCanvas = new EditorAnimationCurveCanvas(_document);
+        const auto curveSource = makeAnimationCurveSource(_document);
+        _curveCanvas = new EditorAnimationCurveCanvas(curveSource);
         _curveCanvas->setOnSelectionChanged(
             [this](const std::string& keyId, std::size_t) {
                 _selectedKeyId = keyId;
@@ -307,7 +309,7 @@ private:
             _host.requestRepaint();
         });
         previewColumn->addWidget(_curveCanvas, 230.0f);
-        _dopeSheet = new EditorAnimationDopeSheet(_document);
+        _dopeSheet = new EditorAnimationDopeSheet(curveSource);
         _dopeSheet->setOnSelectionChanged(
             [this](const std::string& trackId, const std::string& keyId) {
                 if (keyId.rfind("notify.", 0u) == 0u) {
