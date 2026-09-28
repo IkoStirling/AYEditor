@@ -6,7 +6,7 @@
 **Owner:** AYEditor
 
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
-> **2026-09-21 动画编辑状态**：独立 `.ayanm` 动画页面已从只读预览升级为轨道/时间轴作者工具：可新增/删除 TRS 或 Float 轨道，在播放头新增、移动、删除关键帧，编辑关键帧各分量值，并选择 Linear/Step/Cubic Hermite 曲线及编辑逐分量入/出切线或生成自动切线；Quaternion 写入时统一归一化并拒绝零长度输入。所有修改使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。每次内存 revision 直接驱动现有模型/骨架预览；`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。框选、多关键帧操作和 Notify 编辑留后续阶段。
+> **2026-09-28 动画编辑状态**：独立 `.ayanm` 动画页面已具备轨道、图形曲线与 Dope Sheet 三种协同作者视图。除 TRS/Float 轨道和逐分量数值、插值、切线编辑外，现已支持曲线缩放/平移/框选、关键帧与切线手柄拖动、多关键帧批量时间和值变换、批量删除、事件轨 Notify 的名称/时间/payload 作者，以及 clip 名称、时长和 tick 速率属性。曲线、Dope Sheet、属性面板和播放头共享选择与正式模型/骨架预览；所有修改继续使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。
 > **2026-09-23 渲染收尾状态**：`AYEditorShell_Demo` 增加仅在 `AY_EDITOR_R6_CAPTURE_BASE` 存在且 RenderDoc 已注入时启用的 R6-6 自动验证序列，普通产品运行零行为变化；序列覆盖 resize、camera cut、效果关闭/重开、透明边界、raw resource/TAA diagnostics 和双阴影灯。Renderer presentation bootstrap 失败时关闭 splash、写入持久日志位置、显示模态错误并安全 shutdown。新构建的 D3D12 后端已通过 15 秒启动烟测；完整跨后端画面对齐仍由 Renderer 后续专项负责。
 
 > The editor is a **cross-module system**, not a single UI library.  
@@ -521,7 +521,7 @@ control frames continue through the network subsystem independently.
 当前已具备 Skeleton Editor 第一版与规范 `.ayrig` Rig Profile 作者资源；编辑器仍可读取 Legacy `.aysmap`，但会醒目标记并在保存时迁移为 `.ayrig`，旧文件不被静默覆盖。源/目标骨映射支持选择与源骨树拖放，逐角色源参考姿势、目标参考姿势和骨轴四元数修正纳入文档级撤销、保存及 profile 指纹；早期不含目标角色表的最小 retarget profile 会按规范骨名迁移。UI-free source→target 核心已接入真实 `BakeToTarget`，不支持的加法轨道、未映射动画骨和未知 TRS 会明确阻止。骨架画布在存在目标时拆分为 Source/Target 两个视口，目标侧播放正式转换 clip，播放、暂停、停止与时间拖动保持同步；目前不声明模型蒙皮并排预览。生产清理烘焙已覆盖骨架、动画、蒙皮 palette/joint 和 Skeleton Mask，并通过 receipt v2 与 AYResource 的精确闭包门禁保障引用安全；跨骨架蒙皮几何 rebind 尚未实现时任务会明确失败。
 项目元数据 `.ayeditor/skeleton-profile-bindings.json` 现以工程相对路径保存骨架到默认 mapping/retarget profile 的显式绑定；同一骨架可在工作区切换多个 `.ayrig`，同名 sidecar 仅保留为首次建议。`kind=template` 的 `.ayrig` 可被发现、预览命中/保留/缺失/冲突计数并显式应用，已有手工槽不会被模板静默覆盖。骨树支持按名称/索引搜索，角色槽显示左右侧、必需、缺失和重复占用。`kind=retarget` 保存目标骨架、目标角色、逐角色修正、`BakeToTarget` 和 platform；这些输入进入 profile 指纹和输出 scope，真实求解器已替代 `retargetSolverUnavailable` 占位门禁。普通资源 Inspector 与 Content Browser 读取同一 authoring/build 状态来源展示 Mapping/Bake 两个状态及 retarget 目标/platform。
 
-### 4.3.animation 动画轨道与时间轴作者工具（第一阶段已实现）
+### 4.3.animation 动画轨道、曲线与时间轴作者工具（核心阶段已实现）
 
 `.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
 序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
@@ -538,10 +538,20 @@ control frames continue through the network subsystem independently.
   增删、移动 key 会同步维护切线数组；正式模型/骨骼预览直接使用同一运行时 Hermite 采样器。
 - 时间单位边界保持明确：UI 使用秒，`.ayanm` track times 仍保存 source ticks，并通过
   `ticksPerSecond` 双向换算。时间轴公开的代表值读取每个 key 的首分量，不再误把扁平数组索引当 key 索引。
+- 图形曲线画布按分量显示 X/Y/Z/W，可缩放、平移和 Frame All；关键帧按 source frame 吸附，
+  Cubic 轨道可直接拖动入/出切线手柄。一次连续拖动只生成一条 Undo 记录，取消手势恢复完整 revision。
+- 框选和全选可跨可见分量建立多关键帧选择；批量时间/数值拖动和删除在提交前统一检查时间边界、
+  同轨碰撞与有限值，曲线画布、Dope Sheet 和数值属性面板共享选择状态。
+- Dope Sheet 以轨道为行展示全部关键帧和 Notify 事件，支持时间缩放/平移、播放头定位、关键帧和事件
+  直接拖动；轨道行、曲线选择及属性检查器保持同步。
+- Notify 作为 clip 事件轨的一等作者数据，可新增、更新、删除并编辑名称、时间和 float payload；
+  修改支持撤销、保存、重开和 Dope Sheet 拖动，不改变运行时既有事件分发语义。
+- Clip Properties 可编辑名称、duration 和 `ticksPerSecond`。修改 tick 速率时重标定 source ticks 以保持
+  所有关键帧的真实秒数；duration 不得早于最后一个关键帧或 Notify。
 - 所有编辑接入公共 `EditorCommandHistory`、全局 Save/Undo/Redo、dirty 状态与 recovery copy。
   保存从当前完整 revision 生成二进制，先回读验证再原子替换；派生 `.baked.ayanm` 和兼容别名
   `.ayanim` 禁止就地保存。
-- 当前阶段不包含可拖拽图形曲线画布、框选/批量变换、轨道重命名、Notify 作者和压缩设置。
+- 当前阶段不包含轨道重命名、关键帧复制/粘贴、区域缩放/时间反转、Notify duration 或压缩设置。
 
 ## 5. Editor chrome (AYUI)
 
@@ -1339,6 +1349,7 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 | Date | Decision |
 |------|----------|
+| 2026-09-28 | 动画作者核心五项完成：可交互图形曲线、多关键帧编辑、Dope Sheet、Notify/Event 轨和 Clip Properties 已接入同一 `.ayanm` 文档、选择、实时预览、Undo/Redo 与原子保存链路；tick 速率变化保持真实秒数，片段时长不得截断内容。 |
 | 2026-09-21 | 动画曲线/切线作者链路接通 `.ayanm` v5：轨道插值可选 Linear/Step/Cubic Hermite，关键帧可编辑逐分量入/出切线或生成 Auto Tangents，增删移动保持数组同步，并由正式 AnimationPlayer 即时预览。 |
 | 2026-09-21 | 动画关键帧分量编辑已接入：Float/Vector3/Quaternion 按类型展示与写回，非有限值和零 Quaternion 被拒绝，旋转自动归一化；修改继续复用完整 revision、即时预览、Undo/Redo 和原子保存。 |
 | 2026-09-21 | `.ayanm` 动画预览页升级为第一版轨道/时间轴作者工具：轨道与关键帧增删、关键帧移动、即时模型/骨架预览、公共 Undo/Redo、dirty/recovery 及验证后原子保存已接通；baked/Legacy 输出保持只读，曲线和值编辑留后续。 |
