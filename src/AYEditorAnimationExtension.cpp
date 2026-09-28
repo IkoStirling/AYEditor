@@ -5,6 +5,7 @@
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
 #include <AYEditor/EditorCommandButtons.h>
+#include <AYEditor/EditorAuthoringSelectionBridge.h>
 #include "AYEditorAnimationCurveCanvas.h"
 #include "AYEditorAnimationCurveSource.h"
 #include "AYEditorAnimationDopeSheet.h"
@@ -66,7 +67,8 @@ class EditorAnimationWorkspaceView final
 public:
     EditorAnimationWorkspaceView(std::shared_ptr<EditorAnimationDocument> document,
                                  IEditorHostServices& host)
-        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); })
+        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); }),
+          _selectionBridge(host.workspace(), _document)
     {
         _document->configureProjectRoot(_host.projectRoot());
         build();
@@ -86,6 +88,7 @@ public:
         return result;
     }
     void prepareForUiShutdown() override { _commands.detach(); }
+    EditorSelectionContext* selectionContext() noexcept override { return _selectionBridge.context(); }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     bool handlesCommand(const std::string& commandId) const override {
         return commandId == "edit.delete" || (_document && _document->handlesCommand(commandId));
@@ -249,11 +252,12 @@ private:
         curveHelp->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
         curveToolbar->addWidget(curveHelp, 0.0f);
         previewColumn->addWidget(curveToolbar, 26.0f);
-        const auto curveSource = makeAnimationCurveSource(_document);
+        const auto curveSource = _curveSource = makeAnimationCurveSource(_document);
         _curveCanvas = new EditorAnimationCurveCanvas(curveSource);
         _curveCanvas->setOnSelectionChanged(
             [this](const std::string& keyId, std::size_t) {
                 _selectedKeyId = keyId;
+                _selectionCleared = keyId.empty();
                 refreshAuthoring();
             });
         _curveCanvas->setOnEdited([this]() {
@@ -344,6 +348,7 @@ private:
             if (_syncing || index < 0
                 || index >= static_cast<int>(_trackIds.size())) return;
             _selectedTrackId = _trackIds[static_cast<std::size_t>(index)];
+            _selectionCleared = false;
             _selectedKeyId.clear();
             _selectedNotifyId.clear();
             refreshAuthoring();
@@ -380,6 +385,7 @@ private:
             if (_syncing || index < 0
                 || index >= static_cast<int>(_keyIds.size())) return;
             _selectedKeyId = _keyIds[static_cast<std::size_t>(index)];
+            _selectionCleared = false;
             _selectedNotifyId.clear();
             refreshAuthoring();
         });
@@ -663,7 +669,7 @@ private:
                 == _keyIds.end()) {
             _selectedKeyId.clear();
         }
-        if (_selectedKeyId.empty() && !_keyIds.empty()) {
+        if (_selectedKeyId.empty() && !_keyIds.empty() && !_selectionCleared) {
             _selectedKeyId = _keyIds.front();
         }
         const auto selectedKey = std::find(
@@ -755,6 +761,8 @@ private:
                 notifyIndex >= 0 ? _selectedNotifyId : _selectedKeyId);
         }
         _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
+        if (_curveSource) _selectionBridge.publish(*_curveSource->selectionState());
+        _commands.refresh();
     }
 
     void refreshCurveControls()
@@ -1003,6 +1011,9 @@ private:
     std::shared_ptr<EditorAnimationDocument> _document;
     IEditorHostServices& _host;
     EditorCommandButtons _commands;
+    EditorAuthoringSelectionBridge _selectionBridge;
+    std::shared_ptr<ayt::ui::authoring::ICurveEditorSource> _curveSource;
+    bool _selectionCleared = false;
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;

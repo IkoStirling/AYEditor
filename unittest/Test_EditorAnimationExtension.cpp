@@ -15,6 +15,7 @@
 #include <AYUI/MockRenderer.h>
 #include <AYUI/TextInput.h>
 #include <AYEditor/EditorCommandButtons.h>
+#include <AYEditor/EditorAuthoringSelectionBridge.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -681,6 +682,33 @@ TEST_CASE(common_curve_source_caches_immutable_revisions_and_samples_rotation)
     CHECK(std::fabs(first->sample(2u, 0.5) - z) < 1e-5f);
     CHECK(document->timelineUndo());
     CHECK(std::fabs(source->curveTrack("animation.1")->sample(2u, 0.5) - z) < 1e-5f);
+}
+
+TEST_CASE(authoring_selection_bridge_uses_workspace_ids_and_recovers_after_close)
+{
+    ayt::editor::EditorWorkspace workspace;
+    CHECK(workspace.registry().registerEditor(ayt::editor::makeEditorAnimationDescriptor()));
+    const auto opened = workspace.documents().open({writeAnimationEditorClip().string()});
+    CHECK(static_cast<bool>(opened));
+    if (!opened) return;
+    ayt::editor::EditorAuthoringSelectionBridge bridge(workspace, opened.document);
+    auto* context = workspace.selections().find(opened.documentId);
+    CHECK(bridge.context() == context);
+    CHECK(context != nullptr);
+    if (!context) return;
+    int notices = 0;
+    const auto listener = context->addListener([&] { ++notices; });
+    ayt::ui::authoring::TimelineSelection selection{"opaque-track", "second", {"first", "second"}, 2};
+    CHECK(bridge.publish(selection));
+    CHECK(context->primary()->documentId == opened.documentId);
+    CHECK(context->primary()->objectId == "second");
+    CHECK(context->items().size() == 2u);
+    CHECK(!bridge.publish(selection)); CHECK(notices == 1);
+    context->removeListener(listener);
+    CHECK(static_cast<bool>(workspace.documents().close(opened.documentId, ayt::editor::EditorDocumentCloseAction::Discard)));
+    CHECK(bridge.context()->documentId() != opened.documentId);
+    CHECK(bridge.publish("timeline.key", {}, "" ) == false);
+    CHECK(bridge.context()->empty());
 }
 
 TEST_CASE(command_buttons_follow_current_target_and_disable_stale_actions)

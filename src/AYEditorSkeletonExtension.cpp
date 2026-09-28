@@ -3,6 +3,7 @@
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
 #include <AYEditor/EditorCommandButtons.h>
+#include <AYEditor/EditorAuthoringSelectionBridge.h>
 #include <AYUI/Authoring/ResourceReferenceField.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include <AYUI/Authoring/AuthoringPrimitives.h>
@@ -203,7 +204,8 @@ class EditorSkeletonWorkspaceView final : public IEditorView, public IEditorComm
 public:
     EditorSkeletonWorkspaceView(std::shared_ptr<EditorSkeletonDocument> document,
                                 IEditorHostServices& host)
-        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); })
+        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); }),
+          _selectionBridge(host.workspace(), _document)
     {
         _document->configureProjectRoot(_host.projectRoot());
         build();
@@ -223,6 +225,7 @@ public:
         return root;
     }
     void prepareForUiShutdown() override { _commands.detach(); }
+    EditorSelectionContext* selectionContext() noexcept override { return _selectionBridge.context(); }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     bool handlesCommand(const std::string& id) const override { return _document && _document->handlesCommand(id); }
     bool canExecuteCommand(const std::string& id) const override { return _document && _document->canExecuteCommand(id); }
@@ -875,6 +878,10 @@ private:
 
     void refreshBoneProperties()
     {
+        const int selectedBone = _document->core().selectedBone();
+        const auto selectedId = selectedBone < 0 ? std::string{} : std::to_string(selectedBone);
+        _selectionBridge.publish("skeleton.bone", selectedId.empty() ? std::vector<std::string>{}
+            : std::vector<std::string>{selectedId}, selectedId);
         const int index = _document->core().selectedBone();
         if (index < 0 || index >= static_cast<int>(_document->core().bones().size())) {
             _properties->setText(L"No bone selected.");
@@ -1096,6 +1103,7 @@ private:
     std::shared_ptr<EditorSkeletonDocument> _document;
     IEditorHostServices& _host;
     EditorCommandButtons _commands;
+    EditorAuthoringSelectionBridge _selectionBridge;
     ayt::ui::Widget* _root = nullptr;
     EditorSkeletonCanvas* _canvas = nullptr;
     ayt::ui::ListView* _boneList = nullptr;
