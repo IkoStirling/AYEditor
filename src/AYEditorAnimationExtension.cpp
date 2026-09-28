@@ -88,10 +88,19 @@ public:
     bool handlesCommand(const std::string& commandId) const override {
         return commandId == "edit.delete" || commandId == "edit.copy"
             || commandId == "edit.cut" || commandId == "edit.paste"
-            || commandId == "edit.duplicate" || (_document && _document->handlesCommand(commandId));
+            || commandId == "edit.duplicate" || commandId == "animation.scale-time"
+            || commandId == "animation.reverse-time" || (_document && _document->handlesCommand(commandId));
     }
     bool canExecuteCommand(const std::string& commandId) const override {
         const bool selected = _curveSource && !_curveSource->selectionState()->keyIds.empty();
+        if (commandId == "animation.scale-time") {
+            const auto anchor = _timeAnchor ? parseFiniteFloat(_timeAnchor->getText()) : std::optional<float>{};
+            const auto scale = _timeScale ? parseFiniteFloat(_timeScale->getText()) : std::optional<float>{};
+            return selected && _document && !_document->authoringReadOnly()
+                && anchor && scale && *scale != 0 && *scale != 1;
+        }
+        if (commandId == "animation.reverse-time") return selected
+            && _document && !_document->authoringReadOnly();
         if (commandId == "edit.copy") return selected;
         if (commandId == "edit.paste") return _document && !_document->authoringReadOnly()
             && !animationSessionClipboard().data.empty();
@@ -117,6 +126,11 @@ public:
                 _document->timelinePositionSeconds(), ids, &error);
         } else if (commandId == "edit.duplicate") {
             success = _document->duplicateAnimationKeyframes(ids, &error);
+        } else if (commandId == "animation.scale-time") {
+            success = _document->retimeAnimationKeyframes(ids,
+                *parseFiniteFloat(_timeAnchor->getText()), *parseFiniteFloat(_timeScale->getText()), &error);
+        } else if (commandId == "animation.reverse-time") {
+            success = _document->reverseAnimationKeyframes(ids, &error);
         } else success = commandId == "file.save" ? _document->save(&error)
             : _document->executeCommand(commandId);
         if (success && commandId != "edit.copy" && commandId != "file.save"
@@ -290,7 +304,28 @@ private:
         _commands.add(*clipboardActions, L"Cut", "edit.cut", 48);
         _commands.add(*clipboardActions, L"Paste at Playhead", "edit.paste", 116);
         _commands.add(*clipboardActions, L"Duplicate After", "edit.duplicate", 110);
+        _commands.add(*clipboardActions, L"Reverse Selection", "animation.reverse-time", 122);
         previewColumn->addWidget(clipboardActions, 26);
+        auto* timeActions = new ayt::ui::HBox();
+        timeActions->setSpacing(4);
+        timeActions->addWidget(makeHeader(L"Anchor (s)"), 70);
+        _timeAnchor = new ayt::ui::TextInput();
+        _timeAnchor->setId("animation_time_anchor");
+        _timeAnchor->setText(L"0");
+        _timeAnchor->setNumericScrubEnabled(true);
+        timeActions->addWidget(_timeAnchor, 76);
+        timeActions->addWidget(makeButton(L"Use Playhead", [this] {
+            _timeAnchor->setText(std::to_wstring(_document->timelinePositionSeconds()));
+            _commands.refresh();
+        }), 98);
+        timeActions->addWidget(makeHeader(L"Scale"), 42);
+        _timeScale = new ayt::ui::TextInput();
+        _timeScale->setId("animation_time_scale");
+        _timeScale->setText(L"1");
+        _timeScale->setNumericScrubEnabled(true);
+        timeActions->addWidget(_timeScale, 72);
+        _commands.add(*timeActions, L"Scale Selection", "animation.scale-time", 114);
+        previewColumn->addWidget(timeActions, 26);
         const auto curveSource = _curveSource = makeAnimationCurveSource(_document);
         _curveCanvas = new EditorAnimationCurveCanvas(curveSource);
         _curveCanvas->setOnSelectionChanged(
@@ -1092,6 +1127,8 @@ private:
     ayt::ui::TextInput* _clipName = nullptr;
     ayt::ui::TextInput* _clipDuration = nullptr;
     ayt::ui::TextInput* _clipTicksPerSecond = nullptr;
+    ayt::ui::TextInput* _timeAnchor = nullptr;
+    ayt::ui::TextInput* _timeScale = nullptr;
     ayt::ui::TextArea* _tracks = nullptr;
     ayt::ui::ComboBox* _trackPicker = nullptr;
     ayt::ui::TextInput* _trackNode = nullptr;

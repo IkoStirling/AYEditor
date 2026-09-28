@@ -1,5 +1,6 @@
 #include "AYEditor/EditorAnimationDocument.h"
 #include <AYAnimationEditor/AnimationAuthoring.h>
+#include <AYAnimationEditor/AnimationTimeTransform.h>
 
 #include <AYIO/File.h>
 #include <AYResource/assetsDefs/IAnimation.h>
@@ -944,6 +945,38 @@ bool EditorAnimationDocument::authoringReadOnly() const
     const std::filesystem::path resourcePath(_path);
     return resourcePath.extension() != ".ayanm"
         || resourcePath.filename().string().find(".baked.") != std::string::npos;
+}
+
+bool EditorAnimationDocument::retimeAnimationKeyframes(
+    std::vector<std::string>& ids, double anchorSeconds, double scale,
+    std::string* error)
+{
+    std::vector<ayt::anim::editor::AnimationKeyReference> keys;
+    const auto* animation = _preview.animation();
+    if (!animation || !parseAuthoringKeys(ids, keys)) {
+        if (error) *error = "No valid animation keys selected.";
+        return false;
+    }
+    auto edit = ayt::anim::editor::retimeAnimationKeys(*animation, keys, anchorSeconds, scale);
+    if (!edit) {
+        if (error) *error = edit.error;
+        return false;
+    }
+    if (!commitEditedAnimation(edit.animation, error)) return false;
+    ids = authoringKeyIds(edit.keys);
+    return true;
+}
+
+bool EditorAnimationDocument::reverseAnimationKeyframes(
+    std::vector<std::string>& ids, std::string* error)
+{
+    double first = timelineDurationSeconds(), last = 0;
+    for (const auto& key : timelineKeyframes())
+        if (std::find(ids.begin(), ids.end(), key.id) != ids.end()) {
+            first = std::min(first, key.timeSeconds);
+            last = std::max(last, key.timeSeconds);
+        }
+    return retimeAnimationKeyframes(ids, first + (last - first) / 2, -1, error);
 }
 
 bool EditorAnimationDocument::copyAnimationKeyframes(

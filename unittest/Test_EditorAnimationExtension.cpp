@@ -110,9 +110,46 @@ public:
     std::wstring status;
 };
 
+ayt::ui::Widget* findAuthoringWidget(ayt::ui::Widget* root, const std::string& id) {
+    if (!root) return nullptr;
+    if (root->getId() == id) return root;
+    for (auto* child : root->getChildren())
+        if (auto* found = findAuthoringWidget(child, id)) return found;
+    return nullptr;
+}
+
 } // namespace
 
 TEST_SUITE(AYEditor_AnimationExtension)
+
+TEST_CASE(time_transform_document_and_view_are_undoable_and_persistent) {
+    const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
+    std::string error;
+    const auto base = descriptor.createDocument({writeAnimationEditorClip().string()}, error);
+    auto document = std::dynamic_pointer_cast<ayt::editor::EditorAnimationDocument>(base);
+    std::vector<std::string> ids{"key.0.0", "key.0.1", "key.0.2", "notify.0"};
+    CHECK(document->reverseAnimationKeyframes(ids, &error));
+    CHECK(ids.front() == "key.0.2");
+    CHECK(document->preview().animation()->getNotifyTime(0) == 1.5f);
+    CHECK(document->timelineUndo());
+    CHECK(document->preview().animation()->getNotifyTime(0) == .5f);
+    CHECK(document->retimeAnimationKeyframes(ids, 0, .5, &error));
+    CHECK(document->save(&error));
+    CHECK(document->reload(&error));
+    CHECK(document->preview().animation()->getTrackTimes(0)[2] == 2);
+    AnimationExtensionHost host(animationExtensionFixtureRoot().string());
+    const auto view = descriptor.createView(base, host);
+    auto* anchor = dynamic_cast<ayt::ui::TextInput*>(findAuthoringWidget(view->rootWidget(), "animation_time_anchor"));
+    auto* scale = dynamic_cast<ayt::ui::TextInput*>(findAuthoringWidget(view->rootWidget(), "animation_time_scale"));
+    CHECK(anchor); CHECK(scale);
+    if (!anchor || !scale) return;
+    anchor->setText(L"0"); scale->setText(L"0");
+    CHECK(!view->commandTarget()->canExecuteCommand("animation.scale-time"));
+    scale->setText(L"2");
+    CHECK(view->commandTarget()->canExecuteCommand("animation.scale-time"));
+    // Selected first key remains at anchor; no content change is reported.
+    CHECK(!view->commandTarget()->executeCommand("animation.scale-time"));
+}
 
 TEST_CASE(clipboard_document_cut_paste_and_duplicate_are_atomic_undoable) {
     ayt::editor::EditorAnimationDocument document;

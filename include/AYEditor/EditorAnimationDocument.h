@@ -135,6 +135,10 @@ public:
         double seconds, std::vector<std::string>& pastedIds, std::string* error = nullptr);
     bool duplicateAnimationKeyframes(std::vector<std::string>& ids,
         std::string* error = nullptr);
+    bool retimeAnimationKeyframes(std::vector<std::string>& ids,
+        double anchorSeconds, double scale, std::string* error = nullptr);
+    bool reverseAnimationKeyframes(std::vector<std::string>& ids,
+        std::string* error = nullptr);
     std::vector<EditorAnimationNotify> animationNotifies() const;
     bool addAnimationNotify(const std::string& name, double timeSeconds,
                             float payload);
