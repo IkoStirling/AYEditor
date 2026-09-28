@@ -2,6 +2,7 @@
 
 #include <AYUI/UIFlow.h>
 
+#include <AYIO/FileTransaction.h>
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -210,74 +211,13 @@ bool serializeFlow(const ayt::ui::UIFlowDocument& flow, std::string& text,
 
 bool applyFileTransaction(const std::vector<EditorUiFileEdit>& edits,
                           std::string* error) {
-    if (edits.empty()) return true;
-    static std::atomic<unsigned long long> serial{0u};
-    const std::string suffix = ".ayui-workflow-" + std::to_string(++serial);
-    struct Staged { fs::path target; fs::path temporary; fs::path backup; };
-    std::vector<Staged> staged;
-    staged.reserve(edits.size());
-
-    for (const EditorUiFileEdit& edit : edits) {
-        const fs::path target(edit.path);
-        if (readText(target) != edit.beforeText) {
-            for (const Staged& value : staged) {
-                std::error_code ignored;
-                fs::remove(value.temporary, ignored);
-            }
-            return fail(error, "File changed since rename planning: " + edit.path);
-        }
-        Staged value{target, fs::path(edit.path + suffix + ".tmp"),
-                     fs::path(edit.path + suffix + ".bak")};
-        std::error_code ignored;
-        fs::remove(value.temporary, ignored);
-        fs::remove(value.backup, ignored);
-        if (!writeText(value.temporary, edit.afterText, error)) {
-            for (const Staged& prior : staged) fs::remove(prior.temporary, ignored);
-            return false;
-        }
-        staged.push_back(std::move(value));
-    }
-
-    std::size_t backedUp = 0u;
-    std::error_code fsError;
-    for (; backedUp < staged.size(); ++backedUp) {
-        fs::rename(staged[backedUp].target, staged[backedUp].backup, fsError);
-        if (fsError) break;
-    }
-    if (fsError) {
-        for (std::size_t i = backedUp; i > 0u; --i) {
-            std::error_code ignored;
-            fs::rename(staged[i - 1u].backup, staged[i - 1u].target, ignored);
-        }
-        for (const Staged& value : staged) {
-            std::error_code ignored;
-            fs::remove(value.temporary, ignored);
-        }
-        return fail(error, "Could not stage rename transaction: " + fsError.message());
-    }
-
-    std::size_t installed = 0u;
-    for (; installed < staged.size(); ++installed) {
-        fs::rename(staged[installed].temporary, staged[installed].target, fsError);
-        if (fsError) break;
-    }
-    if (fsError) {
-        for (std::size_t i = 0u; i < installed; ++i) {
-            std::error_code ignored;
-            fs::remove(staged[i].target, ignored);
-        }
-        for (std::size_t i = staged.size(); i > 0u; --i) {
-            std::error_code ignored;
-            fs::rename(staged[i - 1u].backup, staged[i - 1u].target, ignored);
-            fs::remove(staged[i - 1u].temporary, ignored);
-        }
-        return fail(error, "Could not install rename transaction: " + fsError.message());
-    }
-    for (const Staged& value : staged) {
-        std::error_code ignored;
-        fs::remove(value.backup, ignored);
-    }
-    return true;
+    std::vector<ayt::io::FileReplacement> replacements;
+    replacements.reserve(edits.size());
+    for (const auto& edit : edits)
+        replacements.push_back({fs::path(edit.path), edit.beforeText, edit.afterText});
+    const auto result = ayt::io::replaceFiles(replacements);
+    if (error) *error = result.error;
+    return result.committed;
 }
 
 } // namespace

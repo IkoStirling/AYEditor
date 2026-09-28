@@ -3,6 +3,8 @@
 #include "AYEditor/EditorExtension.h"
 #include "AYEditor/EditorAssetOperations.h"
 
+#include <AYIO/File.h>
+#include <sstream>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -183,29 +185,22 @@ EditorRecoveryResult EditorRecoveryStore::autosave(
 
 bool EditorRecoveryStore::writeCurrentManifest(std::string* error)
 {
+    if (error) error->clear();
+    if (_currentRoot.empty()) return false;
     const fs::path path = fs::path(_currentRoot) / "manifest.tsv";
-    const fs::path temporary = path.string() + ".tmp";
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    std::ostringstream output;
     output << "AYEDITOR_RECOVERY\t1\n";
     for (const Entry& entry : _currentEntries) {
         output << std::quoted(entry.originalPath) << '\t'
                << std::quoted(entry.recoveryName) << '\t'
                << std::quoted(entry.title) << '\n';
     }
-    output.close();
-    if (!output) {
-        if (error != nullptr) *error = "Could not write recovery manifest.";
+    const auto text = output.str();
+    if (!ayt::io::File::atomicWrite(path.string(), text.data(), text.size())) {
+        if (error) *error = "Could not atomically write recovery manifest: " + path.string();
         return false;
     }
-    std::error_code ioError;
-    fs::rename(temporary, path, ioError);
-    if (ioError) {
-        fs::remove(path, ioError);
-        ioError.clear();
-        fs::rename(temporary, path, ioError);
-    }
-    if (ioError && error != nullptr) *error = ioError.message();
-    return !ioError;
+    return true;
 }
 
 bool EditorRecoveryStore::loadPreviousManifest()
@@ -325,31 +320,22 @@ EditorRecoveryResult EditorRecoveryStore::restorePrevious(
 
 bool EditorRecoveryStore::writePreviousManifest(std::string* error)
 {
-    if (error != nullptr) error->clear();
+    if (error) error->clear();
     if (_previousRoot.empty()) return false;
     const fs::path path = fs::path(_previousRoot) / "manifest.tsv";
-    const fs::path temporary = path.string() + ".tmp";
-    std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+    std::ostringstream output;
     output << "AYEDITOR_RECOVERY\t1\n";
     for (const Entry& entry : _previousEntries) {
         output << std::quoted(entry.originalPath) << '\t'
                << std::quoted(entry.recoveryName) << '\t'
                << std::quoted(entry.title) << '\n';
     }
-    output.close();
-    if (!output) {
-        if (error != nullptr) *error = "Could not update recovery manifest.";
+    const auto text = output.str();
+    if (!ayt::io::File::atomicWrite(path.string(), text.data(), text.size())) {
+        if (error) *error = "Could not atomically write recovery manifest: " + path.string();
         return false;
     }
-    std::error_code ioError;
-    fs::rename(temporary, path, ioError);
-    if (ioError) {
-        fs::remove(path, ioError);
-        ioError.clear();
-        fs::rename(temporary, path, ioError);
-    }
-    if (ioError && error != nullptr) *error = ioError.message();
-    return !ioError;
+    return true;
 }
 
 bool EditorRecoveryStore::discardPrevious(std::string* error)
