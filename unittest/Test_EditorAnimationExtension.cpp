@@ -114,6 +114,28 @@ public:
 
 TEST_SUITE(AYEditor_AnimationExtension)
 
+TEST_CASE(batch_cross_track_notify_edit_is_one_revision_and_undo) {
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize({writeAnimationEditorClip().string()}, error));
+    CHECK(document->addAnimationTrack("root", "scale", ayt::resource::AnimTrackType::Vector3));
+    CHECK(document->timelineAddKeyframe("animation.1", .5, 1));
+    const auto before = document->preview().revision();
+    std::vector<std::string> ids{"key.0.1", "key.1.1", "notify.0"};
+    CHECK(document->transformAnimationKeyframes(ids, .5, 0, 0));
+    CHECK(document->preview().revision() == before + 1);
+    CHECK(document->preview().animation()->getTrackTimes(0)[1] == 3);
+    CHECK(document->preview().animation()->getNotifyTime(0) == 1);
+    CHECK(document->timelineUndo());
+    CHECK(document->preview().animation()->getTrackTimes(0)[1] == 2);
+    CHECK(document->preview().animation()->getNotifyTime(0) == .5f);
+    CHECK(document->timelineRedo());
+    CHECK(document->removeAnimationKeyframes(ids));
+    CHECK(document->preview().animation()->getNotifyCount() == 0);
+    CHECK(document->timelineUndo());
+    CHECK(document->preview().animation()->getNotifyCount() == 1);
+}
+
 TEST_CASE(animation_descriptor_opens_full_preview_document)
 {
     const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();

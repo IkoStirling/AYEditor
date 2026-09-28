@@ -16,6 +16,7 @@
 #include <AYResource/assetsImpl/Mesh.h>
 #include <AYUI/Box.h>
 #include <AYUI/Authoring/AuthoringPrimitives.h>
+#include <AYUI/Authoring/TimelineSelectionOps.h>
 #include <AYUI/Authoring/NumericFields.h>
 #include <AYUI/Authoring/ResourceReferenceField.h>
 #include <AYUI/Button.h>
@@ -616,6 +617,8 @@ private:
 
     void refreshAuthoring()
     {
+        const auto selectionBefore = _curveSource ? *_curveSource->selectionState()
+            : ayt::ui::authoring::TimelineSelection{};
         const auto tracks = _document->timelineTracks();
         _trackIds.clear();
         std::vector<std::wstring> trackItems;
@@ -747,6 +750,9 @@ private:
                     : _selectedTrackId,
                 notifyIndex >= 0 ? _selectedNotifyId : _selectedKeyId);
         }
+        if (_curveSource && selectionBefore.keyIds.size() > 1)
+            ayt::ui::authoring::TimelineSelectionOps::replace(
+                *_curveSource->selectionState(), selectionBefore);
         _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
         if (_curveSource) _selectionBridge.publish(*_curveSource->selectionState());
         _commands.refresh();

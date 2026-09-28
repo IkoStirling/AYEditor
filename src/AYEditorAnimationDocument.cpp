@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAnimationDocument.h"
+#include <AYAnimationEditor/AnimationAuthoring.h>
 
 #include <AYIO/File.h>
 #include <AYResource/assetsDefs/IAnimation.h>
@@ -23,14 +24,7 @@ using Json = nlohmann::json;
 using ayt::anim::editor::AnimationPreviewBindings;
 using ayt::anim::editor::AnimationPreviewMode;
 
-struct EditableClip {
-    std::string name;
-    float duration = 0.0f;
-    float ticksPerSecond = 30.0f;
-    ayt::math::FGuid guid;
-    std::vector<ayt::resource::AnimTrack> tracks;
-    std::vector<ayt::resource::AnimNotifyMarker> notifies;
-};
+using EditableClip = ayt::anim::editor::AuthoredAnimation;
 
 std::size_t valueWidth(ayt::resource::AnimTrackType type) noexcept
 {
@@ -44,60 +38,12 @@ std::size_t valueWidth(ayt::resource::AnimTrackType type) noexcept
 
 EditableClip readEditableClip(const ayt::resource::IAnimation& source)
 {
-    EditableClip result;
-    result.name = source.getName() != nullptr ? source.getName() : "";
-    result.duration = source.getDuration();
-    result.ticksPerSecond = source.getTicksPerSecond();
-    if (const auto* concrete =
-            dynamic_cast<const ayt::resource::Animation*>(&source)) {
-        result.guid = concrete->getGuid();
-    }
-    result.tracks.reserve(source.getTrackCount());
-    for (std::uint32_t index = 0; index < source.getTrackCount(); ++index) {
-        ayt::resource::AnimTrack track;
-        track.nodeName = source.getTrackNodeName(index) != nullptr
-            ? source.getTrackNodeName(index) : "";
-        track.property = source.getTrackProperty(index) != nullptr
-            ? source.getTrackProperty(index) : "";
-        track.valueType = source.getTrackType(index);
-        track.blendMode = source.getTrackBlendMode(index);
-        track.interpolation = source.getTrackInterpolation(index);
-        const std::size_t keyCount = source.getTrackKeyframeCount(index);
-        if (const float* times = source.getTrackTimes(index)) {
-            track.times.assign(times, times + keyCount);
-        }
-        const std::size_t count = keyCount * valueWidth(track.valueType);
-        if (const float* values = source.getTrackValues(index)) {
-            track.values.assign(values, values + count);
-        }
-        if (const float* tangents = source.getTrackInTangents(index)) {
-            track.inTangents.assign(tangents, tangents + count);
-        }
-        if (const float* tangents = source.getTrackOutTangents(index)) {
-            track.outTangents.assign(tangents, tangents + count);
-        }
-        result.tracks.push_back(std::move(track));
-    }
-    result.notifies.reserve(source.getNotifyCount());
-    for (std::uint32_t index = 0; index < source.getNotifyCount(); ++index) {
-        result.notifies.push_back({
-            source.getNotifyName(index) != nullptr ? source.getNotifyName(index) : "",
-            source.getNotifyTime(index), source.getNotifyPayload(index)});
-    }
-    return result;
+    return ayt::anim::editor::copyAnimationForAuthoring(source);
 }
 
-std::shared_ptr<ayt::resource::Animation> buildAnimation(
-    const EditableClip& source)
+std::shared_ptr<ayt::resource::Animation> buildAnimation(const EditableClip& source)
 {
-    auto result = std::make_shared<ayt::resource::Animation>();
-    result->setName(source.name);
-    result->setDuration(source.duration);
-    result->setTicksPerSecond(source.ticksPerSecond);
-    result->setGuid(source.guid);
-    for (const auto& track : source.tracks) result->addTrack(track);
-    for (const auto& notify : source.notifies) result->addNotify(notify);
-    return result;
+    return ayt::anim::editor::buildAuthoredAnimation(source);
 }
 
 std::optional<std::size_t> parseIndex(std::string_view value,
@@ -132,6 +78,30 @@ bool parseKeyId(std::string_view value, std::size_t& track,
         && parsedTrack.ptr == first.data() + first.size()
         && parsedKey.ec == std::errc{}
         && parsedKey.ptr == second.data() + second.size();
+}
+
+bool parseAuthoringKeys(const std::vector<std::string>& ids,
+    std::vector<ayt::anim::editor::AnimationKeyReference>& keys)
+{
+    for (const auto& id : ids) {
+        ayt::anim::editor::AnimationKeyReference key;
+        if (const auto index = parseIndex(id, "notify.")) {
+            key.notify = true;
+            key.key = *index;
+        } else if (!parseKeyId(id, key.track, key.key)) return false;
+        keys.push_back(key);
+    }
+    return !keys.empty();
+}
+
+std::vector<std::string> authoringKeyIds(
+    const std::vector<ayt::anim::editor::AnimationKeyReference>& keys)
+{
+    std::vector<std::string> ids;
+    for (const auto& key : keys) ids.push_back(key.notify
+        ? "notify." + std::to_string(key.key)
+        : "key." + std::to_string(key.track) + "." + std::to_string(key.key));
+    return ids;
 }
 
 std::vector<float> sampledValue(const ayt::resource::AnimTrack& track,
@@ -932,102 +902,13 @@ bool EditorAnimationDocument::transformAnimationKeyframes(
     std::size_t component, float deltaValue)
 {
     const auto* animation = _preview.animation();
-    if (animation == nullptr || keyframeIds.empty()
-        || !std::isfinite(deltaTimeSeconds) || !std::isfinite(deltaValue)) {
-        return false;
-    }
-    std::size_t trackIndex = 0u;
-    std::vector<std::size_t> selected;
-    selected.reserve(keyframeIds.size());
-    for (const auto& id : keyframeIds) {
-        std::size_t parsedTrack = 0u;
-        std::size_t parsedKey = 0u;
-        if (!parseKeyId(id, parsedTrack, parsedKey)
-            || parsedTrack >= animation->getTrackCount()
-            || parsedKey >= animation->getTrackKeyframeCount(
-                static_cast<std::uint32_t>(parsedTrack))
-            || (!selected.empty() && parsedTrack != trackIndex)
-            || std::find(selected.begin(), selected.end(), parsedKey)
-                != selected.end()) return false;
-        trackIndex = parsedTrack;
-        selected.push_back(parsedKey);
-    }
-    EditableClip clip = readEditableClip(*animation);
-    auto& track = clip.tracks[trackIndex];
-    const std::size_t width = valueWidth(track.valueType);
-    if (component >= width) return false;
-    const float ticksPerSecond = clip.ticksPerSecond > 0.0f
-        ? clip.ticksPerSecond : 1.0f;
-    double minimumTime = std::numeric_limits<double>::max();
-    double maximumTime = std::numeric_limits<double>::lowest();
-    for (const std::size_t key : selected) {
-        const double seconds = track.times[key] / ticksPerSecond;
-        minimumTime = std::min(minimumTime, seconds);
-        maximumTime = std::max(maximumTime, seconds);
-    }
-    const double clampedDelta = std::clamp(deltaTimeSeconds,
-        -minimumTime, static_cast<double>(clip.duration) - maximumTime);
-    if (std::fabs(clampedDelta) < 1.0e-9 && std::fabs(deltaValue) < 1.0e-9f) {
-        return false;
-    }
-    for (const std::size_t key : selected) {
-        track.times[key] += static_cast<float>(clampedDelta) * ticksPerSecond;
-        track.values[key * width + component] += deltaValue;
-        if (track.valueType == ayt::resource::AnimTrackType::Quaternion) {
-            float lengthSquared = 0.0f;
-            for (std::size_t item = 0u; item < width; ++item) {
-                const float value = track.values[key * width + item];
-                lengthSquared += value * value;
-            }
-            if (lengthSquared <= 1.0e-12f) return false;
-            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
-            for (std::size_t item = 0u; item < width; ++item) {
-                track.values[key * width + item] *= inverseLength;
-            }
-        }
-    }
-    std::vector<std::size_t> order(track.times.size());
-    std::iota(order.begin(), order.end(), 0u);
-    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
-        return track.times[a] < track.times[b];
-    });
-    for (std::size_t index = 1u; index < order.size(); ++index) {
-        if (std::fabs(track.times[order[index]] - track.times[order[index - 1u]])
-            < 1.0e-5f) return false;
-    }
-    ayt::resource::AnimTrack sorted = track;
-    sorted.times.clear();
-    sorted.values.clear();
-    sorted.inTangents.clear();
-    sorted.outTangents.clear();
-    const bool hasIn = track.inTangents.size() == track.values.size();
-    const bool hasOut = track.outTangents.size() == track.values.size();
-    for (const std::size_t oldIndex : order) {
-        sorted.times.push_back(track.times[oldIndex]);
-        sorted.values.insert(sorted.values.end(),
-            track.values.begin() + oldIndex * width,
-            track.values.begin() + (oldIndex + 1u) * width);
-        if (hasIn) {
-            sorted.inTangents.insert(sorted.inTangents.end(),
-                track.inTangents.begin() + oldIndex * width,
-                track.inTangents.begin() + (oldIndex + 1u) * width);
-        }
-        if (hasOut) {
-            sorted.outTangents.insert(sorted.outTangents.end(),
-                track.outTangents.begin() + oldIndex * width,
-                track.outTangents.begin() + (oldIndex + 1u) * width);
-        }
-    }
-    std::vector<std::string> updatedIds;
-    updatedIds.reserve(selected.size());
-    for (const std::size_t oldIndex : selected) {
-        const auto position = std::find(order.begin(), order.end(), oldIndex);
-        updatedIds.push_back("key." + std::to_string(trackIndex) + "."
-            + std::to_string(static_cast<std::size_t>(position - order.begin())));
-    }
-    clip.tracks[trackIndex] = std::move(sorted);
-    if (!commitEditedAnimation(buildAnimation(clip))) return false;
-    keyframeIds = std::move(updatedIds);
+    if (!animation) return false;
+    std::vector<ayt::anim::editor::AnimationKeyReference> keys;
+    if (!parseAuthoringKeys(keyframeIds, keys)) return false;
+    auto edit = ayt::anim::editor::translateAnimationKeys(
+        *animation, keys, deltaTimeSeconds, component, deltaValue);
+    if (!edit || !commitEditedAnimation(edit.animation)) return false;
+    keyframeIds = authoringKeyIds(edit.keys);
     return true;
 }
 
@@ -1035,41 +916,11 @@ bool EditorAnimationDocument::removeAnimationKeyframes(
     const std::vector<std::string>& keyframeIds)
 {
     const auto* animation = _preview.animation();
-    if (animation == nullptr || keyframeIds.empty()) return false;
-    std::size_t trackIndex = 0u;
-    std::vector<std::size_t> selected;
-    selected.reserve(keyframeIds.size());
-    for (const auto& id : keyframeIds) {
-        std::size_t parsedTrack = 0u;
-        std::size_t parsedKey = 0u;
-        if (!parseKeyId(id, parsedTrack, parsedKey)
-            || parsedTrack >= animation->getTrackCount()
-            || parsedKey >= animation->getTrackKeyframeCount(
-                static_cast<std::uint32_t>(parsedTrack))
-            || (!selected.empty() && parsedTrack != trackIndex)
-            || std::find(selected.begin(), selected.end(), parsedKey)
-                != selected.end()) return false;
-        trackIndex = parsedTrack;
-        selected.push_back(parsedKey);
-    }
-    EditableClip clip = readEditableClip(*animation);
-    auto& track = clip.tracks[trackIndex];
-    const std::size_t width = valueWidth(track.valueType);
-    std::sort(selected.begin(), selected.end(), std::greater<>());
-    for (const std::size_t key : selected) {
-        track.times.erase(track.times.begin() + key);
-        track.values.erase(track.values.begin() + key * width,
-                           track.values.begin() + (key + 1u) * width);
-        if (!track.inTangents.empty()) {
-            track.inTangents.erase(track.inTangents.begin() + key * width,
-                track.inTangents.begin() + (key + 1u) * width);
-        }
-        if (!track.outTangents.empty()) {
-            track.outTangents.erase(track.outTangents.begin() + key * width,
-                track.outTangents.begin() + (key + 1u) * width);
-        }
-    }
-    return commitEditedAnimation(buildAnimation(clip));
+    if (!animation) return false;
+    std::vector<ayt::anim::editor::AnimationKeyReference> keys;
+    if (!parseAuthoringKeys(keyframeIds, keys)) return false;
+    auto edit = ayt::anim::editor::removeAnimationKeys(*animation, keys);
+    return edit && commitEditedAnimation(edit.animation);
 }
 
 std::vector<EditorAnimationNotify>
