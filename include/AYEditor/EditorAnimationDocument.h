@@ -12,6 +12,24 @@
 
 namespace ayt::editor {
 
+struct EditorAnimationCurveKey {
+    std::string id;
+    double timeSeconds = 0.0;
+    std::vector<float> values;
+    std::vector<float> inTangents;
+    std::vector<float> outTangents;
+};
+
+struct EditorAnimationCurveTrack {
+    std::string id;
+    ayt::resource::AnimTrackType valueType =
+        ayt::resource::AnimTrackType::Float;
+    ayt::resource::AnimInterpolation interpolation =
+        ayt::resource::AnimInterpolation::Linear;
+    double ticksPerSecond = 1.0;
+    std::vector<EditorAnimationCurveKey> keys;
+};
+
 class EditorAnimationDocument final
     : public IEditorDocument, public IEditorTimelineSource,
       public IEditorCommandTarget {
@@ -79,6 +97,14 @@ public:
         const std::vector<float>& inTangents,
         const std::vector<float>& outTangents);
     bool autoAnimationTrackTangents(const std::string& trackId);
+    bool animationCurveTrack(const std::string& trackId,
+                             EditorAnimationCurveTrack& track) const;
+    bool updateAnimationKeyframe(std::string& keyframeId, double timeSeconds,
+                                 const std::vector<float>& values);
+    bool beginAnimationEditGesture(const std::string& label);
+    bool commitAnimationEditGesture();
+    bool cancelAnimationEditGesture();
+    bool animationEditGestureActive() const noexcept;
 
     ayt::anim::editor::AnimationPreviewSession& preview() noexcept {
         return _preview;

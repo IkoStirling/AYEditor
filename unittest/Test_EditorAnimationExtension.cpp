@@ -3,6 +3,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "../src/AYEditorAnimationCanvas.h"
+#include "../src/AYEditorAnimationCurveCanvas.h"
 
 #include <AYIO/File.h>
 #include <AYResource/assetsImpl/Animation.h>
@@ -383,6 +384,48 @@ TEST_CASE(animation_canvas_renders_model_and_skeleton_as_one_retained_preview)
         });
     CHECK(pathCalls == 2);
     CHECK(canvas.hasCachedDisplayList());
+}
+
+TEST_CASE(animation_curve_canvas_uses_transactional_live_edits)
+{
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize(
+        ayt::editor::EditorOpenRequest{writeAnimationEditorClip().string()}, error));
+
+    ayt::editor::EditorAnimationCurveTrack track;
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(track.keys.size() == 3u);
+    CHECK(track.keys[1].values == std::vector<float>({0.0f, 2.0f, 0.0f}));
+    CHECK(track.ticksPerSecond == 2.0);
+
+    CHECK(document->beginAnimationEditGesture("Drag animation key"));
+    std::string keyId = "key.0.1";
+    CHECK(document->updateAnimationKeyframe(
+        keyId, 0.75, {1.0f, 2.5f, 3.0f}));
+    CHECK(document->updateAnimationKeyframe(
+        keyId, 0.5, {2.0f, 3.0f, 4.0f}));
+    CHECK(document->commitAnimationEditGesture());
+    CHECK(document->timelineCanUndo());
+    CHECK(document->timelineUndo());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.0) < 1.0e-6);
+    CHECK(track.keys[1].values == std::vector<float>({0.0f, 2.0f, 0.0f}));
+    CHECK(document->timelineRedo());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[1].timeSeconds - 0.5) < 1.0e-6);
+    CHECK(track.keys[1].values == std::vector<float>({2.0f, 3.0f, 4.0f}));
+
+    ayt::editor::EditorAnimationCurveCanvas canvas(document);
+    canvas.setTrackId("animation.0");
+    canvas.setSize({640.0f, 220.0f});
+    ayt::ui::MockRenderer renderer;
+    renderer.beginFrame();
+    canvas.render(renderer);
+    CHECK(std::count_if(renderer.getDrawCalls().begin(),
+        renderer.getDrawCalls().end(), [](const auto& call) {
+            return call.type == ayt::ui::MockRenderer::DrawCall::Path;
+        }) >= 3);
 }
 
 TEST_SUITE_END

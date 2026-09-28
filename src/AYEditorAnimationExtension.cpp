@@ -4,6 +4,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
+#include "AYEditorAnimationCurveCanvas.h"
 
 #include <AYResource/assetsDefs/IAnimation.h>
 #include <AYResource/assetsImpl/Mesh.h>
@@ -247,9 +248,51 @@ private:
 
         auto* body = new ayt::ui::HBox();
         body->setSpacing(5.0f);
+        auto* previewColumn = new ayt::ui::VBox();
+        previewColumn->setSpacing(4.0f);
         _canvas = new EditorAnimationCanvas(_document);
         _canvas->setOnBoneSelected([this](int) { refreshInspector(); });
-        body->addWidget(_canvas, 0.0f);
+        previewColumn->addWidget(_canvas, 0.0f);
+        auto* curveToolbar = new ayt::ui::HBox();
+        curveToolbar->setSpacing(4.0f);
+        curveToolbar->addWidget(makeHeader(L"CURVE EDITOR"), 92.0f);
+        static constexpr const wchar_t* curveComponents[] = {
+            L"X", L"Y", L"Z", L"W"
+        };
+        for (std::size_t component = 0u; component < 4u; ++component) {
+            _curveComponents[component] = makeButton(
+                curveComponents[component], [this, component]() {
+                    if (_curveCanvas == nullptr) return;
+                    _curveCanvas->setComponentVisible(component,
+                        !_curveCanvas->componentVisible(component));
+                    refreshCurveControls();
+                }, 5.0f);
+            curveToolbar->addWidget(_curveComponents[component], 30.0f);
+        }
+        curveToolbar->addWidget(makeButton(L"Frame All", [this]() {
+            if (_curveCanvas != nullptr) _curveCanvas->frameAll();
+        }), 68.0f);
+        auto* curveHelp = new ayt::ui::TextLabel();
+        curveHelp->setText(L"Drag key/value or tangent · Wheel zoom · Middle/right pan");
+        curveHelp->setFontSize(10);
+        curveHelp->setTextColor({0.46f, 0.52f, 0.62f, 1.0f});
+        curveHelp->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
+        curveToolbar->addWidget(curveHelp, 0.0f);
+        previewColumn->addWidget(curveToolbar, 26.0f);
+        _curveCanvas = new EditorAnimationCurveCanvas(_document);
+        _curveCanvas->setOnSelectionChanged(
+            [this](const std::string& keyId, std::size_t) {
+                _selectedKeyId = keyId;
+                refreshAuthoring();
+            });
+        _curveCanvas->setOnEdited([this]() {
+            refreshInspector();
+            refreshAuthoring();
+            refreshTransport();
+            _host.requestRepaint();
+        });
+        previewColumn->addWidget(_curveCanvas, 230.0f);
+        body->addWidget(previewColumn, 0.0f);
 
         auto* inspector = new ayt::ui::VBox();
         inspector->setSpacing(4.0f);
@@ -506,6 +549,7 @@ private:
         refreshDiagnostics();
         refreshTransport();
         refreshAuthoring();
+        refreshCurveControls();
         _lastRevision = _document->preview().revision();
         _lastPoseRevision = _document->preview().poseRevision();
         if (_canvas != nullptr) _canvas->markDirty();
@@ -600,6 +644,9 @@ private:
         if (_selectedTrackId.empty() && !_trackIds.empty()) {
             _selectedTrackId = _trackIds.front();
         }
+        if (_curveCanvas != nullptr) {
+            _curveCanvas->setTrackId(_selectedTrackId);
+        }
         const auto selectedTrack = std::find(
             _trackIds.begin(), _trackIds.end(), _selectedTrackId);
         const int trackIndex = selectedTrack == _trackIds.end() ? -1
@@ -684,6 +731,19 @@ private:
         }
         _syncing = false;
         _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
+    }
+
+    void refreshCurveControls()
+    {
+        if (_curveCanvas == nullptr) return;
+        for (std::size_t component = 0u; component < 4u; ++component) {
+            _curveComponents[component]->setText(
+                _curveCanvas->componentVisible(component)
+                    ? (component == 0u ? L"X ●" : component == 1u ? L"Y ●"
+                        : component == 2u ? L"Z ●" : L"W ●")
+                    : (component == 0u ? L"X ○" : component == 1u ? L"Y ○"
+                        : component == 2u ? L"Z ○" : L"W ○"));
+        }
     }
 
     void addTrack()
@@ -869,6 +929,8 @@ private:
     IEditorHostServices& _host;
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
+    EditorAnimationCurveCanvas* _curveCanvas = nullptr;
+    std::array<ayt::ui::Button*, 4> _curveComponents{};
     ayt::ui::Button* _loop = nullptr;
     ayt::ui::ComboBox* _mode = nullptr;
     ayt::ui::ComboBox* _speed = nullptr;

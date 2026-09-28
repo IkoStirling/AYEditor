@@ -118,6 +118,7 @@ set(SRC_FILES
     src/AYEditorGameFlowExtension.cpp
     src/AYEditorAnimationDocument.cpp
     src/AYEditorAnimationCanvas.cpp
+    src/AYEditorAnimationCurveCanvas.cpp
     src/AYEditorAnimationExtension.cpp
     src/AYEditorSkeletonDocument.cpp
     src/AYEditorSkeletonCanvas.cpp

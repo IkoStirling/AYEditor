@@ -798,6 +798,154 @@ bool EditorAnimationDocument::autoAnimationTrackTangents(
     return commitEditedAnimation(buildAnimation(clip));
 }
 
+bool EditorAnimationDocument::animationCurveTrack(
+    const std::string& trackId, EditorAnimationCurveTrack& result) const
+{
+    const auto index = parseIndex(trackId, "animation.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getTrackCount()) {
+        return false;
+    }
+    const auto trackIndex = static_cast<std::uint32_t>(*index);
+    const std::size_t width = valueWidth(animation->getTrackType(trackIndex));
+    const std::size_t keyCount = animation->getTrackKeyframeCount(trackIndex);
+    const float* times = animation->getTrackTimes(trackIndex);
+    const float* values = animation->getTrackValues(trackIndex);
+    const float* incoming = animation->getTrackInTangents(trackIndex);
+    const float* outgoing = animation->getTrackOutTangents(trackIndex);
+    if ((keyCount != 0u && (times == nullptr || values == nullptr))
+        || width == 0u) return false;
+
+    result = {};
+    result.id = trackId;
+    result.valueType = animation->getTrackType(trackIndex);
+    result.interpolation = animation->getTrackInterpolation(trackIndex);
+    result.ticksPerSecond = animation->getTicksPerSecond() > 0.0f
+        ? animation->getTicksPerSecond() : 1.0;
+    result.keys.reserve(keyCount);
+    for (std::size_t key = 0u; key < keyCount; ++key) {
+        EditorAnimationCurveKey item;
+        item.id = "key." + std::to_string(*index) + "."
+            + std::to_string(key);
+        item.timeSeconds = static_cast<double>(times[key])
+            / result.ticksPerSecond;
+        item.values.assign(values + key * width, values + (key + 1u) * width);
+        item.inTangents.assign(width, 0.0f);
+        item.outTangents.assign(width, 0.0f);
+        if (incoming != nullptr) {
+            std::copy_n(incoming + key * width, width,
+                        item.inTangents.begin());
+        }
+        if (outgoing != nullptr) {
+            std::copy_n(outgoing + key * width, width,
+                        item.outTangents.begin());
+        }
+        result.keys.push_back(std::move(item));
+    }
+    return true;
+}
+
+bool EditorAnimationDocument::updateAnimationKeyframe(
+    std::string& keyframeId, double timeSeconds,
+    const std::vector<float>& values)
+{
+    std::size_t trackIndex = 0u;
+    std::size_t keyIndex = 0u;
+    const auto* animation = _preview.animation();
+    if (!parseKeyId(keyframeId, trackIndex, keyIndex) || animation == nullptr
+        || trackIndex >= animation->getTrackCount()
+        || keyIndex >= animation->getTrackKeyframeCount(
+            static_cast<std::uint32_t>(trackIndex))) return false;
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[trackIndex];
+    const std::size_t width = valueWidth(track.valueType);
+    if (values.size() != width || !std::all_of(values.begin(), values.end(),
+            [](float value) { return std::isfinite(value); })) return false;
+
+    std::vector<float> normalized = values;
+    if (track.valueType == ayt::resource::AnimTrackType::Quaternion) {
+        float lengthSquared = 0.0f;
+        for (const float value : normalized) lengthSquared += value * value;
+        if (lengthSquared <= 1.0e-12f) return false;
+        const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+        for (float& value : normalized) value *= inverseLength;
+    }
+
+    const float ticksPerSecond = clip.ticksPerSecond > 0.0f
+        ? clip.ticksPerSecond : 1.0f;
+    const float tick = static_cast<float>(std::clamp(
+        timeSeconds, 0.0, static_cast<double>(clip.duration))) * ticksPerSecond;
+    for (std::size_t index = 0u; index < track.times.size(); ++index) {
+        if (index != keyIndex && std::fabs(track.times[index] - tick) < 1.0e-5f) {
+            return false;
+        }
+    }
+    const bool sameTime = std::fabs(track.times[keyIndex] - tick) < 1.0e-5f;
+    const auto valueFirst = track.values.begin() + keyIndex * width;
+    if (sameTime && std::equal(normalized.begin(), normalized.end(), valueFirst)) {
+        return false;
+    }
+
+    std::vector<float> storedIn(width, 0.0f);
+    std::vector<float> storedOut(width, 0.0f);
+    const bool hasIn = track.inTangents.size() == track.values.size();
+    const bool hasOut = track.outTangents.size() == track.values.size();
+    if (hasIn) {
+        std::copy_n(track.inTangents.begin() + keyIndex * width, width,
+                    storedIn.begin());
+        track.inTangents.erase(track.inTangents.begin() + keyIndex * width,
+            track.inTangents.begin() + (keyIndex + 1u) * width);
+    }
+    if (hasOut) {
+        std::copy_n(track.outTangents.begin() + keyIndex * width, width,
+                    storedOut.begin());
+        track.outTangents.erase(track.outTangents.begin() + keyIndex * width,
+            track.outTangents.begin() + (keyIndex + 1u) * width);
+    }
+    track.values.erase(track.values.begin() + keyIndex * width,
+                       track.values.begin() + (keyIndex + 1u) * width);
+    track.times.erase(track.times.begin() + keyIndex);
+    const auto position = std::lower_bound(track.times.begin(), track.times.end(), tick);
+    const std::size_t destination = static_cast<std::size_t>(
+        position - track.times.begin());
+    track.times.insert(position, tick);
+    track.values.insert(track.values.begin() + destination * width,
+                        normalized.begin(), normalized.end());
+    if (hasIn) {
+        track.inTangents.insert(track.inTangents.begin() + destination * width,
+                                storedIn.begin(), storedIn.end());
+    }
+    if (hasOut) {
+        track.outTangents.insert(track.outTangents.begin() + destination * width,
+                                 storedOut.begin(), storedOut.end());
+    }
+    if (!commitEditedAnimation(buildAnimation(clip))) return false;
+    keyframeId = "key." + std::to_string(trackIndex) + "."
+        + std::to_string(destination);
+    return true;
+}
+
+bool EditorAnimationDocument::beginAnimationEditGesture(
+    const std::string& label)
+{
+    return _history.beginTransaction(label);
+}
+
+bool EditorAnimationDocument::commitAnimationEditGesture()
+{
+    return _history.commitTransaction();
+}
+
+bool EditorAnimationDocument::cancelAnimationEditGesture()
+{
+    return _history.cancelTransaction();
+}
+
+bool EditorAnimationDocument::animationEditGestureActive() const noexcept
+{
+    return _history.transactionActive();
+}
+
 bool EditorAnimationDocument::bindSkeleton(const std::string& path,
                                            std::string* error)
 {
