@@ -3,6 +3,7 @@
 #endif
 
 #include "AYEditor/EditorGameFlowExtension.h"
+#include <AYUI/Authoring/PropertyField.h>
 
 #include "AYEditor/EditorGameFlowDocument.h"
 #include "AYEditor/EditorGameFlowPreview.h"
@@ -1395,6 +1396,7 @@ private:
         ayt::ui::TextLabel* label = nullptr;
         ayt::ui::TextInput* input = nullptr;
         ayt::ui::ComboBox* choice = nullptr;
+        ayt::ui::authoring::PropertyField* field = nullptr;
     };
 
     std::wstring text(std::string_view key,
@@ -1489,34 +1491,19 @@ private:
     PropertyRow propertyRow(ayt::ui::VBox& parent)
     {
         PropertyRow value;
-        value.row = new ayt::ui::HBox();
-        value.row->setSpacing(4.0f);
-        value.row->setPadding(0.0f, 0.0f, 0.0f, 0.0f);
-        value.label = new ayt::ui::TextLabel();
-        value.label->setFontSize(11);
-        value.label->setTextColor({0.67f, 0.71f, 0.78f, 1.0f});
-        value.label->setVerticalAlignment(
-            ayt::ui::TextLabel::VAlignment::Center);
-        value.input = new ayt::ui::TextInput();
-        value.choice = new ayt::ui::ComboBox();
-        value.choice->setVisible(false);
-        value.input->setOnTextChanged([this](const std::wstring&) {
+        ayt::ui::authoring::PropertyFieldOptions options;
+        options.submitOnFocusLost = true;
+        value.field = new ayt::ui::authoring::PropertyField(options);
+        value.row = value.field;
+        value.label = value.field->label();
+        value.input = value.field->input();
+        value.choice = value.field->choice();
+        value.field->setOnEdited([this]() {
             if (!_refreshing) markInspectorDraftDirty();
         });
-        value.input->setOnSubmit([this](const std::wstring&) {
+        value.field->setOnSubmitted([this]() {
             if (!_refreshing) (void)commitInspectorDraft();
         });
-        value.input->setOnFocusLostNotify([this]() {
-            if (!_refreshing) (void)commitInspectorDraft();
-        });
-        value.choice->setOnSelectionChanged([this](int) {
-            if (_refreshing) return;
-            markInspectorDraftDirty();
-            (void)commitInspectorDraft();
-        });
-        value.row->addWidget(value.label, 102.0f);
-        value.row->addWidget(value.input, 0.0f);
-        value.row->addWidget(value.choice, 0.0f);
         parent.addWidget(value.row, 25.0f);
         return value;
     }
@@ -3008,14 +2995,7 @@ private:
                                const std::string& value,
                                bool readOnly = false)
     {
-        const bool visible = !labelText.empty();
-        row.row->setVisible(visible);
-        if (!visible) return;
-        row.label->setText(labelText);
-        row.input->setVisible(true);
-        row.input->setReadOnly(readOnly);
-        row.choice->setVisible(false);
-        row.input->setText(ayt::ui::decodeUtf8Text(value));
+        row.field->setTextValue(labelText, ayt::ui::decodeUtf8Text(value), readOnly);
     }
 
     static void setPropertyChoice(PropertyRow& row,
@@ -3024,27 +3004,11 @@ private:
                                   const std::vector<std::string>& choices,
                                   bool allowEmpty = false)
     {
-        row.row->setVisible(!labelText.empty());
-        if (labelText.empty()) return;
-        row.label->setText(labelText);
-        row.input->setVisible(false);
-        row.choice->setVisible(true);
         std::vector<std::wstring> items;
-        items.reserve(choices.size() + (allowEmpty ? 1u : 0u));
-        if (allowEmpty) items.emplace_back();
         for (const auto& choice : choices) {
             items.push_back(ayt::ui::decodeUtf8Text(choice));
         }
-        const std::wstring selected = ayt::ui::decodeUtf8Text(value);
-        if (!selected.empty()
-            && std::find(items.begin(), items.end(), selected) == items.end()) {
-            items.push_back(selected);
-        }
-        row.choice->setItems(items);
-        const auto found = std::find(items.begin(), items.end(), selected);
-        row.choice->setSelectedIndex(found == items.end()
-            ? (items.empty() ? -1 : 0)
-            : static_cast<int>(std::distance(items.begin(), found)));
+        row.field->setChoiceValue(labelText, ayt::ui::decodeUtf8Text(value), items, allowEmpty);
     }
 
     static std::string propertyValue(const PropertyRow& row)
