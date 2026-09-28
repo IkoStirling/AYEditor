@@ -63,6 +63,8 @@ target_compile_definitions(${MODULE_NAME} PRIVATE
 # Keep registration symbols in this test-only binary. Production binaries keep
 # their normal linker optimization settings.
 if(MSVC)
+    # Static case registration is aggregated in one translation unit.
+    target_compile_options(${MODULE_NAME} PRIVATE /bigobj)
     target_link_options(${MODULE_NAME} PRIVATE "/OPT:NOREF")
 endif()
 

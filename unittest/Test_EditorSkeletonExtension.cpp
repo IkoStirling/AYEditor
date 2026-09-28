@@ -146,7 +146,10 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
     auto view = descriptor.createView(document, host);
     CHECK(view != nullptr);
     CHECK(view != nullptr && view->rootWidget() != nullptr);
-    CHECK(view != nullptr && view->commandTarget() == skeleton.get());
+    CHECK(view != nullptr && view->commandTarget() != nullptr);
+    CHECK(view != nullptr && view->commandTarget()->handlesCommand("edit.undo"));
+    CHECK(view != nullptr && view->commandTarget()->canExecuteCommand("edit.undo")
+        == skeleton->canExecuteCommand("edit.undo"));
     auto* search = dynamic_cast<ayt::ui::TextInput*>(findSkeletonWidget(
         view->rootWidget(), "skeleton_bone_search"));
     auto* bones = dynamic_cast<ayt::ui::ListView*>(findSkeletonWidget(

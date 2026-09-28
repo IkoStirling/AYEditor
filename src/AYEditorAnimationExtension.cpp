@@ -4,6 +4,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
+#include <AYEditor/EditorCommandButtons.h>
 #include "AYEditorAnimationCurveCanvas.h"
 #include "AYEditorAnimationCurveSource.h"
 #include "AYEditorAnimationDopeSheet.h"
@@ -65,7 +66,7 @@ class EditorAnimationWorkspaceView final
 public:
     EditorAnimationWorkspaceView(std::shared_ptr<EditorAnimationDocument> document,
                                  IEditorHostServices& host)
-        : _document(std::move(document)), _host(host)
+        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); })
     {
         _document->configureProjectRoot(_host.projectRoot());
         build();
@@ -74,6 +75,7 @@ public:
 
     ~EditorAnimationWorkspaceView() override
     {
+        _commands.detach();
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
 
@@ -83,23 +85,28 @@ public:
         _root = nullptr;
         return result;
     }
+    void prepareForUiShutdown() override { _commands.detach(); }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     bool handlesCommand(const std::string& commandId) const override {
-        return _document != nullptr && _document->handlesCommand(commandId);
+        return commandId == "edit.delete" || (_document && _document->handlesCommand(commandId));
     }
     bool canExecuteCommand(const std::string& commandId) const override {
-        return _document != nullptr && _document->canExecuteCommand(commandId);
+        if (commandId == "edit.delete") return _curveCanvas && _curveCanvas->selectedKeyCount() > 0u;
+        return _document && _document->canExecuteCommand(commandId);
     }
     bool executeCommand(const std::string& commandId) override {
-        if (_document == nullptr || !_document->executeCommand(commandId)) {
-            return false;
-        }
-        refreshAll();
-        return true;
+        if (!canExecuteCommand(commandId)) return false;
+        std::string error;
+        const bool success = commandId == "file.save" ? _document->save(&error)
+            : commandId == "edit.delete" ? _curveCanvas->deleteSelectedKeys() : _document->executeCommand(commandId);
+        if (!success) { _host.setStatusText(L"Animation command failed: " + ayt::ui::decodeUtf8Text(error)); return false; }
+        _host.setStatusText(L"Animation command completed");
+        refreshAll(); return true;
     }
     void tick(float dt) override
     {
         if (_document == nullptr) return;
+        _commands.refresh();
         if (_document->timelinePlaying()) _document->timelineTick(dt);
         const auto changes = _refreshGate.consume(stateStamp());
         if (!changes.content && (changes.pose || changes.transport)) {
@@ -188,28 +195,9 @@ private:
         toolbar->addWidget(makeButton(L"Frame", [this]() {
             if (_canvas != nullptr) _canvas->framePreview();
         }), 54.0f);
-        toolbar->addWidget(makeButton(L"Undo", [this]() {
-            if (_document->timelineUndo()) {
-                _host.setStatusText(L"Animation edit undone");
-                refreshAll();
-            }
-        }), 52.0f);
-        toolbar->addWidget(makeButton(L"Redo", [this]() {
-            if (_document->timelineRedo()) {
-                _host.setStatusText(L"Animation edit redone");
-                refreshAll();
-            }
-        }), 52.0f);
-        toolbar->addWidget(makeButton(L"Save", [this]() {
-            std::string error;
-            if (!_document->save(&error)) {
-                _host.setStatusText(L"Animation save failed: "
-                    + ayt::ui::decodeUtf8Text(error));
-            } else {
-                _host.setStatusText(L"Animation clip saved");
-                refreshAll();
-            }
-        }), 52.0f);
+        _commands.add(*toolbar, L"Undo", "edit.undo", 52);
+        _commands.add(*toolbar, L"Redo", "edit.redo", 52);
+        _commands.add(*toolbar, L"Save", "file.save", 52);
         toolbar->addWidget(makeHeader(L"VIEW"), 38.0f);
         _mode = new ayt::ui::ComboBox();
         _mode->setItems({L"Model + Skeleton", L"Model", L"Skeleton"});
@@ -253,13 +241,7 @@ private:
         curveToolbar->addWidget(makeButton(L"Select All", [this]() {
             if (_curveCanvas != nullptr) _curveCanvas->selectAllKeys();
         }), 72.0f);
-        curveToolbar->addWidget(makeButton(L"Delete", [this]() {
-            if (_curveCanvas != nullptr && _curveCanvas->deleteSelectedKeys()) {
-                _selectedKeyId.clear();
-                _host.setStatusText(L"Selected animation keys deleted");
-                refreshAll();
-            }
-        }), 56.0f);
+        _commands.add(*curveToolbar, L"Delete", "edit.delete", 56);
         auto* curveHelp = new ayt::ui::TextLabel();
         curveHelp->setText(L"Drag key/value or tangent · Wheel zoom · Middle/right pan");
         curveHelp->setFontSize(10);
@@ -565,12 +547,14 @@ private:
 
     void refreshAll()
     {
+        _commands.refresh();
         refreshBindings();
         refreshInspector();
         refreshDiagnostics();
         refreshTransport();
         refreshAuthoring();
         refreshCurveControls();
+        _commands.refresh();
         _refreshGate.acknowledge(stateStamp());
         if (_canvas != nullptr) _canvas->markDirty();
         _host.requestRepaint();
@@ -1018,6 +1002,7 @@ private:
 
     std::shared_ptr<EditorAnimationDocument> _document;
     IEditorHostServices& _host;
+    EditorCommandButtons _commands;
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;

@@ -14,6 +14,7 @@
 #include <AYResource/assetsImpl/Skeleton.h>
 #include <AYUI/MockRenderer.h>
 #include <AYUI/TextInput.h>
+#include <AYEditor/EditorCommandButtons.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -227,6 +228,10 @@ TEST_CASE(shared_numeric_fields_submit_to_document_and_reject_partial_input)
     CHECK(x != nullptr);
     if (!x) return;
     const auto id = document->timelineKeyframes().front().id;
+    auto* undoButton = dynamic_cast<ayt::ui::Button*>(findInput(view->rootWidget(), "command_edit.undo"));
+    CHECK(undoButton != nullptr);
+    if (!undoButton) return;
+    CHECK(!undoButton->isEnabled());
     std::vector<float> before, values;
     CHECK(document->animationKeyframeValues(id, before));
     x->setFocus(true);
@@ -234,7 +239,8 @@ TEST_CASE(shared_numeric_fields_submit_to_document_and_reject_partial_input)
     CHECK(x->onKeyDown(13));
     CHECK(document->animationKeyframeValues(id, values));
     CHECK(values[0] == 3.25f);
-    CHECK(document->timelineUndo());
+    CHECK(undoButton->isEnabled());
+    CHECK(view->commandTarget()->executeCommand("edit.undo"));
     view->tick(0);
     CHECK(document->animationKeyframeValues(id, values));
     CHECK(values == before);
@@ -677,6 +683,48 @@ TEST_CASE(common_curve_source_caches_immutable_revisions_and_samples_rotation)
     CHECK(std::fabs(source->curveTrack("animation.1")->sample(2u, 0.5) - z) < 1e-5f);
 }
 
+TEST_CASE(command_buttons_follow_current_target_and_disable_stale_actions)
+{
+    class Target final : public ayt::editor::IEditorCommandTarget {
+    public:
+        bool enabled = true; int executions = 0;
+        bool handlesCommand(const std::string& id) const override { return id == "test.action"; }
+        bool canExecuteCommand(const std::string& id) const override { return handlesCommand(id) && enabled; }
+        bool executeCommand(const std::string& id) override {
+            if (!canExecuteCommand(id)) return false;
+            ++executions; return true;
+        }
+    } first, second;
+    ayt::editor::IEditorCommandTarget* active = &first;
+    auto* row = new ayt::ui::HBox();
+    ayt::ui::Button* retained = nullptr;
+    {
+        ayt::editor::EditorCommandButtons commands([&] { return active; });
+        retained = commands.add(*row, L"Action", "test.action", 80);
+        retained->setSize({80, 28});
+        CHECK(retained->isEnabled());
+        CHECK(commands.invoke("test.action")); CHECK(first.executions == 1);
+        first.enabled = false; commands.refresh();
+        CHECK(!retained->isEnabled());
+        CHECK(!commands.invoke("test.action")); CHECK(first.executions == 1);
+        active = &second; commands.refresh();
+        CHECK(retained->isEnabled());
+        retained->onMouseMove({{10, 10}, 0});
+        retained->onMouseButtonDown({{10, 10}, 0});
+        retained->onMouseButtonUp({{10, 10}, 0});
+        CHECK(second.executions == 1);
+        CHECK(!commands.invoke("unknown"));
+        active = nullptr; commands.refresh();
+        CHECK(!retained->isEnabled());
+        active = &second; commands.refresh();
+    }
+    // A hosted tree may outlive the binding object; its closure is inert.
+    retained->onMouseMove({{10, 10}, 0});
+    retained->onMouseButtonDown({{10, 10}, 0});
+    retained->onMouseButtonUp({{10, 10}, 0});
+    CHECK(second.executions == 1);
+    ayt::ui::destroyWidgetTree(row);
+}
 TEST_SUITE_END
 
 TEST_SUITE(AYEditor_PlaybackAdapter)

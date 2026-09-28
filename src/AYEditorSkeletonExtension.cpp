@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
+#include <AYEditor/EditorCommandButtons.h>
 #include <AYUI/Authoring/ResourceReferenceField.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include <AYUI/Authoring/AuthoringPrimitives.h>
@@ -198,11 +199,11 @@ private:
     bool _dragging = false;
 };
 
-class EditorSkeletonWorkspaceView final : public IEditorView {
+class EditorSkeletonWorkspaceView final : public IEditorView, public IEditorCommandTarget {
 public:
     EditorSkeletonWorkspaceView(std::shared_ptr<EditorSkeletonDocument> document,
                                 IEditorHostServices& host)
-        : _document(std::move(document)), _host(host)
+        : _document(std::move(document)), _host(host), _commands([this] { return commandTarget(); })
     {
         _document->configureProjectRoot(_host.projectRoot());
         build();
@@ -211,6 +212,7 @@ public:
 
     ~EditorSkeletonWorkspaceView() override
     {
+        _commands.detach();
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
 
@@ -220,12 +222,21 @@ public:
         _root = nullptr;
         return root;
     }
-    IEditorCommandTarget* commandTarget() noexcept override {
-        return _document.get();
+    void prepareForUiShutdown() override { _commands.detach(); }
+    IEditorCommandTarget* commandTarget() noexcept override { return this; }
+    bool handlesCommand(const std::string& id) const override { return _document && _document->handlesCommand(id); }
+    bool canExecuteCommand(const std::string& id) const override { return _document && _document->canExecuteCommand(id); }
+    bool executeCommand(const std::string& id) override {
+        if (!canExecuteCommand(id)) return false;
+        std::string error;
+        const bool success = id == "file.save" ? _document->save(&error) : _document->executeCommand(id);
+        if (!success) { _host.setStatusText(L"Skeleton command failed: " + ayt::ui::decodeUtf8Text(error)); return false; }
+        _host.setStatusText(L"Skeleton command completed"); refreshAll(); return true;
     }
     void tick(float dt) override
     {
         if (_document == nullptr) return;
+        _commands.refresh();
         pollBake();
         if (_document->timelinePlaying()) {
             _document->timelineTick(dt);
@@ -281,13 +292,9 @@ private:
 
         auto* toolbar = new ayt::ui::HBox();
         toolbar->setSpacing(5.0f);
-        toolbar->addWidget(makeButton(L"Save", [this]() { save(); }), 54.0f);
-        toolbar->addWidget(makeButton(L"Undo", [this]() {
-            if (_document->core().undo()) refreshAll();
-        }), 52.0f);
-        toolbar->addWidget(makeButton(L"Redo", [this]() {
-            if (_document->core().redo()) refreshAll();
-        }), 52.0f);
+        _commands.add(*toolbar, L"Save", "file.save", 54);
+        _commands.add(*toolbar, L"Undo", "edit.undo", 52);
+        _commands.add(*toolbar, L"Redo", "edit.redo", 52);
         toolbar->addWidget(makeButton(L"Frame", [this]() {
             if (_canvas != nullptr) _canvas->frameSkeleton();
         }), 58.0f);
@@ -553,6 +560,7 @@ private:
 
     void refreshAll()
     {
+        _commands.refresh();
         refreshHierarchy();
         refreshProfiles();
         refreshMapping();
@@ -1071,19 +1079,6 @@ private:
         _transport->refresh();
     }
 
-    void save()
-    {
-        std::string error;
-        if (_document->save(&error)) {
-            _host.setStatusText(L"Skeleton mapping saved");
-            refreshProfiles();
-        } else {
-            _host.setStatusText(L"Skeleton mapping save failed: "
-                + ayt::ui::decodeUtf8Text(error));
-        }
-        refreshStatus();
-    }
-
     ayt::ui::authoring::ResourceReferenceResult loadAnimation()
     {
         std::string error;
@@ -1100,6 +1095,7 @@ private:
 
     std::shared_ptr<EditorSkeletonDocument> _document;
     IEditorHostServices& _host;
+    EditorCommandButtons _commands;
     ayt::ui::Widget* _root = nullptr;
     EditorSkeletonCanvas* _canvas = nullptr;
     ayt::ui::ListView* _boneList = nullptr;
