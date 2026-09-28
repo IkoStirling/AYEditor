@@ -30,6 +30,13 @@ struct EditorAnimationCurveTrack {
     std::vector<EditorAnimationCurveKey> keys;
 };
 
+struct EditorAnimationNotify {
+    std::string id;
+    std::string name;
+    double timeSeconds = 0.0;
+    float payload = 0.0f;
+};
+
 class EditorAnimationDocument final
     : public IEditorDocument, public IEditorTimelineSource,
       public IEditorCommandTarget {
@@ -105,6 +112,12 @@ public:
         double deltaTimeSeconds, std::size_t component, float deltaValue);
     bool removeAnimationKeyframes(
         const std::vector<std::string>& keyframeIds);
+    std::vector<EditorAnimationNotify> animationNotifies() const;
+    bool addAnimationNotify(const std::string& name, double timeSeconds,
+                            float payload);
+    bool updateAnimationNotify(std::string& notifyId, const std::string& name,
+                               double timeSeconds, float payload);
+    bool removeAnimationNotify(const std::string& notifyId);
     bool beginAnimationEditGesture(const std::string& label);
     bool commitAnimationEditGesture();
     bool cancelAnimationEditGesture();

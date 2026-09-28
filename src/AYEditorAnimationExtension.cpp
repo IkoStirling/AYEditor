@@ -310,8 +310,14 @@ private:
         _dopeSheet = new EditorAnimationDopeSheet(_document);
         _dopeSheet->setOnSelectionChanged(
             [this](const std::string& trackId, const std::string& keyId) {
+                if (keyId.rfind("notify.", 0u) == 0u) {
+                    _selectedNotifyId = keyId;
+                    refreshAuthoring();
+                    return;
+                }
                 _selectedTrackId = trackId;
                 _selectedKeyId = keyId;
+                _selectedNotifyId.clear();
                 if (_curveCanvas != nullptr) {
                     _curveCanvas->setTrackId(trackId);
                 }
@@ -370,6 +376,7 @@ private:
                 || index >= static_cast<int>(_trackIds.size())) return;
             _selectedTrackId = _trackIds[static_cast<std::size_t>(index)];
             _selectedKeyId.clear();
+            _selectedNotifyId.clear();
             refreshAuthoring();
         });
         inspector->addWidget(_trackPicker, 28.0f);
@@ -404,6 +411,7 @@ private:
             if (_syncing || index < 0
                 || index >= static_cast<int>(_keyIds.size())) return;
             _selectedKeyId = _keyIds[static_cast<std::size_t>(index)];
+            _selectedNotifyId.clear();
             refreshAuthoring();
         });
         inspector->addWidget(_keyPicker, 28.0f);
@@ -493,6 +501,38 @@ private:
         }), 98.0f);
         inspector->addWidget(tangentActions, 28.0f);
 
+        inspector->addWidget(makeHeader(L"NOTIFY / EVENT"), 20.0f);
+        _notifyPicker = new ayt::ui::ComboBox();
+        _notifyPicker->setOnSelectionChanged([this](int index) {
+            if (_syncing || index < 0
+                || index >= static_cast<int>(_notifyIds.size())) return;
+            _selectedNotifyId = _notifyIds[static_cast<std::size_t>(index)];
+            refreshAuthoring();
+        });
+        inspector->addWidget(_notifyPicker, 28.0f);
+        auto* notifyDefinition = new ayt::ui::HBox();
+        notifyDefinition->setSpacing(4.0f);
+        _notifyName = new ayt::ui::TextInput();
+        _notifyName->setPlaceholder(L"Event name");
+        notifyDefinition->addWidget(_notifyName, 0.0f);
+        _notifyPayload = new ayt::ui::TextInput();
+        _notifyPayload->setPlaceholder(L"Payload");
+        _notifyPayload->setNumericScrubEnabled(true);
+        notifyDefinition->addWidget(_notifyPayload, 92.0f);
+        inspector->addWidget(notifyDefinition, 28.0f);
+        auto* notifyActions = new ayt::ui::HBox();
+        notifyActions->setSpacing(4.0f);
+        notifyActions->addWidget(makeButton(L"Add Here", [this]() {
+            addNotify();
+        }), 72.0f);
+        notifyActions->addWidget(makeButton(L"Apply Here", [this]() {
+            updateNotify();
+        }), 82.0f);
+        notifyActions->addWidget(makeButton(L"Delete", [this]() {
+            deleteNotify();
+        }), 58.0f);
+        inspector->addWidget(notifyActions, 28.0f);
+
         inspector->addWidget(makeHeader(L"TRACKS / EVENTS"), 20.0f);
         _tracks = new ayt::ui::TextArea();
         _tracks->setReadOnly(true);
@@ -516,6 +556,8 @@ private:
             (void)_document->setTimelinePositionSeconds(value);
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
+            if (_curveCanvas != nullptr) _curveCanvas->markDirty();
+            if (_dopeSheet != nullptr) _dopeSheet->markDirty();
         });
         timeline->addWidget(_playhead, 0.0f);
         _time = new ayt::ui::TextLabel();
@@ -679,9 +721,6 @@ private:
         if (_curveCanvas != nullptr) {
             _curveCanvas->setTrackId(_selectedTrackId);
         }
-        if (_dopeSheet != nullptr) {
-            _dopeSheet->setSelection(_selectedTrackId, _selectedKeyId);
-        }
         const auto selectedTrack = std::find(
             _trackIds.begin(), _trackIds.end(), _selectedTrackId);
         const int trackIndex = selectedTrack == _trackIds.end() ? -1
@@ -764,7 +803,47 @@ private:
                 }
             }
         }
+
+        const auto notifies = _document->animationNotifies();
+        _notifyIds.clear();
+        std::vector<std::wstring> notifyItems;
+        for (const auto& notify : notifies) {
+            _notifyIds.push_back(notify.id);
+            std::wostringstream label;
+            label << ayt::ui::decodeUtf8Text(notify.name) << L"   @ "
+                  << std::fixed << std::setprecision(3)
+                  << notify.timeSeconds << L" s";
+            notifyItems.push_back(label.str());
+        }
+        if (!_selectedNotifyId.empty()
+            && std::find(_notifyIds.begin(), _notifyIds.end(),
+                         _selectedNotifyId) == _notifyIds.end()) {
+            _selectedNotifyId.clear();
+        }
+        const auto selectedNotify = std::find(
+            _notifyIds.begin(), _notifyIds.end(), _selectedNotifyId);
+        const int notifyIndex = selectedNotify == _notifyIds.end() ? -1
+            : static_cast<int>(selectedNotify - _notifyIds.begin());
+        _notifyPicker->setItems(notifyItems);
+        _notifyPicker->setSelectedIndex(notifyIndex);
+        if (notifyIndex >= 0) {
+            const auto& notify = notifies[static_cast<std::size_t>(notifyIndex)];
+            _notifyName->setText(ayt::ui::decodeUtf8Text(notify.name));
+            std::wostringstream payload;
+            payload << std::setprecision(7) << notify.payload;
+            _notifyPayload->setText(payload.str());
+        } else {
+            _notifyName->setText(L"");
+            _notifyPayload->setText(L"0");
+        }
         _syncing = false;
+        if (_dopeSheet != nullptr) {
+            _dopeSheet->setSelection(
+                notifyIndex >= 0
+                    ? "event." + std::to_string(notifyIndex)
+                    : _selectedTrackId,
+                notifyIndex >= 0 ? _selectedNotifyId : _selectedKeyId);
+        }
         _editState->setText(_document->isDirty() ? L"Modified" : L"Saved");
     }
 
@@ -921,6 +1000,56 @@ private:
         refreshAll();
     }
 
+    void addNotify()
+    {
+        const std::string name = encodeUtf8(_notifyName->getText());
+        const auto payload = parseFiniteFloat(_notifyPayload->getText());
+        if (name.empty() || !payload) {
+            _host.setStatusText(L"Notify requires a name and finite payload");
+            return;
+        }
+        if (!_document->addAnimationNotify(name,
+                _document->timelinePositionSeconds(), *payload)) return;
+        const auto notifies = _document->animationNotifies();
+        const auto selected = std::find_if(notifies.begin(), notifies.end(),
+            [&](const auto& notify) {
+                return notify.name == name
+                    && std::fabs(notify.timeSeconds
+                        - _document->timelinePositionSeconds()) < 1.0e-5
+                    && notify.payload == *payload;
+            });
+        _selectedNotifyId = selected != notifies.end()
+            ? selected->id : std::string{};
+        _host.setStatusText(L"Animation notify added at playhead");
+        refreshAll();
+    }
+
+    void updateNotify()
+    {
+        if (_selectedNotifyId.empty()) return;
+        const std::string name = encodeUtf8(_notifyName->getText());
+        const auto payload = parseFiniteFloat(_notifyPayload->getText());
+        if (name.empty() || !payload) {
+            _host.setStatusText(L"Notify requires a name and finite payload");
+            return;
+        }
+        std::string updated = _selectedNotifyId;
+        if (!_document->updateAnimationNotify(updated, name,
+                _document->timelinePositionSeconds(), *payload)) return;
+        _selectedNotifyId = std::move(updated);
+        _host.setStatusText(L"Animation notify updated at playhead");
+        refreshAll();
+    }
+
+    void deleteNotify()
+    {
+        if (_selectedNotifyId.empty()
+            || !_document->removeAnimationNotify(_selectedNotifyId)) return;
+        _selectedNotifyId.clear();
+        _host.setStatusText(L"Animation notify deleted");
+        refreshAll();
+    }
+
     void refreshDiagnostics()
     {
         std::wostringstream text;
@@ -985,14 +1114,19 @@ private:
     std::array<ayt::ui::HBox*, 2> _tangentRows{};
     std::array<ayt::ui::TextInput*, 4> _inTangents{};
     std::array<ayt::ui::TextInput*, 4> _outTangents{};
+    ayt::ui::ComboBox* _notifyPicker = nullptr;
+    ayt::ui::TextInput* _notifyName = nullptr;
+    ayt::ui::TextInput* _notifyPayload = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::Slider* _playhead = nullptr;
     ayt::ui::TextLabel* _time = nullptr;
     ayt::ui::TextLabel* _transportStatus = nullptr;
     std::vector<std::string> _trackIds;
     std::vector<std::string> _keyIds;
+    std::vector<std::string> _notifyIds;
     std::string _selectedTrackId;
     std::string _selectedKeyId;
+    std::string _selectedNotifyId;
     std::uint64_t _lastRevision = 0u;
     std::uint64_t _lastPoseRevision = 0u;
     bool _syncing = false;

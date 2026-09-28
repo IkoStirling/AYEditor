@@ -70,7 +70,6 @@ EditorAnimationDopeSheet::KeyHit EditorAnimationDopeSheet::hitKey(
     const auto tracks = _document->timelineTracks();
     const auto keys = _document->timelineKeyframes();
     for (std::size_t row = 0u; row < tracks.size(); ++row) {
-        if (tracks[row].kind != EditorTimelineTrackKind::Animation) continue;
         const float y = getWorldBounds().minY + kHeaderHeight
             + (static_cast<float>(row) + 0.5f) * kRowHeight;
         for (const auto& key : keys) {
@@ -111,7 +110,9 @@ bool EditorAnimationDopeSheet::onMouseButtonDown(
     _dragKeyId = hit.keyId;
     _gestureChanged = false;
     if (_document != nullptr
-        && _document->beginAnimationEditGesture("Move dope sheet key")) {
+        && _document->beginAnimationEditGesture(
+            hit.keyId.rfind("notify.", 0u) == 0u
+                ? "Move animation notify" : "Move dope sheet key")) {
         _draggingKey = true;
         if (_onSelectionChanged) {
             _onSelectionChanged(_selectedTrackId, _selectedKeyId);
@@ -136,6 +137,35 @@ bool EditorAnimationDopeSheet::onMouseMove(
     }
     if (!_draggingKey || _document == nullptr) {
         return getWorldBounds().contains(event.mousePos);
+    }
+    if (_dragKeyId.rfind("notify.", 0u) == 0u) {
+        const auto notifies = _document->animationNotifies();
+        const auto marker = std::find_if(notifies.begin(), notifies.end(),
+            [this](const auto& candidate) {
+                return candidate.id == _dragKeyId;
+            });
+        if (marker == notifies.end()) return true;
+        const auto* animation = _document->preview().animation();
+        const double rate = animation != nullptr
+            && animation->getTicksPerSecond() > 0.0f
+            ? animation->getTicksPerSecond() : 1.0;
+        double seconds = secondsAt(event.mousePos.x);
+        seconds = std::round(seconds * rate) / rate;
+        std::string updated = _dragKeyId;
+        if (_document->updateAnimationNotify(
+                updated, marker->name, seconds, marker->payload)) {
+            _dragKeyId = updated;
+            _selectedKeyId = updated;
+            _selectedTrackId = "event." + updated.substr(7u);
+            _gestureChanged = true;
+            (void)_document->setTimelinePositionSeconds(seconds);
+            if (_onSelectionChanged) {
+                _onSelectionChanged(_selectedTrackId, _selectedKeyId);
+            }
+            if (_onEdited) _onEdited();
+            markDirty();
+        }
+        return true;
     }
     std::vector<float> values;
     if (!_document->animationKeyframeValues(_dragKeyId, values)) return true;

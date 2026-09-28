@@ -487,4 +487,58 @@ TEST_CASE(animation_dope_sheet_drags_keys_with_one_undo_step)
     CHECK(std::fabs(track.keys[1].timeSeconds - 1.0) < 1.0e-6);
 }
 
+TEST_CASE(animation_notifies_are_authored_dragged_undoable_and_persistent)
+{
+    const auto path = writeAnimationEditorClip();
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    auto notifies = document->animationNotifies();
+    CHECK(notifies.size() == 1u);
+    CHECK(notifies[0].name == "footstep");
+    CHECK(document->addAnimationNotify("land", 1.5, 0.8f));
+    notifies = document->animationNotifies();
+    CHECK(notifies.size() == 2u);
+    std::string edited = "notify.0";
+    CHECK(document->updateAnimationNotify(edited, "step", 1.75, 0.5f));
+    CHECK(edited == "notify.1");
+    notifies = document->animationNotifies();
+    CHECK(notifies[1].name == "step");
+    CHECK(notifies[1].payload == 0.5f);
+    CHECK(document->removeAnimationNotify("notify.0"));
+    CHECK(document->animationNotifies().size() == 1u);
+    CHECK(document->timelineUndo());
+    CHECK(document->animationNotifies().size() == 2u);
+    ayt::editor::EditorAnimationDopeSheet sheet(document);
+    sheet.setSize({640.0f, 170.0f});
+    std::string selectedNotify;
+    int editCallbacks = 0;
+    sheet.setOnSelectionChanged([&](const std::string&,
+                                    const std::string& keyId) {
+        selectedNotify = keyId;
+    });
+    sheet.setOnEdited([&]() { ++editCallbacks; });
+    ayt::ui::MockRenderer renderer;
+    renderer.beginFrame();
+    sheet.render(renderer);
+    CHECK(sheet.onMouseButtonDown({{522.0f, 58.0f}, 0}));
+    CHECK(selectedNotify == "notify.0");
+    CHECK(sheet.onMouseMove({{404.0f, 58.0f}, 0}));
+    CHECK(sheet.onMouseButtonUp({{404.0f, 58.0f}, 0}));
+    CHECK(editCallbacks > 0);
+    notifies = document->animationNotifies();
+    CHECK(std::fabs(notifies[0].timeSeconds - 1.0) < 1.0e-6);
+    CHECK(document->timelineUndo());
+    CHECK(document->save(&error));
+
+    ayt::editor::EditorAnimationDocument reopened;
+    CHECK(reopened.initialize(
+        ayt::editor::EditorOpenRequest{path.string()}, error));
+    notifies = reopened.animationNotifies();
+    CHECK(notifies.size() == 2u);
+    CHECK(notifies[1].name == "step");
+    CHECK(std::fabs(notifies[1].timeSeconds - 1.75) < 1.0e-6);
+}
+
 TEST_SUITE_END

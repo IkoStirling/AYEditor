@@ -1072,6 +1072,79 @@ bool EditorAnimationDocument::removeAnimationKeyframes(
     return commitEditedAnimation(buildAnimation(clip));
 }
 
+std::vector<EditorAnimationNotify>
+EditorAnimationDocument::animationNotifies() const
+{
+    std::vector<EditorAnimationNotify> result;
+    const auto* animation = _preview.animation();
+    if (animation == nullptr) return result;
+    result.reserve(animation->getNotifyCount());
+    for (std::uint32_t index = 0u; index < animation->getNotifyCount(); ++index) {
+        result.push_back({"notify." + std::to_string(index),
+            animation->getNotifyName(index) != nullptr
+                ? animation->getNotifyName(index) : "",
+            animation->getNotifyTime(index), animation->getNotifyPayload(index)});
+    }
+    return result;
+}
+
+bool EditorAnimationDocument::addAnimationNotify(
+    const std::string& name, double timeSeconds, float payload)
+{
+    const auto* animation = _preview.animation();
+    if (animation == nullptr || name.empty() || !std::isfinite(timeSeconds)
+        || !std::isfinite(payload)) return false;
+    EditableClip clip = readEditableClip(*animation);
+    clip.notifies.push_back({name, static_cast<float>(std::clamp(
+        timeSeconds, 0.0, static_cast<double>(clip.duration))), payload});
+    std::stable_sort(clip.notifies.begin(), clip.notifies.end(),
+        [](const auto& a, const auto& b) { return a.time < b.time; });
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
+bool EditorAnimationDocument::updateAnimationNotify(
+    std::string& notifyId, const std::string& name,
+    double timeSeconds, float payload)
+{
+    const auto index = parseIndex(notifyId, "notify.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getNotifyCount()
+        || name.empty() || !std::isfinite(timeSeconds)
+        || !std::isfinite(payload)) return false;
+    EditableClip clip = readEditableClip(*animation);
+    auto marker = clip.notifies[*index];
+    const float clampedTime = static_cast<float>(std::clamp(
+        timeSeconds, 0.0, static_cast<double>(clip.duration)));
+    if (marker.name == name && std::fabs(marker.time - clampedTime) < 1.0e-6f
+        && marker.payload == payload) return false;
+    marker.name = name;
+    marker.time = clampedTime;
+    marker.payload = payload;
+    clip.notifies.erase(clip.notifies.begin() + *index);
+    const auto position = std::upper_bound(clip.notifies.begin(),
+        clip.notifies.end(), marker.time,
+        [](float time, const auto& candidate) { return time < candidate.time; });
+    const std::size_t destination = static_cast<std::size_t>(
+        position - clip.notifies.begin());
+    clip.notifies.insert(position, std::move(marker));
+    if (!commitEditedAnimation(buildAnimation(clip))) return false;
+    notifyId = "notify." + std::to_string(destination);
+    return true;
+}
+
+bool EditorAnimationDocument::removeAnimationNotify(
+    const std::string& notifyId)
+{
+    const auto index = parseIndex(notifyId, "notify.");
+    const auto* animation = _preview.animation();
+    if (!index || animation == nullptr || *index >= animation->getNotifyCount()) {
+        return false;
+    }
+    EditableClip clip = readEditableClip(*animation);
+    clip.notifies.erase(clip.notifies.begin() + *index);
+    return commitEditedAnimation(buildAnimation(clip));
+}
+
 bool EditorAnimationDocument::beginAnimationEditGesture(
     const std::string& label)
 {
