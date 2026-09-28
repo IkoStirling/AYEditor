@@ -1835,7 +1835,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             _projectEngineProfile = descriptor.engineProfile;
         }
     }
-    _assetImportProgressPercent = -1;
+    _assetImportProgress.reset();
+    _assetImportPresentation.reset();
     _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
     std::string recoveryError;
     if (!_recoveryStore->beginSession(&recoveryError)) {
@@ -2280,7 +2281,8 @@ void EditorSession::shutdown() {
     }
     _assetPreviewCache.reset();
     _assetImportQueue.reset();
-    _assetImportProgressPercent = -1;
+    _assetImportPresentation.reset();
+    _assetImportProgress.reset();
 
     // v0.3+ PR-5 — Landmine E: 清 Outliner 状态**早于** _ui.shutdown()
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
@@ -2457,35 +2459,47 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         const auto completed = std::find_if(jobs.rbegin(), jobs.rend(),
             [](const EditorAssetImportJob& job) { return job.finished(); });
         if (completed != jobs.rend()) {
-            if (completed->state == EditorAssetImportJobState::Failed) {
-                setAssetBrowserStatus(L"Import failed: "
-                    + ayt::ui::decodeUtf8Text(completed->message), true);
-            } else {
-                if (!completed->outputPaths.empty()) {
-                    std::filesystem::path output(completed->outputPaths.front());
-                    if (output.is_relative()) output =
-                        std::filesystem::path(_assetDatabase.derivedRoot()) / output;
-                    _pendingAssetSelectionPath = output.lexically_normal().string();
+            using namespace ayt::ui::authoring;
+            if (_assetImportPresentation.generation() != completed->id) {
+                _assetImportPresentation.begin(completed->id);
+            }
+            JobStatusSnapshot status;
+            status.generation = completed->id;
+            status.progress = completed->progress;
+            status.state = completed->state == EditorAssetImportJobState::Failed
+                ? JobState::Failed : completed->state == EditorAssetImportJobState::CacheHit
+                    ? JobState::CacheHit : JobState::Succeeded;
+            const auto change = _assetImportPresentation.observe(std::move(status));
+            if (change.completed) {
+                if (completed->state == EditorAssetImportJobState::Failed) {
+                    setAssetBrowserStatus(L"Import failed: "
+                        + ayt::ui::decodeUtf8Text(completed->message), true);
+                } else {
+                    if (!completed->outputPaths.empty()) {
+                        std::filesystem::path output(completed->outputPaths.front());
+                        if (output.is_relative()) output =
+                            std::filesystem::path(_assetDatabase.derivedRoot()) / output;
+                        _pendingAssetSelectionPath = output.lexically_normal().string();
+                    }
+                    _assetCurrentFolder = "Imported";
+                    (void)_assetDatabase.requestScan();
+                    setAssetBrowserStatus(completed->state
+                        == EditorAssetImportJobState::CacheHit
+                        ? L"Import cache reused; refreshing assets."
+                        : L"Import complete; refreshing assets.", true);
                 }
-                _assetCurrentFolder = "Imported";
-                (void)_assetDatabase.requestScan();
-                setAssetBrowserStatus(completed->state
-                    == EditorAssetImportJobState::CacheHit
-                    ? L"Import cache reused; refreshing assets."
-                    : L"Import complete; refreshing assets.", true);
             }
         }
     }
     if (_assetImportQueue != nullptr && _assetImportQueue->busy()) {
-        const int percent = static_cast<int>(std::round(
-            _assetImportQueue->overallProgress() * 100.0f));
-        if (percent != _assetImportProgressPercent) {
-            _assetImportProgressPercent = percent;
-            setAssetBrowserStatus(L"Importing assets... "
-                + std::to_wstring(percent) + L"%", true);
+        if (const auto percent = _assetImportProgress.consume(_assetImportQueue->overallProgress())) {
+            ayt::ui::authoring::JobStatusSnapshot status;
+            status.progress = static_cast<float>(*percent) / 100.0f;
+            setAssetBrowserStatus(ayt::ui::authoring::formatJobReport(
+                status, L"Importing assets...", true), true);
         }
     } else {
-        _assetImportProgressPercent = -1;
+        _assetImportProgress.reset();
     }
     if (_assetPreviewCache != nullptr && _assetPreviewCache->poll()) {
         refreshVisibleAssetPreviews();

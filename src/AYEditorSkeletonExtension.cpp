@@ -11,6 +11,7 @@
 
 #include <AYAnimation/HumanoidSkeleton.h>
 #include <AYAnimationEditor/SkeletonBakeJob.h>
+#include <AYUI/Authoring/JobPresentation.h>
 #include <AYUI/Box.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
@@ -94,6 +95,27 @@ bool parseQuaternionText(std::wstring text, ayt::math::FQuaternion& value)
     std::replace(text.begin(), text.end(), L',', L' ');
     std::wistringstream input(text);
     return static_cast<bool>(input >> value.x >> value.y >> value.z >> value.w);
+}
+
+ayt::ui::authoring::JobStatusSnapshot bakePresentationSnapshot(
+    const ayt::anim::editor::SkeletonBakeJobSnapshot& bake)
+{
+    using namespace ayt::ui::authoring;
+    using S = ayt::anim::editor::SkeletonBakeJobState;
+    JobStatusSnapshot result;
+    result.generation = bake.generation;
+    switch (bake.state) {
+    case S::Idle: result.state = JobState::Idle; break;
+    case S::Running: result.state = JobState::Running; break;
+    case S::Succeeded: result.state = JobState::Succeeded; break;
+    case S::Failed: result.state = JobState::Failed; break;
+    case S::Cancelled: result.state = JobState::Cancelled; break;
+    }
+    result.progress = bake.progress;
+    result.message = ayt::ui::decodeUtf8Text(bake.message);
+    for (const auto& path : bake.outputPaths) result.outputs.push_back(ayt::ui::decodeUtf8Text(path));
+    result.cancellable = bake.state == S::Running;
+    return result;
 }
 
 class SkeletonBoneDragList final : public ayt::ui::ListView {
@@ -210,7 +232,7 @@ public:
         _root = nullptr;
         return root;
     }
-    void prepareForUiShutdown() override { _commands.detach(); }
+    void prepareForUiShutdown() override { _commands.detach(); _bakePresentation.reset(); }
     EditorSelectionContext* selectionContext() noexcept override { return _selectionBridge.context(); }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
     bool handlesCommand(const std::string& id) const override { return _document && _document->handlesCommand(id); }
@@ -299,7 +321,11 @@ private:
             startBake();
         }), 52.0f);
         toolbar->addWidget(makeButton(L"Cancel", [this]() {
-            _bakeJob.cancel();
+            const auto fresh = bakePresentationSnapshot(_bakeJob.poll());
+            (void)_bakePresentation.requestCancel(fresh, [this](std::uint64_t) {
+                _bakeJob.cancel();
+                return true;
+            });
             pollBake();
         }), 58.0f);
         _adaptation = new ayt::ui::TextLabel();
@@ -1012,8 +1038,7 @@ private:
         const std::filesystem::path output =
             std::filesystem::path(_document->core().skeletonPath()).parent_path()
             / "Baked";
-        _activeBakeGeneration = _bakeJob.start(plan, output.string());
-        _handledBakeGeneration = 0u;
+        _bakePresentation.begin(_bakeJob.start(plan, output.string()));
         _document->core().setBakeInProgress(true);
         _host.setStatusText(L"Skeleton bake started");
         pollBake();
@@ -1021,25 +1046,21 @@ private:
 
     void pollBake()
     {
+        if (_bakePresentation.generation() == 0
+            || (_bakePresentation.snapshot() && _bakePresentation.snapshot()->finished())) return;
         const auto snapshot = _bakeJob.poll();
-        if (snapshot.generation == 0u) return;
-        if (snapshot.generation != _activeBakeGeneration) return;
+        const auto presentation = bakePresentationSnapshot(snapshot);
+        const auto change = _bakePresentation.observe(presentation);
+        if (!change.accepted) return;
         if (snapshot.state == ayt::anim::editor::SkeletonBakeJobState::Running) {
-            if (_diagnostics != nullptr) {
-                std::wostringstream text;
-                text << L"BAKING  |  " << std::fixed << std::setprecision(0)
-                     << snapshot.progress * 100.0f << L"%\n"
-                     << ayt::ui::decodeUtf8Text(snapshot.message);
-                _diagnostics->setReport(text.str());
+            if (change.changed && _diagnostics != nullptr) {
+                _diagnostics->setReport(ayt::ui::authoring::formatJobReport(
+                    presentation, L"BAKING  | ", true));
             }
             return;
         }
-        if (!snapshot.finished()
-            || snapshot.generation == _handledBakeGeneration) {
-            return;
-        }
+        if (!change.completed) return;
         _document->core().setBakeInProgress(false);
-        _handledBakeGeneration = snapshot.generation;
         const bool succeeded = snapshot.state
             == ayt::anim::editor::SkeletonBakeJobState::Succeeded;
         std::string error;
@@ -1059,14 +1080,10 @@ private:
                 return;
             }
         }
-        std::wostringstream text;
-        text << L"BAKE " << ayt::ui::decodeUtf8Text(
-            ayt::anim::editor::SkeletonBakeJob::stateName(snapshot.state))
-             << L"  |  " << ayt::ui::decodeUtf8Text(snapshot.message);
-        for (const std::string& output : snapshot.outputPaths) {
-            text << L"\n" << ayt::ui::decodeUtf8Text(output);
-        }
-        if (_diagnostics != nullptr) _diagnostics->setReport(text.str());
+        if (_diagnostics != nullptr) _diagnostics->setReport(
+            ayt::ui::authoring::formatJobReport(presentation, L"BAKE "
+                + ayt::ui::decodeUtf8Text(ayt::anim::editor::SkeletonBakeJob::stateName(snapshot.state)),
+                false, L"  |  "));
         _host.setStatusText(succeeded
             ? L"Skeleton bake completed"
             : snapshot.state == ayt::anim::editor::SkeletonBakeJobState::Cancelled
@@ -1121,8 +1138,7 @@ private:
     ayt::ui::Button* _customButton = nullptr;
     std::vector<int> _visibleBoneIndices;
     ayt::anim::editor::SkeletonBakeJob _bakeJob;
-    std::uint64_t _activeBakeGeneration = 0u;
-    std::uint64_t _handledBakeGeneration = 0u;
+    ayt::ui::authoring::JobPresentation _bakePresentation;
     ayt::ui::authoring::AuthoringRefreshGate _refreshGate;
     bool _syncing = false;
 };

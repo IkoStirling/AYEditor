@@ -1444,6 +1444,11 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 不持有关闭后的 workspace context，不增加第二套历史。独立 view 使用本地选择上下文。
 领域绘制/拾取、pose 推进、引用校验与安全烘焙仍由原 owner 管理。
 
+公共属性行已迁入 AYUI PropertyField（GameFlow 接入），编辑页 UTF-8 编码共用
+UnicodeText。骨骼烘焙/导入状态共用 JobPresentation 的进度展示与代次/完成通知保护；
+任务执行器、指纹校验及结果写入保持领域所有权。EditorSession 成员布局改变，
+AYEditor Source ABI 升至 26，必须重编译消费者。
+
 - [AYUI/design.md §13 Editor chrome](../AYUI/design.md#13-editor-chrome)
 - [AYExtension/design.md §3 Editor Integration](../AYExtension/design.md)
 - [AYApplication/design.md §3 BuildType / subsystems](../AYApplication/design.md)

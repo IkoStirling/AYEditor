@@ -16,6 +16,7 @@
 #include "AYEditor/Importer.h"
 #include "AYEditor/InspectorOverrides.h"
 #include "AYUI/UIManager.h"
+#include <AYUI/Authoring/JobPresentation.h>
 #include "AYUI/DockArea.h"
 #include "AYUI/DockCard.h"
 #include "AYEditor/EditorChildWindowManager.h"
@@ -706,7 +707,8 @@ private:
     EditorAssetId _pendingAssetOpenId = 0;
     std::unique_ptr<EditorAssetPreviewCache> _assetPreviewCache;
     std::unique_ptr<EditorAssetImportQueue> _assetImportQueue;
-    int _assetImportProgressPercent = -1;
+    ayt::ui::authoring::JobProgressPresentation _assetImportProgress;
+    ayt::ui::authoring::JobPresentation _assetImportPresentation;
     std::unique_ptr<EditorAssetTrash> _assetTrash;
     std::unique_ptr<EditorAssetOperations> _assetOperations;
     std::unique_ptr<EditorRecoveryStore> _recoveryStore;
