@@ -7,6 +7,7 @@
 #include "AYEditorAnimationCurveCanvas.h"
 #include "AYEditorAnimationCurveSource.h"
 #include "AYEditorAnimationDopeSheet.h"
+#include "AYEditorTimelinePlaybackSource.h"
 
 #include <AYResource/assetsDefs/IAnimation.h>
 #include <AYResource/assetsImpl/Mesh.h>
@@ -110,7 +111,6 @@ public:
     {
         if (_document == nullptr) return;
         if (_document->timelinePlaying()) _document->timelineTick(dt);
-        const auto& preview = _document->preview();
         const auto changes = _refreshGate.consume(stateStamp());
         if (!changes.content && (changes.pose || changes.transport)) {
             refreshTransport();
@@ -189,15 +189,16 @@ private:
 
         auto* toolbar = new ayt::ui::HBox();
         toolbar->setSpacing(5.0f);
-        toolbar->addWidget(makeButton(L"Play", [this]() {
-            _document->timelinePlay(); refreshTransport();
-        }), 50.0f);
-        toolbar->addWidget(makeButton(L"Pause", [this]() {
-            _document->timelinePause(); refreshTransport();
-        }), 54.0f);
-        toolbar->addWidget(makeButton(L"Stop", [this]() {
-            _document->timelineStop(); refreshTransport();
-        }), 50.0f);
+        const auto owner = _document;
+        auto playback = std::make_shared<TimelinePlaybackSource>([owner] { return owner; },
+            TimelinePlaybackExtras{[owner] { return owner->preview().looping(); },
+                [owner](bool value) { owner->setLooping(value); },
+                [owner] { return owner->preview().playRate(); },
+                [owner](float value) { owner->setPlayRate(value); }});
+        _transport = new ayt::ui::authoring::PlaybackControls(playback,
+            {true, false, false, true, true, true});
+        _transport->setOnChanged([this] { refreshTransport(); });
+        toolbar->addWidget(_transport, 501.0f);
         toolbar->addWidget(makeButton(L"Frame", [this]() {
             if (_canvas != nullptr) _canvas->framePreview();
         }), 54.0f);
@@ -223,11 +224,6 @@ private:
                 refreshAll();
             }
         }), 52.0f);
-        _loop = makeButton(L"Loop: On", [this]() {
-            _document->setLooping(!_document->preview().looping());
-            refreshTransport();
-        });
-        toolbar->addWidget(_loop, 76.0f);
         toolbar->addWidget(makeHeader(L"VIEW"), 38.0f);
         _mode = new ayt::ui::ComboBox();
         _mode->setItems({L"Model + Skeleton", L"Model", L"Skeleton"});
@@ -240,21 +236,6 @@ private:
             refreshAll();
         });
         toolbar->addWidget(_mode, 150.0f);
-        toolbar->addWidget(makeHeader(L"SPEED"), 46.0f);
-        _speed = new ayt::ui::ComboBox();
-        _speed->setItems({L"0.25x", L"0.5x", L"1.0x", L"1.5x", L"2.0x"});
-        _speed->setOnSelectionChanged([this](int index) {
-            if (_syncing || index < 0) return;
-            static constexpr float values[] = {0.25f, 0.5f, 1.0f, 1.5f, 2.0f};
-            _document->setPlayRate(values[std::min(index, 4)]);
-            refreshTransport();
-        });
-        toolbar->addWidget(_speed, 78.0f);
-        _transportStatus = new ayt::ui::TextLabel();
-        _transportStatus->setFontSize(11);
-        _transportStatus->setVerticalAlignment(
-            ayt::ui::TextLabel::VAlignment::Center);
-        toolbar->addWidget(_transportStatus, 0.0f);
         root->addWidget(toolbar, 30.0f);
 
         auto* body = new ayt::ui::HBox();
@@ -575,21 +556,15 @@ private:
         auto* timeline = new ayt::ui::HBox();
         timeline->setSpacing(5.0f);
         timeline->addWidget(makeHeader(L"TIMELINE"), 66.0f);
-        _playhead = new ayt::ui::Slider();
-        _playhead->setValueRange(0.0f, 1.0f);
-        _playhead->setOnValueChanged([this](float value) {
-            if (_syncing) return;
-            (void)_document->setTimelinePositionSeconds(value);
+        _scrubBar = new ayt::ui::authoring::PlaybackControls(playback,
+            {false, true, true, false, false, false});
+        _scrubBar->setOnChanged([this] {
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
             if (_curveCanvas != nullptr) _curveCanvas->markDirty();
             if (_dopeSheet != nullptr) _dopeSheet->markDirty();
         });
-        timeline->addWidget(_playhead, 0.0f);
-        _time = new ayt::ui::TextLabel();
-        _time->setFontSize(11);
-        _time->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
-        timeline->addWidget(_time, 120.0f);
+        timeline->addWidget(_scrubBar, 0.0f);
         auto* editable = new ayt::ui::TextLabel();
         editable->setText(L"Editable tracks + keys");
         editable->setFontSize(11);
@@ -666,15 +641,6 @@ private:
                 == AnimationPreviewMode::ModelOnly ? 1
             : preview.requestedPreviewMode() == AnimationPreviewMode::SkeletonOnly
                 ? 2 : 0);
-        const float speed = preview.playRate();
-        const float values[] = {0.25f, 0.5f, 1.0f, 1.5f, 2.0f};
-        int nearest = 0;
-        for (int index = 1; index < 5; ++index) {
-            if (std::abs(values[index] - speed) < std::abs(values[nearest] - speed)) {
-                nearest = index;
-            }
-        }
-        _speed->setSelectedIndex(nearest);
         _syncing = false;
     }
 
@@ -1135,22 +1101,8 @@ private:
 
     void refreshTransport()
     {
-        const auto& preview = _document->preview();
-        _syncing = true;
-        _playhead->setValueRange(0.0f, std::max(0.001f, preview.duration()));
-        _playhead->setValue(preview.time());
-        _syncing = false;
-        std::wostringstream time;
-        time << std::fixed << std::setprecision(3)
-             << preview.time() << L" / " << preview.duration() << L" s";
-        const std::wstring timeText = time.str();
-        if (_time->getText() != timeText) _time->setText(timeText);
-        _loop->setText(preview.looping() ? L"Loop: On" : L"Loop: Off");
-        const std::wstring status = preview.isPlaying() ? L"Playing"
-            : preview.time() > 0.0f ? L"Paused" : L"Stopped";
-        if (_transportStatus->getText() != status) {
-            _transportStatus->setText(status);
-        }
+        _transport->refresh();
+        _scrubBar->refresh();
     }
 
     std::shared_ptr<EditorAnimationDocument> _document;
@@ -1160,9 +1112,7 @@ private:
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;
     EditorAnimationDopeSheet* _dopeSheet = nullptr;
     std::array<ayt::ui::Button*, 4> _curveComponents{};
-    ayt::ui::Button* _loop = nullptr;
     ayt::ui::ComboBox* _mode = nullptr;
-    ayt::ui::ComboBox* _speed = nullptr;
     ayt::ui::TextInput* _skeletonPath = nullptr;
     ayt::ui::TextInput* _meshPath = nullptr;
     ayt::ui::TextInput* _materialPath = nullptr;
@@ -1185,9 +1135,8 @@ private:
     ayt::ui::TextInput* _notifyName = nullptr;
     ayt::ui::TextInput* _notifyPayload = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
-    ayt::ui::Slider* _playhead = nullptr;
-    ayt::ui::TextLabel* _time = nullptr;
-    ayt::ui::TextLabel* _transportStatus = nullptr;
+    ayt::ui::authoring::PlaybackControls* _transport = nullptr;
+    ayt::ui::authoring::PlaybackControls* _scrubBar = nullptr;
     std::vector<std::string> _trackIds;
     std::vector<std::string> _keyIds;
     std::vector<std::string> _notifyIds;

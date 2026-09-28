@@ -1,4 +1,5 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
+#include "AYEditorTimelinePlaybackSource.h"
 #include "AYEditor/EditorAnimationExtension.h"
 
 #include "AYEditor/EditorCommandSystem.h"
@@ -4550,18 +4551,17 @@ public:
         _root = root;
         root->setSpacing(5.0f);
         root->setPadding(12.0f, 10.0f, 12.0f, 10.0f);
-        auto* transport = new ayt::ui::HBox();
-        transport->setSpacing(6.0f);
-        addButton(transport, L"Play", [this]() {
-            if (auto* value = source()) value->timelinePlay();
+        auto playback = std::make_shared<TimelinePlaybackSource>([this] {
+            for (const auto& record : _host.workspace().documents().records()) {
+                if (record.editorId == kEditorTimelineToolExtensionId) continue;
+                if (auto owner = std::dynamic_pointer_cast<IEditorTimelineSource>(record.document)) return owner;
+            }
+            return std::shared_ptr<IEditorTimelineSource>{};
         });
-        addButton(transport, L"Pause", [this]() {
-            if (auto* value = source()) value->timelinePause();
-        });
-        addButton(transport, L"Stop", [this]() {
-            if (auto* value = source()) value->timelineStop();
-        });
-        root->addWidget(transport, 28.0f);
+        _transport = new ayt::ui::authoring::PlaybackControls(playback,
+            {true, false, false, false, false, false});
+        _transport->setOnChanged([this] { _host.requestRepaint(); });
+        root->addWidget(_transport, 28.0f);
         auto* edit = new ayt::ui::HBox();
         edit->setSpacing(4.0f);
         addButton(edit, L"Key +", [this]() { addKeyframe(); }, 58.0f);
@@ -4583,15 +4583,10 @@ public:
         _ruler = new ayt::ui::TextLabel();
         _ruler->setFontSize(11);
         root->addWidget(_ruler, 20.0f);
-        _playhead = new ayt::ui::Slider();
-        _playhead->setValueRange(0.0f, 1.0f);
-        _playhead->setOnValueChanged([this](float seconds) {
-            if (_updating) return;
-            if (auto* value = source()) {
-                (void)value->setTimelinePositionSeconds(seconds);
-            }
-        });
-        root->addWidget(_playhead, 24.0f);
+        _scrubBar = new ayt::ui::authoring::PlaybackControls(playback,
+            {false, true, true, false, false, false});
+        _scrubBar->setOnChanged([this] { _host.requestRepaint(); });
+        root->addWidget(_scrubBar, 24.0f);
         _waveform = new ayt::ui::TextLabel();
         _waveform->setFontSize(11);
         root->addWidget(_waveform, 20.0f);
@@ -4643,12 +4638,8 @@ public:
                 + L"                 " + std::to_wstring(duration * 0.75)
                 + L"                 " + std::to_wstring(duration) + L" s"
             : L"0 s");
-        _updating = true;
-        _playhead->setValueRange(0.0f,
-            static_cast<float>(std::max(0.001, duration)));
-        _playhead->setValue(static_cast<float>(timeline != nullptr
-            ? timeline->timelinePositionSeconds() : 0.0));
-        _updating = false;
+        _transport->refresh();
+        _scrubBar->refresh();
         const std::vector<EditorTimelineTrack> tracks = timeline != nullptr
             ? timeline->timelineTracks() : std::vector<EditorTimelineTrack>{};
         const std::vector<EditorTimelineKeyframe> keys = timeline != nullptr
@@ -4795,7 +4786,8 @@ private:
     ayt::ui::Widget* _root = nullptr;
     ayt::ui::TextLabel* _label = nullptr;
     ayt::ui::TextLabel* _ruler = nullptr;
-    ayt::ui::Slider* _playhead = nullptr;
+    ayt::ui::authoring::PlaybackControls* _transport = nullptr;
+    ayt::ui::authoring::PlaybackControls* _scrubBar = nullptr;
     ayt::ui::TextLabel* _waveform = nullptr;
     std::vector<ayt::ui::TextLabel*> _trackLabels;
     std::string _selectedItemId;

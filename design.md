@@ -535,6 +535,11 @@ Notify 命名、source ticks 换算、验证、事务和保存只存在于文档
 连续 key/tangent 拖动复用 `EditGestureSession`，时间标尺和吸附复用公共秒制基础。
 刷新检测不发起资源重建，也不改变各文档既有 command/history 和保存行为。
 
+播放条/seek 行共用 AYUI `PlaybackControls`，动画页、骨骼页和上下文 Timeline
+通过 `TimelinePlaybackSource` 桥接原 `IEditorTimelineSource`。Loop/rate 为独立可选能力；
+公共控件不会 tick，保留文档原播放推进权。上下文桥接每次获取当前 shared 文档，
+关闭/切换后无旧裸指针；程序化 refresh 不会反向 seek 或改速率。
+
 `.ayanm` 继续使用现有 Animation 文档和模型/骨架预览，不建立第二套动画页面。文档把当前 clip
 序列化为内存 revision；轨道或关键帧修改先构建完整新 revision、反序列化验证，再一次性替换预览。
 因此预览不会观察到半修改的 `times/values` 数组，撤销/重做也恢复完整 clip 而不是零散 UI 状态。

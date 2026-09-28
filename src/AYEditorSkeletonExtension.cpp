@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorSkeletonDocument.h"
 #include "AYEditorSkeletonCanvas.h"
+#include "AYEditorTimelinePlaybackSource.h"
 #include <AYUI/Authoring/AuthoringPrimitives.h>
 
 #include <AYAnimation/HumanoidSkeleton.h>
@@ -542,29 +543,15 @@ private:
         _animationPath->setText(L"");
         animation->addWidget(_animationPath, 0.0f);
         animation->addWidget(makeButton(L"Load", [this]() { loadAnimation(); }), 48.0f);
-        animation->addWidget(makeButton(L"Play", [this]() {
-            _document->timelinePlay(); refreshTransport();
-        }), 48.0f);
-        animation->addWidget(makeButton(L"Pause", [this]() {
-            _document->timelinePause(); refreshTransport();
-        }), 54.0f);
-        animation->addWidget(makeButton(L"Stop", [this]() {
-            _document->timelineStop(); refreshTransport();
-            if (_canvas != nullptr) _canvas->markDirty();
-        }), 48.0f);
-        _timeline = new ayt::ui::Slider();
-        _timeline->setValueRange(0.0f, 1.0f);
-        _timeline->setOnValueChanged([this](float value) {
-            if (_syncing) return;
-            (void)_document->setTimelinePositionSeconds(value);
+        const auto owner = _document;
+        auto playback = std::make_shared<TimelinePlaybackSource>([owner] { return owner; });
+        _transport = new ayt::ui::authoring::PlaybackControls(playback,
+            {true, true, true, false, false, false, 2});
+        _transport->setOnChanged([this] {
             refreshTransport();
             if (_canvas != nullptr) _canvas->markDirty();
         });
-        animation->addWidget(_timeline, 210.0f);
-        _time = new ayt::ui::TextLabel();
-        _time->setFontSize(11);
-        _time->setVerticalAlignment(ayt::ui::TextLabel::VAlignment::Center);
-        animation->addWidget(_time, 92.0f);
+        animation->addWidget(_transport, 470.0f);
         root->addWidget(animation, 30.0f);
     }
 
@@ -1087,19 +1074,7 @@ private:
 
     void refreshTransport()
     {
-        _syncing = true;
-        const float duration = static_cast<float>(_document->timelineDurationSeconds());
-        _timeline->setValueRange(0.0f, std::max(duration, 0.001f));
-        _timeline->setValue(static_cast<float>(_document->timelinePositionSeconds()));
-        _syncing = false;
-        std::wostringstream text;
-        text << std::fixed << std::setprecision(2)
-             << _document->timelinePositionSeconds() << L" / "
-             << _document->timelineDurationSeconds();
-        const std::wstring time = text.str();
-        if (_time->getText() != time) {
-            _time->setText(time);
-        }
+        _transport->refresh();
     }
 
     void save()
@@ -1147,8 +1122,7 @@ private:
     ayt::ui::TextInput* _targetSkeletonPath = nullptr;
     ayt::ui::TextInput* _platform = nullptr;
     ayt::ui::TextInput* _correctionValue = nullptr;
-    ayt::ui::Slider* _timeline = nullptr;
-    ayt::ui::TextLabel* _time = nullptr;
+    ayt::ui::authoring::PlaybackControls* _transport = nullptr;
     ayt::ui::TextLabel* _adaptation = nullptr;
     ayt::ui::TextLabel* _bake = nullptr;
     ayt::ui::TextLabel* _status = nullptr;

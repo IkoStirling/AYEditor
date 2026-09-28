@@ -6,6 +6,7 @@
 #include "../src/AYEditorAnimationCurveCanvas.h"
 #include "../src/AYEditorAnimationCurveSource.h"
 #include "../src/AYEditorAnimationDopeSheet.h"
+#include "../src/AYEditorTimelinePlaybackSource.h"
 
 #include <AYIO/File.h>
 #include <AYResource/assetsImpl/Animation.h>
@@ -620,4 +621,46 @@ TEST_CASE(common_curve_source_caches_immutable_revisions_and_samples_rotation)
     CHECK(std::fabs(source->curveTrack("animation.1")->sample(2u, 0.5) - z) < 1e-5f);
 }
 
+TEST_SUITE_END
+
+TEST_SUITE(AYEditor_PlaybackAdapter)
+TEST_CASE(contextual_adapter_switches_owner_without_ticking_or_retaining_old_documents)
+{
+    struct Owner final : ayt::editor::IEditorTimelineSource {
+        double position = 0;
+        bool playing = false;
+        int ticks = 0;
+        double timelineDurationSeconds() const noexcept override { return 1.0; }
+        double timelinePositionSeconds() const noexcept override { return position; }
+        bool setTimelinePositionSeconds(double value) override { position = value; return true; }
+        bool timelinePlaying() const noexcept override { return playing; }
+        void timelinePlay() override { playing = true; }
+        void timelinePause() override { playing = false; }
+        void timelineTick(double) override { ++ticks; }
+    };
+    auto first = std::make_shared<Owner>();
+    auto second = std::make_shared<Owner>();
+    std::shared_ptr<ayt::editor::IEditorTimelineSource> current = first;
+    ayt::editor::TimelinePlaybackSource source([&] { return current; });
+    CHECK(source.playbackState().available);
+    source.play();
+    CHECK(first->playing);
+    CHECK(source.seek(0.25));
+    CHECK(first->position == 0.25);
+    CHECK(first->ticks == 0);
+    current = second;
+    source.play();
+    CHECK(second->playing);
+    CHECK(source.seek(0.75));
+    CHECK(second->position == 0.75);
+    CHECK(first->position == 0.25);
+    std::weak_ptr<Owner> previous = first;
+    first.reset();
+    CHECK(previous.expired());
+    current.reset();
+    CHECK(!source.playbackState().available);
+    CHECK(!source.seek(0.5));
+    source.play();
+    CHECK(second->ticks == 0);
+}
 TEST_SUITE_END

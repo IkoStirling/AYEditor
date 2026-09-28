@@ -45,7 +45,7 @@
 
 namespace {
 
-constexpr std::array<const char*, 27> kEditorTestSuites{
+constexpr std::array<const char*, 28> kEditorTestSuites{
     "AYEditor_Shell",
     "AYEditor_Importer",
     "AYEditor_PlayRuntime",
@@ -61,6 +61,7 @@ constexpr std::array<const char*, 27> kEditorTestSuites{
     "AYEditor_AssetTilePresenter",
     "AYEditor_SkeletonExtension",
     "AYEditor_AnimationExtension",
+    "AYEditor_PlaybackAdapter",
     "AYEditor_DslDocument",
     "Editor2DToolsTests",
     "AYEditor_Framework",
