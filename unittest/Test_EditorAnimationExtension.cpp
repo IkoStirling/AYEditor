@@ -428,4 +428,38 @@ TEST_CASE(animation_curve_canvas_uses_transactional_live_edits)
         }) >= 3);
 }
 
+TEST_CASE(animation_curve_multi_key_edits_are_atomic_and_conflict_safe)
+{
+    auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
+    std::string error;
+    CHECK(document->initialize(
+        ayt::editor::EditorOpenRequest{writeAnimationEditorClip().string()}, error));
+    std::vector<std::string> keys{"key.0.0", "key.0.1"};
+    CHECK(document->transformAnimationKeyframes(keys, 0.25, 1u, 1.0f));
+    ayt::editor::EditorAnimationCurveTrack track;
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[0].timeSeconds - 0.25) < 1.0e-6);
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.25) < 1.0e-6);
+    CHECK(track.keys[0].values[1] == 2.0f);
+    CHECK(track.keys[1].values[1] == 3.0f);
+    const auto conflicting = keys;
+    CHECK_FALSE(document->transformAnimationKeyframes(keys, 0.75, 0u, 0.0f));
+    CHECK(keys == conflicting);
+    CHECK(document->timelineUndo());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(std::fabs(track.keys[0].timeSeconds) < 1.0e-6);
+    CHECK(std::fabs(track.keys[1].timeSeconds - 1.0) < 1.0e-6);
+
+    ayt::editor::EditorAnimationCurveCanvas canvas(document);
+    canvas.setTrackId("animation.0");
+    canvas.selectAllKeys();
+    CHECK(canvas.selectedKeyCount() == 3u);
+    CHECK(canvas.deleteSelectedKeys());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(track.keys.empty());
+    CHECK(document->timelineUndo());
+    CHECK(document->animationCurveTrack("animation.0", track));
+    CHECK(track.keys.size() == 3u);
+}
+
 TEST_SUITE_END

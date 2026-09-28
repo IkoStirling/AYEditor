@@ -10,7 +10,9 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <memory>
+#include <numeric>
 #include <optional>
 #include <string_view>
 
@@ -923,6 +925,151 @@ bool EditorAnimationDocument::updateAnimationKeyframe(
     keyframeId = "key." + std::to_string(trackIndex) + "."
         + std::to_string(destination);
     return true;
+}
+
+bool EditorAnimationDocument::transformAnimationKeyframes(
+    std::vector<std::string>& keyframeIds, double deltaTimeSeconds,
+    std::size_t component, float deltaValue)
+{
+    const auto* animation = _preview.animation();
+    if (animation == nullptr || keyframeIds.empty()
+        || !std::isfinite(deltaTimeSeconds) || !std::isfinite(deltaValue)) {
+        return false;
+    }
+    std::size_t trackIndex = 0u;
+    std::vector<std::size_t> selected;
+    selected.reserve(keyframeIds.size());
+    for (const auto& id : keyframeIds) {
+        std::size_t parsedTrack = 0u;
+        std::size_t parsedKey = 0u;
+        if (!parseKeyId(id, parsedTrack, parsedKey)
+            || parsedTrack >= animation->getTrackCount()
+            || parsedKey >= animation->getTrackKeyframeCount(
+                static_cast<std::uint32_t>(parsedTrack))
+            || (!selected.empty() && parsedTrack != trackIndex)
+            || std::find(selected.begin(), selected.end(), parsedKey)
+                != selected.end()) return false;
+        trackIndex = parsedTrack;
+        selected.push_back(parsedKey);
+    }
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[trackIndex];
+    const std::size_t width = valueWidth(track.valueType);
+    if (component >= width) return false;
+    const float ticksPerSecond = clip.ticksPerSecond > 0.0f
+        ? clip.ticksPerSecond : 1.0f;
+    double minimumTime = std::numeric_limits<double>::max();
+    double maximumTime = std::numeric_limits<double>::lowest();
+    for (const std::size_t key : selected) {
+        const double seconds = track.times[key] / ticksPerSecond;
+        minimumTime = std::min(minimumTime, seconds);
+        maximumTime = std::max(maximumTime, seconds);
+    }
+    const double clampedDelta = std::clamp(deltaTimeSeconds,
+        -minimumTime, static_cast<double>(clip.duration) - maximumTime);
+    if (std::fabs(clampedDelta) < 1.0e-9 && std::fabs(deltaValue) < 1.0e-9f) {
+        return false;
+    }
+    for (const std::size_t key : selected) {
+        track.times[key] += static_cast<float>(clampedDelta) * ticksPerSecond;
+        track.values[key * width + component] += deltaValue;
+        if (track.valueType == ayt::resource::AnimTrackType::Quaternion) {
+            float lengthSquared = 0.0f;
+            for (std::size_t item = 0u; item < width; ++item) {
+                const float value = track.values[key * width + item];
+                lengthSquared += value * value;
+            }
+            if (lengthSquared <= 1.0e-12f) return false;
+            const float inverseLength = 1.0f / std::sqrt(lengthSquared);
+            for (std::size_t item = 0u; item < width; ++item) {
+                track.values[key * width + item] *= inverseLength;
+            }
+        }
+    }
+    std::vector<std::size_t> order(track.times.size());
+    std::iota(order.begin(), order.end(), 0u);
+    std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b) {
+        return track.times[a] < track.times[b];
+    });
+    for (std::size_t index = 1u; index < order.size(); ++index) {
+        if (std::fabs(track.times[order[index]] - track.times[order[index - 1u]])
+            < 1.0e-5f) return false;
+    }
+    ayt::resource::AnimTrack sorted = track;
+    sorted.times.clear();
+    sorted.values.clear();
+    sorted.inTangents.clear();
+    sorted.outTangents.clear();
+    const bool hasIn = track.inTangents.size() == track.values.size();
+    const bool hasOut = track.outTangents.size() == track.values.size();
+    for (const std::size_t oldIndex : order) {
+        sorted.times.push_back(track.times[oldIndex]);
+        sorted.values.insert(sorted.values.end(),
+            track.values.begin() + oldIndex * width,
+            track.values.begin() + (oldIndex + 1u) * width);
+        if (hasIn) {
+            sorted.inTangents.insert(sorted.inTangents.end(),
+                track.inTangents.begin() + oldIndex * width,
+                track.inTangents.begin() + (oldIndex + 1u) * width);
+        }
+        if (hasOut) {
+            sorted.outTangents.insert(sorted.outTangents.end(),
+                track.outTangents.begin() + oldIndex * width,
+                track.outTangents.begin() + (oldIndex + 1u) * width);
+        }
+    }
+    std::vector<std::string> updatedIds;
+    updatedIds.reserve(selected.size());
+    for (const std::size_t oldIndex : selected) {
+        const auto position = std::find(order.begin(), order.end(), oldIndex);
+        updatedIds.push_back("key." + std::to_string(trackIndex) + "."
+            + std::to_string(static_cast<std::size_t>(position - order.begin())));
+    }
+    clip.tracks[trackIndex] = std::move(sorted);
+    if (!commitEditedAnimation(buildAnimation(clip))) return false;
+    keyframeIds = std::move(updatedIds);
+    return true;
+}
+
+bool EditorAnimationDocument::removeAnimationKeyframes(
+    const std::vector<std::string>& keyframeIds)
+{
+    const auto* animation = _preview.animation();
+    if (animation == nullptr || keyframeIds.empty()) return false;
+    std::size_t trackIndex = 0u;
+    std::vector<std::size_t> selected;
+    selected.reserve(keyframeIds.size());
+    for (const auto& id : keyframeIds) {
+        std::size_t parsedTrack = 0u;
+        std::size_t parsedKey = 0u;
+        if (!parseKeyId(id, parsedTrack, parsedKey)
+            || parsedTrack >= animation->getTrackCount()
+            || parsedKey >= animation->getTrackKeyframeCount(
+                static_cast<std::uint32_t>(parsedTrack))
+            || (!selected.empty() && parsedTrack != trackIndex)
+            || std::find(selected.begin(), selected.end(), parsedKey)
+                != selected.end()) return false;
+        trackIndex = parsedTrack;
+        selected.push_back(parsedKey);
+    }
+    EditableClip clip = readEditableClip(*animation);
+    auto& track = clip.tracks[trackIndex];
+    const std::size_t width = valueWidth(track.valueType);
+    std::sort(selected.begin(), selected.end(), std::greater<>());
+    for (const std::size_t key : selected) {
+        track.times.erase(track.times.begin() + key);
+        track.values.erase(track.values.begin() + key * width,
+                           track.values.begin() + (key + 1u) * width);
+        if (!track.inTangents.empty()) {
+            track.inTangents.erase(track.inTangents.begin() + key * width,
+                track.inTangents.begin() + (key + 1u) * width);
+        }
+        if (!track.outTangents.empty()) {
+            track.outTangents.erase(track.outTangents.begin() + key * width,
+                track.outTangents.begin() + (key + 1u) * width);
+        }
+    }
+    return commitEditedAnimation(buildAnimation(clip));
 }
 
 bool EditorAnimationDocument::beginAnimationEditGesture(

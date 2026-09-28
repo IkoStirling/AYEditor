@@ -272,6 +272,16 @@ private:
         curveToolbar->addWidget(makeButton(L"Frame All", [this]() {
             if (_curveCanvas != nullptr) _curveCanvas->frameAll();
         }), 68.0f);
+        curveToolbar->addWidget(makeButton(L"Select All", [this]() {
+            if (_curveCanvas != nullptr) _curveCanvas->selectAllKeys();
+        }), 72.0f);
+        curveToolbar->addWidget(makeButton(L"Delete", [this]() {
+            if (_curveCanvas != nullptr && _curveCanvas->deleteSelectedKeys()) {
+                _selectedKeyId.clear();
+                _host.setStatusText(L"Selected animation keys deleted");
+                refreshAll();
+            }
+        }), 56.0f);
         auto* curveHelp = new ayt::ui::TextLabel();
         curveHelp->setText(L"Drag key/value or tangent · Wheel zoom · Middle/right pan");
         curveHelp->setFontSize(10);

@@ -101,6 +101,10 @@ public:
                              EditorAnimationCurveTrack& track) const;
     bool updateAnimationKeyframe(std::string& keyframeId, double timeSeconds,
                                  const std::vector<float>& values);
+    bool transformAnimationKeyframes(std::vector<std::string>& keyframeIds,
+        double deltaTimeSeconds, std::size_t component, float deltaValue);
+    bool removeAnimationKeyframes(
+        const std::vector<std::string>& keyframeIds);
     bool beginAnimationEditGesture(const std::string& label);
     bool commitAnimationEditGesture();
     bool cancelAnimationEditGesture();

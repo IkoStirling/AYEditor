@@ -98,6 +98,7 @@ void EditorAnimationCurveCanvas::setTrackId(std::string trackId)
     finishGesture(true);
     _trackId = std::move(trackId);
     _selectedKeyId.clear();
+    _selectedKeyIds.clear();
     _viewValid = false;
     markDirty();
 }
@@ -121,6 +122,43 @@ void EditorAnimationCurveCanvas::frameAll()
 {
     _viewValid = false;
     markDirty();
+}
+
+void EditorAnimationCurveCanvas::selectAllKeys()
+{
+    EditorAnimationCurveTrack track;
+    if (!loadTrack(track)) return;
+    _selectedKeyIds.clear();
+    for (const auto& key : track.keys) _selectedKeyIds.push_back(key.id);
+    _selectedKeyId = _selectedKeyIds.empty() ? std::string{}
+                                             : _selectedKeyIds.front();
+    if (_onSelectionChanged && !_selectedKeyId.empty()) {
+        _onSelectionChanged(_selectedKeyId, 0u);
+    }
+    markDirty();
+}
+
+void EditorAnimationCurveCanvas::clearSelection()
+{
+    if (_selectedKeyIds.empty()) return;
+    _selectedKeyIds.clear();
+    _selectedKeyId.clear();
+    markDirty();
+}
+
+bool EditorAnimationCurveCanvas::deleteSelectedKeys()
+{
+    if (_document == nullptr || _selectedKeyIds.empty()
+        || !_document->removeAnimationKeyframes(_selectedKeyIds)) return false;
+    clearSelection();
+    if (_onEdited) _onEdited();
+    return true;
+}
+
+bool EditorAnimationCurveCanvas::isSelected(const std::string& keyId) const
+{
+    return std::find(_selectedKeyIds.begin(), _selectedKeyIds.end(), keyId)
+        != _selectedKeyIds.end();
 }
 
 ayt::math::FRectangle EditorAnimationCurveCanvas::plotBounds() const noexcept
@@ -261,9 +299,16 @@ bool EditorAnimationCurveCanvas::onMouseButtonDown(
     ensureView(track);
     const Hit hit = hitTest(event.mousePos, track);
     if (hit.kind == HitKind::None) {
-        (void)_document->setTimelinePositionSeconds(secondsAt(event.mousePos.x));
+        _boxSelecting = true;
+        _boxMoved = false;
+        _boxStart = _boxEnd = event.mousePos;
+        _selectedKeyIds.clear();
+        _selectedKeyId.clear();
         markDirty();
         return true;
+    }
+    if (!isSelected(hit.keyId)) {
+        _selectedKeyIds = {hit.keyId};
     }
     _selectedKeyId = hit.keyId;
     _dragHit = hit;
@@ -296,6 +341,38 @@ bool EditorAnimationCurveCanvas::onMouseMove(
         markDirty();
         return true;
     }
+    if (_boxSelecting) {
+        _boxEnd = event.mousePos;
+        _boxMoved = _boxMoved
+            || distanceSquared(_boxStart, _boxEnd) > 9.0f;
+        const ayt::math::FRectangle selection{
+            std::min(_boxStart.x, _boxEnd.x),
+            std::min(_boxStart.y, _boxEnd.y),
+            std::max(_boxStart.x, _boxEnd.x),
+            std::max(_boxStart.y, _boxEnd.y)};
+        EditorAnimationCurveTrack track;
+        if (loadTrack(track)) {
+            _selectedKeyIds.clear();
+            for (const auto& key : track.keys) {
+                bool selected = false;
+                for (std::size_t component = 0u;
+                     component < key.values.size()
+                     && component < _componentVisible.size(); ++component) {
+                    if (_componentVisible[component]
+                        && selection.contains({worldX(key.timeSeconds),
+                                               worldY(key.values[component])})) {
+                        selected = true;
+                        break;
+                    }
+                }
+                if (selected) _selectedKeyIds.push_back(key.id);
+            }
+            _selectedKeyId = _selectedKeyIds.empty() ? std::string{}
+                                                     : _selectedKeyIds.front();
+        }
+        markDirty();
+        return true;
+    }
     if (_dragHit.kind == HitKind::None) {
         return getWorldBounds().contains(event.mousePos);
     }
@@ -309,6 +386,38 @@ bool EditorAnimationCurveCanvas::onMouseMove(
         return true;
     }
     if (_dragHit.kind == HitKind::Key) {
+        if (_selectedKeyIds.size() > 1u) {
+            const auto plot = plotBounds();
+            const double frame = track.ticksPerSecond > 0.0
+                ? 1.0 / track.ticksPerSecond : 0.0;
+            double deltaTime = (event.mousePos.x - _lastPointer.x)
+                / std::max(1.0f, plot.maxX - plot.minX) * _viewDuration;
+            if (frame > 0.0) {
+                deltaTime = std::round(deltaTime / frame) * frame;
+            }
+            const float deltaValue = std::round(
+                (-(event.mousePos.y - _lastPointer.y)
+                    / std::max(1.0f, plot.maxY - plot.minY) * _valueSpan)
+                    * 1000.0f) / 1000.0f;
+            const auto primary = std::find(_selectedKeyIds.begin(),
+                _selectedKeyIds.end(), _dragHit.keyId);
+            const std::size_t primaryIndex = primary == _selectedKeyIds.end()
+                ? 0u : static_cast<std::size_t>(primary - _selectedKeyIds.begin());
+            if (_document->transformAnimationKeyframes(_selectedKeyIds,
+                    deltaTime, _dragHit.component, deltaValue)) {
+                _dragHit.keyId = _selectedKeyIds[std::min(
+                    primaryIndex, _selectedKeyIds.size() - 1u)];
+                _selectedKeyId = _dragHit.keyId;
+                _gestureChanged = true;
+                _lastPointer = event.mousePos;
+                if (_onSelectionChanged) {
+                    _onSelectionChanged(_selectedKeyId, _dragHit.component);
+                }
+                if (_onEdited) _onEdited();
+                markDirty();
+            }
+            return true;
+        }
         const double frame = track.ticksPerSecond > 0.0
             ? 1.0 / track.ticksPerSecond : 0.0;
         double seconds = secondsAt(event.mousePos.x);
@@ -320,6 +429,7 @@ bool EditorAnimationCurveCanvas::onMouseMove(
         if (_document->updateAnimationKeyframe(updatedId, seconds, values)) {
             _dragHit.keyId = updatedId;
             _selectedKeyId = updatedId;
+            _selectedKeyIds = {updatedId};
             _gestureChanged = true;
             (void)_document->setTimelinePositionSeconds(seconds);
             if (_onSelectionChanged) {
@@ -357,6 +467,18 @@ bool EditorAnimationCurveCanvas::onMouseButtonUp(
 {
     if ((event.mouseButton == 1 || event.mouseButton == 2) && _panning) {
         _panning = false;
+        return true;
+    }
+    if (event.mouseButton == 0 && _boxSelecting) {
+        _boxSelecting = false;
+        _boxEnd = event.mousePos;
+        if (!_boxMoved && _document != nullptr) {
+            (void)_document->setTimelinePositionSeconds(secondsAt(event.mousePos.x));
+        }
+        if (_onSelectionChanged && !_selectedKeyId.empty()) {
+            _onSelectionChanged(_selectedKeyId, 0u);
+        }
+        markDirty();
         return true;
     }
     if (event.mouseButton != 0 || _dragHit.kind == HitKind::None) return false;
@@ -402,6 +524,8 @@ void EditorAnimationCurveCanvas::finishGesture(bool cancel)
 void EditorAnimationCurveCanvas::onCaptureCancelled()
 {
     _panning = false;
+    _boxSelecting = false;
+    _boxMoved = false;
     finishGesture(true);
 }
 
@@ -465,11 +589,12 @@ void EditorAnimationCurveCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             const auto& key = track.keys[keyIndex];
             const float x = worldX(key.timeSeconds);
             const float y = worldY(key.values[component]);
-            const bool selected = key.id == _selectedKeyId;
+            const bool selected = isSelected(key.id);
             renderer.drawRoundedRect({x - 4.0f, y - 4.0f, x + 4.0f, y + 4.0f},
                 selected ? ayt::math::FVector4{1.0f, 0.86f, 0.48f, 1.0f}
                          : kColors[component], 2.0f);
-            if (!selected || track.interpolation !=
+            if (!selected || key.id != _selectedKeyId
+                || track.interpolation !=
                     ayt::resource::AnimInterpolation::CubicHermite) continue;
             const double inDelta = handleDelta(track, keyIndex, true);
             const double outDelta = handleDelta(track, keyIndex, false);
@@ -508,6 +633,16 @@ void EditorAnimationCurveCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             renderer.drawRect({playhead, plot.minY, playhead + 1.0f, plot.maxY},
                               {1.0f, 0.33f, 0.29f, 0.9f});
         }
+    }
+    if (_boxSelecting && _boxMoved) {
+        const ayt::math::FRectangle selection{
+            std::min(_boxStart.x, _boxEnd.x),
+            std::min(_boxStart.y, _boxEnd.y),
+            std::max(_boxStart.x, _boxEnd.x),
+            std::max(_boxStart.y, _boxEnd.y)};
+        renderer.drawRect(selection, {0.20f, 0.46f, 0.78f, 0.18f});
+        renderer.drawBorderRect(selection,
+            {0.40f, 0.68f, 1.0f, 0.9f}, 1.0f, 0.0f);
     }
     std::wostringstream range;
     range << std::fixed << std::setprecision(2)

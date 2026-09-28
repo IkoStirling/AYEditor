@@ -8,6 +8,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace ayt::editor {
 
@@ -21,6 +22,12 @@ public:
     void setComponentVisible(std::size_t component, bool visible);
     bool componentVisible(std::size_t component) const noexcept;
     void frameAll();
+    void selectAllKeys();
+    void clearSelection();
+    bool deleteSelectedKeys();
+    std::size_t selectedKeyCount() const noexcept {
+        return _selectedKeyIds.size();
+    }
     void setOnSelectionChanged(
         std::function<void(const std::string&, std::size_t)> callback) {
         _onSelectionChanged = std::move(callback);
@@ -57,10 +64,12 @@ private:
     Hit hitTest(ayt::math::FVector2 point,
                 const EditorAnimationCurveTrack& track) const;
     void finishGesture(bool cancel);
+    bool isSelected(const std::string& keyId) const;
 
     std::shared_ptr<EditorAnimationDocument> _document;
     std::string _trackId;
     std::string _selectedKeyId;
+    std::vector<std::string> _selectedKeyIds;
     std::array<bool, 4> _componentVisible{{true, true, true, true}};
     std::function<void(const std::string&, std::size_t)> _onSelectionChanged;
     std::function<void()> _onEdited;
@@ -70,9 +79,13 @@ private:
     float _valueSpan = 2.0f;
     bool _viewValid = false;
     bool _panning = false;
+    bool _boxSelecting = false;
+    bool _boxMoved = false;
     bool _gestureChanged = false;
     Hit _dragHit;
     ayt::math::FVector2 _lastPointer{};
+    ayt::math::FVector2 _boxStart{};
+    ayt::math::FVector2 _boxEnd{};
 };
 
 } // namespace ayt::editor
