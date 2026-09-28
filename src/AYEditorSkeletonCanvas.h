@@ -3,6 +3,7 @@
 #include "AYEditor/EditorSkeletonDocument.h"
 
 #include <AYUI/Widget.h>
+#include <AYUI/Authoring/PreviewViewport.h>
 
 #include <cstdint>
 #include <functional>
@@ -29,13 +30,14 @@ public:
     bool onMouseButtonUp(const ayt::ui::UIMouseEvent& event) override;
     bool onMouseWheel(const ayt::ui::UIMouseWheelEvent& event) override;
     void onMouseLeave() override;
+    void onCaptureCancelled() override { _orbit.cancel(); }
     ayt::ui::UiCursorHint getCursorHint() const override;
 
 protected:
     void onRender(ayt::ui::IRenderBackend& renderer) override;
 
 private:
-    struct ProjectedPoint { float x = 0.0f; float y = 0.0f; float depth = 0.0f; };
+    using ProjectedPoint = ayt::ui::authoring::PreviewPoint;
     void rebuildProjection();
     int hitBone(ayt::math::FVector2 worldPoint) const noexcept;
 
@@ -44,17 +46,8 @@ private:
     std::vector<ProjectedPoint> _projected;
     std::vector<ayt::math::FVector3> _targetWorldPoints;
     std::vector<ProjectedPoint> _targetProjected;
-    ayt::math::FRectangle _projectedBounds{};
-    std::uint64_t _projectedPoseRevision = 0u;
-    float _projectedYaw = 0.0f;
-    float _projectedPitch = 0.0f;
-    float _projectedZoom = 0.0f;
-    bool _projectionValid = false;
-    float _yaw = 0.55f;
-    float _pitch = -0.18f;
-    float _zoom = 1.0f;
-    bool _rotating = false;
-    ayt::math::FVector2 _lastPointer{};
+    ayt::ui::authoring::PreviewOrbit _orbit;
+    ayt::ui::authoring::PreviewProjectionCache _projectionCache;
     std::function<void(int)> _onBoneSelected;
 };
 

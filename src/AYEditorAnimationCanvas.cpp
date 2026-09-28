@@ -70,10 +70,8 @@ EditorAnimationCanvas::EditorAnimationCanvas(
 
 void EditorAnimationCanvas::framePreview()
 {
-    _yaw = 0.55f;
-    _pitch = -0.18f;
-    _zoom = 1.0f;
-    _projectionValid = false;
+    _orbit.reset();
+    _projectionCache.invalidate();
     markDirty();
 }
 
@@ -120,22 +118,8 @@ void EditorAnimationCanvas::rebuildProjection()
     if (_document == nullptr) return;
     const auto bounds = getWorldBounds();
     const auto& preview = _document->preview();
-    if (_projectionValid && _projectedRevision == preview.revision()
-        && _projectedPoseRevision == preview.poseRevision()
-        && _projectedYaw == _yaw && _projectedPitch == _pitch
-        && _projectedZoom == _zoom
-        && _projectedBounds.minX == bounds.minX
-        && _projectedBounds.minY == bounds.minY
-        && _projectedBounds.maxX == bounds.maxX
-        && _projectedBounds.maxY == bounds.maxY) return;
-
-    _projectionValid = true;
-    _projectedRevision = preview.revision();
-    _projectedPoseRevision = preview.poseRevision();
-    _projectedYaw = _yaw;
-    _projectedPitch = _pitch;
-    _projectedZoom = _zoom;
-    _projectedBounds = bounds;
+    if (!_projectionCache.consume({preview.revision(), preview.poseRevision(), bounds,
+        _orbit.yaw, _orbit.pitch, _orbit.zoom})) return;
     _skeletonWorld.clear();
     _skeletonProjected.clear();
     _modelProjectedSegments.clear();
@@ -152,41 +136,13 @@ void EditorAnimationCanvas::rebuildProjection()
     if (showModel) rebuildModelSegments();
     else _modelWorldSegments.clear();
 
-    ayt::math::FVector3 minimum{};
-    ayt::math::FVector3 maximum{};
-    bool hasPoint = false;
-    auto include = [&](const ayt::math::FVector3& point) {
-        if (!hasPoint) { minimum = maximum = point; hasPoint = true; return; }
-        minimum.x = std::min(minimum.x, point.x);
-        minimum.y = std::min(minimum.y, point.y);
-        minimum.z = std::min(minimum.z, point.z);
-        maximum.x = std::max(maximum.x, point.x);
-        maximum.y = std::max(maximum.y, point.y);
-        maximum.z = std::max(maximum.z, point.z);
-    };
-    for (const auto& point : _skeletonWorld) include(point);
+    ayt::ui::authoring::PreviewBounds points;
+    for (const auto& point : _skeletonWorld) points.include(point);
     for (const auto& segment : _modelWorldSegments) {
-        include(segment.a); include(segment.b);
+        points.include(segment.a); points.include(segment.b);
     }
-    if (!hasPoint) return;
-
-    const ayt::math::FVector3 center = (minimum + maximum) * 0.5f;
-    const float extent = std::max({maximum.x - minimum.x,
-        maximum.y - minimum.y, maximum.z - minimum.z, 0.01f});
-    const float width = std::max(1.0f, bounds.maxX - bounds.minX);
-    const float height = std::max(1.0f, bounds.maxY - bounds.minY);
-    const float scale = std::min(width, height) * 0.72f / extent * _zoom;
-    const float cy = std::cos(_yaw), sy = std::sin(_yaw);
-    const float cp = std::cos(_pitch), sp = std::sin(_pitch);
-    const auto project = [&](ayt::math::FVector3 point) {
-        point -= center;
-        const float x1 = cy * point.x + sy * point.z;
-        const float z1 = -sy * point.x + cy * point.z;
-        const float y2 = cp * point.y - sp * z1;
-        const float z2 = sp * point.y + cp * z1;
-        return ProjectedPoint{(bounds.minX + bounds.maxX) * 0.5f + x1 * scale,
-            (bounds.minY + bounds.maxY) * 0.5f - y2 * scale, z2};
-    };
+    if (!points.populated) return;
+    const ayt::ui::authoring::PreviewProjection project(points, bounds, _orbit, 0.72f);
     _skeletonProjected.reserve(_skeletonWorld.size());
     for (const auto& point : _skeletonWorld) _skeletonProjected.push_back(project(point));
     _modelProjectedSegments.reserve(_modelWorldSegments.size());
@@ -213,9 +169,8 @@ int EditorAnimationCanvas::hitBone(ayt::math::FVector2 point) const noexcept
 
 bool EditorAnimationCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event)
 {
-    _lastPointer = event.mousePos;
     if (event.mouseButton == 1 || event.mouseButton == 2) {
-        _rotating = true;
+        _orbit.begin(event.mousePos);
         return true;
     }
     if (event.mouseButton != 0) return false;
@@ -230,41 +185,33 @@ bool EditorAnimationCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event
 
 bool EditorAnimationCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
 {
-    if (!_rotating) return false;
-    _yaw += (event.mousePos.x - _lastPointer.x) * 0.012f;
-    _pitch = std::clamp(_pitch
-        + (event.mousePos.y - _lastPointer.y) * 0.012f, -1.5f, 1.5f);
-    _lastPointer = event.mousePos;
-    _projectionValid = false;
+    if (!_orbit.move(event.mousePos)) return false;
     markDirty();
     return true;
 }
 
 bool EditorAnimationCanvas::onMouseButtonUp(const ayt::ui::UIMouseEvent& event)
 {
-    if (!_rotating || (event.mouseButton != 1 && event.mouseButton != 2)) return false;
-    _rotating = false;
-    return true;
+    if (event.mouseButton != 1 && event.mouseButton != 2) return false;
+    return _orbit.end();
 }
 
 bool EditorAnimationCanvas::onMouseWheel(const ayt::ui::UIMouseWheelEvent& event)
 {
-    _zoom = std::clamp(_zoom * (event.deltaY > 0.0f ? 1.12f : 0.89f),
-                       0.2f, 8.0f);
-    _projectionValid = false;
+    _orbit.wheel(event.deltaY);
     markDirty();
     return true;
 }
 
 void EditorAnimationCanvas::onMouseLeave()
 {
-    _rotating = false;
+    _orbit.cancel();
     ayt::ui::Widget::onMouseLeave();
 }
 
 ayt::ui::UiCursorHint EditorAnimationCanvas::getCursorHint() const
 {
-    return _rotating ? ayt::ui::UiCursorHint::Move
+    return _orbit.rotating() ? ayt::ui::UiCursorHint::Move
                      : ayt::ui::UiCursorHint::Default;
 }
 

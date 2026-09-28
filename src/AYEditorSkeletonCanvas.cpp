@@ -35,9 +35,8 @@ EditorSkeletonCanvas::EditorSkeletonCanvas(
 
 void EditorSkeletonCanvas::frameSkeleton()
 {
-    _yaw = 0.55f;
-    _pitch = -0.18f;
-    _zoom = 1.0f;
+    _orbit.reset();
+    _projectionCache.invalidate();
     markDirty();
 }
 
@@ -48,75 +47,34 @@ void EditorSkeletonCanvas::rebuildProjection()
         _projected.clear();
         _targetWorldPoints.clear();
         _targetProjected.clear();
-        _projectionValid = false;
+        _projectionCache.invalidate();
         return;
     }
     const auto bounds = getWorldBounds();
     const std::uint64_t poseRevision = _document->core().poseRevision();
-    if (_projectionValid
-        && _projectedPoseRevision == poseRevision
-        && _projectedYaw == _yaw
-        && _projectedPitch == _pitch
-        && _projectedZoom == _zoom
-        && _projectedBounds.minX == bounds.minX
-        && _projectedBounds.minY == bounds.minY
-        && _projectedBounds.maxX == bounds.maxX
-        && _projectedBounds.maxY == bounds.maxY) {
-        return;
-    }
-
-    _projectionValid = true;
-    _projectedPoseRevision = poseRevision;
-    _projectedYaw = _yaw;
-    _projectedPitch = _pitch;
-    _projectedZoom = _zoom;
-    _projectedBounds = bounds;
+    if (!_projectionCache.consume({0u, poseRevision, bounds,
+        _orbit.yaw, _orbit.pitch, _orbit.zoom})) return;
     _worldPoints.clear();
     _projected.clear();
     _targetWorldPoints.clear();
     _targetProjected.clear();
     const auto& world = _document->core().poseWorldMatrices();
     if (world.empty()) return;
-    const float cy = std::cos(_yaw), sy = std::sin(_yaw);
-    const float cp = std::cos(_pitch), sp = std::sin(_pitch);
     const auto project = [&](const std::vector<ayt::math::Float4x4>& matrices,
                              const ayt::math::FRectangle& viewport,
                              std::vector<ayt::math::FVector3>& worldPoints,
                              std::vector<ProjectedPoint>& projected) {
         if (matrices.empty()) return;
         worldPoints.reserve(matrices.size());
-        ayt::math::FVector3 minimum =
-            matrices.front().transformPoint({0, 0, 0});
-        ayt::math::FVector3 maximum = minimum;
+        ayt::ui::authoring::PreviewBounds points;
         for (const auto& matrix : matrices) {
-            const ayt::math::FVector3 point =
-                matrix.transformPoint({0, 0, 0});
+            const auto point = matrix.transformPoint({0, 0, 0});
             worldPoints.push_back(point);
-            minimum.x = std::min(minimum.x, point.x);
-            minimum.y = std::min(minimum.y, point.y);
-            minimum.z = std::min(minimum.z, point.z);
-            maximum.x = std::max(maximum.x, point.x);
-            maximum.y = std::max(maximum.y, point.y);
-            maximum.z = std::max(maximum.z, point.z);
+            points.include(point);
         }
-        const ayt::math::FVector3 center = (minimum + maximum) * 0.5f;
-        const float extent = std::max({maximum.x - minimum.x,
-            maximum.y - minimum.y, maximum.z - minimum.z, 0.01f});
-        const float width = std::max(1.0f, viewport.maxX - viewport.minX);
-        const float height = std::max(1.0f, viewport.maxY - viewport.minY);
-        const float scale = std::min(width, height) * 0.68f / extent * _zoom;
+        const ayt::ui::authoring::PreviewProjection projection(points, viewport, _orbit, 0.68f);
         projected.reserve(worldPoints.size());
-        for (ayt::math::FVector3 point : worldPoints) {
-            point -= center;
-            const float x1 = cy * point.x + sy * point.z;
-            const float z1 = -sy * point.x + cy * point.z;
-            const float y2 = cp * point.y - sp * z1;
-            const float z2 = sp * point.y + cp * z1;
-            projected.push_back({
-                (viewport.minX + viewport.maxX) * 0.5f + x1 * scale,
-                (viewport.minY + viewport.maxY) * 0.5f - y2 * scale,
-                z2});
-        }
+        for (const auto& point : worldPoints) projected.push_back(projection(point));
     };
     const auto& targetWorld =
         _document->core().targetPoseWorldMatrices();
@@ -150,9 +108,8 @@ int EditorSkeletonCanvas::hitBone(ayt::math::FVector2 point) const noexcept
 
 bool EditorSkeletonCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event)
 {
-    _lastPointer = event.mousePos;
     if (event.mouseButton == 1 || event.mouseButton == 2) {
-        _rotating = true;
+        _orbit.begin(event.mousePos);
         return true;
     }
     if (event.mouseButton != 0) return false;
@@ -167,42 +124,34 @@ bool EditorSkeletonCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event)
 
 bool EditorSkeletonCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
 {
-    if (!_rotating) return false;
-    _yaw += (event.mousePos.x - _lastPointer.x) * 0.012f;
-    _pitch = std::clamp(_pitch
-        + (event.mousePos.y - _lastPointer.y) * 0.012f, -1.5f, 1.5f);
-    _lastPointer = event.mousePos;
+    if (!_orbit.move(event.mousePos)) return false;
     markDirty();
     return true;
 }
 
 bool EditorSkeletonCanvas::onMouseButtonUp(const ayt::ui::UIMouseEvent& event)
 {
-    if (!_rotating || (event.mouseButton != 1 && event.mouseButton != 2)) {
-        return false;
-    }
-    _rotating = false;
-    return true;
+    if (event.mouseButton != 1 && event.mouseButton != 2) return false;
+    return _orbit.end();
 }
 
 bool EditorSkeletonCanvas::onMouseWheel(
     const ayt::ui::UIMouseWheelEvent& event)
 {
-    _zoom = std::clamp(_zoom * (event.deltaY > 0.0f ? 1.12f : 0.89f),
-                       0.2f, 8.0f);
+    _orbit.wheel(event.deltaY);
     markDirty();
     return true;
 }
 
 void EditorSkeletonCanvas::onMouseLeave()
 {
-    _rotating = false;
+    _orbit.cancel();
     ayt::ui::Widget::onMouseLeave();
 }
 
 ayt::ui::UiCursorHint EditorSkeletonCanvas::getCursorHint() const
 {
-    return _rotating ? ayt::ui::UiCursorHint::Move
+    return _orbit.rotating() ? ayt::ui::UiCursorHint::Move
                      : ayt::ui::UiCursorHint::Default;
 }
 
