@@ -1436,6 +1436,14 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 
 ## 12. References
 
+### 2026-09-28：作者页面公共组件接入
+
+动画和骨骼页面共用 AYUI 的预览基础、资源引用及诊断展示；命令按钮通过
+`EditorCommandButtons` 使用同一个 view 命令目标供按钮/快捷键执行，并同步可用状态。
+`EditorAuthoringSelectionBridge` 只把领域选择投射到既有 EditorSelectionContext，
+不持有关闭后的 workspace context，不增加第二套历史。独立 view 使用本地选择上下文。
+领域绘制/拾取、pose 推进、引用校验与安全烘焙仍由原 owner 管理。
+
 - [AYUI/design.md §13 Editor chrome](../AYUI/design.md#13-editor-chrome)
 - [AYExtension/design.md §3 Editor Integration](../AYExtension/design.md)
 - [AYApplication/design.md §3 BuildType / subsystems](../AYApplication/design.md)

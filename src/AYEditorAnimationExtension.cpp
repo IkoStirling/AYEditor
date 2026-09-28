@@ -6,6 +6,7 @@
 #include "AYEditorAnimationCanvas.h"
 #include <AYEditor/EditorCommandButtons.h>
 #include <AYEditor/EditorAuthoringSelectionBridge.h>
+#include <AYUI/Authoring/DiagnosticsPanel.h>
 #include "AYEditorAnimationCurveCanvas.h"
 #include "AYEditorAnimationCurveSource.h"
 #include "AYEditorAnimationDopeSheet.h"
@@ -497,10 +498,10 @@ private:
         body->addWidget(inspector, 380.0f);
         root->addWidget(body, 0.0f);
 
-        _diagnostics = new ayt::ui::TextArea();
-        _diagnostics->setReadOnly(true);
-        _diagnostics->setWordWrap(false);
-        root->addWidget(_diagnostics, 72.0f);
+        _diagnostics = new ayt::ui::authoring::DiagnosticsPanel();
+        _diagnostics->setId("animation_diagnostics");
+        _diagnostics->setOnLocate([this](const std::string& target) { locateDiagnostic(target); });
+        root->addWidget(_diagnostics, 96.0f);
 
         auto* timeline = new ayt::ui::HBox();
         timeline->setSpacing(5.0f);
@@ -983,23 +984,43 @@ private:
         refreshAll();
     }
 
+    void locateDiagnostic(const std::string& target)
+    {
+        if (std::find(_trackIds.begin(), _trackIds.end(), target) != _trackIds.end()) {
+            _selectedTrackId = target; _selectedKeyId.clear(); _selectionCleared = false;
+            refreshAuthoring(); return;
+        }
+        for (const auto& bone : _document->preview().bones()) {
+            if (target != "bone." + std::to_string(bone.index)) continue;
+            if (_document->selectBone(bone.index)) {
+                _selectionBridge.publish("skeleton.bone", {std::to_string(bone.index)}, std::to_string(bone.index));
+                refreshInspector(); if (_canvas) _canvas->markDirty(); _host.requestRepaint();
+            }
+            return;
+        }
+    }
+
     void refreshDiagnostics()
     {
-        std::wostringstream text;
+        using namespace ayt::ui::authoring;
+        std::vector<DiagnosticEntry> entries;
+        const auto tracks = _document->timelineTracks();
         for (const auto& diagnostic : _document->preview().diagnostics()) {
-            text << (diagnostic.severity
-                        == ayt::anim::editor::AnimationPreviewDiagnosticSeverity::Error
-                    ? L"ERROR "
-                    : diagnostic.severity
-                        == ayt::anim::editor::AnimationPreviewDiagnosticSeverity::Warning
-                    ? L"WARN  " : L"INFO  ")
-                 << L"[" << ayt::ui::decodeUtf8Text(
-                        ayt::anim::editor::AnimationPreviewSession::diagnosticCodeName(
-                            diagnostic.code)) << L"] "
-                 << ayt::ui::decodeUtf8Text(diagnostic.message) << L"\n";
+            const auto severity = diagnostic.severity == ayt::anim::editor::AnimationPreviewDiagnosticSeverity::Error
+                ? DiagnosticSeverity::Error : diagnostic.severity == ayt::anim::editor::AnimationPreviewDiagnosticSeverity::Warning
+                ? DiagnosticSeverity::Warning : DiagnosticSeverity::Info;
+            std::string target;
+            const auto track = "animation." + std::to_string(diagnostic.trackIndex);
+            if (std::any_of(tracks.begin(), tracks.end(), [&](const auto& item) {
+                return item.id == track && item.kind == EditorTimelineTrackKind::Animation;
+            })) target = track;
+            else if (diagnostic.boneIndex >= 0 && static_cast<std::size_t>(diagnostic.boneIndex) < _document->preview().bones().size())
+                target = "bone." + std::to_string(diagnostic.boneIndex);
+            entries.push_back({severity, ayt::ui::decodeUtf8Text(
+                ayt::anim::editor::AnimationPreviewSession::diagnosticCodeName(diagnostic.code)),
+                ayt::ui::decodeUtf8Text(diagnostic.message), target});
         }
-        const std::wstring value = text.str();
-        if (_diagnostics->getText() != value) _diagnostics->setText(value);
+        _diagnostics->setEntries(std::move(entries));
     }
 
     void refreshTransport()
@@ -1041,7 +1062,7 @@ private:
     ayt::ui::ComboBox* _notifyPicker = nullptr;
     ayt::ui::TextInput* _notifyName = nullptr;
     ayt::ui::TextInput* _notifyPayload = nullptr;
-    ayt::ui::TextArea* _diagnostics = nullptr;
+    ayt::ui::authoring::DiagnosticsPanel* _diagnostics = nullptr;
     ayt::ui::authoring::PlaybackControls* _transport = nullptr;
     ayt::ui::authoring::PlaybackControls* _scrubBar = nullptr;
     std::vector<std::string> _trackIds;

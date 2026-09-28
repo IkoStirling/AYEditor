@@ -4,6 +4,7 @@
 #include "AYEditorSkeletonCanvas.h"
 #include <AYEditor/EditorCommandButtons.h>
 #include <AYEditor/EditorAuthoringSelectionBridge.h>
+#include <AYUI/Authoring/DiagnosticsPanel.h>
 #include <AYUI/Authoring/ResourceReferenceField.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include <AYUI/Authoring/AuthoringPrimitives.h>
@@ -537,10 +538,10 @@ private:
         body->addWidget(inspector, 330.0f);
         root->addWidget(body, 0.0f);
 
-        _diagnostics = new ayt::ui::TextArea();
-        _diagnostics->setReadOnly(true);
-        _diagnostics->setWordWrap(false);
-        root->addWidget(_diagnostics, 78.0f);
+        _diagnostics = new ayt::ui::authoring::DiagnosticsPanel();
+        _diagnostics->setId("skeleton_diagnostics");
+        _diagnostics->setOnLocate([this](const std::string& target) { locateDiagnostic(target); });
+        root->addWidget(_diagnostics, 102.0f);
 
         auto* animation = new ayt::ui::HBox();
         animation->setSpacing(4.0f);
@@ -704,7 +705,7 @@ private:
                 << L"  |  missing: " << report.missingCount
                 << L"  |  ambiguous/conflict: " << report.ambiguousCount
                 << L"\nPreview does not modify the mapping.";
-        _diagnostics->setText(preview.str());
+        _diagnostics->setReport(preview.str());
         _host.setStatusText(L"RigProfile template preview ready");
     }
 
@@ -930,32 +931,40 @@ private:
             : ayt::math::FVector4{0.62f, 0.66f, 0.74f, 1.0f});
     }
 
+    void locateDiagnostic(const std::string& target)
+    {
+        for (const auto& bone : _document->core().bones()) {
+            if (target != "bone." + std::to_string(bone.index)) continue;
+            (void)_document->core().selectBone(bone.index);
+            refreshHierarchy(); refreshBoneProperties();
+            if (_canvas) _canvas->markDirty(); _host.requestRepaint(); return;
+        }
+    }
+
+    std::vector<ayt::ui::authoring::DiagnosticEntry> preflightEntries(
+        const ayt::anim::editor::SkeletonPreflightReport& report) const
+    {
+        using namespace ayt::ui::authoring;
+        std::vector<DiagnosticEntry> entries;
+        for (const auto& issue : report.issues) {
+            const auto severity = issue.severity == ayt::anim::editor::SkeletonPreflightSeverity::Error
+                ? DiagnosticSeverity::Error : DiagnosticSeverity::Warning;
+            const auto target = issue.boneIndex >= 0 && static_cast<std::size_t>(issue.boneIndex) < _document->core().bones().size()
+                ? "bone." + std::to_string(issue.boneIndex) : std::string{};
+            entries.push_back({severity, ayt::ui::decodeUtf8Text(SkeletonEditorCore::preflightCodeName(issue.code)),
+                ayt::ui::decodeUtf8Text(issue.message), target});
+        }
+        return entries;
+    }
+
     bool refreshPreflight()
     {
-        if (_diagnostics == nullptr) return false;
+        if (!_diagnostics) return false;
         const auto report = _document->core().preflight();
-        std::wostringstream text;
-        if (report.canBake()) {
-            text << L"PREFLIGHT PASSED";
-        } else {
-            text << L"PREFLIGHT BLOCKED  |  " << report.errorCount()
-                 << L" error(s), " << report.warningCount() << L" warning(s)";
-        }
-        const std::size_t visible = std::min<std::size_t>(report.issues.size(), 6u);
-        for (std::size_t index = 0; index < visible; ++index) {
-            const auto& issue = report.issues[index];
-            text << L"\n[" << ayt::ui::decodeUtf8Text(
-                SkeletonEditorCore::preflightCodeName(issue.code)) << L"] "
-                 << ayt::ui::decodeUtf8Text(issue.message);
-        }
-        if (report.issues.size() > visible) {
-            text << L"\n... " << (report.issues.size() - visible)
-                 << L" more issue(s)";
-        }
-        const std::wstring diagnostics = text.str();
-        if (_diagnostics->getText() != diagnostics) {
-            _diagnostics->setText(diagnostics);
-        }
+        std::wostringstream heading;
+        heading << (report.canBake() ? L"PREFLIGHT PASSED" : L"PREFLIGHT BLOCKED") << L"  |  "
+            << report.errorCount() << L" error(s), " << report.warningCount() << L" warning(s)";
+        _diagnostics->setEntries(preflightEntries(report), heading.str());
         return report.canBake();
     }
 
@@ -983,27 +992,26 @@ private:
              << plan.boneActionCount(
                     ayt::anim::editor::SkeletonBakeBoneAction::Delete)
              << L", dependencies " << plan.dependencies.size();
-        std::size_t visible = 0u;
+        using namespace ayt::ui::authoring;
+        auto entries = preflightEntries(plan.preflight);
         for (const auto& operation : plan.boneOperations) {
-            if (operation.action
-                == ayt::anim::editor::SkeletonBakeBoneAction::Keep) {
-                continue;
-            }
-            text << L"\n[" << ayt::ui::decodeUtf8Text(
-                SkeletonEditorCore::bakeBoneActionName(operation.action))
-                 << L"] " << ayt::ui::decodeUtf8Text(operation.sourceName);
-            if (!operation.targetName.empty()) {
-                text << L" -> " << ayt::ui::decodeUtf8Text(operation.targetName);
-            }
-            if (++visible >= 4u) break;
+            if (operation.action == ayt::anim::editor::SkeletonBakeBoneAction::Keep) continue;
+            auto message = ayt::ui::decodeUtf8Text(operation.sourceName);
+            if (!operation.targetName.empty()) message += L" -> " + ayt::ui::decodeUtf8Text(operation.targetName);
+            const auto target = operation.sourceBoneIndex >= 0
+                && static_cast<std::size_t>(operation.sourceBoneIndex) < _document->core().bones().size()
+                ? "bone." + std::to_string(operation.sourceBoneIndex) : std::string{};
+            entries.push_back({DiagnosticSeverity::Info, ayt::ui::decodeUtf8Text(
+                SkeletonEditorCore::bakeBoneActionName(operation.action)), std::move(message), target});
         }
         for (const auto& dependency : plan.dependencies) {
-            if (visible++ >= 6u) break;
-            text << L"\n[" << ayt::ui::decodeUtf8Text(
-                SkeletonEditorCore::bakeDependencyKindName(dependency.kind))
-                 << L"] " << ayt::ui::decodeUtf8Text(dependency.path);
+            const auto severity = dependency.impact == ayt::anim::editor::SkeletonBakeDependencyImpact::Blocked
+                ? DiagnosticSeverity::Error : dependency.impact == ayt::anim::editor::SkeletonBakeDependencyImpact::RequiresVerification
+                ? DiagnosticSeverity::Warning : DiagnosticSeverity::Info;
+            entries.push_back({severity, ayt::ui::decodeUtf8Text(SkeletonEditorCore::bakeDependencyKindName(dependency.kind)),
+                ayt::ui::decodeUtf8Text(dependency.path + " " + dependency.message), {}});
         }
-        _diagnostics->setText(text.str());
+        _diagnostics->setEntries(std::move(entries), text.str());
         _host.setStatusText(L"Bake dry-run manifest written: "
             + ayt::ui::decodeUtf8Text(manifestPath));
     }
@@ -1037,7 +1045,7 @@ private:
                 text << L"BAKING  |  " << std::fixed << std::setprecision(0)
                      << snapshot.progress * 100.0f << L"%\n"
                      << ayt::ui::decodeUtf8Text(snapshot.message);
-                _diagnostics->setText(text.str());
+                _diagnostics->setReport(text.str());
             }
             return;
         }
@@ -1073,7 +1081,7 @@ private:
         for (const std::string& output : snapshot.outputPaths) {
             text << L"\n" << ayt::ui::decodeUtf8Text(output);
         }
-        if (_diagnostics != nullptr) _diagnostics->setText(text.str());
+        if (_diagnostics != nullptr) _diagnostics->setReport(text.str());
         _host.setStatusText(succeeded
             ? L"Skeleton bake completed"
             : snapshot.state == ayt::anim::editor::SkeletonBakeJobState::Cancelled
@@ -1115,7 +1123,7 @@ private:
     ayt::ui::ComboBox* _profilePicker = nullptr;
     ayt::ui::ComboBox* _templatePicker = nullptr;
     ayt::ui::TextArea* _properties = nullptr;
-    ayt::ui::TextArea* _diagnostics = nullptr;
+    ayt::ui::authoring::DiagnosticsPanel* _diagnostics = nullptr;
     ayt::ui::TextInput* _animationPath = nullptr;
     ayt::ui::TextInput* _targetSkeletonPath = nullptr;
     ayt::ui::TextInput* _platform = nullptr;
