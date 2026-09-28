@@ -70,8 +70,8 @@ if(MSVC)
     target_link_options(${MODULE_NAME} PRIVATE "/OPT:NOREF")
 endif()
 
-ay_add_test(${MODULE_NAME} LABELS "ayeditor;editor-full" TIMEOUT 600 RUN_SERIAL)
-ay_add_test(${MODULE_NAME} NAME AYEditor_FastTests
+ay_add_test(${MODULE_NAME} CASE_REPORT LABELS "ayeditor;editor-full" TIMEOUT 600 RUN_SERIAL)
+ay_add_test(${MODULE_NAME} CASE_REPORT NAME AYEditor_FastTests
     ARGS --include-suite AYEditor_P0Core --include-suite AYEditor_TransformGizmo
          --include-suite AYEditor_AssetTilePresenter --include-suite AYEditor_Framework
     LABELS "ayeditor;editor-fast;unit" TIMEOUT 60 RUN_SERIAL)
@@ -156,4 +156,4 @@ if(MSVC)
         "/IGNORE:4006")
 endif()
 
-ay_add_test(DefaultEditorModuleAssemblyTest LABELS "ayeditor;editor-full" TIMEOUT 30 RUN_SERIAL)
+ay_add_test(DefaultEditorModuleAssemblyTest CASE_REPORT LABELS "ayeditor;editor-full" TIMEOUT 30 RUN_SERIAL)
