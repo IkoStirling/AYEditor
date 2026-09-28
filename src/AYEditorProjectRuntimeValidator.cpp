@@ -8,6 +8,7 @@
 
 #include <AYUI/UIFlow.h>
 
+#include <AYIO/PathSafety.h>
 #include <algorithm>
 #include <cctype>
 #include <exception>
@@ -27,33 +28,6 @@ bool hasWindowsDrivePrefix(std::string_view value) noexcept
     const char letter = value.front();
     return (letter >= 'A' && letter <= 'Z')
         || (letter >= 'a' && letter <= 'z');
-}
-
-bool pathComponentEqual(const fs::path& left, const fs::path& right)
-{
-#ifdef _WIN32
-    const std::string leftText = left.string();
-    const std::string rightText = right.string();
-    return leftText.size() == rightText.size()
-        && std::equal(leftText.begin(), leftText.end(), rightText.begin(),
-            [](char lhs, char rhs) {
-                return std::tolower(static_cast<unsigned char>(lhs))
-                    == std::tolower(static_cast<unsigned char>(rhs));
-            });
-#else
-    return left == right;
-#endif
-}
-
-bool isWithin(const fs::path& root, const fs::path& candidate)
-{
-    auto rootIt = root.begin();
-    auto candidateIt = candidate.begin();
-    for (; rootIt != root.end(); ++rootIt, ++candidateIt) {
-        if (candidateIt == candidate.end()
-            || !pathComponentEqual(*rootIt, *candidateIt)) return false;
-    }
-    return true;
 }
 
 bool resolveContainedPath(const fs::path& base,
@@ -86,61 +60,7 @@ bool resolveContainedPath(const fs::path& base,
         }
     }
 
-    std::error_code filesystemError;
-    const fs::path canonicalBase = fs::canonical(base, filesystemError);
-    if (filesystemError) {
-        error = "Content root cannot be resolved: " + base.string()
-            + ": " + filesystemError.message();
-        return false;
-    }
-
-    const fs::path candidate = (canonicalBase / supplied).lexically_normal();
-    if (!isWithin(canonicalBase, candidate)) {
-        error = "Path resolves outside its content root: "
-            + std::string(relative);
-        return false;
-    }
-
-    // canonical()/weakly_canonical() can report access_denied for a missing
-    // leaf on some Windows filesystems. Resolve the nearest existing ancestor
-    // instead, then append the still-missing suffix. Existing symlink parents
-    // are canonicalized and cannot be used to escape the content root.
-    fs::path probe = candidate;
-    fs::path missingSuffix;
-    while (true) {
-        filesystemError.clear();
-        const bool exists = fs::exists(probe, filesystemError);
-        if (filesystemError) {
-            error = "Path cannot be inspected: " + std::string(relative)
-                + ": " + filesystemError.message();
-            return false;
-        }
-        if (exists) break;
-        if (probe.empty() || probe == probe.parent_path()) {
-            error = "Path cannot be resolved: " + std::string(relative);
-            return false;
-        }
-        missingSuffix = probe.filename() / missingSuffix;
-        probe = probe.parent_path();
-    }
-
-    const fs::path resolvedPrefix = fs::canonical(probe, filesystemError);
-    if (filesystemError) {
-        error = "Path cannot be resolved: " + std::string(relative)
-            + ": " + filesystemError.message();
-        return false;
-    }
-    const fs::path resolved = missingSuffix.empty()
-        ? resolvedPrefix.lexically_normal()
-        : (resolvedPrefix / missingSuffix).lexically_normal();
-    if (!isWithin(canonicalBase, resolved)) {
-        error = "Path resolves outside its content root: "
-            + std::string(relative);
-        return false;
-    }
-    result = resolved;
-    error.clear();
-    return true;
+    return ayt::io::path::resolveWithinRoot(base, fs::path(relative), result, error);
 }
 
 void validateUiFlow(
