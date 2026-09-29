@@ -1261,6 +1261,18 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Cells use texture top-left origin and row-major order, matching the runtime
   component. The Source Sheet preserves the full image, draws the actual grid,
   and turns a left-drag into one contiguous `firstFrame`/`frameCount` range.
+- Row navigation wraps and selects a whole row for Loop preview. Optional
+  trailing-blank trimming scans original alpha, assigns texel centers to UV
+  cells (including fractional grids), and preserves leading/interior blanks.
+  Requested and effective counts stay separate; Apply writes the effective
+  count, without runtime scanning. Entirely blank ranges require opting out.
+- Pixel-size setup offers 8/16/32/64 and custom width/height. Only an explicit
+  setup click derives columns/rows; exact divisibility avoids silently dropping
+  edge pixels. Subsequent manual grid edits are never overridden by the setup.
+  Source dimensions and fractional-cell warnings stay visible beside the sheet.
+- Hidden tabs do not background-tick the preview. Frame progression only
+  updates frame-dependent widgets; unchanged mode/row/grid labels retain their
+  cached display lists. Source pixels are scanned on edits, not playback ticks.
 - The center-Dock document gives the source image the flexible majority of the
   workspace. Its inspector scrolls independently and provides a live single
   frame preview, transport controls, scrub, grid/range inputs, Loop/Once and

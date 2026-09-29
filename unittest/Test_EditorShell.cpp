@@ -2730,12 +2730,12 @@ TEST_CASE(sprite_animation_rows_trim_toggle_and_apply_use_source_alpha)
     host.state.frameCount = 24;
     host.state.playbackMode = 1;
     host.state.hasAnimation = true;
-    auto pixels = std::make_shared<std::vector<uint8_t>>(96u * 4u, 0u);
-    (*pixels)[75u * 4u + 3u] = 255;
+    auto pixels = std::make_shared<std::vector<uint8_t>>(736u * 128u * 4u, 0u);
+    (*pixels)[(120u * 736u + 120u) * 4u + 3u] = 255;
     (*pixels)[0u * 4u + 3u] = 255;
     host.image.texture.handle = reinterpret_cast<void*>(1);
-    host.image.width = 24;
-    host.image.height = 4;
+    host.image.width = 736;
+    host.image.height = 128;
     host.image.bgraPixels = pixels;
     EditorExtensionRegistry registry;
     CHECK(registerEditorSpriteAnimationExtension(registry));
@@ -2746,6 +2746,7 @@ TEST_CASE(sprite_animation_rows_trim_toggle_and_apply_use_source_alpha)
     auto document = descriptor->createDocument({}, error);
     auto view = descriptor->createView(document, host);
     auto* root = view->rootWidget();
+    CHECK_FALSE(view->wantsBackgroundTick());
     const auto button = [&](const char* id) {
         auto* result = dynamic_cast<Button*>(findWidgetInTree(root, id));
         if (result != nullptr) result->setSize(ayt::math::FVector2(120, 30));
@@ -2784,6 +2785,68 @@ TEST_CASE(sprite_animation_rows_trim_toggle_and_apply_use_source_alpha)
     CHECK(clickButton(apply));
     CHECK_INT_EQ(48u, host.state.firstFrame);
     CHECK_INT_EQ(24u, host.state.frameCount);
+    trim->setChecked(true);
+    CHECK(clickButton(button("sprite_animation_next_row")));
+    auto* preset = dynamic_cast<ComboBox*>(findWidgetInTree(root,
+        "sprite_animation_cell_preset"));
+    auto* columns = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_columns"));
+    auto* rows = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_rows"));
+    auto* first = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_first"));
+    auto* count = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_count"));
+    auto* width = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_cell_width"));
+    auto* height = dynamic_cast<TextInput*>(findWidgetInTree(root,
+        "sprite_animation_cell_height"));
+    auto* gridInfo = dynamic_cast<TextLabel*>(findWidgetInTree(root,
+        "sprite_animation_grid_info"));
+    CHECK(preset && columns && rows && first && count && width && height && gridInfo);
+    if (!preset || !columns || !rows || !first || !count || !width || !height || !gridInfo) return;
+    CHECK(gridInfo->getText().find(L"Fractional") != std::wstring::npos);
+    CHECK(clickButton(button("sprite_animation_apply_cell_size")));
+    CHECK(columns->getText() == L"23");
+    CHECK(rows->getText() == L"4");
+    CHECK(first->getText() == L"69");
+    CHECK(rowStatus->getText().find(L"4 / 23 frames") != std::wstring::npos);
+    CHECK(gridInfo->getText().find(L"Cell: 32 x 32 px") != std::wstring::npos);
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(23u, host.state.columns);
+    CHECK_INT_EQ(4u, host.state.frameCount);
+    preset->setSelectedIndex(3); // 64px would leave a 32px remainder
+    CHECK(columns->getText() == L"23"); // preset alone never changes grid
+    CHECK(clickButton(button("sprite_animation_apply_cell_size")));
+    CHECK(columns->getText() == L"23"); // incompatible dimensions rejected
+    preset->setSelectedIndex(4);
+    width->setText(L"32");
+    height->setText(L"64");
+    CHECK(rows->getText() == L"4");
+    CHECK(clickButton(button("sprite_animation_apply_cell_size")));
+    CHECK(rows->getText() == L"2");
+    columns->setText(L"24");
+    rows->setText(L"4");
+    first->setText(L"72");
+    count->setText(L"24");
+    view->tick(0.1f);
+    CHECK(columns->getText() == L"24"); // prepared custom dimensions cannot override manual edits
+    CHECK(rows->getText() == L"4");
+    CHECK_INT_EQ(4u, host.state.frameCount);
+    auto* modeStatus = dynamic_cast<TextLabel*>(findWidgetInTree(root,
+        "sprite_animation_mode_status"));
+    CHECK(modeStatus != nullptr);
+    if (modeStatus != nullptr) {
+        MockRenderer renderer;
+        modeStatus->render(renderer);
+        rowStatus->render(renderer);
+        gridInfo->render(renderer);
+        CHECK_FALSE(modeStatus->isDirtyThis());
+        view->tick(0.1f);
+        CHECK_FALSE(modeStatus->isDirtyThis());
+        CHECK_FALSE(rowStatus->isDirtyThis());
+        CHECK_FALSE(gridInfo->isDirtyThis()); // playback doesn't dirty static chrome
+    }
 }
 
 TEST_SUITE_END

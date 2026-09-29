@@ -148,6 +148,48 @@ public:
         _rowStatus->setId("sprite_animation_row_status");
         rowNavigation->addWidget(_rowStatus, 0.0f);
         sourceColumn->addWidget(rowNavigation, 30.0f);
+        _gridInfo = label(L"No source image", 11);
+        _gridInfo->setId("sprite_animation_grid_info");
+        _gridInfo->setWordWrap(true);
+        sourceColumn->addWidget(_gridInfo, 42.0f);
+        auto* pixelSetup = new ayt::ui::HBox();
+        pixelSetup->setSpacing(5.0f);
+        pixelSetup->addWidget(label(L"Cell size (px)", 11), 92.0f);
+        _cellPreset = new ayt::ui::ComboBox();
+        _cellPreset->setId("sprite_animation_cell_preset");
+        _cellPreset->setItems({L"8 x 8", L"16 x 16", L"32 x 32", L"64 x 64", L"Custom"});
+        _cellPreset->setSelectedIndex(2);
+        _cellPreset->setOnSelectionChanged([this](int index) {
+            constexpr uint32_t sizes[] = {8u, 16u, 32u, 64u};
+            if (index >= 0 && index < 4) {
+                _cellWidth->setText(std::to_wstring(sizes[index]));
+                _cellHeight->setText(std::to_wstring(sizes[index]));
+            }
+            // Presets only prepare the setup; they never overwrite manual grid edits.
+        });
+        pixelSetup->addWidget(_cellPreset, 0.0f);
+        _applyCellSize = addTextButton(pixelSetup, L"Apply Cell Size", 130.0f,
+            [this]() { applyCellSize(); });
+        _applyCellSize->setId("sprite_animation_apply_cell_size");
+        sourceColumn->addWidget(pixelSetup, 29.0f);
+        auto* customSize = new ayt::ui::HBox();
+        customSize->setSpacing(5.0f);
+        customSize->addWidget(label(L"Width", 11), 48.0f);
+        _cellWidth = new ayt::ui::TextInput();
+        _cellWidth->setId("sprite_animation_cell_width");
+        _cellWidth->setMaxLength(10u);
+        _cellWidth->setText(L"32");
+        customSize->addWidget(_cellWidth, 70.0f);
+        customSize->addWidget(label(L"Height", 11), 48.0f);
+        _cellHeight = new ayt::ui::TextInput();
+        _cellHeight->setId("sprite_animation_cell_height");
+        _cellHeight->setMaxLength(10u);
+        _cellHeight->setText(L"32");
+        customSize->addWidget(_cellHeight, 70.0f);
+        auto* setupHint = label(L"Applies only on click", 10);
+        setupHint->setWordWrap(true);
+        customSize->addWidget(setupHint, 0.0f);
+        sourceColumn->addWidget(customSize, 32.0f);
         ayt::ui::BoxSlotLimits sourceLimits;
         sourceLimits.minWidth = 430.0f;
         body->addWidget(sourceColumn, 0.0f, sourceLimits);
@@ -269,7 +311,9 @@ public:
         return result;
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
-    bool wantsBackgroundTick() const noexcept override { return true; }
+    // Hidden previews must not keep rebuilding source-sheet/text display lists.
+    bool wantsBackgroundTick() const noexcept override { return false; }
+    void onActivated() override { reloadSelection(false); }
 
     void tick(float dt) override {
         _selectionPoll += std::max(0.0f, dt);
@@ -278,9 +322,14 @@ public:
             reloadSelection(false);
         }
         const uint32_t before = _model.currentFrameOffset();
+        const bool wasPlaying = _model.isPlaying();
+        const bool wasFinished = _model.isFinished();
         _model.tick(static_cast<uint64_t>(
             std::max(0.0f, dt) * 1000000.0f));
-        if (before != _model.currentFrameOffset()) updatePlayhead();
+        if (before != _model.currentFrameOffset()) updatePlayhead(true, false);
+        if (wasPlaying != _model.isPlaying() || wasFinished != _model.isFinished()) {
+            refreshStatus();
+        }
     }
 
     void prepareForUiShutdown() override { clearCallbacks(); }
@@ -411,6 +460,39 @@ private:
         _host.requestRepaint();
     }
 
+    void applyCellSize()
+    {
+        uint32_t width = 0u, height = 0u;
+        if (!_model.hasSheet()) {
+            setMessage(L"Load a Sprite source image before setting its cell size.");
+            return;
+        }
+        if (!parseUInt(_cellWidth->getText(), width) || width == 0u
+            || !parseUInt(_cellHeight->getText(), height) || height == 0u
+            || _model.sheetWidthPx() % width != 0u
+            || _model.sheetHeightPx() % height != 0u) {
+            setMessage(L"Cell width/height must be positive and divide the source image "
+                       L"exactly. Existing manual grid is unchanged.");
+            return;
+        }
+        const uint32_t columns = _model.sheetWidthPx() / width;
+        const uint32_t rows = _model.sheetHeightPx() / height;
+        if (columns == 0u || rows == 0u || columns > 4096u || rows > 4096u) {
+            setMessage(L"Cell size exceeds the supported grid range. Grid is unchanged.");
+            return;
+        }
+        if (_bound.entityId == 0u || !readControls()) return;
+        const uint32_t row = std::min(_model.draft().firstFrame / _model.draft().columns,
+                                      rows - 1u);
+        _model.setGrid(columns, rows);
+        _model.selectRange(row * columns, (row + 1u) * columns - 1u);
+        updateTrailingTrim();
+        _dirty = true;
+        syncControls();
+        showRangeMessage();
+        _host.requestRepaint();
+    }
+
     void updateTrailingTrim()
     {
         _model.clearTrailingEmptyTrim();
@@ -430,7 +512,7 @@ private:
                        L"or turn off trailing-frame skipping to use it intentionally.");
         } else if (_trimTrailing->isChecked() && !_trimResult.available) {
             setMessage(L"Blank-frame detection unavailable: load source pixels and use "
-                       L"a grid that divides the image exactly. Full range is retained.");
+                       L"cells at least one pixel wide/high. Full range is retained.");
         } else if (_trimResult.trimmedFrames != 0u) {
             setMessage(L"Skipping " + std::to_wstring(_trimResult.trimmedFrames)
                 + L" trailing blank frames. Interior blanks are kept. Apply saves "
@@ -536,6 +618,8 @@ private:
             _preview->clearImage();
             _modeStatus->setText(L"NO SPRITE SELECTED");
             _sourceLabel->setText(L"");
+            _gridInfo->setText(L"No source image");
+            _applyCellSize->setEnabled(false);
             _previousRow->setEnabled(false);
             _nextRow->setEnabled(false);
             _apply->setEnabled(false);
@@ -579,7 +663,7 @@ private:
             ayt::ui::decodeUtf8Text(state.texturePath));
         updateTrailingTrim();
         syncControls();
-        if (_trimResult.allEmpty || _trimResult.trimmedFrames != 0u) {
+        if (_trimTrailing->isChecked()) {
             _dirty = _model.previewFrameCount() != _bound.frameCount;
             showRangeMessage();
         }
@@ -587,7 +671,7 @@ private:
         _host.requestRepaint();
     }
 
-    void updatePlayhead(bool updateSlider = true)
+    void updatePlayhead(bool updateSlider = true, bool updateChrome = true)
     {
         const uint32_t count = _model.previewFrameCount();
         if (updateSlider) {
@@ -604,7 +688,7 @@ private:
             + L"  ·  Cell " + std::to_wstring(_model.currentCell()));
         _sheet->markDirty();
         _preview->markDirty();
-        refreshStatus();
+        if (updateChrome) refreshStatus();
         _host.requestRepaint();
     }
 
@@ -615,17 +699,32 @@ private:
         _previousRow->setEnabled(draft.rows > 1u);
         _nextRow->setEnabled(draft.rows > 1u);
         _apply->setEnabled(!(_trimTrailing->isChecked() && _trimResult.allEmpty));
-        _rowStatus->setText(L"Row " + std::to_wstring(draft.firstFrame / draft.columns + 1u)
+        const std::wstring rowText = L"Row " + std::to_wstring(draft.firstFrame / draft.columns + 1u)
             + L" / " + std::to_wstring(draft.rows) + L"  ·  "
             + std::to_wstring(_model.previewFrameCount()) + L" / "
-            + std::to_wstring(draft.frameCount) + L" frames");
+            + std::to_wstring(draft.frameCount) + L" frames";
+        if (_rowStatus->getText() != rowText) _rowStatus->setText(rowText);
+        _applyCellSize->setEnabled(_model.hasSheet());
+        std::wstring gridText = std::to_wstring(_model.sheetWidthPx()) + L" x "
+            + std::to_wstring(_model.sheetHeightPx()) + L" px  ·  "
+            + std::to_wstring(draft.columns) + L" x " + std::to_wstring(draft.rows) + L" cells";
+        if (_model.hasSheet()) {
+            if (_model.sheetWidthPx() % draft.columns != 0u
+                || _model.sheetHeightPx() % draft.rows != 0u) {
+                gridText += L"\nFractional cells: use pixel-size setup for exact slices.";
+            } else {
+                gridText += L"\nCell: " + std::to_wstring(_model.sheetWidthPx() / draft.columns)
+                    + L" x " + std::to_wstring(_model.sheetHeightPx() / draft.rows) + L" px";
+            }
+        }
+        if (_gridInfo->getText() != gridText) _gridInfo->setText(gridText);
         std::wstring text = _model.isPlaying() ? L"PLAYING" : L"PAUSED";
         if (_model.isFinished()) text = L"FINISHED";
         text += L"  ·  " + ayt::ui::decodeUtf8Text(_bound.entityName)
             + L"  ·  Cells " + std::to_wstring(draft.firstFrame)
             + L"–" + std::to_wstring(_model.selectedLastFrame());
         if (_dirty) text += L"  ·  NOT APPLIED";
-        _modeStatus->setText(text);
+        if (_modeStatus->getText() != text) _modeStatus->setText(text);
     }
 
     void setMessage(const std::wstring& text)
@@ -643,6 +742,7 @@ private:
         if (_playbackMode != nullptr) _playbackMode->setOnSelectionChanged({});
         if (_startsPlaying != nullptr) _startsPlaying->setOnToggled({});
         if (_trimTrailing != nullptr) _trimTrailing->setOnToggled({});
+        if (_cellPreset != nullptr) _cellPreset->setOnSelectionChanged({});
         for (auto* input : _inputs) {
             if (input != nullptr) input->setOnTextChanged({});
         }
@@ -672,6 +772,11 @@ private:
     ayt::ui::TextLabel* _playhead = nullptr;
     ayt::ui::TextLabel* _message = nullptr;
     ayt::ui::TextLabel* _rowStatus = nullptr;
+    ayt::ui::TextLabel* _gridInfo = nullptr;
+    ayt::ui::ComboBox* _cellPreset = nullptr;
+    ayt::ui::TextInput* _cellWidth = nullptr;
+    ayt::ui::TextInput* _cellHeight = nullptr;
+    ayt::ui::Button* _applyCellSize = nullptr;
     ayt::ui::TextInput* _columns = nullptr;
     ayt::ui::TextInput* _rows = nullptr;
     ayt::ui::TextInput* _firstFrame = nullptr;
