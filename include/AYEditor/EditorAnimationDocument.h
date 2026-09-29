@@ -128,6 +128,15 @@ public:
     bool removeAnimationKeyframes(
         const std::vector<std::string>& keyframeIds);
     bool authoringReadOnly() const;
+    bool createControlRig(const std::string& mappingProfile = {}, std::string* error = nullptr);
+    bool clearControlRig(std::string* error = nullptr);
+    const std::string& controlRigLoadError() const noexcept { return _controlRigLoadError; }
+    bool editControlRig(const std::function<bool(ayt::anim::editor::HumanoidControlRig&)>&,
+                        std::string* error = nullptr, const std::vector<std::string>* afterIds = nullptr);
+    void bindControlRigSelection(std::shared_ptr<ayt::ui::authoring::TimelineSelection> selection) { _controlRigSelection=std::move(selection); }
+    bool switchControlRigLimb(ayt::anim::editor::RigLimb, bool ik, std::string* error = nullptr);
+    bool recordControlRigKey(std::string* error = nullptr);
+    bool bakeControlRig(double sampleRate = 30, std::string* error = nullptr);
     void bindAuthoringSelection(std::shared_ptr<ayt::ui::authoring::TimelineSelection> selection) {
         _authoringSelection = std::move(selection);
     }
@@ -176,9 +185,10 @@ public:
     bool selectBone(int index) noexcept;
 
     const std::string& metadataPath() const noexcept { return _metadataPath; }
-    bool persistPreviewMetadata(std::string* error = nullptr) const;
+    bool persistPreviewMetadata(std::string* error = nullptr, bool includeControls = false) const;
 
 private:
+    bool recordSkeletonBinding(const std::string& before, const std::string& after);
     void loadPreviewMetadata();
     bool resetEditHistory(std::string* error = nullptr);
     bool commitEditedAnimation(
@@ -196,11 +206,13 @@ private:
     std::string _title;
     std::string _projectRoot;
     std::string _metadataPath;
+    std::string _controlRigLoadError;
     ayt::anim::editor::AnimationPreviewSession _preview;
     int _selectedBone = -1;
     std::vector<std::uint8_t> _currentBytes;
     EditorCommandHistory _history;
     std::weak_ptr<ayt::ui::authoring::TimelineSelection> _authoringSelection;
+    std::weak_ptr<ayt::ui::authoring::TimelineSelection> _controlRigSelection;
     std::uint64_t _gestureGeneration = 0;
 };
 

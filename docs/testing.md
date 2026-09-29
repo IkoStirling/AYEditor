@@ -39,3 +39,11 @@ CTest 注册项数量不是用例数；主报告使用用例通过/失败/跳过
 独立 `AYAnimationEditorCore` 另有 45 用例：fast 13 / integration 31 / stress 1，
 不与 Editor 的 UI 适配测试混计。作者核心快速门禁用 `animation-editor-fast`，
 full 用 `animation-editor-full`；源码/运行时审计必须检查完整层，无遗漏、无重复。
+
+2026-09-29 人形控制器接入回归：作者核心 full 53（fast 21 / integration 31 /
+stress 1），Editor 主入口 300 + 装配 1 = 301，UI full 1229，动画运行时 296。
+控制器专项覆盖四肢/Pole/端点/均匀 scale、双向切换、拖动/旋转取消、姿势键、
+原子重排及选择撤销、保存重开、metadata 失败回滚、坏 metadata 防静默覆盖、
+清除重绑定历史和烘焙撤销。Editor source ABI 28，旧二进制需重建。
+精确报告与未交付的 Recovery/真实资产验收见
+[控制器实施记录](../../../AYDocs/control-rig-implementation.md)。

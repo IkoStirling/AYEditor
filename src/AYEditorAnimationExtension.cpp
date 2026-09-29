@@ -4,6 +4,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditorAnimationCanvas.h"
+#include "AYEditorAnimationRigPanel.h"
 #include <AYEditor/EditorCommandButtons.h>
 #include <AYEditor/EditorAuthoringSelectionBridge.h>
 #include <AYUI/Authoring/DiagnosticsPanel.h>
@@ -22,6 +23,7 @@
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Slider.h>
+#include <AYUI/ScrollView.h>
 #include <AYUI/TextArea.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
@@ -157,12 +159,14 @@ public:
         const auto changes = _refreshGate.consume(stateStamp());
         if (!changes.content && (changes.pose || changes.transport)) {
             refreshTransport();
+            if (_rigPanel) _rigPanel->refreshValues();
             if (_canvas != nullptr) _canvas->markDirty();
             if (_curveCanvas != nullptr) _curveCanvas->markDirty();
             if (_dopeSheet != nullptr) _dopeSheet->markDirty();
             _host.requestRepaint();
         }
         if (changes.content) {
+            if (_rigPanel) _rigPanel->refresh();
             refreshBindings();
             refreshInspector();
             refreshDiagnostics();
@@ -276,6 +280,7 @@ private:
         previewColumn->setSpacing(4.0f);
         _canvas = new EditorAnimationCanvas(_document);
         _canvas->setOnBoneSelected([this](int) { refreshInspector(); });
+        _canvas->setOnControlSelected([this](const std::string& id){if(_rigPanel) _rigPanel->selectControl(id);});
         previewColumn->addWidget(_canvas, 0.0f);
         auto* curveToolbar = new ayt::ui::HBox();
         curveToolbar->setSpacing(4.0f);
@@ -427,6 +432,13 @@ private:
         inspector->addWidget(bindingActions, 28.0f);
 
         inspector->addWidget(makeHeader(L"TRACK AUTHORING"), 20.0f);
+        _rigPanel=new EditorAnimationRigPanel(_document,
+            [this](const std::string& id){if(_canvas) _canvas->setControlHandle(id);},
+            [this](const std::string& error){
+                _host.setStatusText(error.empty() ? L"Controller edit completed" : ayt::ui::decodeUtf8Text(error));
+                refreshAll();
+            });
+        inspector->addWidget(_rigPanel,272);
         _trackPicker = new ayt::ui::ComboBox();
         _trackPicker->setOnSelectionChanged([this](int index) {
             if (_syncing || index < 0
@@ -577,8 +589,12 @@ private:
         _tracks = new ayt::ui::TextArea();
         _tracks->setReadOnly(true);
         _tracks->setWordWrap(false);
-        inspector->addWidget(_tracks, 0.0f);
-        body->addWidget(inspector, 380.0f);
+        inspector->addWidget(_tracks, 140.0f);
+        auto* inspectorScroll=new ayt::ui::ScrollView();
+        inspectorScroll->setId("animation_inspector_scroll");
+        inspectorScroll->setHorizontalScrollBarEnabled(false);
+        inspectorScroll->setContentOwned(inspector);
+        body->addWidget(inspectorScroll, 380.0f);
         root->addWidget(body, 0.0f);
 
         _diagnostics = new ayt::ui::authoring::DiagnosticsPanel();
@@ -637,6 +653,7 @@ private:
 
     void refreshAll()
     {
+        if (_rigPanel) _rigPanel->refresh();
         _commands.refresh();
         refreshBindings();
         refreshInspector();
@@ -1129,6 +1146,7 @@ private:
     bool _lastLooping = true;
     ayt::ui::Widget* _root = nullptr;
     EditorAnimationCanvas* _canvas = nullptr;
+    EditorAnimationRigPanel* _rigPanel = nullptr;
     EditorAnimationCurveCanvas* _curveCanvas = nullptr;
     EditorAnimationDopeSheet* _dopeSheet = nullptr;
     std::array<ayt::ui::Button*, 4> _curveComponents{};

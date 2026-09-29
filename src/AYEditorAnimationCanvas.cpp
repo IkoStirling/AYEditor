@@ -67,6 +67,17 @@ EditorAnimationCanvas::EditorAnimationCanvas(
 {
     setId("animation_editor_preview_canvas");
 }
+EditorAnimationCanvas::~EditorAnimationCanvas() { _onControlSelected={}; finishControlDrag(true); }
+void EditorAnimationCanvas::finishControlDrag(bool cancel) {
+    if (!_controlDragging) return;
+    _controlDragging=false; _dragProjection.reset();
+    if (_document) {
+        if (cancel) (void)_document->cancelAnimationEditGesture();
+        else (void)_document->commitAnimationEditGesture();
+    }
+    _projectionCache.invalidate(); markDirty();
+}
+void EditorAnimationCanvas::onCaptureCancelled() { finishControlDrag(true); _orbit.cancel(); }
 
 void EditorAnimationCanvas::framePreview()
 {
@@ -123,6 +134,7 @@ void EditorAnimationCanvas::rebuildProjection()
     _skeletonWorld.clear();
     _skeletonProjected.clear();
     _modelProjectedSegments.clear();
+    _controls.clear();
 
     const AnimationPreviewMode mode = preview.effectivePreviewMode();
     const bool showSkeleton = mode != AnimationPreviewMode::ModelOnly;
@@ -136,13 +148,33 @@ void EditorAnimationCanvas::rebuildProjection()
     if (showModel) rebuildModelSegments();
     else _modelWorldSegments.clear();
 
+    if (const auto* rig=preview.controlRig(); rig && rig->enabled) {
+        const auto& world=preview.poseWorldMatrices();
+        for (const auto& h:rig->handles()) if (std::size_t(h.bone)<world.size()) {
+            bool ikJoint=false; for(unsigned i=0;i<4;++i) if(rig->pose().limbs[i].ik)
+                for(unsigned j=0;j<3;++j) ikJoint=ikJoint || rig->limbBone(ayt::anim::editor::RigLimb(i),j)==h.bone;
+            if (ikJoint) continue;
+            const auto position=world[h.bone].transformPoint({});
+            _controls.push_back({"fk."+std::to_string(h.bone)+".rotation",position,{},true});
+            if(h.translation) _controls.push_back({"fk."+std::to_string(h.bone)+".position",position,{},false});
+        }
+        for(unsigned i=0;i<4;++i) if(rig->limbBone(ayt::anim::editor::RigLimb(i),0)>=0 && rig->pose().limbs[i].ik) {
+            const auto& limb=rig->pose().limbs[i]; const auto id="ik."+std::to_string(i)+".";
+            _controls.push_back({id+"target",limb.target,{},false}); _controls.push_back({id+"pole",limb.pole,{},false});
+            _controls.push_back({id+"rotation",limb.target,{},true});
+        }
+    }
+
     ayt::ui::authoring::PreviewBounds points;
     for (const auto& point : _skeletonWorld) points.include(point);
+    for (const auto& handle:_controls) points.include(handle.world);
     for (const auto& segment : _modelWorldSegments) {
         points.include(segment.a); points.include(segment.b);
     }
     if (!points.populated) return;
-    const ayt::ui::authoring::PreviewProjection project(points, bounds, _orbit, 0.72f);
+    const ayt::ui::authoring::PreviewProjection project=_dragProjection ? *_dragProjection : ayt::ui::authoring::PreviewProjection(points, bounds, _orbit, 0.72f);
+    _projection=project;
+    for (auto& handle:_controls) handle.projected=project(handle.world);
     _skeletonProjected.reserve(_skeletonWorld.size());
     for (const auto& point : _skeletonWorld) _skeletonProjected.push_back(project(point));
     _modelProjectedSegments.reserve(_modelWorldSegments.size());
@@ -170,11 +202,26 @@ int EditorAnimationCanvas::hitBone(ayt::math::FVector2 point) const noexcept
 bool EditorAnimationCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event)
 {
     if (event.mouseButton == 1 || event.mouseButton == 2) {
+        finishControlDrag(true);
         _orbit.begin(event.mousePos);
         return true;
     }
     if (event.mouseButton != 0) return false;
     rebuildProjection();
+    if (_document && _projection && !_document->authoringReadOnly()) {
+        for (auto i=_controls.rbegin();i!=_controls.rend();++i) {
+            const float dx=event.mousePos.x-i->projected.x,dy=event.mousePos.y-i->projected.y;
+            const float radius=std::sqrt(dx*dx+dy*dy);
+            if (i->rotation ? std::fabs(radius-14)>5 : radius>8) continue;
+            if (!_document->beginAnimationEditGesture("Move rig controller")) return false;
+            _document->timelinePause(); _controlId=i->id; _controlDragging=true;
+            _dragPointer=event.mousePos; _dragCenter=i->projected; _dragProjection=_projection;
+            _dragWorld=_document->preview().poseWorldMatrices();
+            auto rig=*_document->preview().controlRig(); (void)rig.captureFK(_dragWorld); _dragPose=rig.pose();
+            if (_onControlSelected) _onControlSelected(_controlId);
+            markDirty(); return true;
+        }
+    }
     const int selected = hitBone(event.mousePos);
     if (selected < 0 || _document == nullptr) return false;
     (void)_document->selectBone(selected);
@@ -185,6 +232,29 @@ bool EditorAnimationCanvas::onMouseButtonDown(const ayt::ui::UIMouseEvent& event
 
 bool EditorAnimationCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
 {
+    if (_controlDragging && _document && _dragProjection) {
+        using namespace ayt::math;
+        const auto dot=_controlId.find('.',3); const unsigned index=unsigned(std::stoul(_controlId.substr(3,dot-3))); const auto type=_controlId.substr(dot+1);
+        const float cy=std::cos(_orbit.yaw),sy=std::sin(_orbit.yaw),cp=std::cos(_orbit.pitch),sp=std::sin(_orbit.pitch);
+        const FVector3 right{cy,0,sy},up{sp*sy,cp,-sp*cy},normal{-cp*sy,sp,cp*cy};
+        const auto a=(*_dragProjection)(FVector3{}),b=(*_dragProjection)(right);
+        const float scale=std::max(.00001f,std::fabs(b.x-a.x));
+        const auto delta=right*((event.mousePos.x-_dragPointer.x)/scale)+up*((_dragPointer.y-event.mousePos.y)/scale);
+        auto pose=_dragPose;
+        if(type=="rotation") {
+            const float start=std::atan2(_dragPointer.y-_dragCenter.y,_dragPointer.x-_dragCenter.x);
+            const float now=std::atan2(event.mousePos.y-_dragCenter.y,event.mousePos.x-_dragCenter.x);
+            const auto rotation=FQuaternion::fromAxisAngle(normal,start-now);
+            if(_controlId.starts_with("ik.")) pose.limbs[index].tipRotation=(rotation*pose.limbs[index].tipRotation).normalize();
+            else { const int parent=_document->preview().bones()[index].parentIndex; FQuaternion parentQ=FQuaternion::identity(); FVector3 p,s;
+                if(parent>=0) _dragWorld[parent].decompose(p,parentQ,s);
+                pose.fk.rotations[index]=(parentQ.inverse()*rotation*parentQ*pose.fk.rotations[index]).normalize(); }
+        } else if(_controlId.starts_with("ik.")) { if(type=="pole") pose.limbs[index].pole+=delta; else pose.limbs[index].target+=delta; }
+        else { const int parent=_document->preview().bones()[index].parentIndex; const auto inv=parent<0 ? Float4x4::identity() : _dragWorld[parent].inverse();
+            pose.fk.positions[index]+=inv.transformPoint(delta)-inv.transformPoint({}); }
+        const bool edited=_document->editControlRig([&](auto& rig){return rig.setPose(pose);});
+        if(edited) markDirty(); return true;
+    }
     if (!_orbit.move(event.mousePos)) return false;
     markDirty();
     return true;
@@ -192,6 +262,7 @@ bool EditorAnimationCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
 
 bool EditorAnimationCanvas::onMouseButtonUp(const ayt::ui::UIMouseEvent& event)
 {
+    if(event.mouseButton==0 && _controlDragging) {finishControlDrag(false); return true;}
     if (event.mouseButton != 1 && event.mouseButton != 2) return false;
     return _orbit.end();
 }
@@ -205,13 +276,14 @@ bool EditorAnimationCanvas::onMouseWheel(const ayt::ui::UIMouseWheelEvent& event
 
 void EditorAnimationCanvas::onMouseLeave()
 {
+    finishControlDrag(true);
     _orbit.cancel();
     ayt::ui::Widget::onMouseLeave();
 }
 
 ayt::ui::UiCursorHint EditorAnimationCanvas::getCursorHint() const
 {
-    return _orbit.rotating() ? ayt::ui::UiCursorHint::Move
+    return _orbit.rotating() || _controlDragging ? ayt::ui::UiCursorHint::Move
                      : ayt::ui::UiCursorHint::Default;
 }
 
@@ -238,6 +310,14 @@ void EditorAnimationCanvas::onRender(ayt::ui::IRenderBackend& renderer)
     }
 
     const auto& bones = _document->preview().bones();
+    for(const auto& control:_controls) {
+        const auto color=control.id==_controlId ? ayt::math::FVector4{1,.8f,.2f,1} : control.id.find("pole")!=std::string::npos ? ayt::math::FVector4{.8f,.4f,1,1} : ayt::math::FVector4{.2f,.85f,.65f,1};
+        if(!control.rotation) renderer.drawRect({control.projected.x-4,control.projected.y-4,control.projected.x+4,control.projected.y+4},color);
+        else { const auto path=renderer.createPath(); if(path.id>=0) { ayt::math::FVector2 points[32];
+            for(int i=0;i<32;++i) {const float angle=i*6.2831853f/32;points[i]={control.projected.x+14*std::cos(angle),control.projected.y+14*std::sin(angle)};}
+            renderer.addPathContour(path,points,32,true); renderer.setPathStrokeColor(path,color); renderer.setPathStrokeWidth(path,1.5f); renderer.drawPath(path,ayt::ui::PathFillMode::Stroke);renderer.releasePath(path); }
+        }
+    }
     if (!_skeletonProjected.empty()) {
         const auto path = renderer.createPath();
         if (path.id >= 0) {

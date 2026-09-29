@@ -7,6 +7,7 @@
 #include "../src/AYEditorAnimationCurveCanvas.h"
 #include "../src/AYEditorAnimationCurveSource.h"
 #include "../src/AYEditorAnimationDopeSheet.h"
+#include "../src/AYEditorAnimationRigPanel.h"
 #include "../src/AYEditorTimelinePlaybackSource.h"
 #include <AYAnimationEditor/SkeletonEditorCore.h>
 #include <AYAnimationEditor/SkeletonBakeJob.h>
@@ -125,6 +126,131 @@ ayt::ui::Widget* findAuthoringWidget(ayt::ui::Widget* root, const std::string& i
 } // namespace
 
 TEST_SUITE(AYEditor_AnimationExtension)
+TEST_CASE(control_rig_corrupt_metadata_blocks_silent_save_and_clear_is_undoable) {
+    ayt::test::ScratchDirectory scratch("rig-corrupt-metadata"); const auto clip=scratch.path()/"clip.ayanm"; std::string error;
+    CHECK(ayt::io::File::writeAllBytes(clip.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
+    ayt::editor::EditorAnimationDocument document; CHECK(document.initialize({clip.string()},error)); document.configureProjectRoot(scratch.path().string());
+    CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string())); CHECK(document.createControlRig()); CHECK(document.save());
+    auto metadata=nlohmann::json::parse(ayt::io::File::readAllText(document.metadataPath()));
+    for(auto& value:metadata["bindings"].items()) value.value()["controlRig"]["version"]=999;
+    const auto poisoned=metadata.dump(); CHECK(ayt::io::File::writeAllText(document.metadataPath(),poisoned));
+    CHECK(document.reload()); CHECK(!document.preview().controlRig()); CHECK(!document.controlRigLoadError().empty());
+    CHECK(!document.save(&error)); CHECK(ayt::io::File::readAllText(document.metadataPath())==poisoned);
+    CHECK(document.clearControlRig()); CHECK(document.controlRigLoadError().empty()); CHECK(document.timelineUndo()); CHECK(!document.controlRigLoadError().empty());
+    CHECK(document.timelineRedo()); CHECK(document.save()); CHECK(document.controlRigLoadError().empty());
+}
+TEST_CASE(control_rig_rebind_preserves_live_edits_and_clear_binding_history_is_safe) {
+    ayt::test::ScratchDirectory scratch("rig-rebind"); std::string error;
+    const auto clip=scratch.path()/"clip.ayanm",skeletonPath=writeAnimationEditorSkeleton();
+    CHECK(ayt::io::File::writeAllBytes(clip.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
+    ayt::editor::EditorAnimationDocument document; CHECK(document.initialize({clip.string()},error)); document.configureProjectRoot(scratch.path().string());
+    CHECK(document.bindSkeleton(skeletonPath.string())); CHECK(document.createControlRig()); CHECK(document.recordControlRigKey());
+    CHECK(document.editControlRig([](auto& rig){auto p=rig.pose();p.fk.positions[1]={0,7,0};return rig.setPose(p);}));
+    const auto live=document.preview().controlRig()->encode(); CHECK(document.bindSkeleton(skeletonPath.string())); CHECK(document.preview().controlRig()->encode()==live);
+    CHECK(document.save());
+    ayt::resource::Skeleton originalSkeleton,changed; CHECK(originalSkeleton.load(skeletonPath.string()));
+    std::vector<ayt::resource::Bone> bones(originalSkeleton.getBones(),originalSkeleton.getBones()+originalSkeleton.getBoneCount()); bones[1].name="different-hips"; for(const auto& b:bones) changed.addBone(b);
+    std::vector<ayt::math::UInt8> bytes; CHECK(changed.saveToBinary(bytes)); const auto different=scratch.path()/"different.ayskel";
+    CHECK(ayt::io::File::writeAllBytes(different.string(),bytes)); CHECK(!document.bindSkeleton(different.string(),&error)); CHECK(document.preview().controlRig()->encode()==live);
+    CHECK(document.clearControlRig()); CHECK(document.bindSkeleton(different.string())); CHECK(!document.preview().controlRig());
+    CHECK(document.timelineUndo()); CHECK(document.preview().skeletonPath()==skeletonPath.generic_string());
+    CHECK(document.timelineUndo()); CHECK(document.preview().controlRig()->encode()==live);
+    CHECK(document.timelineRedo()); CHECK(document.timelineRedo());
+    CHECK(document.reload()); CHECK(document.preview().controlRig()); CHECK(document.preview().skeletonPath()==skeletonPath.generic_string());
+}
+TEST_CASE(control_rig_clip_shortening_rejects_out_of_range_keys_without_mutation) {
+    ayt::editor::EditorAnimationDocument document; std::string error;
+    CHECK(document.initialize({writeAnimationEditorClip().string()},error)); CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string()));
+    CHECK(document.createControlRig()); CHECK(document.setTimelinePositionSeconds(2)); CHECK(document.recordControlRigKey());
+    // Clear the original TRS track so its end key is not the reason to reject.
+    CHECK(document.removeAnimationTrack("animation.0"));
+    auto properties=document.animationClipProperties(); properties.durationSeconds=1;
+    CHECK(!document.setAnimationClipProperties(properties,&error)); CHECK(document.timelineDurationSeconds()==2); CHECK(!error.empty());
+    CHECK(document.preview().controlRig()->keys().back().seconds==2);
+}
+
+TEST_CASE(control_rig_keys_preview_save_reopen_and_bake_are_undoable) {
+    ayt::test::ScratchDirectory scratch("rig-document");
+    const auto path=scratch.path()/"rig.ayanm";
+    CHECK(ayt::io::File::writeAllBytes(path.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
+    auto document=std::make_shared<ayt::editor::EditorAnimationDocument>(); std::string error;
+    CHECK(document->initialize({path.string()},error)); document->configureProjectRoot(scratch.path().string());
+    CHECK(document->bindSkeleton(writeAnimationEditorSkeleton().string(),&error));
+    CHECK(document->createControlRig({},&error)); CHECK(document->recordControlRigKey(&error));
+    CHECK(document->setTimelinePositionSeconds(1));
+    CHECK(document->editControlRig([](auto& rig){auto p=rig.pose();p.fk.positions[1]={0,3,0};p.overrides[1]=true;return rig.setPose(p);}));
+    CHECK(document->recordControlRigKey(&error)); CHECK(document->preview().controlRig()->keys().size()==2);
+    CHECK(document->setTimelinePositionSeconds(.5));
+    CHECK(std::fabs(document->preview().poseWorldMatrices()[1].transformPoint({}).y-2)<1e-4f);
+    CHECK(document->save(&error)); const auto original=ayt::io::File::readAllBytes(path.string());
+    CHECK(document->editControlRig([](auto& rig){auto p=rig.pose();p.fk.positions[1]={0,9,0};return rig.setPose(p);}));
+    document->setLooping(false); // Transport metadata must not silently save unsaved controller edits.
+    CHECK(document->reload(&error)); CHECK(document->preview().controlRig()); CHECK(document->preview().controlRig()->keys().size()==2);
+    CHECK(document->setTimelinePositionSeconds(.5));
+    CHECK(std::fabs(document->preview().poseWorldMatrices()[1].transformPoint({}).y-2)<1e-4f);
+    CHECK(document->bakeControlRig(30,&error)); CHECK(!document->preview().controlRig()->enabled);
+    CHECK(document->preview().animation()->getTrackCount()==3); CHECK(document->preview().animation()->getNotifyCount()==1);
+    CHECK(document->timelineUndo()); CHECK(document->preview().controlRig()->enabled); CHECK(document->preview().animation()->getTrackCount()==1);
+    CHECK(document->timelineRedo()); CHECK(!document->preview().controlRig()->enabled); CHECK(document->preview().animation()->getTrackCount()==3);
+    CHECK(ayt::io::File::readAllBytes(path.string())==original);
+}
+
+TEST_CASE(control_rig_timeline_moves_atomically_and_reuses_playhead_snapshot) {
+    auto document=std::make_shared<ayt::editor::EditorAnimationDocument>(); std::string error;
+    CHECK(document->initialize({writeAnimationEditorClip().string()},error)); CHECK(document->bindSkeleton(writeAnimationEditorSkeleton().string()));
+    CHECK(document->createControlRig()); CHECK(document->recordControlRigKey()); CHECK(document->setTimelinePositionSeconds(1)); CHECK(document->recordControlRigKey());
+    const auto source=ayt::editor::makeControlRigTimelineSource(document); const auto before=source->timelineSnapshot(); CHECK(before->keys.size()==2);
+    CHECK(document->setTimelinePositionSeconds(.25)); CHECK(source->timelineSnapshot()==before);
+    std::vector<std::string> ids{"rig.key.1"}; CHECK(!source->transformKeys(ids,-1,0,0)); CHECK(source->timelineSnapshot()==before);
+    CHECK(source->beginEdit("rig move")); CHECK(source->transformKeys(ids,-.25,0,0)); CHECK(source->endEdit(false));
+    CHECK(document->preview().controlRig()->keys()[1].seconds==.75); CHECK(document->timelineUndo()); CHECK(document->preview().controlRig()->keys()[1].seconds==1);
+    CHECK(source->removeKeys({"rig.key.0","rig.key.1"})); CHECK(document->preview().controlRig()->keys().empty());
+    CHECK(document->timelineUndo()); CHECK(document->preview().controlRig()->keys().size()==2);
+    source->selectionState()->keyIds={"rig.key.0"}; source->selectionState()->primaryKeyId="rig.key.0";
+    ids={"rig.key.0"}; CHECK(source->beginEdit("reorder rig key")); CHECK(source->transformKeys(ids,1.5,0,0)); CHECK(source->endEdit(false));
+    CHECK(source->selectionState()->primaryKeyId=="rig.key.1"); CHECK(document->timelineUndo()); CHECK(source->selectionState()->primaryKeyId=="rig.key.0");
+    CHECK(document->timelineRedo()); CHECK(source->selectionState()->primaryKeyId=="rig.key.1");
+    CHECK(source->removeKeys({"rig.key.0","rig.key.1"})); CHECK(source->selectionState()->keyIds.empty());
+    CHECK(document->timelineUndo()); CHECK(source->selectionState()->primaryKeyId=="rig.key.1");
+}
+
+TEST_CASE(control_rig_canvas_drag_cancel_and_page_controls_use_one_history) {
+    auto document=std::make_shared<ayt::editor::EditorAnimationDocument>(); std::string error;
+    CHECK(document->initialize({writeAnimationEditorClip().string()},error)); CHECK(document->bindSkeleton(writeAnimationEditorSkeleton().string())); CHECK(document->createControlRig());
+    ayt::editor::EditorAnimationCanvas canvas(document); canvas.setSize({640,320}); ayt::ui::MockRenderer renderer; renderer.beginFrame();canvas.render(renderer);
+    ayt::ui::authoring::PreviewBounds bounds; for(const auto& matrix:document->preview().poseWorldMatrices()) bounds.include(matrix.transformPoint({}));
+    ayt::ui::authoring::PreviewOrbit orbit; ayt::ui::authoring::PreviewProjection project(bounds,{0,0,640,320},orbit,.72f);
+    const auto center=project(document->preview().poseWorldMatrices()[1].transformPoint({})); const auto original=document->preview().poseWorldMatrices()[1].transformPoint({});
+    CHECK(canvas.onMouseButtonDown({{center.x,center.y},0})); CHECK(canvas.onMouseMove({{center.x+30,center.y},0}));
+    CHECK((document->preview().poseWorldMatrices()[1].transformPoint({})-original).length()>.01f);
+    canvas.onCaptureCancelled(); CHECK((document->preview().poseWorldMatrices()[1].transformPoint({})-original).length()<1e-4f); CHECK(!document->animationEditGestureActive());
+    CHECK(canvas.onMouseButtonDown({{center.x,center.y},0})); CHECK(canvas.onMouseMove({{center.x+40,center.y},0})); CHECK(canvas.onMouseButtonUp({{center.x+40,center.y},0}));
+    CHECK(document->timelineUndo()); CHECK((document->preview().poseWorldMatrices()[1].transformPoint({})-original).length()<1e-4f);
+    CHECK(canvas.onMouseButtonDown({{center.x+14,center.y},0})); CHECK(canvas.onMouseMove({{center.x,center.y-14},0}));
+    const auto q=document->preview().controlRig()->pose().fk.rotations[1]; CHECK(std::fabs(q.w)<.99f);
+    canvas.onCaptureCancelled(); CHECK(std::fabs(document->preview().controlRig()->pose().fk.rotations[1].w-1)<1e-4f);
+    AnimationExtensionHost host(animationExtensionFixtureRoot().string()); const auto view=ayt::editor::makeEditorAnimationDescriptor().createView(document,host);
+    CHECK(findAuthoringWidget(view->rootWidget(),"animation_control_rig_panel")); CHECK(findAuthoringWidget(view->rootWidget(),"animation_rig_timeline"));
+    CHECK(findAuthoringWidget(view->rootWidget(),"animation_rig_record")); CHECK(findAuthoringWidget(view->rootWidget(),"animation_inspector_scroll"));
+}
+
+TEST_CASE(control_rig_save_failure_stays_dirty_and_legacy_refuses_creation) {
+    ayt::test::ScratchDirectory scratch("rig-save-failure"); const auto path=scratch.path()/"clip.ayanm";
+    CHECK(ayt::io::File::writeAllBytes(path.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
+    ayt::editor::EditorAnimationDocument document; std::string error;
+    CHECK(document.initialize({path.string()},error)); document.configureProjectRoot(scratch.path().string()); CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string()));
+    CHECK(document.createControlRig()); CHECK(document.recordControlRigKey());
+    const auto original=ayt::io::File::readAllBytes(path.string());
+    auto properties=document.animationClipProperties(); properties.name="unsaved-clip"; CHECK(document.setAnimationClipProperties(properties));
+    CHECK(!document.writeRecoveryCopy((scratch.path()/"recovery.ayanm").string(),&error)); CHECK(!error.empty());
+    const auto metadata=std::filesystem::path(document.metadataPath());
+    // Existing metadata already has a directory after bind; a directory at the file target must be refused.
+    std::error_code ec; std::filesystem::remove(metadata,ec); std::filesystem::create_directory(metadata,ec);
+    CHECK(!document.save(&error)); CHECK(document.isDirty()); CHECK(!error.empty());
+    CHECK(ayt::io::File::readAllBytes(path.string())==original);
+    const auto legacy=scratch.path()/"readonly.ayanim"; CHECK(ayt::io::File::writeAllBytes(legacy.string(),ayt::io::File::readAllBytes(path.string())));
+    ayt::editor::EditorAnimationDocument readOnly; CHECK(readOnly.initialize({legacy.string()},error)); CHECK(readOnly.bindSkeleton(writeAnimationEditorSkeleton().string())); CHECK(!readOnly.createControlRig());
+}
 
 TEST_CASE(session_clipboard_survives_source_close_and_pastes_compatible_clip) {
     ayt::test::ScratchDirectory scratch("cross-clip-authoring");

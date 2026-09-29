@@ -117,6 +117,8 @@ set(SRC_FILES
     src/AYEditorGameFlowPreview.cpp
     src/AYEditorGameFlowExtension.cpp
     src/AYEditorAnimationDocument.cpp
+    src/AYEditorAnimationControlRig.cpp
+    src/AYEditorAnimationRigPanel.cpp
     src/AYEditorAnimationCurveSource.cpp
     src/AYEditorAnimationCanvas.cpp
     src/AYEditorAnimationCurveCanvas.cpp
@@ -217,7 +219,7 @@ set(HEAD_FILES
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=27)
+    AYEDITOR_SOURCE_ABI_VERSION=28)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

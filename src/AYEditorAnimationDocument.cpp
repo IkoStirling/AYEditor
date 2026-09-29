@@ -5,6 +5,7 @@
 
 #include <AYIO/File.h>
 #include <AYResource/assetsDefs/IAnimation.h>
+#include <AYResource/assetsImpl/Skeleton.h>
 #include <AYResource/assetsImpl/Animation.h>
 #include <nlohmann/json.hpp>
 
@@ -323,20 +324,41 @@ bool EditorAnimationDocument::save(std::string* error)
         }
         return false;
     }
+    if (!_controlRigLoadError.empty()) {
+        if (error) *error="Saved controls could not be loaded. Explicitly clear or replace them before saving: "+_controlRigLoadError;
+        return false;
+    }
+    const auto previousBytes=ayt::io::File::readAllBytes(_path);
+    if (_preview.controlRig() && previousBytes.empty()) {
+        if (error) *error="Unable to snapshot the existing clip for control metadata save rollback.";
+        return false;
+    }
     if (!writeAnimationBytes(_path, error)) return false;
+    if (!persistPreviewMetadata(error, true)) {
+        if (!previousBytes.empty() && !ayt::io::File::atomicWrite(_path,previousBytes.data(),previousBytes.size()) && error)
+            *error += " Clip rollback also failed; the document remains dirty.";
+        return false;
+    }
     return _history.markSaved();
 }
 
 bool EditorAnimationDocument::writeRecoveryCopy(
     const std::string& path, std::string* error) const
 {
+    if (_preview.controlRig() || !_controlRigLoadError.empty()) {
+        if (error) *error="Control rig recovery is not supported by the single-file recovery format. Save the clip and project metadata explicitly.";
+        return false;
+    }
     return writeAnimationBytes(path, error);
 }
 
 bool EditorAnimationDocument::reload(std::string* error)
 {
     if (!_preview.reloadAnimation(error)) return false;
-    return resetEditHistory(error);
+    if (!resetEditHistory(error)) return false;
+    (void)_preview.setControlRig(nullptr);
+    loadPreviewMetadata();
+    return true;
 }
 
 bool EditorAnimationDocument::handlesCommand(
@@ -1169,7 +1191,11 @@ bool EditorAnimationDocument::animationEditGestureActive() const noexcept
 bool EditorAnimationDocument::bindSkeleton(const std::string& path,
                                            std::string* error)
 {
+    const auto before=_preview.skeletonPath();
+    const bool retainHistory=_history.canUndo() || _history.canRedo();
     if (!_preview.bindSkeleton(path, error)) return false;
+    if (retainHistory && before!=_preview.skeletonPath()
+        && !recordSkeletonBinding(before,_preview.skeletonPath())) return false;
     _selectedBone = _preview.bones().empty() ? -1 : 0;
     (void)persistPreviewMetadata(nullptr);
     return true;
@@ -1325,9 +1351,13 @@ bool EditorAnimationDocument::writeAnimationBytes(
     return true;
 }
 
-bool EditorAnimationDocument::persistPreviewMetadata(std::string* error) const
+bool EditorAnimationDocument::persistPreviewMetadata(std::string* error, bool includeControls) const
 {
     if (_metadataPath.empty()) {
+        if (includeControls && _preview.controlRig()) {
+            if (error) *error="Configure a project before saving control rig authoring metadata.";
+            return false;
+        }
         if (error != nullptr) error->clear();
         return true;
     }
@@ -1338,6 +1368,8 @@ bool EditorAnimationDocument::persistPreviewMetadata(std::string* error) const
         root["version"] = 2;
         const std::string animationKey = encodeProjectPath(_path, _projectRoot);
         auto& entry = root["bindings"][animationKey];
+        const auto oldControls=entry.is_object() ? entry.value("controlRig", Json{}) : Json{};
+        const auto savedSkeleton=entry.is_object() ? entry.value("skeleton", std::string{}) : std::string{};
         entry = {{"skeleton", encodeProjectPath(
                                   _preview.skeletonPath(), _projectRoot)},
                  {"mesh", encodeProjectPath(_preview.meshPath(), _projectRoot)},
@@ -1346,6 +1378,14 @@ bool EditorAnimationDocument::persistPreviewMetadata(std::string* error) const
                  {"mode", modeValue(_preview.requestedPreviewMode())},
                  {"loop", _preview.looping()},
                  {"speed", _preview.playRate()}};
+        if (includeControls) {
+            if (const auto* rig=_preview.controlRig()) entry["controlRig"]=Json::parse(rig->encode());
+        } else if (!oldControls.is_null()) {
+            entry["controlRig"]=oldControls;
+            // An unsaved clear/rebind is authoring state. Keep the saved rig's
+            // matching skeleton until the explicit Save commits both.
+            entry["skeleton"]=savedSkeleton;
+        }
         const std::string encoded = root.dump(2) + "\n";
         const std::filesystem::path path(_metadataPath);
         std::error_code directoryError;
@@ -1365,6 +1405,8 @@ bool EditorAnimationDocument::persistPreviewMetadata(std::string* error) const
 
 void EditorAnimationDocument::loadPreviewMetadata()
 {
+    if (_preview.controlRig()) return; // Reconfiguring the host must not discard live authoring.
+    _controlRigLoadError.clear();
     const std::string text = ayt::io::File::readAllText(_metadataPath);
     if (text.empty()) return;
     try {
@@ -1391,6 +1433,14 @@ void EditorAnimationDocument::loadPreviewMetadata()
         _preview.setPreviewMode(parseMode(value->value("mode", "model+skeleton")));
         _preview.setLooping(value->value("loop", true));
         _preview.setPlayRate(value->value("speed", 1.0f));
+        if (value->contains("controlRig")) {
+            auto rig=std::make_shared<ayt::anim::editor::HumanoidControlRig>();
+            if (!_preview.skeleton()) _controlRigLoadError="Bind the saved skeleton to restore its controls.";
+            else if (!rig->restore(*_preview.skeleton(),value->at("controlRig").dump(),&_controlRigLoadError)
+                || !_preview.setControlRig(rig,&_controlRigLoadError)) {
+                if (_controlRigLoadError.empty()) _controlRigLoadError="Saved controls are invalid.";
+            }
+        }
         _selectedBone = _preview.bones().empty() ? -1 : 0;
     } catch (...) {
         // Corrupt editor metadata must never prevent the cooked asset opening.
