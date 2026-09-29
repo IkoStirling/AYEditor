@@ -374,6 +374,9 @@ private:
     void syncDocumentCommandMenu();
     void afterDocumentReload();
     void createEmptyEntity();
+    bool isOutlinerTreePoint(ayt::ui::UIManager& ui, float physicalX, float physicalY) const;
+    void showOutlinerCreateMenu(ayt::ui::UIManager& ui, float logicalX, float logicalY);
+    void syncOutlinerCreateControls();
     void deleteSelectedEntity();
     void applyRenderSettingsFromPanel();
     void applyPreferences(const EditorPreferences& preferences);

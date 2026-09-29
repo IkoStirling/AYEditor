@@ -229,6 +229,10 @@ std::unordered_map<const EditorSession*, std::vector<EditorTooltipBinding>>
     gEditorTooltips;
 std::unordered_map<const EditorSession*, std::vector<EditorMenuTextBinding>>
     gEditorMenuTexts;
+// Menu uses external tree ownership when returning from its popup overlay.
+// Keep a durable owner, like MenuBar, across host migration and fade-out.
+std::unordered_map<const EditorSession*, std::unique_ptr<ayt::ui::Menu>>
+    gEditorOutlinerMenus;
 
 // Read-only project HUD preview layered over the native Scene View. It clips
 // authored layouts to the viewport and deliberately yields pointer input to
@@ -2436,6 +2440,24 @@ void EditorSession::shutdown() {
     if (_dockViewHost != nullptr) {
         _dockViewHost->prepareForUiShutdown();
     }
+    if (const auto found = gEditorOutlinerMenus.find(this);
+        found != gEditorOutlinerMenus.end()) {
+        auto* ownerUi = &_ui;
+        if (_childWindows != nullptr) {
+            for (const auto& entry : _childWindows->entries()) {
+                if (entry.ui != nullptr && (entry.ui->findById("btn_outliner_create")
+                    || findDescendantById(entry.ui->getOverlayRoot(), "outliner_create_menu"))) {
+                    ownerUi = entry.ui.get();
+                    break;
+                }
+            }
+        }
+        auto active = ayt::ui::UIManager::pushActive(ownerUi);
+        found->second->detachForHostDestruction();
+        found->second->clearOwnerHost();
+        found->second->detachFromParent();
+        gEditorOutlinerMenus.erase(found);
+    }
     _childWindows.reset();
     if (_tilemapDockViewHost != nullptr) {
         _tilemapDockViewHost->releaseAfterUiShutdown();
@@ -3202,6 +3224,11 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
     if (_ui.isDragging()) {
         return _ui.onMouseButtonDown(x, y, button);
     }
+    // Open the context menu on release, so that release cannot activate a
+    // freshly mounted row. Use the actual hit tree to respect popup occlusion.
+    if (button == 1 && !_ui.isCapturing() && isOutlinerTreePoint(_ui, x, y)) {
+        return true;
+    }
     // Dismiss MenuBar popups on any click that is not inside an open
     // menu. Play-mode freecam / isCapturing used to skip UIManager, so
     // click-outside never ran and the dropdown stayed painted forever.
@@ -3323,6 +3350,13 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
     if (_ui.isDragging()) {
         return _ui.onMouseButtonUp(x, y, button);
+    }
+    if (button == 1 && !_ui.isCapturing()
+        && !_sceneCamera.threeD().isLooking() && !_sceneCamera.isTwoDPanning()
+        && isOutlinerTreePoint(_ui, x, y)) {
+        const auto pos = _ui.physicalToLogical({x, y});
+        showOutlinerCreateMenu(_ui, pos.x, pos.y);
+        return true;
     }
     if (_dockViewHost != nullptr
         && _dockViewHost->routePointerUp(x, y, button)) {
@@ -3844,6 +3878,7 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_stop", "filled/player-stop.svg", "ui.editor.tooltip.stop", L"Stop", 16.0f, 8.0f, 4.0f},
         {"btn_tool_ui_layout", "outline/layout.svg", "ui.editor.tooltip.open_ui_layout", L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
         {"btn_tool_2d", "outline/grid.svg", "ui.editor.tooltip.open_tilemap", L"Open 2D Tilemap Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_outliner_create", "outline/plus.svg", "ui.editor.tooltip.create_entity", L"Create scene entity", 16.0f, 5.0f, 5.0f},
         {"btn_tool_sprite_animation", "filled/player-play.svg", "ui.editor.tooltip.open_sprite_animation", L"Open Sprite Animation Editor", 20.0f, 7.0f, 7.0f},
         {"btn_tool_audio", "outline/music-cog.svg", "ui.editor.tooltip.open_audio", L"Open Audio Editor", 20.0f, 7.0f, 7.0f},
         {"btn_run_project", "outline/rocket.svg", "ui.editor.tooltip.run_project", L"Run current project", 20.0f, 7.0f, 7.0f},
@@ -4115,10 +4150,120 @@ void EditorSession::bindOutlinerPanel()
             // selected entity hidden by collapse remains selected logically.
             _outlinerRefreshPending = true;
         });
+
+    auto ownedMenu = std::make_unique<ayt::ui::Menu>();
+    auto* menu = ownedMenu.get();
+    menu->setId("outliner_create_menu");
+    gEditorOutlinerMenus[this] = std::move(ownedMenu);
+    _ui.root()->addChildExternal(menu);
+    const auto addCreate = [this, menu](const char* id, const char* key,
+        const wchar_t* fallback, std::function<void()> action) {
+        auto* item = menu->addItem(localizedText(key, fallback));
+        item->setId(id);
+        item->setLocalizationKey("text", key);
+        item->setOnActivate(std::move(action));
+        gEditorMenuTexts[this].push_back(
+            {item, nullptr, 0u, key, fallback});
+    };
+    addCreate("outliner_create_empty", "ui.editor.menu.edit.create_entity",
+        L"Create Empty Entity", [this]() { createEmptyEntity(); });
+    addCreate("outliner_create_sprite", "ui.editor.menu.edit.create_sprite",
+        L"Create Sprite", [this]() {
+            (void)createTwoDEntity(Editor2DEntityKind::Sprite);
+        });
+    addCreate("outliner_create_tilemap", "ui.editor.menu.edit.create_tilemap",
+        L"Create Tilemap", [this]() {
+            (void)createTwoDEntity(Editor2DEntityKind::Tilemap);
+        });
+    addCreate("outliner_create_camera", "ui.editor.menu.edit.create_2d_camera",
+        L"Create 2D Camera", [this]() {
+            (void)createTwoDEntity(Editor2DEntityKind::Camera);
+        });
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_outliner_create"))) {
+        menu->detachFromParent();
+        button->addChildExternal(menu);
+        button->setOnClicked([this, button, menu]() {
+            auto* hostUi = ayt::ui::UIManager::tryGet();
+            if (hostUi == nullptr) return;
+            if (menu->isOpen()) {
+                menu->close();
+                return;
+            }
+            const auto bounds = button->getWorldBounds();
+            showOutlinerCreateMenu(*hostUi, bounds.minX, bounds.maxY + 2.0f);
+        });
+    }
+}
+
+bool EditorSession::isOutlinerTreePoint(ayt::ui::UIManager& ui, float x, float y) const
+{
+    if (_outliner == nullptr || ui.root() == nullptr) return false;
+    const auto position = ui.physicalToLogical({x, y});
+    if (auto* overlay = ui.getOverlayRoot()) {
+        // The overlay root is intentionally a leaf; UIManager descends its
+        // popup children explicitly, so use that same hit-test contract here.
+        const auto& children = overlay->getChildren();
+        for (auto it = children.rbegin(); it != children.rend(); ++it) {
+            if (*it != nullptr && (*it)->hitTest(position) != nullptr) {
+                return false;
+            }
+        }
+    }
+    for (auto* hit = ui.root()->hitTest(position); hit != nullptr;
+         hit = hit->getParent()) {
+        if (hit == _outliner) return true;
+    }
+    return false;
+}
+
+void EditorSession::showOutlinerCreateMenu(ayt::ui::UIManager& ui, float x, float y)
+{
+    const auto found = gEditorOutlinerMenus.find(this);
+    if (found == gEditorOutlinerMenus.end() || ui.root() == nullptr) return;
+    auto* menu = found->second.get();
+    syncOutlinerCreateControls();
+    auto active = ayt::ui::UIManager::pushActive(&ui);
+    auto* anchor = ui.findById("btn_outliner_create");
+    menu->open(anchor != nullptr ? anchor : _outliner, {x, y});
+    if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::syncOutlinerCreateControls()
+{
+    const bool canCreate = _document != nullptr
+        && _gameView.mode() == EditorMode::Edit;
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(
+            _ui.findById("btn_outliner_create"))) {
+        button->setEnabled(canCreate);
+    }
+    auto* ownerUi = &_ui;
+    if (_childWindows != nullptr) {
+        for (const auto& entry : _childWindows->entries()) {
+            if (entry.ui == nullptr) continue;
+            if (auto* button = dynamic_cast<ayt::ui::Button*>(
+                    entry.ui->findById("btn_outliner_create"))) {
+                button->setEnabled(canCreate);
+                ownerUi = entry.ui.get();
+            }
+        }
+    }
+    if (const auto found = gEditorOutlinerMenus.find(this);
+        found != gEditorOutlinerMenus.end()) {
+        auto* menu = found->second.get();
+        for (size_t i = 0; i < menu->getItemCount(); ++i) {
+            if (auto* item = menu->getItem(i)) item->setEnabled(canCreate);
+        }
+        if (!canCreate) {
+            auto active = ayt::ui::UIManager::pushActive(ownerUi);
+            menu->close();
+        }
+    }
 }
 
 void EditorSession::refreshOutliner()
 {
+    syncOutlinerCreateControls();
     if (_outliner == nullptr) {
         return;
     }
@@ -8336,6 +8481,7 @@ void EditorSession::createEmptyEntity()
     }
     ayt::entity::Entity* entity = world->findEntity(entityId);
     if (entity == nullptr) return;
+    _outlinerRootExpanded = true;
     setSelectedEntity(world, entity);
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -8401,6 +8547,7 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
     if (entity == nullptr) return 0u;
 
     _inspectedComponentTypeName = inspectedTypeName;
+    _outlinerRootExpanded = true;
     setSelectedEntity(world, entity);
     _outlinerRefreshPending = true;
     refreshInspectorLabels();
@@ -11838,6 +11985,57 @@ void wirePromoteCallbackRecursive(ayt::ui::Widget* w, EditorSession* session) {
 void EditorSession::wirePromoteCallback() {
     if (!_childWindows) return;  // no manager → no-op
     wirePromoteCallbackRecursive(_ui.root(), this);
+    if (auto* card = dynamic_cast<ayt::ui::DockCard*>(_ui.findById("card_outliner"))) {
+        card->setPromoteCallback([this](ayt::ui::DockCard* promoted,
+            const std::wstring& title, int x, int y, int w, int h) {
+            // Retire any primary-host popup before moving its anchor card.
+            if (const auto found = gEditorOutlinerMenus.find(this);
+                found != gEditorOutlinerMenus.end()) {
+                auto active = ayt::ui::UIManager::pushActive(&_ui);
+                auto* menu = found->second.get();
+                menu->detachForHostDestruction();
+                menu->clearOwnerHost();
+                menu->detachFromParent();
+                if (auto* button = findDescendantById(promoted, "btn_outliner_create")) {
+                    button->addChildExternal(menu);
+                }
+            }
+#if defined(_WIN32)
+            POINT position{x, y};
+            if (_hostWindow != nullptr
+                && ::ClientToScreen(static_cast<HWND>(_hostWindow), &position)) {
+                x = position.x; y = position.y;
+            }
+#endif
+            ChildWindowConfig cfg;
+            cfg.title = wideToUtf8(title);
+            cfg.card = promoted;
+            cfg.x = x; cfg.y = y; cfg.width = w; cfg.height = h;
+            cfg.beforeMouseButton = [this](ayt::ui::UIManager& ui,
+                float px, float py, int button, bool pressed) {
+                if (button != 1 || ui.isCapturing()
+                    || !isOutlinerTreePoint(ui, px, py)) return false;
+                if (!pressed) {
+                    const auto pos = ui.physicalToLogical({px, py});
+                    showOutlinerCreateMenu(ui, pos.x, pos.y);
+                }
+                return true;
+            };
+            cfg.beforeClose = [this](ayt::ui::UIManager& ui) {
+                const auto found = gEditorOutlinerMenus.find(this);
+                if (found == gEditorOutlinerMenus.end()) return;
+                auto* menu = found->second.get();
+                menu->detachForHostDestruction();
+                menu->clearOwnerHost();
+                menu->detachFromParent();
+                if (auto* button = ui.findById("btn_outliner_create")) {
+                    button->addChildExternal(menu);
+                }
+            };
+            EditorChildWindowManager::Handle handle = nullptr;
+            return _childWindows->openChildWindow(cfg, handle);
+        });
+    }
 }
 
 void EditorSession::setModeLabel(const std::wstring& text) {
@@ -11901,6 +12099,8 @@ void EditorSession::onModeChanged(EditorMode mode) {
 
     syncDocumentCommandMenu();
     syncSceneVisibilityMenu();
+
+    syncOutlinerCreateControls();
 
     // v0.3+ PR-5 — mode 切换会换 Hierarchy 的 World 源（决策 1b）。
     // 选择在上方按 World 生命期切换；这里只排队重建。延迟到 update() 消费

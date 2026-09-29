@@ -31,9 +31,14 @@
 #include "AYUI/TextLabel.h"
 #include "AYUI/TreeView.h"
 #include "AYUI/DockCard.h"
+#include "AYUI/DockArea.h"
 #include "AYUI/Menu.h"
 #include "AYUI/MenuBar.h"
 #include "AYUI/MenuItem.h"
+#include "AYUI/UIKeyCode.h"
+#include <AYEntity/components/SpriteComponent.h>
+#include <AYEntity/components/TilemapComponent.h>
+#include <AYEntity/components/OrthoCameraComponent.h>
 
 #include "AYScene.h"
 #include "AYScene/SceneManager.h"
@@ -44,6 +49,10 @@
 
 #include <sys/stat.h>
 #include <string>
+#if defined(_WIN32)
+#include "AYDevice/WindowManager.h"
+#include <Windows.h>
+#endif
 
 using namespace ayt::ui;
 using namespace ayt::editor;
@@ -465,5 +474,226 @@ TEST_CASE(editor_top_menu_anchors_and_popup_rows_are_fully_hittable)
 
     session.shutdown();
 }
+
+TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
+{
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, resolveHierarchyLayoutPath()));
+    session.setClientSize(1280.0f, 720.0f);
+    auto* button = dynamic_cast<Button*>(session.ui().findById("btn_outliner_create"));
+    auto* menu = dynamic_cast<Menu*>(session.ui().findById("outliner_create_menu"));
+    auto* tree = dynamic_cast<TreeView*>(session.ui().findById("tree_outliner"));
+    CHECK_NOT_NULL(button);
+    CHECK_NOT_NULL(menu);
+    CHECK_NOT_NULL(tree);
+    if (!button || !menu || !tree) { session.shutdown(); return; }
+    CHECK(button->isEnabled());
+    CHECK(menu->getItemCount() == 4u);
+    auto& world = session.document()->scene().world();
+    const size_t before = world.getAllEntities().size();
+
+    for (size_t type = 0; type < 4u; ++type) {
+        tree->toggleExpand(0); // Creation must reveal a previously collapsed tree.
+        const auto bounds = button->getWorldBounds();
+        const auto pos = session.ui().logicalToPhysical(
+            {(bounds.minX + bounds.maxX) * 0.5f, (bounds.minY + bounds.maxY) * 0.5f});
+        session.onMouseMove(pos.x, pos.y);
+        CHECK(session.onMouseButtonDown(pos.x, pos.y, 0));
+        CHECK(session.onMouseButtonUp(pos.x, pos.y, 0));
+        CHECK(menu->isOpen());
+        session.update(0.2f);
+        const auto row = menu->getItem(type)->getWorldBounds();
+        const auto pick = session.ui().logicalToPhysical(
+            {(row.minX + row.maxX) * 0.5f, (row.minY + row.maxY) * 0.5f});
+        session.onMouseMove(pick.x, pick.y);
+        CHECK(session.onMouseButtonDown(pick.x, pick.y, 0));
+        CHECK(session.onMouseButtonUp(pick.x, pick.y, 0));
+        CHECK_FALSE(menu->isOpen());
+        session.update(0.2f);
+        CHECK(world.getAllEntities().size() == before + type + 1u);
+        CHECK(tree->getNodeCount() == before + type + 2u);
+        auto* entity = world.findEntity(session.selectedEntityId());
+        CHECK_NOT_NULL(entity);
+        if (entity) {
+            CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+            if (type == 1u) CHECK(entity->getComponent<ayt::entity::SpriteComponent>() != nullptr);
+            if (type == 2u) CHECK(entity->getComponent<ayt::entity::TilemapComponent>() != nullptr);
+            if (type == 3u) CHECK(entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr);
+        }
+        CHECK(tree->getSelectedIndex() > 0);
+    }
+    session.ui().setFocus(nullptr);
+    session.onKeyDown(UIKey_Control);
+    CHECK(session.onKeyDown(UIKey_Z));
+    session.onKeyUp(UIKey_Control);
+    CHECK(world.getAllEntities().size() == before + 3u);
+    session.onKeyDown(UIKey_Control);
+    session.onKeyDown(UIKey_Shift);
+    CHECK(session.onKeyDown(UIKey_Z));
+    session.onKeyUp(UIKey_Shift);
+    session.onKeyUp(UIKey_Control);
+    CHECK(world.getAllEntities().size() == before + 4u);
+    session.shutdown();
+}
+
+TEST_CASE(hierarchy_context_menu_respects_scale_popups_and_play_readonly)
+{
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, resolveHierarchyLayoutPath()));
+    session.ui().setDpiScale(1.5f);
+    session.setClientSize(1920.0f, 1080.0f);
+    auto* button = dynamic_cast<Button*>(session.ui().findById("btn_outliner_create"));
+    auto* menu = dynamic_cast<Menu*>(session.ui().findById("outliner_create_menu"));
+    auto* tree = dynamic_cast<TreeView*>(session.ui().findById("tree_outliner"));
+    CHECK_NOT_NULL(button);
+    CHECK_NOT_NULL(menu);
+    CHECK_NOT_NULL(tree);
+    if (!button || !menu || !tree) { session.shutdown(); return; }
+    const auto treeBounds = tree->getWorldBounds();
+    const auto pos = session.ui().logicalToPhysical(
+        {treeBounds.minX + 20.0f, treeBounds.minY + 12.0f});
+    CHECK(session.onMouseButtonDown(pos.x, pos.y, 1));
+    CHECK_FALSE(menu->isOpen());
+    CHECK(session.onMouseButtonUp(pos.x, pos.y, 1));
+    CHECK(menu->isOpen());
+    session.update(0.2f);
+    // An open popup above the tree must receive its own right click, rather
+    // than opening the underlying tree's context menu again.
+    const auto menuBounds = menu->getWorldBounds();
+    const auto covered = session.ui().logicalToPhysical(
+        {menuBounds.minX + 12.0f, menuBounds.minY + 12.0f});
+    session.onMouseButtonDown(covered.x, covered.y, 1);
+    session.onMouseButtonUp(covered.x, covered.y, 1);
+    CHECK(menu->isOpen());
+    CHECK(menu->getWorldBounds().minX == menuBounds.minX);
+    CHECK(menu->getWorldBounds().minY == menuBounds.minY);
+    const auto outside = session.ui().logicalToPhysical(
+        {treeBounds.maxX - 10.0f, treeBounds.maxY - 10.0f});
+    session.onMouseButtonDown(outside.x, outside.y, 0);
+    session.onMouseButtonUp(outside.x, outside.y, 0);
+    CHECK_FALSE(menu->isOpen());
+    session.update(0.2f);
+
+    const size_t before = session.document()->scene().world().getAllEntities().size();
+    for (const auto mode : {EditorMode::Play, EditorMode::Paused}) {
+        EditorGameViewTestAccess::forceModeAndNotify(session.gameView(), mode);
+        session.update(0.016f);
+        CHECK_FALSE(button->isEnabled());
+        for (size_t i = 0; i < menu->getItemCount(); ++i) {
+            CHECK_FALSE(menu->getItem(i)->isEnabled());
+            const auto row = menu->getItem(i)->getWorldBounds();
+            CHECK_FALSE(menu->getItem(i)->onMouseButtonUp(UIMouseEvent(
+                {(row.minX + row.maxX) * 0.5f, (row.minY + row.maxY) * 0.5f}, 0)));
+        }
+        CHECK(session.document()->scene().world().getAllEntities().size() == before);
+    }
+    EditorGameViewTestAccess::forceModeAndNotify(session.gameView(), EditorMode::Edit);
+    session.update(0.016f);
+    CHECK(button->isEnabled());
+    // Leave the popup mounted to exercise session-owned overlay teardown.
+    CHECK(session.onMouseButtonDown(pos.x, pos.y, 1));
+    CHECK(session.onMouseButtonUp(pos.x, pos.y, 1));
+    CHECK(menu->isOpen());
+    session.shutdown();
+}
+
+#if defined(_WIN32)
+TEST_CASE(hierarchy_creation_follows_detached_panel_and_survives_close)
+{
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor hierarchy creation test";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = resolveHierarchyLayoutPath();
+    desc.hostWindow = windowManager.getWindowHandle();
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    auto* dock = dynamic_cast<DockArea*>(session.ui().findById("main_dock"));
+    auto* card = dynamic_cast<DockCard*>(session.ui().findById("card_outliner"));
+    auto* menu = dynamic_cast<Menu*>(session.ui().findById("outliner_create_menu"));
+    CHECK_NOT_NULL(dock);
+    CHECK_NOT_NULL(card);
+    CHECK_NOT_NULL(menu);
+    if (!dock || !card || !menu) {
+        session.shutdown(); windowManager.destroyWindow(); return;
+    }
+    CHECK(dock->floatCard("card_outliner", {100.0f, 120.0f}));
+    {
+        auto active = UIManager::pushActive(&session.ui());
+        auto* create = dynamic_cast<Button*>(session.ui().findById("btn_outliner_create"));
+        CHECK_NOT_NULL(create);
+        if (create) {
+            const auto bounds = create->getWorldBounds();
+            const UIMouseEvent event({(bounds.minX + bounds.maxX) * 0.5f,
+                (bounds.minY + bounds.maxY) * 0.5f}, 0);
+            CHECK(create->onMouseButtonDown(event));
+            CHECK(create->onMouseButtonUp(event));
+        }
+        CHECK(menu->isOpen());
+    }
+    CHECK(card->detachToOwnWindow());
+    auto* children = session.childWindows();
+    CHECK(children->count() == 1u);
+    if (children->count() != 1u) {
+        session.shutdown(); windowManager.destroyWindow(); return;
+    }
+    auto& childUi = *children->entries()[0].ui;
+    const auto childHandle = children->entries()[0].handle;
+    children->tickAll(0.2f);
+    auto* button = dynamic_cast<Button*>(childUi.findById("btn_outliner_create"));
+    auto* tree = dynamic_cast<TreeView*>(childUi.findById("tree_outliner"));
+    CHECK_NOT_NULL(button);
+    CHECK_NOT_NULL(tree);
+    if (button && tree) {
+        const size_t before = session.document()->scene().world().getAllEntities().size();
+        {
+            auto active = UIManager::pushActive(&childUi);
+            const auto bounds = button->getWorldBounds();
+            const UIMouseEvent event({(bounds.minX + bounds.maxX) * 0.5f,
+                (bounds.minY + bounds.maxY) * 0.5f}, 0);
+            CHECK(button->onMouseButtonDown(event));
+            CHECK(button->onMouseButtonUp(event));
+            CHECK(menu->isOpen());
+            CHECK(menu->getParent() == childUi.getOverlayRoot());
+            CHECK(menu->getItem(1)->handleClick());
+        }
+        children->tickAll(0.2f);
+        session.update(0.2f);
+        CHECK(session.document()->scene().world().getAllEntities().size() == before + 1u);
+        CHECK(tree->getSelectedIndex() > 0);
+        EditorGameViewTestAccess::forceModeAndNotify(session.gameView(), EditorMode::Play);
+        CHECK_FALSE(button->isEnabled());
+        EditorGameViewTestAccess::forceModeAndNotify(session.gameView(), EditorMode::Edit);
+        CHECK(button->isEnabled());
+        const auto bounds = tree->getWorldBounds();
+        const auto pos = childUi.logicalToPhysical({bounds.minX + 20.0f, bounds.minY + 12.0f});
+        const auto packed = MAKELPARAM(static_cast<int>(pos.x), static_cast<int>(pos.y));
+        ::SendMessageW(static_cast<HWND>(childHandle), WM_RBUTTONDOWN, MK_RBUTTON, packed);
+        ::SendMessageW(static_cast<HWND>(childHandle), WM_RBUTTONUP, 0, packed);
+        CHECK(menu->isOpen());
+        CHECK(menu->getParent() == childUi.getOverlayRoot());
+    }
+    children->closeChildWindow(childHandle);
+    CHECK(children->count() == 0u);
+    CHECK(session.ui().findById("outliner_create_menu") == menu);
+    CHECK_FALSE(menu->isOpen());
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+#endif
 
 TEST_SUITE_END
