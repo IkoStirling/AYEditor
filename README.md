@@ -7,6 +7,8 @@ AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play �
 Scene 实体可由 Hierarchy 顶部的 `+` 或树内右键菜单创建：空实体、Sprite、Tilemap
 和 2D Camera。创建后自动展开层级树并选中实体，在 Inspector 继续配置组件；创建
 使用同一 Scene 命令历史，支持撤销/重做。Play 和 Paused 状态下创建入口禁用。
+Inspector 组件标题的展开/折叠只改变界面状态；面板在点击派发结束后的宿主更新中
+重建，并在释放旧控件前清除焦点、悬停和捕获引用（包含独立窗口），不写入 Scene 历史。
 
 **当前状态：** v0.3 编辑器壳层，包含 Edit/Play Scene、Transport Bar、网络客户端、
 通过 `AYRenderer/UIRenderBackend.h` 完成的单窗口 UI/3D 合成，以及直接复用

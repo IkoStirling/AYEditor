@@ -1372,6 +1372,63 @@ TEST_CASE(renderer_settings_close_and_window_menu_reopen_keeps_live_card) {
 }
 
 #if defined(_WIN32)
+TEST_CASE(detached_sprite_inspector_header_rebuild_is_dispatch_safe) {
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::device::WindowManager windowManager;
+    ayt::device::WindowCreateInfo windowInfo{};
+    windowInfo.title = "AYEditor detached-inspector regression";
+    windowInfo.width = 1280;
+    windowInfo.height = 720;
+    windowInfo.hidden = true;
+    CHECK(windowManager.createWindow(windowInfo));
+    if (windowManager.getWindowHandle() == nullptr) return;
+    MockRenderer backend;
+    EditorSession session;
+    EditorSessionDesc desc;
+    desc.uiBackend = &backend;
+    desc.layoutPath = resolveEditorShellLayoutPath();
+    desc.hostWindow = windowManager.getWindowHandle();
+    desc.childWindowManager = &windowManager;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    (void)session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    session.update(0.016f);
+    auto* dock = dynamic_cast<DockArea*>(session.ui().findById("main_dock"));
+    auto* panel = dynamic_cast<DockCard*>(session.ui().findById("card_inspector"));
+    CHECK_NOT_NULL(dock);
+    CHECK_NOT_NULL(panel);
+    if (dock && panel) {
+        CHECK(dock->floatCard("card_inspector", {760.0f, 90.0f}));
+        CHECK(panel->detachToOwnWindow());
+        auto* children = session.childWindows();
+        CHECK(children->count() == 1u);
+        if (children->count() == 1u) {
+            auto& ui = *children->entries()[0].ui;
+            for (int repeat = 0; repeat < 4; ++repeat) {
+                children->tickAll(0.0f);
+                ui.layout();
+                auto* header = ui.findById("inspector_component_header_SpriteComponent");
+                CHECK_NOT_NULL(header);
+                if (!header) break;
+                auto* texture = ui.findById("inspector_field_texturePath");
+                const auto bounds = header->getWorldBounds();
+                const auto pos = ui.logicalToPhysical({(bounds.minX + bounds.maxX) * 0.5f,
+                    (bounds.minY + bounds.maxY) * 0.5f});
+                ui.onMouseMove(pos.x, pos.y);
+                CHECK(ui.onMouseButtonDown(pos.x, pos.y, 0));
+                CHECK(ui.onMouseButtonUp(pos.x, pos.y, 0));
+                CHECK(ui.findById("inspector_component_header_SpriteComponent") == header);
+                session.update(0.016f);
+                CHECK((ui.findById("inspector_field_texturePath") != nullptr)
+                    == (texture == nullptr));
+                ui.onMouseMove(0.0f, 0.0f);
+            }
+        }
+    }
+    session.shutdown();
+    windowManager.destroyWindow();
+}
+
 TEST_CASE(detached_renderer_settings_close_then_window_menu_reopens_live_card) {
     const std::string layoutPath = resolveEditorShellLayoutPath();
     CHECK(!layoutPath.empty());

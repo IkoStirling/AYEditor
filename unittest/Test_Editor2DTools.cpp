@@ -572,6 +572,88 @@ TEST_CASE(TwoDInspectorUsesResourceAndEnumControls)
     session.shutdown();
 }
 
+TEST_CASE(SpriteInspectorHeaderDefersRebuildUntilClickReturns)
+{
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, resolveEditorShellLayoutPath()));
+    session.setClientSize(1280.0f, 720.0f);
+    const auto entityId = session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    session.update(0.016f);
+    const auto clickHeader = [&session]() {
+        // Host rebuild is deferred; lay out its newly allocated controls
+        // before asking for the next click's world-space bounds.
+        session.ui().layout();
+        auto* header = dynamic_cast<Button*>(session.ui().findById(
+            "inspector_component_header_SpriteComponent"));
+        CHECK_NOT_NULL(header);
+        if (header == nullptr) return;
+        const auto bounds = header->getWorldBounds();
+        const auto pos = session.ui().logicalToPhysical(
+            {(bounds.minX + bounds.maxX) * 0.5f, (bounds.minY + bounds.maxY) * 0.5f});
+        auto* texture = session.ui().findById("inspector_field_texturePath");
+        session.onMouseMove(pos.x, pos.y);
+        CHECK(session.onMouseButtonDown(pos.x, pos.y, 0));
+        CHECK(session.onMouseButtonUp(pos.x, pos.y, 0));
+        // Both the dispatch target and its callback closure must survive
+        // until the dispatch unwinds, before the next host update.
+        CHECK(session.ui().findById("inspector_component_header_SpriteComponent") == header);
+        CHECK(session.ui().findById("inspector_field_texturePath") == texture);
+        session.update(0.016f);
+        session.onMouseMove(640.0f, 100.0f); // No freed hover target remains.
+    };
+    for (int repeat = 0; repeat < 6; ++repeat) {
+        CHECK(session.ui().findById("inspector_field_texturePath") != nullptr);
+        clickHeader();
+        CHECK(session.ui().findById("inspector_field_texturePath") == nullptr);
+        clickHeader();
+        CHECK(session.ui().findById("inspector_field_texturePath") != nullptr);
+        CHECK(session.selectedEntityId() == entityId);
+    }
+    // Expanding/collapsing is presentation-only, not a Scene history edit.
+    CHECK(session.document()->undo());
+    CHECK(session.document()->scene().world().findEntity(entityId) == nullptr);
+    CHECK(session.document()->redo());
+    session.update(0.016f);
+    session.shutdown();
+}
+
+TEST_CASE(SpriteInspectorReplacementRetiresFocusHoverAndPopup)
+{
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, resolveEditorShellLayoutPath()));
+    session.setClientSize(1280.0f, 720.0f);
+    (void)session.createTwoDEntity(Editor2DEntityKind::Sprite);
+    session.update(0.016f);
+    auto* header = session.ui().findById("inspector_component_header_SpriteComponent");
+    auto* input = session.ui().findById("inspector_field_value_texturePath");
+    auto* flip = dynamic_cast<ComboBox*>(session.ui().findById("inspector_field_flip"));
+    CHECK_NOT_NULL(header);
+    CHECK_NOT_NULL(input);
+    CHECK_NOT_NULL(flip);
+    if (header && input && flip) {
+        {
+            auto active = UIManager::pushActive(&session.ui());
+            flip->openPopup();
+            CHECK(flip->isPopupOpen());
+            session.ui().setFocus(input);
+        }
+        const auto bounds = header->getWorldBounds();
+        const auto pos = session.ui().logicalToPhysical(
+            {(bounds.minX + bounds.maxX) * 0.5f, (bounds.minY + bounds.maxY) * 0.5f});
+        session.onMouseMove(pos.x, pos.y);
+        (void)session.createTwoDEntity(Editor2DEntityKind::Camera);
+        CHECK(session.ui().getFocusedWidget() == nullptr);
+        session.update(0.2f);
+        session.onMouseMove(640.0f, 100.0f);
+        CHECK(session.ui().findById("inspector_field_aspectPolicy") != nullptr);
+    }
+    session.shutdown();
+}
+
 TEST_CASE(TwoDPickingUsesDrawableLayerOrder)
 {
     const std::string layoutPath = resolveEditorShellLayoutPath();

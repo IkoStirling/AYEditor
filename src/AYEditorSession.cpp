@@ -2458,6 +2458,11 @@ void EditorSession::shutdown() {
         found->second->detachFromParent();
         gEditorOutlinerMenus.erase(found);
     }
+    // Inspector can live in a child host. Clear its borrowed preview while
+    // that widget is alive, before child-host teardown destroys the panel.
+    if (_assetInspectorPreview != nullptr) {
+        _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
+    }
     _childWindows.reset();
     if (_tilemapDockViewHost != nullptr) {
         _tilemapDockViewHost->releaseAfterUiShutdown();
@@ -2490,9 +2495,6 @@ void EditorSession::shutdown() {
     if (auto* appLogoImage = dynamic_cast<EditorBorrowedImage*>(
             _ui.findById("app_logo_image"))) {
         appLogoImage->clearBorrowedTexture();
-    }
-    if (_assetInspectorPreview != nullptr) {
-        _assetInspectorPreview->setTexture(ayt::ui::ImageTextureHandle{});
     }
     _assetPreviewCache.reset();
     _assetImportQueue.reset();
@@ -10664,10 +10666,23 @@ void EditorSession::rebuildComponentPropertyEditor()
     const EditorDensityMetrics& density =
         editorDensityMetrics(_preferences.density);
 
-    if (ayt::ui::Widget* focused = _ui.getFocusedWidget();
-        focused != nullptr && isDescendantOf(focused, _componentPropertyBody)) {
-        _ui.clearFocusNoDispatch(focused);
+    auto* propertyUi = &_ui;
+    if (_childWindows != nullptr) {
+        for (const auto& entry : _childWindows->entries()) {
+            if (entry.ui != nullptr
+                && isDescendantOf(_componentPropertyBody, entry.ui->root())) {
+                propertyUi = entry.ui.get();
+                break;
+            }
+        }
     }
+    // Composite destructors (notably ComboBox popup teardown) must address
+    // the UIManager that actually owns this potentially detached panel.
+    auto activePropertyUi = ayt::ui::UIManager::pushActive(propertyUi);
+    // Retire transient pointers while every old control is still alive.
+    // Clearing only focus leaves hover/capture dangling after an earlier
+    // sibling is freed, and a later ComboBox destructor walks that pointer.
+    propertyUi->clearTransientStateForSubtree(_componentPropertyBody);
     const std::vector<ayt::ui::Widget*> oldChildren =
         _componentPropertyBody->getChildren();
     for (ayt::ui::Widget* child : oldChildren) {
@@ -10694,7 +10709,7 @@ void EditorSession::rebuildComponentPropertyEditor()
     if (entity == nullptr) {
         addLabel(L"Select an entity", 20.0f,
                  "inspector_property_placeholder");
-        _ui.invalidateLayout();
+        propertyUi->invalidateLayout();
         return;
     }
 
@@ -10709,6 +10724,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             && EditorComponentPolicyRegistry::instance().canRemove(
                 *entity, typeName, &removeReason);
         auto* header = new ayt::ui::Button();
+        header->setId("inspector_component_header_" + typeName);
         header->setStyleId("editor_property_button");
         header->setText((expanded ? L"v  " : L">  ")
             + ayt::ui::decodeUtf8Text(sectionDescriptor->displayName)
@@ -10719,7 +10735,10 @@ void EditorSession::rebuildComponentPropertyEditor()
                      : L"Expand component properties");
         header->setOnClicked([this, typeName, expanded]() {
             _inspectedComponentTypeName = expanded ? std::string{} : typeName;
-            refreshComponentBrowser();
+            // This header belongs to the rebuilt subtree. Never destroy it
+            // (or its callback closure) inside its own input dispatch.
+            _inspectorRefreshPending = true;
+            if (_repaintCallback) _repaintCallback();
         });
         _componentPropertyBody->addWidget(header, 27.0f);
         if (expanded) {
@@ -10735,11 +10754,11 @@ void EditorSession::rebuildComponentPropertyEditor()
     if (_attachedComponentTypeNames.empty()) {
         addLabel(L"Entity has no components. It remains in Hierarchy.",
                  20.0f, "inspector_property_placeholder");
-        _ui.invalidateLayout();
+        propertyUi->invalidateLayout();
         return;
     }
     if (!createdExpandedSection) {
-        _ui.invalidateLayout();
+        propertyUi->invalidateLayout();
         return;
     }
 
@@ -10753,7 +10772,7 @@ void EditorSession::rebuildComponentPropertyEditor()
     if (component == nullptr) {
         addLabel(L"Component is unavailable.",
                  20.0f, "inspector_property_placeholder");
-        _ui.invalidateLayout();
+        propertyUi->invalidateLayout();
         return;
     }
 
@@ -10762,7 +10781,7 @@ void EditorSession::rebuildComponentPropertyEditor()
     if (type == nullptr || type->getFieldCount() == 0) {
         addLabel(L"No reflected properties", 20.0f,
                  "inspector_property_placeholder");
-        _ui.invalidateLayout();
+        propertyUi->invalidateLayout();
         return;
     }
 
@@ -11202,7 +11221,7 @@ void EditorSession::rebuildComponentPropertyEditor()
         addLabel(L"No visible reflected properties", 20.0f,
                  "inspector_property_placeholder");
     }
-    _ui.invalidateLayout();
+    propertyUi->invalidateLayout();
 }
 
 void EditorSession::commitInspectorColorField(
