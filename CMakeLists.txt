@@ -101,6 +101,8 @@ set(SRC_FILES
     src/AYEditorBuiltInExtensions.cpp
     src/AYEditorTilemapCanvas.cpp
     src/AYEditorTileAtlasPicker.cpp
+    src/AYEditorSpriteAnimationCanvas.cpp
+    src/AYEditorSpriteAnimationExtension.cpp
     src/AYEditorComponentPolicy.cpp
     src/AYEditorShortcutRegistry.cpp
     src/EditorAssetPreviewCache.cpp
@@ -206,6 +208,7 @@ set(HEAD_FILES
     include/AYEditor/EditorSceneCamera.h
     include/AYEditor/EditorSceneViewWorkspace.h
     include/AYEditor/EditorTilemapDocument.h
+    include/AYEditor/EditorSpriteAnimationExtension.h
     include/AYEditor/Importer.h
     include/AYEditor/ImportDialog.h
     include/AYEditor/ImportedCharacterMapper.h

@@ -1,6 +1,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditorTimelinePlaybackSource.h"
 #include "AYEditor/EditorAnimationExtension.h"
+#include "AYEditor/EditorSpriteAnimationExtension.h"
 
 #include "AYEditor/EditorCommandSystem.h"
 #include "AYEditor/EditorProductPaths.h"
@@ -4791,6 +4792,7 @@ bool registerEditorBuiltInExtensions(
             : nullptr;
     };
     if (!add(registry, std::move(tilemap), error)) return false;
+    if (!registerEditorSpriteAnimationExtension(registry, error)) return false;
 
     auto addTimedAsset = [&registry, error](
         const char* id, const wchar_t* displayName, bool isAudio,

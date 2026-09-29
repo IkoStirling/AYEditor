@@ -50,7 +50,9 @@ struct EditorHostedView {
 
 // AYEditor-owned bridge between model-only EditorWorkspace services and AYUI
 // DockCards. It contains no resource/editor-specific semantics.
-class EditorDockViewHost final : public IEditorHostServices {
+class EditorDockViewHost final
+    : public IEditorHostServices,
+      public IEditorSpriteAnimationHost {
 public:
     using CloseActionProvider = std::function<EditorDocumentCloseAction(
         const EditorHostedView& hosted)>;
@@ -116,6 +118,48 @@ public:
     EditorAuthoringImage loadAuthoringImage(
         const std::string& path,
         std::string* error = nullptr) override;
+    bool querySelectedSpriteAnimation(
+        EditorSpriteAnimationState& state,
+        std::string* error = nullptr) override {
+        auto* host = dynamic_cast<IEditorSpriteAnimationHost*>(&_outerHost);
+        if (host != nullptr) {
+            return host->querySelectedSpriteAnimation(state, error);
+        }
+        if (error != nullptr) {
+            *error = "Sprite animation scene binding is unavailable.";
+        }
+        return false;
+    }
+    bool applySelectedSpriteAnimation(
+        const EditorSpriteAnimationState& state,
+        std::string* error = nullptr) override {
+        auto* host = dynamic_cast<IEditorSpriteAnimationHost*>(&_outerHost);
+        if (host != nullptr) {
+            return host->applySelectedSpriteAnimation(state, error);
+        }
+        if (error != nullptr) {
+            *error = "Sprite animation scene binding is unavailable.";
+        }
+        return false;
+    }
+    bool canUndoSpriteAnimationEdit() const noexcept override {
+        auto* host = dynamic_cast<const IEditorSpriteAnimationHost*>(
+            &_outerHost);
+        return host != nullptr && host->canUndoSpriteAnimationEdit();
+    }
+    bool canRedoSpriteAnimationEdit() const noexcept override {
+        auto* host = dynamic_cast<const IEditorSpriteAnimationHost*>(
+            &_outerHost);
+        return host != nullptr && host->canRedoSpriteAnimationEdit();
+    }
+    bool undoSpriteAnimationEdit() override {
+        auto* host = dynamic_cast<IEditorSpriteAnimationHost*>(&_outerHost);
+        return host != nullptr && host->undoSpriteAnimationEdit();
+    }
+    bool redoSpriteAnimationEdit() override {
+        auto* host = dynamic_cast<IEditorSpriteAnimationHost*>(&_outerHost);
+        return host != nullptr && host->redoSpriteAnimationEdit();
+    }
     void requestRepaint() override;
     void setStatusText(const std::wstring& text) override {
         _outerHost.setStatusText(text);

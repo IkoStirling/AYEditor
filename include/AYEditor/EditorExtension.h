@@ -38,6 +38,25 @@ struct EditorAuthoringImage {
     }
 };
 
+// Scene-facing data used by the Sprite Animation authoring tool. Keeping this
+// value type in the editor bridge prevents the reusable AY2D authoring model
+// from depending on AYEntity or on the active Scene implementation.
+struct EditorSpriteAnimationState {
+    uint32_t entityId = 0u;
+    std::string entityName;
+    std::string texturePath;
+    uint32_t columns = 1u;
+    uint32_t rows = 1u;
+    uint32_t firstFrame = 0u;
+    uint32_t frameCount = 1u;
+    uint32_t frameDurationMs = 100u;
+    uint32_t playbackMode = 0u;
+    bool playing = true;
+    bool hasAnimation = false;
+
+    bool operator==(const EditorSpriteAnimationState&) const = default;
+};
+
 enum class EditorSurfaceKind : uint8_t {
     Document,
     ToolPanel,
@@ -118,6 +137,24 @@ public:
     virtual ~IEditorDocumentSavePathProvider() = default;
     virtual std::string chooseDocumentSavePath(
         const IEditorDocument& document, bool saveAs) = 0;
+};
+
+// Optional scene bridge used by the Sprite Animation authoring surface. It is
+// deliberately separate from IEditorHostServices so adding this tool does not
+// change the stable host-services vtable for third-party editor extensions.
+class IEditorSpriteAnimationHost {
+public:
+    virtual ~IEditorSpriteAnimationHost() = default;
+    virtual bool querySelectedSpriteAnimation(
+        EditorSpriteAnimationState& state,
+        std::string* error = nullptr) = 0;
+    virtual bool applySelectedSpriteAnimation(
+        const EditorSpriteAnimationState& state,
+        std::string* error = nullptr) = 0;
+    virtual bool canUndoSpriteAnimationEdit() const noexcept = 0;
+    virtual bool canRedoSpriteAnimationEdit() const noexcept = 0;
+    virtual bool undoSpriteAnimationEdit() = 0;
+    virtual bool redoSpriteAnimationEdit() = 0;
 };
 
 // AYEditor-owned services exposed to a registered editor view. Module editor

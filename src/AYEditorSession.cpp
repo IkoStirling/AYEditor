@@ -30,6 +30,7 @@
 #include "AYEditor/EditorGameFlowExtension.h"
 #include "AYEditor/EditorSkeletonExtension.h"
 #include "AYEditor/EditorSkeletonDocument.h"
+#include "AYEditor/EditorSpriteAnimationExtension.h"
 #include "AYEditor/EditorUiDesignerWorkflow.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "AYEditorProjectSettingsController.h"
@@ -501,9 +502,12 @@ void clearEditorTooltips(const EditorSession* session)
     gEditorTooltips.erase(found);
 }
 
-class EditorSessionHostServices final : public IEditorHostServices {
+class EditorSessionHostServices final
+    : public IEditorHostServices,
+      public IEditorSpriteAnimationHost {
 public:
     EditorSessionHostServices(
+        EditorSession& session,
         EditorWorkspace& workspace,
         ayt::ui::UIManager& ui,
         std::string projectRoot,
@@ -514,7 +518,7 @@ public:
         std::function<std::wstring(std::string_view, std::wstring_view)>
             localize,
         std::function<std::string()> currentLanguage)
-        : _workspace(workspace), _ui(ui),
+        : _session(session), _workspace(workspace), _ui(ui),
           _projectRoot(std::move(projectRoot)),
           _imageCache(imageCache), _ownerWindow(ownerWindow),
           _repaint(std::move(repaint)), _setStatus(std::move(setStatus)),
@@ -539,6 +543,189 @@ public:
         }
         return _imageCache->loadAuthoringImage(path, error);
     }
+    bool querySelectedSpriteAnimation(
+        EditorSpriteAnimationState& state,
+        std::string* error = nullptr) override {
+        state = {};
+        EditorSceneDocument* document = _session.document();
+        if (document == nullptr || _session.selectedEntityId() == 0u) {
+            if (error != nullptr) *error = "Select a Sprite entity first.";
+            return false;
+        }
+        ayt::entity::Entity* entity = document->scene().world().findEntity(
+            _session.selectedEntityId());
+        auto* sprite = entity != nullptr
+            ? entity->getComponent<ayt::entity::SpriteComponent>() : nullptr;
+        if (sprite == nullptr) {
+            if (error != nullptr) {
+                *error = "The selected entity does not have SpriteComponent.";
+            }
+            return false;
+        }
+        state.entityId = entity->getId();
+        state.entityName = entity->getName() != nullptr
+            ? entity->getName() : "Sprite";
+        state.texturePath = sprite->texturePath;
+        if (!state.texturePath.empty()) {
+            std::error_code pathError;
+            std::filesystem::path source =
+                std::filesystem::u8path(state.texturePath);
+            if (source.is_relative() && !_projectRoot.empty()) {
+                const std::filesystem::path candidate =
+                    std::filesystem::u8path(_projectRoot) / source;
+                if (std::filesystem::is_regular_file(candidate, pathError)) {
+                    state.texturePath = candidate.lexically_normal().string();
+                }
+            }
+        }
+        if (auto* animation = entity->getComponent<
+                ayt::entity::SpriteAnimationComponent>()) {
+            state.columns = static_cast<uint32_t>(
+                std::max(1, animation->columns));
+            state.rows = static_cast<uint32_t>(std::max(1, animation->rows));
+            state.firstFrame = static_cast<uint32_t>(
+                std::max(0, animation->firstFrame));
+            state.frameCount = static_cast<uint32_t>(
+                std::max(1, animation->frameCount));
+            state.frameDurationMs = static_cast<uint32_t>(
+                std::max(1, animation->frameDurationMs));
+            state.playbackMode = animation->playbackMode == 1 ? 1u : 0u;
+            state.playing = animation->playing;
+            state.hasAnimation = true;
+        }
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    bool applySelectedSpriteAnimation(
+        const EditorSpriteAnimationState& state,
+        std::string* error = nullptr) override {
+        EditorSceneDocument* document = _session.document();
+        if (document == nullptr || state.entityId == 0u
+            || state.entityId != _session.selectedEntityId()) {
+            if (error != nullptr) {
+                *error = "The Sprite selection changed; reload the editor first.";
+            }
+            return false;
+        }
+        const uint64_t cells = static_cast<uint64_t>(state.columns)
+            * static_cast<uint64_t>(state.rows);
+        if (state.columns == 0u || state.rows == 0u
+            || state.columns > 4096u || state.rows > 4096u
+            || cells == 0u || state.firstFrame >= cells
+            || state.frameCount == 0u
+            || state.frameCount > cells - state.firstFrame
+            || state.frameDurationMs == 0u
+            || state.frameDurationMs > 3600000u
+            || state.playbackMode > 1u) {
+            if (error != nullptr) *error = "The Sprite animation values are invalid.";
+            return false;
+        }
+        ayt::entity::Entity* entity = document->scene().world().findEntity(
+            state.entityId);
+        if (entity == nullptr || entity->getComponent<
+                ayt::entity::SpriteComponent>() == nullptr) {
+            if (error != nullptr) *error = "The selected Sprite no longer exists.";
+            return false;
+        }
+        auto matches = [&state](
+            const ayt::entity::SpriteAnimationComponent& value) {
+            return value.columns == static_cast<int32_t>(state.columns)
+                && value.rows == static_cast<int32_t>(state.rows)
+                && value.firstFrame == static_cast<int32_t>(state.firstFrame)
+                && value.frameCount == static_cast<int32_t>(state.frameCount)
+                && value.frameDurationMs
+                    == static_cast<int32_t>(state.frameDurationMs)
+                && value.playbackMode
+                    == static_cast<int32_t>(state.playbackMode)
+                && value.playing == state.playing;
+        };
+        if (auto* current = entity->getComponent<
+                ayt::entity::SpriteAnimationComponent>();
+            current != nullptr && matches(*current)) {
+            if (error != nullptr) error->clear();
+            return true;
+        }
+
+        EditorCommandHistory& history = document->commandHistory();
+        if (!history.beginTransaction("Edit Sprite Animation")) {
+            if (error != nullptr) *error = "Could not start the Scene edit.";
+            return false;
+        }
+        if (entity->getComponent<ayt::entity::SpriteAnimationComponent>()
+            == nullptr) {
+            if (!document->addComponent(state.entityId,
+                    "SpriteAnimationComponent", nullptr, error)) {
+                (void)history.cancelTransaction();
+                return false;
+            }
+            entity = document->scene().world().findEntity(state.entityId);
+        }
+        auto* current = entity != nullptr ? entity->getComponent<
+            ayt::entity::SpriteAnimationComponent>() : nullptr;
+        if (current == nullptr) {
+            (void)history.cancelTransaction();
+            if (error != nullptr) *error = "Could not create Sprite Animation.";
+            return false;
+        }
+        if (!matches(*current)) {
+            const bool mutated = document->mutateComponent(
+                state.entityId, "SpriteAnimationComponent",
+                "Configure Sprite Animation", {},
+                [&state](ayt::entity::IComponent& base) {
+                    auto* animation = dynamic_cast<
+                        ayt::entity::SpriteAnimationComponent*>(&base);
+                    if (animation == nullptr) return false;
+                    animation->columns = static_cast<int32_t>(state.columns);
+                    animation->rows = static_cast<int32_t>(state.rows);
+                    animation->firstFrame =
+                        static_cast<int32_t>(state.firstFrame);
+                    animation->frameCount =
+                        static_cast<int32_t>(state.frameCount);
+                    animation->frameDurationMs =
+                        static_cast<int32_t>(state.frameDurationMs);
+                    animation->playbackMode =
+                        static_cast<int32_t>(state.playbackMode);
+                    animation->playing = state.playing;
+                    animation->restart();
+                    return true;
+                });
+            if (!mutated) {
+                (void)history.cancelTransaction();
+                if (error != nullptr) {
+                    *error = "Could not update Sprite Animation.";
+                }
+                return false;
+            }
+        }
+        if (!history.commitTransaction()) {
+            (void)history.cancelTransaction();
+            if (error != nullptr) *error = "Could not commit the Scene edit.";
+            return false;
+        }
+        if (_repaint) _repaint();
+        if (error != nullptr) error->clear();
+        return true;
+    }
+    bool canUndoSpriteAnimationEdit() const noexcept override {
+        const EditorSceneDocument* document = _session.document();
+        return document != nullptr && document->canUndo();
+    }
+    bool canRedoSpriteAnimationEdit() const noexcept override {
+        const EditorSceneDocument* document = _session.document();
+        return document != nullptr && document->canRedo();
+    }
+    bool undoSpriteAnimationEdit() override {
+        EditorSceneDocument* document = _session.document();
+        const bool changed = document != nullptr && document->undo();
+        if (changed && _repaint) _repaint();
+        return changed;
+    }
+    bool redoSpriteAnimationEdit() override {
+        EditorSceneDocument* document = _session.document();
+        const bool changed = document != nullptr && document->redo();
+        if (changed && _repaint) _repaint();
+        return changed;
+    }
     void requestRepaint() override {
         if (_repaint) _repaint();
     }
@@ -554,6 +741,7 @@ public:
     }
 
 private:
+    EditorSession& _session;
     EditorWorkspace& _workspace;
     ayt::ui::UIManager& _ui;
     std::string _projectRoot;
@@ -2001,7 +2189,7 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     _mainDock = dynamic_cast<ayt::ui::DockArea*>(_ui.findById("main_dock"));
     if (_mainDock != nullptr) {
         _editorHostServices = std::make_unique<EditorSessionHostServices>(
-            *_workspace, _ui, desc.projectRoot,
+            *this, *_workspace, _ui, desc.projectRoot,
             _assetPreviewCache.get(), static_cast<HWND>(_hostWindow),
             [this]() {
                 if (_repaintCallback) _repaintCallback();
@@ -3413,6 +3601,9 @@ void EditorSession::bindToolbar() {
     bindButton("btn_tool_2d", [this]() {
         (void)openTilemapEditor();
     });
+    bindButton("btn_tool_sprite_animation", [this]() {
+        (void)openRegisteredTool(kEditorSpriteAnimationExtensionId);
+    });
     bindButton("btn_tool_audio", [this]() {
         (void)openRegisteredTool(kEditorAudioToolExtensionId);
     });
@@ -3653,6 +3844,7 @@ void EditorSession::bindShellIcons(const std::string& iconRootPath)
         {"btn_stop", "filled/player-stop.svg", "ui.editor.tooltip.stop", L"Stop", 16.0f, 8.0f, 4.0f},
         {"btn_tool_ui_layout", "outline/layout.svg", "ui.editor.tooltip.open_ui_layout", L"Open UI Layout Editor", 20.0f, 7.0f, 7.0f},
         {"btn_tool_2d", "outline/grid.svg", "ui.editor.tooltip.open_tilemap", L"Open 2D Tilemap Editor", 20.0f, 7.0f, 7.0f},
+        {"btn_tool_sprite_animation", "filled/player-play.svg", "ui.editor.tooltip.open_sprite_animation", L"Open Sprite Animation Editor", 20.0f, 7.0f, 7.0f},
         {"btn_tool_audio", "outline/music-cog.svg", "ui.editor.tooltip.open_audio", L"Open Audio Editor", 20.0f, 7.0f, 7.0f},
         {"btn_run_project", "outline/rocket.svg", "ui.editor.tooltip.run_project", L"Run current project", 20.0f, 7.0f, 7.0f},
         {"btn_tool_space", "outline/world.svg", "ui.editor.tooltip.transform_world", L"Transform orientation: World", 16.0f, 6.0f, 4.0f},
@@ -8537,6 +8729,14 @@ void EditorSession::bindMenuBar() {
         if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.tilemap", L"2D Tilemap Editor...")) {
             item->setId("menu_tools_tilemap_editor");
             item->setOnActivate([this]() { (void)openTilemapEditor(); });
+        }
+        if (auto* item = addLocalizedItem(toolsMenu,
+                "ui.editor.menu.tools.sprite_animation",
+                L"Sprite Animation Editor...")) {
+            item->setId("menu_tools_sprite_animation_editor");
+            item->setOnActivate([this]() {
+                (void)openRegisteredTool(kEditorSpriteAnimationExtensionId);
+            });
         }
         if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.audio", L"Audio Editor...")) {
             item->setOnActivate([this]() {

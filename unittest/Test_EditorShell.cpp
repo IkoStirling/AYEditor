@@ -2526,4 +2526,108 @@ TEST_CASE(editor_universal_gizmo_requires_handle_instead_of_object_surface_drag)
     session.shutdown();
 }
 
+TEST_CASE(sprite_animation_tool_applies_one_undoable_scene_edit)
+{
+    const std::string layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280.0f, 720.0f);
+
+    auto* openTool = dynamic_cast<Button*>(
+        session.ui().findById("btn_tool_sprite_animation"));
+    CHECK(openTool != nullptr);
+    ayt::entity::World* world =
+        session.worldContext().world(EditorWorldSlot::Edit, true);
+    auto* viewport = dynamic_cast<Image*>(
+        session.ui().findById("panel_viewport"));
+    CHECK(world != nullptr);
+    CHECK(viewport != nullptr);
+    if (world == nullptr || viewport == nullptr) {
+        session.shutdown();
+        return;
+    }
+
+    ayt::entity::Entity* entity = world->createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) {
+        session.shutdown();
+        return;
+    }
+    entity->setName("Animated Sprite");
+    entity->addComponent<ayt::entity::Transform>();
+    entity->addComponent<ayt::entity::MeshComponent>();
+    entity->addComponent<ayt::entity::SpriteComponent>();
+
+    const auto bounds = viewport->getWorldBounds();
+    const float x = (bounds.minX + bounds.maxX) * 0.5f;
+    const float y = (bounds.minY + bounds.maxY) * 0.5f;
+    CHECK(session.onMouseButtonDown(x, y, 0));
+    CHECK(session.onMouseButtonUp(x, y, 0));
+    CHECK(session.selectedEntityId() == entity->getId());
+
+    CHECK(clickButton(openTool));
+    auto* columns = dynamic_cast<TextInput*>(
+        session.ui().findById("sprite_animation_columns"));
+    auto* rows = dynamic_cast<TextInput*>(
+        session.ui().findById("sprite_animation_rows"));
+    auto* first = dynamic_cast<TextInput*>(
+        session.ui().findById("sprite_animation_first"));
+    auto* count = dynamic_cast<TextInput*>(
+        session.ui().findById("sprite_animation_count"));
+    auto* duration = dynamic_cast<TextInput*>(
+        session.ui().findById("sprite_animation_duration"));
+    auto* apply = dynamic_cast<Button*>(
+        session.ui().findById("sprite_animation_apply"));
+    CHECK(columns != nullptr);
+    CHECK(rows != nullptr);
+    CHECK(first != nullptr);
+    CHECK(count != nullptr);
+    CHECK(duration != nullptr);
+    CHECK(apply != nullptr);
+    if (columns != nullptr && rows != nullptr && first != nullptr
+        && count != nullptr && duration != nullptr && apply != nullptr) {
+        columns->setText(L"4");
+        rows->setText(L"2");
+        first->setText(L"1");
+        count->setText(L"5");
+        duration->setText(L"80");
+        CHECK(clickButton(apply));
+
+        auto* animation = entity->getComponent<
+            ayt::entity::SpriteAnimationComponent>();
+        CHECK(animation != nullptr);
+        if (animation != nullptr) {
+            CHECK(animation->columns == 4);
+            CHECK(animation->rows == 2);
+            CHECK(animation->firstFrame == 1);
+            CHECK(animation->frameCount == 5);
+            CHECK(animation->frameDurationMs == 80);
+        }
+
+        session.ui().setFocus(nullptr);
+        session.onKeyDown(UIKey_Control);
+        CHECK(session.onKeyDown(UIKey_Z));
+        session.onKeyUp(UIKey_Control);
+        CHECK(entity->getComponent<
+            ayt::entity::SpriteAnimationComponent>() == nullptr);
+
+        session.onKeyDown(UIKey_Control);
+        session.onKeyDown(UIKey_Shift);
+        CHECK(session.onKeyDown(UIKey_Z));
+        session.onKeyUp(UIKey_Shift);
+        session.onKeyUp(UIKey_Control);
+        animation = entity->getComponent<
+            ayt::entity::SpriteAnimationComponent>();
+        CHECK(animation != nullptr);
+        CHECK(animation != nullptr && animation->frameCount == 5);
+    }
+
+    session.shutdown();
+}
+
 TEST_SUITE_END
