@@ -36,6 +36,7 @@ namespace {
 using ayt::ay2d::editor::SpriteAnimationAuthoringModel;
 using ayt::ay2d::editor::SpriteAnimationDraft;
 using ayt::ay2d::editor::SpriteAnimationPlaybackMode;
+using ayt::ay2d::editor::SpriteAnimationTrimResult;
 
 class SpriteAnimationToolDocument final : public IEditorDocument {
 public:
@@ -115,7 +116,9 @@ public:
         _sheet->setModel(&_model);
         _sheet->setOnSelectionChanged([this]() {
             _dirty = true;
+            updateTrailingTrim();
             syncSelectionInputs();
+            showRangeMessage();
             refreshStatus();
             _host.requestRepaint();
         });
@@ -130,6 +133,21 @@ public:
         auto* hint = label(L"Wheel: zoom   Middle drag: pan   Left drag: select", 10);
         sheetFooter->addWidget(hint, 0.0f);
         sourceColumn->addWidget(sheetFooter, 28.0f);
+        auto* rowNavigation = new ayt::ui::HBox();
+        rowNavigation->setSpacing(5.0f);
+        _previousRow = addIconButton(rowNavigation, "outline/arrow-up.svg",
+            L"Loop previous row (wraps to the last row)", [this]() { loopRow(-1); });
+        _previousRow->setId("sprite_animation_previous_row");
+        auto* loopCurrent = addTextButton(rowNavigation, L"Loop Row", 85.0f,
+            [this]() { loopRow(0); });
+        loopCurrent->setId("sprite_animation_loop_row");
+        _nextRow = addIconButton(rowNavigation, "outline/arrow-down.svg",
+            L"Loop next row (wraps to the first row)", [this]() { loopRow(1); });
+        _nextRow->setId("sprite_animation_next_row");
+        _rowStatus = label(L"Row 1 / 1", 11);
+        _rowStatus->setId("sprite_animation_row_status");
+        rowNavigation->addWidget(_rowStatus, 0.0f);
+        sourceColumn->addWidget(rowNavigation, 30.0f);
         ayt::ui::BoxSlotLimits sourceLimits;
         sourceLimits.minWidth = 430.0f;
         body->addWidget(sourceColumn, 0.0f, sourceLimits);
@@ -149,15 +167,18 @@ public:
 
         auto* transport = new ayt::ui::HBox();
         transport->setSpacing(4.0f);
-        addIconButton(transport, "outline/arrow-up.svg", L"Previous frame",
+        addIconButton(transport, "outline/arrow-left.svg", L"Previous frame",
             [this]() { _model.stepBackward(); updatePlayhead(); });
         addIconButton(transport, "filled/player-play.svg", L"Play preview",
-            [this]() { _model.play(); refreshStatus(); });
+            [this]() {
+                if (!_trimResult.allEmpty) _model.play();
+                refreshStatus();
+            });
         addIconButton(transport, "filled/player-pause.svg", L"Pause preview",
             [this]() { _model.pause(); refreshStatus(); });
         addIconButton(transport, "filled/player-stop.svg", L"Stop preview",
             [this]() { _model.stop(); updatePlayhead(); });
-        addIconButton(transport, "outline/arrow-down.svg", L"Next frame",
+        addIconButton(transport, "outline/arrow-right.svg", L"Next frame",
             [this]() { _model.stepForward(); updatePlayhead(); });
         inspector->addWidget(transport, 30.0f);
 
@@ -174,6 +195,14 @@ public:
         inspector->addWidget(_playhead, 20.0f);
 
         inspector->addWidget(label(L"Grid and Range", 13), 23.0f);
+        _trimTrailing = new ayt::ui::CheckBox();
+        _trimTrailing->setId("sprite_animation_trim_trailing");
+        _trimTrailing->setText(L"Skip trailing transparent frames");
+        _trimTrailing->setAccessibilityDescription(
+            L"Only trim fully transparent frames at the end. Keep blanks between frames.");
+        _trimTrailing->setChecked(true);
+        _trimTrailing->setOnToggled([this](bool) { controlsChanged(); });
+        inspector->addWidget(_trimTrailing, 28.0f);
         _columns = addField(inspector, L"Columns", "sprite_animation_columns");
         _rows = addField(inspector, L"Rows", "sprite_animation_rows");
         _firstFrame = addField(inspector, L"First frame", "sprite_animation_first");
@@ -366,6 +395,7 @@ private:
             : SpriteAnimationPlaybackMode::Loop;
         draft.playing = _startsPlaying->isChecked();
         _model.setDraft(draft);
+        updateTrailingTrim();
         updatePlayhead();
         return true;
     }
@@ -375,9 +405,51 @@ private:
         if (_syncing) return;
         if (readControls()) {
             _dirty = true;
-            setMessage(L"Preview updated. Apply to write one undoable Scene edit.");
+            showRangeMessage();
             refreshStatus();
         }
+        _host.requestRepaint();
+    }
+
+    void updateTrailingTrim()
+    {
+        _model.clearTrailingEmptyTrim();
+        _trimResult = {};
+        if (_trimTrailing != nullptr && _trimTrailing->isChecked()) {
+            _trimResult = _model.trimTrailingEmptyFrames(_sourceImage.bgraPixels
+                ? std::span<const uint8_t>(*_sourceImage.bgraPixels)
+                : std::span<const uint8_t>{});
+            if (_trimResult.allEmpty) _model.pause();
+        }
+    }
+
+    void showRangeMessage()
+    {
+        if (_trimTrailing->isChecked() && _trimResult.allEmpty) {
+            setMessage(L"This range is entirely transparent. Select another row/range, "
+                       L"or turn off trailing-frame skipping to use it intentionally.");
+        } else if (_trimTrailing->isChecked() && !_trimResult.available) {
+            setMessage(L"Blank-frame detection unavailable: load source pixels and use "
+                       L"a grid that divides the image exactly. Full range is retained.");
+        } else if (_trimResult.trimmedFrames != 0u) {
+            setMessage(L"Skipping " + std::to_wstring(_trimResult.trimmedFrames)
+                + L" trailing blank frames. Interior blanks are kept. Apply saves "
+                  L"the effective frame count.");
+        } else {
+            setMessage(L"Preview updated. Apply to write one undoable Scene edit.");
+        }
+    }
+
+    void loopRow(int32_t delta)
+    {
+        if (_bound.entityId == 0u || !readControls()) return;
+        _model.selectAdjacentRow(delta);
+        _model.setPlaybackMode(SpriteAnimationPlaybackMode::Loop);
+        updateTrailingTrim();
+        if (!_trimResult.allEmpty) _model.play();
+        _dirty = true;
+        syncControls();
+        showRangeMessage();
         _host.requestRepaint();
     }
 
@@ -413,7 +485,7 @@ private:
         state.columns = draft.columns;
         state.rows = draft.rows;
         state.firstFrame = draft.firstFrame;
-        state.frameCount = draft.frameCount;
+        state.frameCount = _model.previewFrameCount();
         state.frameDurationMs = draft.frameDurationMs;
         state.playbackMode = draft.playbackMode
             == SpriteAnimationPlaybackMode::Once ? 1u : 0u;
@@ -425,6 +497,10 @@ private:
     void apply()
     {
         if (_bound.entityId == 0u || !readControls()) return;
+        if (_trimTrailing->isChecked() && _trimResult.allEmpty) {
+            showRangeMessage();
+            return;
+        }
         const EditorSpriteAnimationState next = editedState();
         std::string error;
         if (_sceneHost == nullptr
@@ -454,10 +530,15 @@ private:
             if (!force && _bound.entityId == 0u) return;
             _bound = {};
             _dirty = false;
+            _sourceImage = {};
+            _trimResult = {};
             _sheet->clearImage();
             _preview->clearImage();
             _modeStatus->setText(L"NO SPRITE SELECTED");
             _sourceLabel->setText(L"");
+            _previousRow->setEnabled(false);
+            _nextRow->setEnabled(false);
+            _apply->setEnabled(false);
             setMessage(ayt::ui::decodeUtf8Text(error));
             return;
         }
@@ -477,11 +558,11 @@ private:
         draft.playing = state.playing;
         _model.setDraft(draft);
         _dirty = false;
-        syncControls();
 
         std::string imageError;
         const EditorAuthoringImage image = _host.loadAuthoringImage(
             state.texturePath, &imageError);
+        _sourceImage = image;
         if (image) {
             _sheet->setImage(image.texture, image.width, image.height);
             _preview->setImage(image.texture, image.width, image.height);
@@ -496,13 +577,19 @@ private:
         }
         _sourceLabel->setText(
             ayt::ui::decodeUtf8Text(state.texturePath));
+        updateTrailingTrim();
+        syncControls();
+        if (_trimResult.allEmpty || _trimResult.trimmedFrames != 0u) {
+            _dirty = _model.previewFrameCount() != _bound.frameCount;
+            showRangeMessage();
+        }
         refreshStatus();
         _host.requestRepaint();
     }
 
     void updatePlayhead(bool updateSlider = true)
     {
-        const uint32_t count = _model.draft().frameCount;
+        const uint32_t count = _model.previewFrameCount();
         if (updateSlider) {
             _syncing = true;
             _scrub->setValueRange(0.0f,
@@ -525,6 +612,13 @@ private:
     {
         if (_bound.entityId == 0u) return;
         const auto& draft = _model.draft();
+        _previousRow->setEnabled(draft.rows > 1u);
+        _nextRow->setEnabled(draft.rows > 1u);
+        _apply->setEnabled(!(_trimTrailing->isChecked() && _trimResult.allEmpty));
+        _rowStatus->setText(L"Row " + std::to_wstring(draft.firstFrame / draft.columns + 1u)
+            + L" / " + std::to_wstring(draft.rows) + L"  ·  "
+            + std::to_wstring(_model.previewFrameCount()) + L" / "
+            + std::to_wstring(draft.frameCount) + L" frames");
         std::wstring text = _model.isPlaying() ? L"PLAYING" : L"PAUSED";
         if (_model.isFinished()) text = L"FINISHED";
         text += L"  ·  " + ayt::ui::decodeUtf8Text(_bound.entityName)
@@ -548,6 +642,7 @@ private:
         if (_scrub != nullptr) _scrub->setOnValueChanged({});
         if (_playbackMode != nullptr) _playbackMode->setOnSelectionChanged({});
         if (_startsPlaying != nullptr) _startsPlaying->setOnToggled({});
+        if (_trimTrailing != nullptr) _trimTrailing->setOnToggled({});
         for (auto* input : _inputs) {
             if (input != nullptr) input->setOnTextChanged({});
         }
@@ -567,6 +662,8 @@ private:
     std::filesystem::path _iconRoot;
     SpriteAnimationAuthoringModel _model;
     EditorSpriteAnimationState _bound;
+    EditorAuthoringImage _sourceImage;
+    SpriteAnimationTrimResult _trimResult;
     ayt::ui::Widget* _root = nullptr;
     EditorSpriteAnimationCanvas* _sheet = nullptr;
     EditorSpriteAnimationCanvas* _preview = nullptr;
@@ -574,6 +671,7 @@ private:
     ayt::ui::TextLabel* _sourceLabel = nullptr;
     ayt::ui::TextLabel* _playhead = nullptr;
     ayt::ui::TextLabel* _message = nullptr;
+    ayt::ui::TextLabel* _rowStatus = nullptr;
     ayt::ui::TextInput* _columns = nullptr;
     ayt::ui::TextInput* _rows = nullptr;
     ayt::ui::TextInput* _firstFrame = nullptr;
@@ -581,9 +679,12 @@ private:
     ayt::ui::TextInput* _duration = nullptr;
     ayt::ui::ComboBox* _playbackMode = nullptr;
     ayt::ui::CheckBox* _startsPlaying = nullptr;
+    ayt::ui::CheckBox* _trimTrailing = nullptr;
     ayt::ui::Slider* _scrub = nullptr;
     ayt::ui::Button* _apply = nullptr;
     ayt::ui::Button* _revert = nullptr;
+    ayt::ui::Button* _previousRow = nullptr;
+    ayt::ui::Button* _nextRow = nullptr;
     std::vector<ayt::ui::TextInput*> _inputs;
     std::vector<ayt::ui::Button*> _buttons;
     std::vector<ayt::ui::Tooltip*> _tooltips;

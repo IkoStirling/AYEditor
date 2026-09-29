@@ -4,6 +4,7 @@
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorUiFlowExtension.h"
+#include "AYEditor/EditorSpriteAnimationExtension.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorWorkspace.h"
 #include "../src/AYEditorProjectSettingsController.h"
@@ -2685,6 +2686,104 @@ TEST_CASE(sprite_animation_tool_applies_one_undoable_scene_edit)
     }
 
     session.shutdown();
+}
+
+TEST_CASE(sprite_animation_rows_trim_toggle_and_apply_use_source_alpha)
+{
+    class SpriteRowsHost final : public IEditorHostServices,
+                                 public IEditorSpriteAnimationHost {
+    public:
+        EditorWorkspace workspaceValue;
+        std::string root;
+        EditorSpriteAnimationState state;
+        EditorAuthoringImage image;
+        unsigned applied = 0;
+        EditorWorkspace& workspace() noexcept override { return workspaceValue; }
+        const std::string& projectRoot() const noexcept override { return root; }
+        void requestRepaint() override {}
+        void setStatusText(const std::wstring&) override {}
+        EditorAuthoringImage loadAuthoringImage(const std::string&, std::string*) override {
+            return image;
+        }
+        bool querySelectedSpriteAnimation(EditorSpriteAnimationState& out,
+                                           std::string*) override {
+            out = state;
+            return true;
+        }
+        bool applySelectedSpriteAnimation(const EditorSpriteAnimationState& next,
+                                           std::string*) override {
+            state = next;
+            ++applied;
+            return true;
+        }
+        bool canUndoSpriteAnimationEdit() const noexcept override { return false; }
+        bool canRedoSpriteAnimationEdit() const noexcept override { return false; }
+        bool undoSpriteAnimationEdit() override { return false; }
+        bool redoSpriteAnimationEdit() override { return false; }
+    } host;
+    host.state.entityId = 1;
+    host.state.entityName = "Short fourth row";
+    host.state.texturePath = "rows.png";
+    host.state.columns = 24;
+    host.state.rows = 4;
+    host.state.firstFrame = 72;
+    host.state.frameCount = 24;
+    host.state.playbackMode = 1;
+    host.state.hasAnimation = true;
+    auto pixels = std::make_shared<std::vector<uint8_t>>(96u * 4u, 0u);
+    (*pixels)[75u * 4u + 3u] = 255;
+    (*pixels)[0u * 4u + 3u] = 255;
+    host.image.texture.handle = reinterpret_cast<void*>(1);
+    host.image.width = 24;
+    host.image.height = 4;
+    host.image.bgraPixels = pixels;
+    EditorExtensionRegistry registry;
+    CHECK(registerEditorSpriteAnimationExtension(registry));
+    const auto* descriptor = registry.find(kEditorSpriteAnimationExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+    std::string error;
+    auto document = descriptor->createDocument({}, error);
+    auto view = descriptor->createView(document, host);
+    auto* root = view->rootWidget();
+    const auto button = [&](const char* id) {
+        auto* result = dynamic_cast<Button*>(findWidgetInTree(root, id));
+        if (result != nullptr) result->setSize(ayt::math::FVector2(120, 30));
+        return result;
+    };
+    auto* trim = dynamic_cast<CheckBox*>(findWidgetInTree(root,
+        "sprite_animation_trim_trailing"));
+    auto* rowStatus = dynamic_cast<TextLabel*>(findWidgetInTree(root,
+        "sprite_animation_row_status"));
+    auto* apply = button("sprite_animation_apply");
+    CHECK(trim != nullptr && rowStatus != nullptr && apply != nullptr);
+    if (trim == nullptr || rowStatus == nullptr || apply == nullptr) return;
+    CHECK(rowStatus->getText().find(L"4 / 24 frames") != std::wstring::npos);
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(4u, host.state.frameCount);
+    trim->setChecked(false);
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(24u, host.state.frameCount);
+    trim->setChecked(true);
+    CHECK(clickButton(button("sprite_animation_next_row")));
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(0u, host.state.firstFrame);
+    CHECK_INT_EQ(1u, host.state.frameCount);
+    CHECK_INT_EQ(0u, host.state.playbackMode);
+    CHECK(clickButton(button("sprite_animation_previous_row")));
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(72u, host.state.firstFrame);
+    CHECK_INT_EQ(4u, host.state.frameCount);
+    CHECK(clickButton(button("sprite_animation_previous_row")));
+    CHECK_FALSE(apply->isEnabled()); // third row is entirely transparent
+    const auto appliedBefore = host.applied;
+    CHECK_FALSE(clickButton(apply));
+    CHECK_INT_EQ(appliedBefore, host.applied);
+    trim->setChecked(false);
+    CHECK_TRUE(apply->isEnabled());
+    CHECK(clickButton(apply));
+    CHECK_INT_EQ(48u, host.state.firstFrame);
+    CHECK_INT_EQ(24u, host.state.frameCount);
 }
 
 TEST_SUITE_END
