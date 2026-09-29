@@ -20,6 +20,12 @@ RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
 独立窗口的绘制后端建立本地纹理，因此导入预览、Source Sheet 与画布铺砖共用同一
 份可见图像，不会误用主窗口的后端句柄。
 
+普通 2D Scene 中的规则网格 Sprite Sheet 动画通过 Inspector 的
+`2D / Sprite Animation` 组件创作。添加该组件会自动补齐 Sprite 与 Transform；
+面板提供网格列/行、起始格、帧数、统一帧时长、Loop/Once 与播放开关，并限制无效
+数值。当前阶段聚焦运行时与可保存参数，尚未提供帧时间轴、逐帧预览或命名 Clip
+资产面板。
+
 项目 UI Flow 创作阶段十一也已接入：`.uiflow.json` 可由 Content Browser 创建、识别和双击打开，
 或通过 `Tools -> UI Flow Editor...` 打开项目描述符声明的 Flow。独立 Flow 工具窗提供完整模型
 Outline、Region/State/Transition 与 Graph 画布、Layer/Screen/Context/Transition Inspector、
