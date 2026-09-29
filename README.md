@@ -23,8 +23,11 @@ RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
 普通 2D Scene 中的规则网格 Sprite Sheet 动画通过 Inspector 的
 `2D / Sprite Animation` 组件创作。添加该组件会自动补齐 Sprite 与 Transform；
 面板提供网格列/行、起始格、帧数、统一帧时长、Loop/Once 与播放开关，并限制无效
-数值。当前阶段聚焦运行时与可保存参数，尚未提供帧时间轴、逐帧预览或命名 Clip
-资产面板。
+数值。第二行播放图标或 `Tools -> Sprite Animation Editor...` 会打开中心 Dock 中的
+可视化序列帧工作区：左侧原图支持拖选连续格、缩放和平移，右侧提供实时预览、
+逐帧、播放/暂停/停止与 scrub。Apply 将全部参数作为一条 Scene 命令写回选中的
+Sprite，统一支持 `Ctrl+Z` 与 `Ctrl+Shift+Z`。该工具刻意不复用骨骼动画时间轴；命名
+Clip、逐帧时长与事件仍属于后续独立 Sprite Clip 资产。
 
 项目 UI Flow 创作阶段十一也已接入：`.uiflow.json` 可由 Content Browser 创建、识别和双击打开，
 或通过 `Tools -> UI Flow Editor...` 打开项目描述符声明的 Flow。独立 Flow 工具窗提供完整模型

@@ -1248,6 +1248,31 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
   child UI teardown. Import preview, Source Sheet selection, and painted map
   tiles therefore never pass a primary-window GPU handle to another backend.
 
+### 10.15a Sprite-sheet animation authoring
+
+- Sprite-sheet animation remains a Scene component workflow, not a Tilemap
+  sub-mode and not a skeletal-animation timeline. A selected Entity must own
+  `SpriteComponent`; Apply creates or updates its
+  `SpriteAnimationComponent` through one `EditorSceneDocument` transaction.
+- The reusable `AY2DEditorCore::SpriteAnimationAuthoringModel` owns grid/range
+  validation and preview time. AYEditor owns only presentation, image loading,
+  selection binding and command routing, so standalone or future tools cannot
+  silently choose a different cell order.
+- Cells use texture top-left origin and row-major order, matching the runtime
+  component. The Source Sheet preserves the full image, draws the actual grid,
+  and turns a left-drag into one contiguous `firstFrame`/`frameCount` range.
+- The center-Dock document gives the source image the flexible majority of the
+  workspace. Its inspector scrolls independently and provides a live single
+  frame preview, transport controls, scrub, grid/range inputs, Loop/Once and
+  the Scene-start playing flag.
+- `IEditorSpriteAnimationHost` is an optional host capability rather than new
+  virtual methods on `IEditorHostServices`; this keeps the general extension
+  host ABI stable. The tool routes Undo/Redo to the active Scene history, while
+  Apply is the only operation that mutates the Scene.
+- Irregular regions, per-frame duration, animation events and named clips are
+  intentionally outside this component editor. They require a future Sprite
+  Clip asset instead of accumulating exceptions in the uniform-grid contract.
+
 ### 10.16 Project UI Flow authoring（阶段四）
 
 - `.uiflow.json` 是项目级 UI 编排资产，不是 Scene 内的 Widget 树。Content Browser 会识别该
