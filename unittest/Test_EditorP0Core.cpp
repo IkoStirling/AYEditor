@@ -5,6 +5,7 @@
 #include "AYEditor/EditorSelection.h"
 #include "AYEntity.h"
 #include "AYEntity/components/TransformComponent.h"
+#include "AYEntity/components/SpriteAnimationComponent.h"
 #include "AYEntity/components/SpriteComponent.h"
 #include "AYScene.h"
 
@@ -235,6 +236,32 @@ TEST_CASE(editor_scene_component_and_property_commands_share_history)
     CHECK_FALSE(document.removeComponent(
         entity->getId(), "Transform", &error));
     CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+}
+
+TEST_CASE(sprite_animation_authoring_adds_and_protects_sprite_requirement)
+{
+    EditorComponentPolicyRegistry::instance().installDefaults();
+    EditorSceneDocument document;
+    ayt::entity::World& world = document.scene().world();
+    ayt::entity::Entity* entity = world.createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) return;
+
+    std::vector<std::string> added;
+    std::string error;
+    CHECK(document.addComponent(
+        entity->getId(), "SpriteAnimationComponent", &added, &error));
+    CHECK(error.empty());
+    CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+    CHECK(entity->getComponent<ayt::entity::SpriteComponent>() != nullptr);
+    CHECK(entity->getComponent<
+        ayt::entity::SpriteAnimationComponent>() != nullptr);
+    CHECK_FALSE(document.removeComponent(
+        entity->getId(), "SpriteComponent", &error));
+    CHECK(document.removeComponent(
+        entity->getId(), "SpriteAnimationComponent", &error));
+    CHECK(document.removeComponent(
+        entity->getId(), "SpriteComponent", &error));
 }
 
 TEST_SUITE_END

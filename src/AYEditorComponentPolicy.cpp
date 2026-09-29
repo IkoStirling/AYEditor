@@ -35,6 +35,7 @@ void EditorComponentPolicyRegistry::installDefaults()
     add("SimTransformComponent", {"Transform"});
     add("MeshComponent", {"Transform"});
     add("SpriteComponent", {"Transform"});
+    add("SpriteAnimationComponent", {"SpriteComponent"});
     add("TilemapComponent", {"Transform"});
     add("OrthoCameraComponent", {"Transform"});
     add("RigidBodyComponent", {"Transform"});

@@ -35,6 +35,8 @@
 #include <AYEntity/components/HealthComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
+#include <AYEntity/components/SpriteAnimationComponent.h>
+#include <AYEntity/components/SpriteComponent.h>
 #include "AYApplication/IEngineHost.h"
 #include "AYApplication.h"
 #include "AYScene.h"
@@ -2334,8 +2336,7 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
 
             int animationIndex = -1;
             for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
-                if (picker->getItem(i).find(L"Animation")
-                    != std::wstring::npos) {
+                if (picker->getItem(i) == L"Animation / Animation") {
                     animationIndex = static_cast<int>(i);
                     break;
                 }
@@ -2364,6 +2365,55 @@ TEST_CASE(editor_component_browser_adds_reflects_and_removes_components)
                 CHECK(clickButton(remove));
                 CHECK(entity->getComponent<
                     ayt::entity::AnimationComponent>() == nullptr);
+            }
+
+            int spriteAnimationIndex = -1;
+            for (std::size_t i = 0; i < picker->getItemCount(); ++i) {
+                if (picker->getItem(i) == L"2D / Sprite Animation") {
+                    spriteAnimationIndex = static_cast<int>(i);
+                    break;
+                }
+            }
+            CHECK(spriteAnimationIndex >= 0);
+            if (spriteAnimationIndex >= 0) {
+                picker->setSelectedIndex(spriteAnimationIndex);
+                CHECK(clickButton(add));
+                CHECK(entity->getComponent<
+                    ayt::entity::SpriteAnimationComponent>() != nullptr);
+                CHECK(entity->getComponent<
+                    ayt::entity::SpriteComponent>() != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_columns") != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_rows") != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_firstFrame") != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_frameCount") != nullptr);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_frameDurationMs") != nullptr);
+                auto* playbackMode = dynamic_cast<ComboBox*>(findWidgetInTree(
+                    propertyBody, "inspector_field_playbackMode"));
+                CHECK(playbackMode != nullptr);
+                CHECK(playbackMode != nullptr
+                      && playbackMode->getItemCount() == 2u);
+                CHECK(findWidgetInTree(propertyBody,
+                                       "inspector_field_playing") != nullptr);
+                CHECK(clickButton(remove));
+                CHECK(entity->getComponent<
+                    ayt::entity::SpriteAnimationComponent>() == nullptr);
+
+                for (std::size_t i = 0; i < attached->getNodeCount(); ++i) {
+                    if (attached->getNodeData(i).label.find(L"Sprite")
+                        != std::wstring::npos) {
+                        attached->setSelectedIndex(static_cast<int>(i));
+                        break;
+                    }
+                }
+                CHECK(remove->isEnabled());
+                CHECK(clickButton(remove));
+                CHECK(entity->getComponent<
+                    ayt::entity::SpriteComponent>() == nullptr);
             }
 
             auto selectAttached = [attached](const wchar_t* name) {

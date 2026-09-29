@@ -89,6 +89,7 @@
 #include <AYEntity/ComponentRegistry.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/OrthoCameraComponent.h>
+#include <AYEntity/components/SpriteAnimationComponent.h>
 #include <AYEntity/components/SpriteComponent.h>
 #include <AYEntity/components/SkeletonComponent.h>
 #include <AYEntity/components/TilemapComponent.h>
@@ -801,6 +802,10 @@ std::vector<std::wstring> editor2DEnumItems(
     }
     if (componentType == "SpriteComponent" && fieldName == "flip") {
         return {L"None", L"Horizontal", L"Vertical", L"Both"};
+    }
+    if (componentType == "SpriteAnimationComponent"
+        && fieldName == "playbackMode") {
+        return {L"Loop", L"Once"};
     }
     if (componentType == "TilemapComponent"
         && fieldName == "samplingQuality") {
@@ -10935,6 +10940,23 @@ void EditorSession::commitInspectorTextField(
     } else if (componentType == "OrthoCameraComponent"
                && (fieldName == "zoom" || fieldName == "viewSize")) {
         parsed = std::max(parsed, 0.0001);
+    } else if (componentType == "SpriteAnimationComponent") {
+        if (fieldName == "columns" || fieldName == "rows") {
+            parsed = std::clamp(parsed, 1.0, 4096.0);
+            constrainedIntegral = true;
+        } else if (fieldName == "firstFrame") {
+            parsed = std::clamp(parsed, 0.0, 16777215.0);
+            constrainedIntegral = true;
+        } else if (fieldName == "frameCount") {
+            parsed = std::clamp(parsed, 1.0, 16777216.0);
+            constrainedIntegral = true;
+        } else if (fieldName == "frameDurationMs") {
+            parsed = std::clamp(parsed, 1.0, 3600000.0);
+            constrainedIntegral = true;
+        } else if (fieldName == "playbackMode") {
+            parsed = std::clamp(parsed, 0.0, 1.0);
+            constrainedIntegral = true;
+        }
     }
 
     if (componentType == "Transform") {
