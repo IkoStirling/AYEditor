@@ -123,6 +123,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::UiFlow: return L"UIFLOW";
     case EditorAssetType::GameFlow: return L"FLOW";
     case EditorAssetType::SkeletonMapping: return L"RIG";
+    case EditorAssetType::Sequence: return L"SEQ";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -142,6 +143,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
     case EditorAssetType::Scene:
         return EditorAssetTileCategory::Scene;
     case EditorAssetType::Animation:
+    case EditorAssetType::Sequence:
     case EditorAssetType::Skeleton:
     case EditorAssetType::SkeletonMapping:
         return EditorAssetTileCategory::Motion;

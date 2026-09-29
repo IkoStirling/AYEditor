@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.12)
 
 set(MODULE_NAME AYEditor_UnitTests)
+set(_sequence_editor_tests OFF)
+if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
+    set(_sequence_editor_tests ON)
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test-features.json" "{\"sequence\":\"${_sequence_editor_tests}\"}\n")
 
 add_executable(${MODULE_NAME} main.cpp)
 
@@ -21,6 +26,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorAssetTilePresenter.cpp
     Test_EditorSkeletonExtension.cpp
     Test_EditorAnimationExtension.cpp
+    Test_EditorSequence.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
@@ -71,6 +77,11 @@ if(MSVC)
 endif()
 
 ay_add_test(${MODULE_NAME} CASE_REPORT LABELS "ayeditor;editor-full" TIMEOUT 600 RUN_SERIAL)
+if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
+    add_executable(AYEditor_SequenceTests main.cpp Test_EditorSequence.cpp)
+    target_link_libraries(AYEditor_SequenceTests PRIVATE AYEditor AYTest AYEntity AYScene)
+    ay_add_test(AYEditor_SequenceTests CASE_REPORT LABELS "ayeditor;sequence;integration" TIMEOUT 60 RUN_SERIAL)
+endif()
 ay_add_test(${MODULE_NAME} CASE_REPORT NAME AYEditor_FastTests
     ARGS --include-suite AYEditor_P0Core --include-suite AYEditor_TransformGizmo
          --include-suite AYEditor_AssetTilePresenter --include-suite AYEditor_Framework

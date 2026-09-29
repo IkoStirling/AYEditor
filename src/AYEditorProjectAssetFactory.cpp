@@ -8,6 +8,9 @@
 #include <AYUI/UIFlow.h>
 
 #include <filesystem>
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include <AYSequence/SequenceAssetIO.h>
+#endif
 
 namespace ayt::editor {
 namespace {
@@ -21,6 +24,11 @@ struct AssetTemplate {
 bool templateFor(EditorAssetType type, AssetTemplate& value)
 {
     switch (type) {
+#ifdef AYEDITOR_HAS_SEQUENCE
+    case EditorAssetType::Sequence:
+        value = {"sequences", "NewSequence", ".ayseq"};
+        return true;
+#endif
     case EditorAssetType::Scene:
         value = {"worlds", "NewScene", ".ayscene"};
         return true;
@@ -86,7 +94,14 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
     const std::filesystem::path destination = uniquePath(folder, assetTemplate);
     std::string error;
     bool saved = false;
-    if (type == EditorAssetType::Scene) {
+    if (type == EditorAssetType::Sequence) {
+#ifdef AYEDITOR_HAS_SEQUENCE
+        ayt::sequence::Sequence sequence; sequence.id = "new-sequence"; sequence.duration = 5;
+        ayt::sequence::Diagnostic diagnostic;
+        saved = ayt::sequence::saveSequence(destination.string(), sequence, &diagnostic);
+        error = diagnostic.message;
+#endif
+    } else if (type == EditorAssetType::Scene) {
         EditorSceneDocument document;
         document.newScene();
         saved = document.saveAs(destination.string(), &error);

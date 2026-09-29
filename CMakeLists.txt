@@ -220,6 +220,14 @@ set(HEAD_FILES
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
+if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
+    target_sources(${MODULE_NAME} PRIVATE
+        src/AYEditorSequenceDocument.cpp src/AYEditorSequenceSource.cpp
+        src/AYEditorSequenceExtension.cpp)
+    target_link_libraries(${MODULE_NAME} PUBLIC AYSequenceEditorCore
+        AYSequenceAssetIO AYSequenceAnimationIntegration)
+    target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_SEQUENCE=1)
+endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
     AYEDITOR_SOURCE_ABI_VERSION=28)

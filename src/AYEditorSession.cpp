@@ -11,6 +11,9 @@
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include "AYEditor/EditorSequenceDocument.h"
+#endif
 #include "AYEditor/EditorProjectDescriptor.h"
 #include "AYEditor/EditorProjectRunner.h"
 #include "AYEditor/EditorRecoveryStore.h"
@@ -5991,6 +5994,9 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         return true;
     }
     case EditorAssetType::Animation:
+#ifdef AYEDITOR_HAS_SEQUENCE
+    case EditorAssetType::Sequence:
+#endif
     case EditorAssetType::Audio: {
         if (_dockViewHost == nullptr) return false;
         EditorOpenRequest request;
@@ -6001,6 +6007,9 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         request.preferredEditorId = record->type == EditorAssetType::Animation
             ? kEditorAnimationTimelineExtensionId
             : kEditorAudioTimelineExtensionId;
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if (record->type == EditorAssetType::Sequence) request.preferredEditorId = kEditorSequenceExtensionId;
+#endif
         EditorDockViewOptions options;
         options.cardId = "card_timed_asset_" + std::to_string(assetId);
         const EditorDockOpenResult opened = _dockViewHost->open(request, options);
@@ -8676,6 +8685,11 @@ void EditorSession::bindMenuBar() {
                 (void)createProjectAsset(EditorAssetType::GameFlow);
             });
         }
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_sequence", L"New Scene Sequence")) {
+            item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::Sequence); });
+        }
+#endif
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_tilemap", L"New Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);

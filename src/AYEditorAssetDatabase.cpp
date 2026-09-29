@@ -264,7 +264,7 @@ bool readIndex(const std::filesystem::path& path,
     while (input >> record.id >> std::quoted(record.logicalPath)
                  >> type >> origin >> importState
                  >> record.size >> record.lastModified) {
-        if (type > static_cast<unsigned>(EditorAssetType::SkeletonMapping)
+        if (type > static_cast<unsigned>(EditorAssetType::Sequence)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -329,6 +329,7 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::UiFlow: return "UI Flow";
     case EditorAssetType::GameFlow: return "Game Flow";
     case EditorAssetType::SkeletonMapping: return "Rig Profile";
+    case EditorAssetType::Sequence: return "Scene Sequence";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -375,6 +376,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         return EditorAssetType::Texture;
     }
     if (extension == ".ayscene") return EditorAssetType::Scene;
+    if (extension == ".ayseq") return EditorAssetType::Sequence;
     if (extension == ".aytilemap") return EditorAssetType::Tilemap;
     if (extension == ".ayanm" || extension == ".ayanim") {
         return EditorAssetType::Animation;

@@ -36,6 +36,7 @@ enum class EditorAssetType : std::uint8_t {
     // Author-side Rig Profile resource (including legacy .aysmap files).
     // Appended for ABI stability; the enum name is retained for compatibility.
     SkeletonMapping,
+    Sequence,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

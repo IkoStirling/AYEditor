@@ -1,6 +1,9 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditorTimelinePlaybackSource.h"
 #include "AYEditor/EditorAnimationExtension.h"
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include "AYEditor/EditorSequenceDocument.h"
+#endif
 #include "AYEditor/EditorSpriteAnimationExtension.h"
 
 #include "AYEditor/EditorCommandSystem.h"
@@ -4824,6 +4827,9 @@ bool registerEditorBuiltInExtensions(
         return add(registry, std::move(descriptor), error);
     };
     if (!registerEditorAnimationExtension(registry, error)) return false;
+#ifdef AYEDITOR_HAS_SEQUENCE
+    if (!registerEditorSequenceExtension(registry, error)) return false;
+#endif
     if (!addTimedAsset(kEditorAudioTimelineExtensionId, L"Audio",
             true, {".ayaudio", ".wav", ".ogg", ".mp3", ".flac"},
             {"Audio"})) return false;
