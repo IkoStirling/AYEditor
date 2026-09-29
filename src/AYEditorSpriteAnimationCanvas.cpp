@@ -312,8 +312,17 @@ void EditorSpriteAnimationCanvas::renderPreview(
         centerX - width * 0.5f, centerY - height * 0.5f,
         centerX + width * 0.5f, centerY + height * 0.5f};
     const auto uv = _model->cellRect(_model->currentCell());
+    // Bilinear filtering at an atlas cell's edge reads its neighbour. Keep
+    // samples between this frame's first/last texel centers. This affects only
+    // preview sampling, not the authored UV boundaries or frame selection.
+    // Clamp the inset for one-texel/subpixel cells so UVs never invert.
+    const float insetU = std::min(0.5f / static_cast<float>(_imageWidth),
+                                  (uv.maxU - uv.minU) * 0.5f);
+    const float insetV = std::min(0.5f / static_cast<float>(_imageHeight),
+                                  (uv.maxV - uv.minV) * 0.5f);
     renderer.drawRect(destination, _texture.handle,
-                      {uv.minU, uv.minV, uv.maxU, uv.maxV});
+                      {uv.minU + insetU, uv.minV + insetV,
+                       uv.maxU - insetU, uv.maxV - insetV});
     renderer.drawBorderRect(destination,
                             {0.30f, 0.80f, 1.0f, 0.90f}, 1.0f);
 }

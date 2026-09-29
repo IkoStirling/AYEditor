@@ -9,6 +9,7 @@
 #include "AYEditor/EditorWorkspace.h"
 #include "../src/AYEditorProjectSettingsController.h"
 #include "EditorGameViewTestAccess.h"
+#include "../src/AYEditorSpriteAnimationCanvas.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
 #include "AYUI/DockArea.h"
@@ -2847,6 +2848,63 @@ TEST_CASE(sprite_animation_rows_trim_toggle_and_apply_use_source_alpha)
         CHECK_FALSE(rowStatus->isDirtyThis());
         CHECK_FALSE(gridInfo->isDirtyThis()); // playback doesn't dirty static chrome
     }
+}
+
+TEST_CASE(sprite_animation_preview_does_not_sample_adjacent_atlas_cells)
+{
+    class PreviewUvRenderer final : public MockRenderer {
+    public:
+        ayt::math::FRectangle sampledUv;
+        unsigned imageCalls = 0;
+        void drawRect(const ayt::math::FRectangle& bounds, void* texture,
+                      const ayt::math::FRectangle& uv) override {
+            sampledUv = uv;
+            ++imageCalls;
+            MockRenderer::drawRect(bounds, texture, uv);
+        }
+    } renderer;
+    ayt::ay2d::editor::SpriteAnimationAuthoringModel model;
+    model.setGrid(23, 4);
+    model.selectRange(69, 72);
+    EditorSpriteAnimationCanvas preview(true);
+    preview.setSize({300, 300});
+    preview.setModel(&model);
+    ImageTextureHandle texture;
+    texture.handle = reinterpret_cast<void*>(1);
+    preview.setImage(texture, 736, 128);
+    preview.render(renderer);
+    CHECK_INT_EQ(1u, renderer.imageCalls);
+    CHECK_FLOAT_EQ(0.5f / 736.0f, renderer.sampledUv.minX, 1e-6f);
+    CHECK_FLOAT_EQ(31.5f / 736.0f, renderer.sampledUv.maxX, 1e-6f);
+    CHECK_FLOAT_EQ(96.5f / 128.0f, renderer.sampledUv.minY, 1e-6f);
+    CHECK_FLOAT_EQ(127.5f / 128.0f, renderer.sampledUv.maxY, 1e-6f);
+    // Bilinear's pixel coordinate u*extent-0.5 must stay inside this frame:
+    // row 95 has previous-frame content, row 96 is the transparent first row.
+    CHECK_FLOAT_EQ(96.0f, renderer.sampledUv.minY * 128.0f - 0.5f, 1e-5f);
+    CHECK_FLOAT_EQ(127.0f, renderer.sampledUv.maxY * 128.0f - 0.5f, 1e-5f);
+    CHECK_FLOAT_EQ(0.75f, model.cellRect(69).minV, 1e-6f); // raw grid unchanged
+
+    EditorSpriteAnimationCanvas sheet(false);
+    sheet.setSize({600, 300});
+    sheet.setModel(&model);
+    sheet.setImage(texture, 736, 128);
+    sheet.render(renderer);
+    CHECK_FLOAT_EQ(0.0f, renderer.sampledUv.minY, 1e-6f);
+    CHECK_FLOAT_EQ(1.0f, renderer.sampledUv.maxY, 1e-6f); // source remains whole
+
+    model.setGrid(2, 2);
+    model.selectRange(3, 3);
+    preview.setImage(texture, 2, 2);
+    preview.render(renderer);
+    CHECK_FLOAT_EQ(0.75f, renderer.sampledUv.minX, 1e-6f);
+    CHECK_FLOAT_EQ(0.75f, renderer.sampledUv.maxX, 1e-6f);
+    CHECK_FLOAT_EQ(0.75f, renderer.sampledUv.minY, 1e-6f);
+    CHECK_FLOAT_EQ(0.75f, renderer.sampledUv.maxY, 1e-6f); // one pixel, no inverted UV
+    model.setGrid(4, 4);
+    preview.setImage(texture, 1, 1);
+    preview.render(renderer);
+    CHECK_TRUE(renderer.sampledUv.minX <= renderer.sampledUv.maxX);
+    CHECK_TRUE(renderer.sampledUv.minY <= renderer.sampledUv.maxY);
 }
 
 TEST_SUITE_END

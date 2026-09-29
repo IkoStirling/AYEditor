@@ -1273,6 +1273,10 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - Hidden tabs do not background-tick the preview. Frame progression only
   updates frame-dependent widgets; unchanged mode/row/grid labels retain their
   cached display lists. Source pixels are scanned on edits, not playback ticks.
+- Single-frame preview insets the sampled UV by half a source texel on each
+  edge to prevent bilinear atlas bleed. Insets are capped at half the cell
+  extent so one-pixel frames collapse to their centers without inverted UVs.
+  Source-sheet selection and the component's authored UV boundaries are unchanged.
 - The center-Dock document gives the source image the flexible majority of the
   workspace. Its inspector scrolls independently and provides a live single
   frame preview, transport controls, scrub, grid/range inputs, Loop/Once and
