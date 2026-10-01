@@ -520,7 +520,7 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
             CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
             if (type == 1u) CHECK(entity->getComponent<ayt::entity::SpriteComponent>() != nullptr);
             if (type == 2u) CHECK(entity->getComponent<ayt::entity::TilemapComponent>() != nullptr);
-            if (type == 3u) CHECK(entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr);
+            if (type == 3u) CHECK(entity->hasComponent<ayt::entity::OrthoCameraComponent>());
         }
         CHECK(tree->getSelectedIndex() > 0);
     }

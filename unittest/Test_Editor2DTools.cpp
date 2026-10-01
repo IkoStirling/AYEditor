@@ -202,8 +202,8 @@ TEST_CASE(StandardMixedProjectUsesOneSceneAcrossValidationProfiles)
             hasWorldLit |= sprite->renderDomain == 1;
             hasOverlay |= sprite->renderDomain == 0;
         }
-        hasOverlayCamera |= entity->getComponent<
-            ayt::entity::OrthoCameraComponent>() != nullptr;
+        hasOverlayCamera |= entity->hasComponent<
+            ayt::entity::OrthoCameraComponent>();
     }
     CHECK(hasMesh);
     CHECK(hasWorldLit);
@@ -514,8 +514,9 @@ TEST_CASE(TwoDSceneTemplateAndCreateCommandsBuildEditableEntities)
     CHECK_INT_EQ(static_cast<uint32_t>(world->getAllEntities().size()), 1u);
     ayt::entity::Entity* cameraEntity = world->getAllEntities().front();
     CHECK(cameraEntity->getComponent<ayt::entity::Transform>() != nullptr);
-    auto* camera = cameraEntity->getComponent<
+    const auto cameras = cameraEntity->getComponents<
         ayt::entity::OrthoCameraComponent>();
+    auto* camera = cameras.empty() ? nullptr : cameras.front();
     CHECK(camera != nullptr);
     CHECK(camera != nullptr && camera->viewSize == 600.0f);
 
@@ -840,7 +841,7 @@ TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
         if (entity->getComponent<ayt::entity::TilemapComponent>() != nullptr) {
             ++reopenedTilemaps;
         }
-        if (entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr) {
+        if (entity->hasComponent<ayt::entity::OrthoCameraComponent>()) {
             ++reopenedCameras;
         }
     }

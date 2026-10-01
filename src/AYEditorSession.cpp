@@ -935,7 +935,9 @@ bool editor2DSelectionShape(ayt::entity::Entity& entity,
         out.sortingKey = tilemap->sortingKey;
         return true;
     }
-    if (auto* camera = entity.getComponent<ayt::entity::OrthoCameraComponent>()) {
+    const auto cameras = entity.getComponents<ayt::entity::OrthoCameraComponent>();
+    if (!cameras.empty()) {
+        const auto* camera = cameras.front();
         const ayt::math::FVector2 half = camera->visibleHalfExtents(viewportAspect);
         out.localMin = {-half.x, -half.y};
         out.localMax = { half.x,  half.y};
@@ -8110,7 +8112,7 @@ void EditorSession::selectInitialSceneViewForDocument()
         for (ayt::entity::Entity* entity : world.getAllEntities()) {
             if (entity == nullptr) continue;
             content.hasOrthographicCamera |=
-                entity->getComponent<ayt::entity::OrthoCameraComponent>() != nullptr;
+                entity->hasComponent<ayt::entity::OrthoCameraComponent>();
             content.hasTwoDContent |=
                 entity->getComponent<ayt::entity::SpriteComponent>() != nullptr
                 || entity->getComponent<ayt::entity::TilemapComponent>() != nullptr;
@@ -8676,7 +8678,7 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
                     transform->setPosition(
                         center.x - 16.0f, center.y - 16.0f, 0.0f);
                 } else {
-                    auto* camera = candidate.addComponent<
+                    auto* camera = candidate.createComponent<
                         ayt::entity::OrthoCameraComponent>();
                     if (camera == nullptr) return false;
                     camera->viewSize =
