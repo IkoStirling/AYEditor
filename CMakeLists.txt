@@ -220,6 +220,10 @@ set(HEAD_FILES
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
+if(MSVC)
+    # The editor session translation unit exceeds COFF's default section count.
+    set_source_files_properties(src/AYEditorSession.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
+endif()
 if(TARGET AYStatsInspector AND TARGET AYEntityStatsIntegration)
     target_link_libraries(${MODULE_NAME} PUBLIC AYStatsInspector AYEntityStatsIntegration)
     target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_STATS=1)

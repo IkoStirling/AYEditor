@@ -4,6 +4,8 @@
 #include "AYEditor/EditorComponentPolicy.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEntity.h"
+#include "AYEntity/ComponentRegistry.h"
+#include "AYSerializer/SerializerCore.h"
 #include "AYEntity/components/TransformComponent.h"
 #include "AYEntity/components/SpriteAnimationComponent.h"
 #include "AYEntity/components/SpriteComponent.h"
@@ -15,7 +17,82 @@
 
 using namespace ayt::editor;
 
+namespace {
+class EditorMultiProbe final : public ayt::entity::IComponent {
+public:
+    const char* getName() const override { return "EditorMultiProbe"; }
+    Int32 value = 0;
+};
+
+bool registerEditorMultiProbe() {
+    using namespace ayt::entity;
+    ComponentDescriptor descriptor;
+    descriptor.name = "test.EditorMultiProbe";
+    descriptor.displayName = "Editor Multi Probe";
+    descriptor.type = typeid(EditorMultiProbe);
+    descriptor.size = sizeof(EditorMultiProbe);
+    descriptor.alignment = alignof(EditorMultiProbe);
+    descriptor.multiplicity = ComponentMultiplicity::Multiple;
+    descriptor.editorAddable = true;
+    descriptor.sceneSerializable = true;
+    descriptor.add = [](Entity& entity) -> IComponent* {
+        return entity.createComponent<EditorMultiProbe>();
+    };
+    descriptor.get = [](Entity& entity) -> IComponent* {
+        return entity.getComponent<EditorMultiProbe>();
+    };
+    descriptor.has = [](const Entity& entity) {
+        return entity.hasComponent<EditorMultiProbe>();
+    };
+    descriptor.remove = [](Entity& entity) { entity.removeComponent<EditorMultiProbe>(); };
+    descriptor.serialize = [](ayt::serializer::ISerializer& s, const IComponent& c) {
+        Int32 value = static_cast<const EditorMultiProbe&>(c).value;
+        s.field("value", value);
+    };
+    descriptor.deserialize = [](ayt::serializer::ISerializer& s, IComponent& c) {
+        s.field("value", static_cast<EditorMultiProbe&>(c).value);
+    };
+    return ComponentRegistry::instance().registerComponent(std::move(descriptor)).succeeded();
+}
+} // namespace
+
 TEST_SUITE(AYEditor_P0Core)
+
+TEST_CASE(editor_multi_components_have_independent_history_and_labels)
+{
+    CHECK(registerEditorMultiProbe());
+    EditorSceneDocument document;
+    auto* entity = document.scene().world().createEntity();
+    entity->setName("Editor Multi");
+    std::string error;
+    CHECK(document.addComponent(entity->getId(), "test.EditorMultiProbe", nullptr, &error));
+    CHECK(document.addComponent(entity->getId(), "test.EditorMultiProbe", nullptr, &error));
+    auto values = entity->getComponents<EditorMultiProbe>();
+    CHECK_INT_EQ(static_cast<int>(values.size()), 2);
+    const std::string firstId = entity->componentInstance(values[0])->id;
+    const std::string secondId = entity->componentInstance(values[1])->id;
+    CHECK(firstId != secondId);
+    CHECK(document.undo());
+    CHECK(entity->findComponentById(secondId) == nullptr);
+    CHECK(document.redo());
+    CHECK(entity->findComponentById(secondId) != nullptr);
+    CHECK(document.renameComponent(entity->getId(), secondId, "Right camera"));
+    CHECK(entity->findComponentInstance(secondId)->displayName == "Right camera");
+    CHECK(document.mutateComponentById(entity->getId(), secondId,
+        "Set probe", {}, [](ayt::entity::IComponent& component) {
+            static_cast<EditorMultiProbe&>(component).value = 42;
+            return true;
+        }));
+    CHECK_INT_EQ(static_cast<EditorMultiProbe*>(entity->findComponentById(secondId))->value, 42);
+    CHECK(document.removeComponentById(entity->getId(), firstId, &error));
+    CHECK(entity->findComponentById(firstId) == nullptr);
+    CHECK(document.undo());
+    CHECK(entity->findComponentById(firstId) != nullptr);
+    CHECK(document.undo());
+    CHECK_INT_EQ(static_cast<EditorMultiProbe*>(entity->findComponentById(secondId))->value, 0);
+    CHECK(document.redo());
+    CHECK_INT_EQ(static_cast<EditorMultiProbe*>(entity->findComponentById(secondId))->value, 42);
+}
 
 TEST_CASE(editor_document_keeps_scene_identity_across_new)
 {

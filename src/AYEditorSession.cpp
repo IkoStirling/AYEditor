@@ -51,6 +51,7 @@
 #include "AYEditorProjectSettingsController.h"
 #include "AYEditorNewProjectController.h"
 #include "AYEntity.h"
+#include "AYEntity/ComponentFactory.h"
 #include "AYUI/SplitterHandle.h"
 #include "AYUI/Button.h"
 #include "AYUI/CheckBox.h"
@@ -10583,9 +10584,12 @@ void EditorSession::bindComponentBrowser()
             }
             if (index == 0) {
                 _inspectedComponentTypeName.clear();
+                _inspectedComponentId.clear();
             } else if (static_cast<std::size_t>(index - 1)
                        < _attachedComponentTypeNames.size()) {
                 _inspectedComponentTypeName = _attachedComponentTypeNames[
+                    static_cast<std::size_t>(index - 1)];
+                _inspectedComponentId = _attachedComponentIds[
                     static_cast<std::size_t>(index - 1)];
             } else {
                 return;
@@ -10620,16 +10624,28 @@ void EditorSession::refreshComponentBrowser()
     const bool canAdd = entity != nullptr
         && _gameView.mode() == EditorMode::Edit;
 
-    std::vector<const ayt::entity::ComponentDescriptor*> attached;
+    struct AttachedComponent {
+        const ayt::entity::ComponentDescriptor* descriptor = nullptr;
+        const ayt::entity::Entity::ComponentInstance* instance = nullptr;
+    };
+    std::vector<AttachedComponent> attached;
     std::vector<const ayt::entity::ComponentDescriptor*> available;
+    if (entity != nullptr) {
+        for (const auto& instance : entity->componentInstances()) {
+            if (!instance.component) continue;
+            const auto* descriptor =
+                ayt::entity::ComponentRegistry::instance().find(*instance.component);
+            if (descriptor) attached.push_back({descriptor, &instance});
+        }
+    }
     for (const auto& descriptor :
          ayt::entity::ComponentRegistry::instance().descriptors()) {
         const bool present = entity != nullptr && descriptor.has != nullptr
             && descriptor.has(*entity);
-        if (present) attached.push_back(&descriptor);
         if (canAdd && descriptor.editorAddable && descriptor.sceneSerializable
             && descriptor.add != nullptr
-            && !present) {
+            && (!present || descriptor.multiplicity
+                == ayt::entity::ComponentMultiplicity::Multiple)) {
             available.push_back(&descriptor);
         }
     }
@@ -10642,7 +10658,11 @@ void EditorSession::refreshComponentBrowser()
         }
         return left->name < right->name;
     };
-    std::sort(attached.begin(), attached.end(), descriptorLess);
+    std::sort(attached.begin(), attached.end(), [&](const auto& left, const auto& right) {
+        if (left.descriptor != right.descriptor)
+            return descriptorLess(left.descriptor, right.descriptor);
+        return left.instance->id < right.instance->id;
+    });
     std::sort(available.begin(), available.end(), descriptorLess);
 
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
@@ -10654,26 +10674,43 @@ void EditorSession::refreshComponentBrowser()
     }
 
     _attachedComponentTypeNames.clear();
+    _attachedComponentIds.clear();
     _attachedComponentTypeNames.reserve(attached.size());
+    _attachedComponentIds.reserve(attached.size());
     int inspectedIndex = -1;
     for (std::size_t i = 0; i < attached.size(); ++i) {
-        const auto* descriptor = attached[i];
+        const auto* descriptor = attached[i].descriptor;
         _attachedComponentTypeNames.push_back(descriptor->name);
-        if (descriptor->name == _inspectedComponentTypeName) {
+        _attachedComponentIds.push_back(attached[i].instance->id);
+        if (attached[i].instance->id == _inspectedComponentId) {
             inspectedIndex = static_cast<int>(i);
         }
     }
     if (attached.empty()) {
         _inspectedComponentTypeName.clear();
+        _inspectedComponentId.clear();
     } else if (inspectedIndex < 0) {
         inspectedIndex = 0;
         for (std::size_t i = 0; i < attached.size(); ++i) {
-            if (attached[i]->name == "Transform") {
+            if (attached[i].descriptor->name == _inspectedComponentTypeName) {
+                inspectedIndex = static_cast<int>(i);
+                break;
+            }
+            if (_inspectedComponentTypeName.empty()
+                && attached[i].descriptor->name == "Transform") {
                 inspectedIndex = static_cast<int>(i);
                 break;
             }
         }
         _inspectedComponentTypeName = _attachedComponentTypeNames[
+            static_cast<std::size_t>(inspectedIndex)];
+        _inspectedComponentId = _attachedComponentIds[
+            static_cast<std::size_t>(inspectedIndex)];
+    }
+    if (inspectedIndex >= 0) {
+        _inspectedComponentTypeName = _attachedComponentTypeNames[
+            static_cast<std::size_t>(inspectedIndex)];
+        _inspectedComponentId = _attachedComponentIds[
             static_cast<std::size_t>(inspectedIndex)];
     }
     _updatingComponentPicker = true;
@@ -10696,10 +10733,13 @@ void EditorSession::refreshComponentBrowser()
             root.hasChildren = !attached.empty();
             root.expanded = true;
             nodes.push_back(std::move(root));
-            for (const auto* descriptor : attached) {
+            for (const auto& item : attached) {
+                const auto* descriptor = item.descriptor;
                 ayt::ui::TreeNodeData node;
                 node.label = ayt::ui::decodeUtf8Text(
-                    descriptor->category + " / " + descriptor->displayName);
+                    descriptor->category + " / "
+                    + (item.instance->displayName.empty()
+                        ? descriptor->displayName : item.instance->displayName));
                 node.parentIndex = 0;
                 nodes.push_back(std::move(node));
             }
@@ -10716,9 +10756,7 @@ void EditorSession::refreshComponentBrowser()
             _inspectedComponentTypeName);
     std::string removeReason;
     const bool mechanicallyRemovable = canAdd && inspectedDescriptor != nullptr
-        && inspectedDescriptor->remove != nullptr
-        && inspectedDescriptor->has != nullptr
-        && inspectedDescriptor->has(*entity);
+        && entity->findComponentById(_inspectedComponentId) != nullptr;
     const bool canRemove = mechanicallyRemovable
         && EditorComponentPolicyRegistry::instance().canRemove(
             *entity, _inspectedComponentTypeName, &removeReason);
@@ -10803,6 +10841,15 @@ void EditorSession::addSelectedComponent()
     }
 
     _inspectedComponentTypeName = typeName;
+    for (auto it = entity->componentInstances().rbegin();
+         it != entity->componentInstances().rend(); ++it) {
+        const char* registered = it->component
+            ? ayt::entity::ComponentFactory::registeredTypeName(*it->component) : nullptr;
+        if (registered && typeName == registered) {
+            _inspectedComponentId = it->id;
+            break;
+        }
+    }
     refreshInspectorLabels();
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
@@ -10811,7 +10858,7 @@ void EditorSession::addSelectedComponent()
 void EditorSession::removeSelectedComponent()
 {
     if (_gameView.mode() != EditorMode::Edit || _document == nullptr
-        || _inspectedComponentTypeName.empty()) {
+        || _inspectedComponentId.empty()) {
         return;
     }
     ayt::entity::World* world = hierarchyWorldMutable();
@@ -10819,8 +10866,7 @@ void EditorSession::removeSelectedComponent()
     const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
         _inspectedComponentTypeName);
     if (world == nullptr || entity == nullptr || descriptor == nullptr
-        || descriptor->has == nullptr || descriptor->remove == nullptr
-        || !descriptor->has(*entity)) {
+        || entity->findComponentById(_inspectedComponentId) == nullptr) {
         refreshComponentBrowser();
         return;
     }
@@ -10835,13 +10881,14 @@ void EditorSession::removeSelectedComponent()
         finishTransformGizmoDrag(false);
     }
     std::string error;
-    if (!_document->removeComponent(
-            entity->getId(), _inspectedComponentTypeName, &error)) {
+    if (!_document->removeComponentById(
+            entity->getId(), _inspectedComponentId, &error)) {
         if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
         refreshComponentBrowser();
         return;
     }
     _inspectedComponentTypeName.clear();
+    _inspectedComponentId.clear();
     refreshInspectorLabels();
     refreshUnsavedIndicator();
     syncTransformGizmoToRenderer();
@@ -10903,27 +10950,36 @@ void EditorSession::rebuildComponentPropertyEditor()
     }
 
     bool createdExpandedSection = false;
-    for (const std::string& typeName : _attachedComponentTypeNames) {
+    for (std::size_t index = 0; index < _attachedComponentTypeNames.size(); ++index) {
+        const std::string& typeName = _attachedComponentTypeNames[index];
+        const std::string& componentId = _attachedComponentIds[index];
         const auto* sectionDescriptor =
             ayt::entity::ComponentRegistry::instance().find(typeName);
         if (sectionDescriptor == nullptr) continue;
-        const bool expanded = typeName == _inspectedComponentTypeName;
+        const bool expanded = componentId == _inspectedComponentId;
+        const auto* instance = entity->findComponentInstance(componentId);
+        const std::string sectionName = instance && !instance->displayName.empty()
+            ? instance->displayName : sectionDescriptor->displayName;
         std::string removeReason;
         const bool removable = sectionDescriptor->remove != nullptr
             && EditorComponentPolicyRegistry::instance().canRemove(
                 *entity, typeName, &removeReason);
         auto* header = new ayt::ui::Button();
-        header->setId("inspector_component_header_" + typeName);
+        header->setId("inspector_component_header_" + typeName
+            + (sectionDescriptor->multiplicity
+                == ayt::entity::ComponentMultiplicity::Multiple
+                ? "_" + componentId : std::string{}));
         header->setStyleId("editor_property_button");
         header->setText((expanded ? L"v  " : L">  ")
-            + ayt::ui::decodeUtf8Text(sectionDescriptor->displayName)
+            + ayt::ui::decodeUtf8Text(sectionName)
             + (removable ? L"" : L"  [required]"));
         header->setSize({240.0f, 27.0f});
         header->setAccessibilityDescription(
             expanded ? L"Collapse component properties"
                      : L"Expand component properties");
-        header->setOnClicked([this, typeName, expanded]() {
+        header->setOnClicked([this, typeName, componentId, expanded]() {
             _inspectedComponentTypeName = expanded ? std::string{} : typeName;
+            _inspectedComponentId = expanded ? std::string{} : componentId;
             // This header belongs to the rebuilt subtree. Never destroy it
             // (or its callback closure) inside its own input dispatch.
             _inspectorRefreshPending = true;
@@ -10956,14 +11012,39 @@ void EditorSession::rebuildComponentPropertyEditor()
         : ayt::entity::ComponentRegistry::instance().find(
             _inspectedComponentTypeName);
     ayt::entity::IComponent* component = entity != nullptr
-        && descriptor != nullptr && descriptor->get != nullptr
-        ? descriptor->get(*entity) : nullptr;
+        && descriptor != nullptr
+        ? entity->findComponentById(_inspectedComponentId) : nullptr;
     if (component == nullptr) {
         addLabel(L"Component is unavailable.",
                  20.0f, "inspector_property_placeholder");
         propertyUi->invalidateLayout();
         return;
     }
+
+    addLabel(L"Component name", 20.0f);
+    auto* componentNameInput = new ayt::ui::TextInput();
+    componentNameInput->setId("inspector_component_name_" + _inspectedComponentId);
+    componentNameInput->setMaxLength(128u);
+    const auto* instanceInfo = entity->findComponentInstance(_inspectedComponentId);
+    componentNameInput->setText(ayt::ui::decodeUtf8Text(
+        instanceInfo ? instanceInfo->displayName : std::string{}));
+    componentNameInput->setReadOnly(_gameView.mode() != EditorMode::Edit);
+    componentNameInput->setSize({240.0f, 25.0f});
+    const std::string selectedComponentId = _inspectedComponentId;
+    auto commitName = [this, componentNameInput, selectedComponentId]() {
+        if (!_document || _gameView.mode() != EditorMode::Edit) return;
+        auto* selected = _selection.resolve(hierarchyWorldMutable());
+        if (!selected) return;
+        if (_document->renameComponent(selected->getId(), selectedComponentId,
+                wideToUtf8(componentNameInput->getText()))) {
+            _inspectorRefreshPending = true;
+            refreshUnsavedIndicator();
+            if (_repaintCallback) _repaintCallback();
+        }
+    };
+    componentNameInput->setOnSubmit([commitName](const std::wstring&) { commitName(); });
+    componentNameInput->setOnFocusLostNotify(commitName);
+    propertyTarget->addWidget(componentNameInput, 25.0f);
 
     if (_inspectedComponentTypeName == "ActorInstanceComponent") {
         auto* restore = new ayt::ui::Button();
@@ -11759,8 +11840,10 @@ void EditorSession::commitInspectorColorField(
     const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
         componentType);
     ayt::entity::IComponent* component = entity != nullptr
-        && descriptor != nullptr && descriptor->get != nullptr
-        ? descriptor->get(*entity) : nullptr;
+        && descriptor != nullptr
+        ? entity->findComponentById(_inspectedComponentId) : nullptr;
+    if (component && componentType !=
+            ayt::entity::ComponentFactory::registeredTypeName(*component)) return;
     auto* type = descriptor != nullptr
         ? ayt::reflect::TypeRegistryImpl::instance().findType(
             descriptor->type.hash_code()) : nullptr;
@@ -11773,10 +11856,10 @@ void EditorSession::commitInspectorColorField(
     }
     auto* current = static_cast<ayt::math::FVector4*>(field->get(component));
     if (current == nullptr || *current == next) return;
-    (void)_document->mutateComponent(
-        entity->getId(), componentType, "Edit " + fieldName,
+    (void)_document->mutateComponentById(
+        entity->getId(), _inspectedComponentId, "Edit " + fieldName,
         "property:" + std::to_string(entity->getId()) + ":"
-            + componentType + ":" + fieldName,
+            + _inspectedComponentId + ":" + fieldName,
         [field, next](ayt::entity::IComponent& editable) {
             auto* target = static_cast<ayt::math::FVector4*>(
                 field->get(&editable));
@@ -11798,8 +11881,10 @@ void EditorSession::commitInspectorTextField(
     const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
         componentType);
     ayt::entity::IComponent* component = entity != nullptr
-        && descriptor != nullptr && descriptor->get != nullptr
-        ? descriptor->get(*entity) : nullptr;
+        && descriptor != nullptr
+        ? entity->findComponentById(_inspectedComponentId) : nullptr;
+    if (component && componentType !=
+            ayt::entity::ComponentFactory::registeredTypeName(*component)) return;
     auto* type = descriptor != nullptr
         ? ayt::reflect::TypeRegistryImpl::instance().findType(
             descriptor->type.hash_code()) : nullptr;
@@ -11887,10 +11972,10 @@ void EditorSession::commitInspectorTextField(
         }
     }
 
-    const bool changed = _document->mutateComponent(
-        entity->getId(), componentType, "Edit " + fieldName,
+    const bool changed = _document->mutateComponentById(
+        entity->getId(), _inspectedComponentId, "Edit " + fieldName,
         "property:" + std::to_string(entity->getId()) + ":"
-            + componentType + ":" + fieldName + ":"
+            + _inspectedComponentId + ":" + fieldName + ":"
             + std::to_string(elementIndex),
         [&](ayt::entity::IComponent& editable) {
             void* targetValue = field->get(&editable);
@@ -11989,8 +12074,10 @@ void EditorSession::commitInspectorBoolField(
     const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(
         componentType);
     ayt::entity::IComponent* component = entity != nullptr
-        && descriptor != nullptr && descriptor->get != nullptr
-        ? descriptor->get(*entity) : nullptr;
+        && descriptor != nullptr
+        ? entity->findComponentById(_inspectedComponentId) : nullptr;
+    if (component && componentType !=
+            ayt::entity::ComponentFactory::registeredTypeName(*component)) return;
     auto* type = descriptor != nullptr
         ? ayt::reflect::TypeRegistryImpl::instance().findType(
             descriptor->type.hash_code()) : nullptr;
@@ -12004,10 +12091,10 @@ void EditorSession::commitInspectorBoolField(
     }
     auto* target = static_cast<bool*>(field->get(component));
     if (target == nullptr || *target == checked) return;
-    (void)_document->mutateComponent(
-        entity->getId(), componentType, "Edit " + fieldName,
+    (void)_document->mutateComponentById(
+        entity->getId(), _inspectedComponentId, "Edit " + fieldName,
         "property:" + std::to_string(entity->getId()) + ":"
-            + componentType + ":" + fieldName,
+            + _inspectedComponentId + ":" + fieldName,
         [field, checked](ayt::entity::IComponent& editable) {
             auto* value = static_cast<bool*>(field->get(&editable));
             if (value == nullptr || *value == checked) return false;

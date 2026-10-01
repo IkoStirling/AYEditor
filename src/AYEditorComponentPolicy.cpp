@@ -83,6 +83,9 @@ bool EditorComponentPolicyRegistry::addWithRequirements(
     std::vector<std::string>* added, std::string* error) const
 {
     std::vector<std::string> localAdded;
+    std::unordered_set<std::string> beforeIds;
+    for (const auto& instance : entity.componentInstances())
+        beforeIds.insert(instance.id);
     std::unordered_set<std::string> visiting;
     const auto addOne = [&](const auto& self, const std::string& typeName) -> bool {
         const auto* descriptor =
@@ -96,7 +99,10 @@ bool EditorComponentPolicyRegistry::addWithRequirements(
             if (error) *error = "component cannot be saved in a Scene: " + typeName;
             return false;
         }
-        if (descriptor->has(entity)) return true;
+        if (descriptor->has(entity)
+            && (typeName != componentType
+                || descriptor->multiplicity == ayt::entity::ComponentMultiplicity::Single))
+            return true;
         if (!visiting.insert(typeName).second) {
             if (error) *error = "component prerequisite cycle at " + typeName;
             return false;
@@ -119,14 +125,11 @@ bool EditorComponentPolicyRegistry::addWithRequirements(
     };
 
     if (!addOne(addOne, std::string(componentType))) {
-        for (auto it = localAdded.rbegin(); it != localAdded.rend(); ++it) {
-            const auto* descriptor =
-                ayt::entity::ComponentRegistry::instance().find(*it);
-            if (descriptor != nullptr && descriptor->remove != nullptr
-                && descriptor->has != nullptr && descriptor->has(entity)) {
-                descriptor->remove(entity);
-            }
-        }
+        std::vector<std::string> rollback;
+        for (const auto& instance : entity.componentInstances())
+            if (!beforeIds.contains(instance.id)) rollback.push_back(instance.id);
+        for (auto it = rollback.rbegin(); it != rollback.rend(); ++it)
+            entity.removeComponentById(*it);
         return false;
     }
     if (added) *added = std::move(localAdded);
@@ -142,6 +145,16 @@ bool EditorComponentPolicyRegistry::canRemove(
         own != nullptr && !own->removable) {
         if (reason) *reason = typeName + " is required by the entity";
         return false;
+    }
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(typeName);
+    if (descriptor && descriptor->multiplicity == ayt::entity::ComponentMultiplicity::Multiple) {
+        size_t count = 0;
+        for (const auto& instance : entity.componentInstances())
+            if (instance.typeHash == descriptor->type.hash_code()) ++count;
+        if (count > 1) {
+            if (reason) reason->clear();
+            return true;
+        }
     }
     for (const auto& [dependentName, policy] : _policies) {
         if (std::find(policy.prerequisites.begin(),

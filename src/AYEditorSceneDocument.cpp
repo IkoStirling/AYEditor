@@ -163,6 +163,8 @@ private:
 
 struct EditorSceneDocument::ComponentSnapshot {
     std::string typeName;
+    std::string componentId;
+    std::string displayName;
     std::string payload;
     std::string actorAssetsRoot;
     std::string actorClassDefaultsJson;
@@ -262,28 +264,44 @@ public:
         if (!isAlive()) return false;
         ayt::entity::Entity* entity = _document->findCommandEntity(_entityId);
         if (entity == nullptr) return false;
+        if (!_snapshots.empty()) {
+            for (const auto& snapshot : _snapshots) {
+                if (!_document->restoreComponent(*entity, snapshot)) return false;
+            }
+            return true;
+        }
+        std::unordered_set<std::string> before;
+        for (const auto& instance : entity->componentInstances())
+            before.insert(instance.id);
         _added.clear();
         _error.clear();
-        return EditorComponentPolicyRegistry::instance().addWithRequirements(
-            *entity, _componentType, &_added, &_error) && !_added.empty();
+        if (!EditorComponentPolicyRegistry::instance().addWithRequirements(
+                *entity, _componentType, &_added, &_error) || _added.empty())
+            return false;
+        for (const auto& instance : entity->componentInstances()) {
+            if (before.contains(instance.id)) continue;
+            ComponentSnapshot snapshot;
+            if (!_document->snapshotComponent(*entity, *instance.component, snapshot)) {
+                std::vector<std::string> rollbackIds;
+                for (const auto& added : entity->componentInstances())
+                    if (!before.contains(added.id)) rollbackIds.push_back(added.id);
+                for (auto it = rollbackIds.rbegin(); it != rollbackIds.rend(); ++it)
+                    entity->removeComponentById(*it);
+                _snapshots.clear();
+                return false;
+            }
+            _snapshots.push_back(std::move(snapshot));
+        }
+        return !_snapshots.empty();
     }
     bool undo() override {
         if (!isAlive()) return false;
         ayt::entity::Entity* entity = _document->findCommandEntity(_entityId);
         if (entity == nullptr) return false;
-        for (auto it = _added.rbegin(); it != _added.rend(); ++it) {
-            const auto* descriptor =
-                ayt::entity::ComponentRegistry::instance().find(*it);
-            if (descriptor == nullptr || descriptor->has == nullptr
-                || descriptor->remove == nullptr || !descriptor->has(*entity)) {
-                return false;
-            }
-        }
-        for (auto it = _added.rbegin(); it != _added.rend(); ++it) {
-            const auto* descriptor =
-                ayt::entity::ComponentRegistry::instance().find(*it);
-            descriptor->remove(*entity);
-        }
+        for (auto it = _snapshots.rbegin(); it != _snapshots.rend(); ++it)
+            if (!entity->findComponentById(it->componentId)) return false;
+        for (auto it = _snapshots.rbegin(); it != _snapshots.rend(); ++it)
+            if (!entity->removeComponentById(it->componentId)) return false;
         return true;
     }
     bool isAlive() const noexcept override {
@@ -299,6 +317,7 @@ private:
     std::string _componentType;
     std::string _label;
     std::vector<std::string> _added;
+    std::vector<ComponentSnapshot> _snapshots;
     std::string _error;
 };
 
@@ -314,15 +333,8 @@ public:
     bool execute() override {
         if (!isAlive()) return false;
         ayt::entity::Entity* entity = _document->findCommandEntity(_entityId);
-        const auto* descriptor = ayt::entity::ComponentRegistry::instance()
-            .find(_snapshot.typeName);
-        if (entity == nullptr || descriptor == nullptr
-            || descriptor->has == nullptr || descriptor->remove == nullptr
-            || !descriptor->has(*entity)) {
-            return false;
-        }
-        descriptor->remove(*entity);
-        return true;
+        return entity != nullptr
+            && entity->removeComponentById(_snapshot.componentId);
     }
     bool undo() override {
         if (!isAlive()) return false;
@@ -341,6 +353,34 @@ private:
     uint32_t _entityId = 0;
     ComponentSnapshot _snapshot;
     std::string _label;
+};
+
+class EditorSceneDocument::RestoreComponentCommand final : public IEditorCommand {
+public:
+    RestoreComponentCommand(EditorSceneDocument& document, uint64_t generation,
+                            uint32_t entityId, ComponentSnapshot snapshot)
+        : _document(&document), _generation(generation), _entityId(entityId),
+          _snapshot(std::move(snapshot)) {}
+    const std::string& label() const noexcept override { return _label; }
+    bool execute() override {
+        if (!isAlive()) return false;
+        auto* entity = _document->findCommandEntity(_entityId);
+        return entity && _document->restoreComponent(*entity, _snapshot);
+    }
+    bool undo() override {
+        if (!isAlive()) return false;
+        auto* entity = _document->findCommandEntity(_entityId);
+        return entity && entity->removeComponentById(_snapshot.componentId);
+    }
+    bool isAlive() const noexcept override {
+        return _document && _document->_contentGeneration == _generation;
+    }
+private:
+    EditorSceneDocument* _document = nullptr;
+    uint64_t _generation = 0;
+    uint32_t _entityId = 0;
+    ComponentSnapshot _snapshot;
+    std::string _label = "Restore Component";
 };
 
 class EditorSceneDocument::ComponentMutationCommand final
@@ -369,7 +409,7 @@ public:
         if (mutation == nullptr || mutation->_document != _document
             || mutation->_generation != _generation
             || mutation->_entityId != _entityId
-            || mutation->_after.typeName != _after.typeName) {
+            || mutation->_after.componentId != _after.componentId) {
             return false;
         }
         _after = mutation->_after;
@@ -383,8 +423,8 @@ private:
         if (entity == nullptr) return false;
         const auto* descriptor = ayt::entity::ComponentRegistry::instance()
             .find(snapshot.typeName);
-        ayt::entity::IComponent* component = descriptor != nullptr
-            && descriptor->get != nullptr ? descriptor->get(*entity) : nullptr;
+        ayt::entity::IComponent* component = entity->findComponentById(
+            snapshot.componentId);
         if (component == nullptr) return false;
 
         auto reader = ayt::serializer::createSerializer(
@@ -395,6 +435,8 @@ private:
             *reader, snapshot.typeName.c_str(), *component);
         reader->endObject();
         if (!restored || !reader->lastError().ok()) return false;
+        if (!entity->setComponentDisplayName(component, snapshot.displayName))
+            return false;
         ayt::entity::ComponentFactory::afterSceneDeserialize(
             *entity, snapshot.typeName.c_str(), *component);
         return true;
@@ -633,9 +675,28 @@ bool EditorSceneDocument::removeComponent(
     ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
     const auto* descriptor =
         ayt::entity::ComponentRegistry::instance().find(componentType);
+    if (!entity || !descriptor
+        || descriptor->multiplicity != ayt::entity::ComponentMultiplicity::Single
+        || !descriptor->get) {
+        setError(error, "Component type requires an instance ID: " + componentType);
+        return false;
+    }
+    ayt::entity::IComponent* component = descriptor->get(*entity);
+    const auto* instance = entity->componentInstance(component);
+    return instance && removeComponentById(entityId, instance->id, error);
+}
+
+bool EditorSceneDocument::removeComponentById(
+    uint32_t entityId, const std::string& componentId, std::string* error)
+{
+    ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
     ayt::entity::IComponent* component = entity != nullptr
-        && descriptor != nullptr && descriptor->get != nullptr
-        ? descriptor->get(*entity) : nullptr;
+        ? entity->findComponentById(componentId) : nullptr;
+    const char* type = component != nullptr
+        ? ayt::entity::ComponentFactory::registeredTypeName(*component) : nullptr;
+    const std::string componentType = type ? type : std::string{};
+    const auto* descriptor = ayt::entity::ComponentRegistry::instance()
+        .find(componentType);
     std::string removeReason;
     if (entity != nullptr
         && !EditorComponentPolicyRegistry::instance().canRemove(
@@ -648,12 +709,12 @@ bool EditorSceneDocument::removeComponent(
         // Transient components predate the Scene authoring restriction. They
         // have no serializable state to capture for undo, but must be removable
         // so a document can be made persistable again.
-        descriptor->remove(*entity);
+        entity->removeComponentById(componentId);
         if (error != nullptr) error->clear();
         return true;
     }
     ComponentSnapshot snapshot;
-    if (component == nullptr || !snapshotComponent(*component, snapshot)) {
+    if (component == nullptr || !snapshotComponent(*entity, *component, snapshot)) {
         setError(error, "Unable to snapshot component: " + componentType);
         return false;
     }
@@ -675,21 +736,38 @@ bool EditorSceneDocument::mutateComponent(
     ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
     const auto* descriptor =
         ayt::entity::ComponentRegistry::instance().find(componentType);
+    if (!entity || !descriptor
+        || descriptor->multiplicity != ayt::entity::ComponentMultiplicity::Single
+        || !descriptor->get) return false;
     ayt::entity::IComponent* component = entity != nullptr
         && descriptor != nullptr && descriptor->get != nullptr
         ? descriptor->get(*entity) : nullptr;
+    const auto* instance = entity->componentInstance(component);
+    return instance && mutateComponentById(entityId, instance->id,
+        std::move(label), std::move(mergeKey), mutation);
+}
+
+bool EditorSceneDocument::mutateComponentById(
+    uint32_t entityId, const std::string& componentId,
+    std::string label, std::string mergeKey,
+    const std::function<bool(ayt::entity::IComponent&)>& mutation)
+{
+    ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
+    ayt::entity::IComponent* component = entity != nullptr
+        ? entity->findComponentById(componentId) : nullptr;
     if (component == nullptr || !mutation) return false;
 
     ComponentSnapshot before;
-    if (!snapshotComponent(*component, before) || !mutation(*component)) {
+    if (!snapshotComponent(*entity, *component, before) || !mutation(*component)) {
         return false;
     }
     ComponentSnapshot after;
-    if (!snapshotComponent(*component, after)) {
+    if (!snapshotComponent(*entity, *component, after)) {
         (void)restoreComponent(*entity, before);
         return false;
     }
     if (before.payload == after.payload
+        && before.displayName == after.displayName
         && before.actorAssetsRoot == after.actorAssetsRoot
         && before.actorClassDefaultsJson == after.actorClassDefaultsJson) {
         (void)restoreComponent(*entity, before);
@@ -699,6 +777,23 @@ bool EditorSceneDocument::mutateComponent(
     return _history.execute(std::make_unique<ComponentMutationCommand>(
         *this, _contentGeneration, logicalEntityId(entityId), std::move(before),
         std::move(after), std::move(label), std::move(mergeKey)));
+}
+
+bool EditorSceneDocument::renameComponent(
+    uint32_t entityId, const std::string& componentId, std::string displayName)
+{
+    ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
+    ayt::entity::IComponent* component = entity != nullptr
+        ? entity->findComponentById(componentId) : nullptr;
+    if (!component) return false;
+    ComponentSnapshot before;
+    if (!snapshotComponent(*entity, *component, before)) return false;
+    if (before.displayName == displayName) return true;
+    ComponentSnapshot after = before;
+    after.displayName = std::move(displayName);
+    return _history.execute(std::make_unique<ComponentMutationCommand>(
+        *this, _contentGeneration, logicalEntityId(entityId), std::move(before),
+        std::move(after), "Rename Component", std::string{}));
 }
 
 bool EditorSceneDocument::restoreActorDefaults(uint32_t entityId,
@@ -714,6 +809,11 @@ bool EditorSceneDocument::restoreActorDefaults(uint32_t entityId,
     auto* baseline = _scene->world().createEntity();
     if (!baseline) return false;
     auto* baselineInstance = baseline->addComponent<ayt::entity::ActorInstanceComponent>();
+    if (!baselineInstance || !baseline->setComponentInstanceId(
+            baselineInstance, entity->componentInstance(instance)->id)) {
+        _scene->world().destroyEntity(baseline);
+        return false;
+    }
     baselineInstance->classPath = instance->classPath;
     baselineInstance->assetsRoot = instance->assetsRoot;
     std::string actorError;
@@ -737,30 +837,30 @@ bool EditorSceneDocument::restoreActorDefaults(uint32_t entityId,
     };
     std::unordered_set<std::string> expected;
     for (const auto& component : defaults.components)
-        expected.insert(component.typeName);
+        expected.insert(component.componentId);
     std::vector<std::string> remove;
-    for (auto* component : entity->getComponents()) {
-        const char* type = component != nullptr
-            ? ayt::entity::ComponentFactory::registeredTypeName(*component) : nullptr;
-        if (type && !expected.contains(type)) remove.emplace_back(type);
+    for (const auto& component : entity->componentInstances()) {
+        if (!expected.contains(component.id)) remove.push_back(component.id);
     }
-    for (const auto& type : remove) {
-        if (!removeComponent(entityId, type)) return abort();
+    for (const auto& id : remove) {
+        if (!removeComponentById(entityId, id)) return abort();
         changed = true;
     }
     for (const auto& component : defaults.components) {
         if (component.typeName == "ActorInstanceComponent") continue;
-        const auto* descriptor = ayt::entity::ComponentRegistry::instance()
-            .find(component.typeName);
-        if (!descriptor || !descriptor->has) return abort();
-        if (!descriptor->has(*entity)) {
-            if (!addComponent(entityId, component.typeName)) return abort();
+        auto* currentComponent = entity->findComponentById(component.componentId);
+        if (!currentComponent) {
+            if (!_history.execute(std::make_unique<RestoreComponentCommand>(
+                    *this, _contentGeneration, logicalEntityId(entityId), component)))
+                return abort();
             changed = true;
+            continue;
         }
         ComponentSnapshot current;
-        if (!snapshotComponent(*descriptor->get(*entity), current)) return abort();
-        if (current.payload != component.payload) {
-            if (!mutateComponent(entityId, component.typeName,
+        if (!snapshotComponent(*entity, *currentComponent, current)) return abort();
+        if (current.payload != component.payload
+            || current.displayName != component.displayName) {
+            if (!mutateComponentById(entityId, component.componentId,
                     "Restore Actor component", {},
                     [this, entity, component](ayt::entity::IComponent&) {
                         return restoreComponent(*entity, component);
@@ -771,7 +871,8 @@ bool EditorSceneDocument::restoreActorDefaults(uint32_t entityId,
     if (instance->propertyOverridesJson != "{}"
         || instance->componentOverridesJson != "{}"
         || instance->classDefaultsJson != defaultSnapshot) {
-        if (!mutateComponent(entityId, "ActorInstanceComponent",
+        if (!mutateComponentById(entityId,
+                entity->componentInstance(instance)->id,
                 "Restore Actor properties", {},
                 [defaultSnapshot](ayt::entity::IComponent& component) {
                     auto& actor = static_cast<ayt::entity::ActorInstanceComponent&>(component);
@@ -843,7 +944,8 @@ bool EditorSceneDocument::applyEntityName(
 }
 
 bool EditorSceneDocument::snapshotComponent(
-    ayt::entity::IComponent& component, ComponentSnapshot& snapshot) const
+    ayt::entity::Entity& entity, ayt::entity::IComponent& component,
+    ComponentSnapshot& snapshot) const
 {
     const char* typeName =
         ayt::entity::ComponentFactory::registeredTypeName(component);
@@ -858,6 +960,10 @@ bool EditorSceneDocument::snapshotComponent(
     writer->endObject();
     if (!writer->lastError().ok()) return false;
     snapshot.typeName = typeName;
+    const auto* instance = entity.componentInstance(&component);
+    if (!instance) return false;
+    snapshot.componentId = instance->id;
+    snapshot.displayName = instance->displayName;
     snapshot.payload = writer->output();
     if (auto* actor = dynamic_cast<ayt::entity::ActorInstanceComponent*>(
             &component)) {
@@ -872,14 +978,28 @@ bool EditorSceneDocument::restoreComponent(
 {
     const auto* descriptor = ayt::entity::ComponentRegistry::instance()
         .find(snapshot.typeName);
-    if (descriptor == nullptr || descriptor->get == nullptr
-        || descriptor->add == nullptr) {
+    if (descriptor == nullptr || descriptor->add == nullptr) {
         return false;
     }
-    const bool existed = descriptor->has != nullptr && descriptor->has(entity);
-    ayt::entity::IComponent* component = existed
-        ? descriptor->get(entity) : descriptor->add(entity);
+    ayt::entity::IComponent* component = entity.findComponentById(
+        snapshot.componentId);
+    const bool existed = component != nullptr;
+    if (existed) {
+        const char* actualType = ayt::entity::ComponentFactory::registeredTypeName(
+            *component);
+        if (!actualType || snapshot.typeName != actualType) return false;
+    } else {
+        if (descriptor->multiplicity == ayt::entity::ComponentMultiplicity::Single
+            && descriptor->has && descriptor->has(entity)) return false;
+        component = descriptor->add(entity);
+    }
     if (component == nullptr) return false;
+    const std::string createdId = entity.componentInstance(component)->id;
+    if (!entity.setComponentInstanceId(component, snapshot.componentId)
+        || !entity.setComponentDisplayName(component, snapshot.displayName)) {
+        if (!existed) entity.removeComponentById(createdId);
+        return false;
+    }
 
     auto reader = ayt::serializer::createSerializer(
         ayt::serializer::Format::Json);
@@ -889,7 +1009,7 @@ bool EditorSceneDocument::restoreComponent(
         *reader, snapshot.typeName.c_str(), *component);
     reader->endObject();
     if (!restored || !reader->lastError().ok()) {
-        if (!existed && descriptor->remove != nullptr) descriptor->remove(entity);
+        if (!existed) entity.removeComponentById(snapshot.componentId);
         return false;
     }
     ayt::entity::ComponentFactory::afterSceneDeserialize(
@@ -916,7 +1036,7 @@ bool EditorSceneDocument::snapshotEntity(
             return false;
         }
         ComponentSnapshot componentSnapshot;
-        if (!snapshotComponent(*component, componentSnapshot)) return false;
+        if (!snapshotComponent(entity, *component, componentSnapshot)) return false;
         snapshot.components.push_back(std::move(componentSnapshot));
     }
     return true;

@@ -69,10 +69,18 @@ public:
                       std::string* error = nullptr);
     bool removeComponent(uint32_t entityId, const std::string& componentType,
                          std::string* error = nullptr);
+    bool removeComponentById(uint32_t entityId, const std::string& componentId,
+                             std::string* error = nullptr);
     bool mutateComponent(
         uint32_t entityId, const std::string& componentType,
         std::string label, std::string mergeKey,
         const std::function<bool(ayt::entity::IComponent&)>& mutation);
+    bool mutateComponentById(
+        uint32_t entityId, const std::string& componentId,
+        std::string label, std::string mergeKey,
+        const std::function<bool(ayt::entity::IComponent&)>& mutation);
+    bool renameComponent(uint32_t entityId, const std::string& componentId,
+                         std::string displayName);
     /// Restore class defaults (including component presence and properties)
     /// as one undoable Actor instance edit.
     bool restoreActorDefaults(uint32_t entityId, std::string* error = nullptr);
@@ -105,6 +113,7 @@ private:
     class EntityDeleteCommand;
     class AddComponentCommand;
     class RemoveComponentCommand;
+    class RestoreComponentCommand;
     class ComponentMutationCommand;
     friend class TransformCommand;
     friend class EntityRenameCommand;
@@ -112,6 +121,7 @@ private:
     friend class EntityDeleteCommand;
     friend class AddComponentCommand;
     friend class RemoveComponentCommand;
+    friend class RestoreComponentCommand;
     friend class ComponentMutationCommand;
 
     struct ComponentSnapshot;
@@ -121,7 +131,8 @@ private:
                         const EditorTransformState& state);
     bool applyEntityName(uint64_t generation, uint32_t entityId,
                          const std::string& name);
-    bool snapshotComponent(ayt::entity::IComponent& component,
+    bool snapshotComponent(ayt::entity::Entity& entity,
+                           ayt::entity::IComponent& component,
                            ComponentSnapshot& snapshot) const;
     bool restoreComponent(ayt::entity::Entity& entity,
                           const ComponentSnapshot& snapshot) const;

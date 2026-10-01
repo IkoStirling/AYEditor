@@ -750,7 +750,9 @@ private:
     ayt::ui::TextInput* _entityNameInput = nullptr;
     ayt::ui::VBox* _componentPropertyBody = nullptr;
     std::vector<std::string> _attachedComponentTypeNames;
+    std::vector<std::string> _attachedComponentIds;
     std::string _inspectedComponentTypeName;
+    std::string _inspectedComponentId;
     bool _updatingComponentPicker = false;
     bool _updatingEntityName = false;
     bool _updatingComponentPropertyCommit = false;
