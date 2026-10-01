@@ -92,6 +92,10 @@ bool EditorComponentPolicyRegistry::addWithRequirements(
             if (error) *error = "component is unavailable for authoring: " + typeName;
             return false;
         }
+        if (!descriptor->sceneSerializable) {
+            if (error) *error = "component cannot be saved in a Scene: " + typeName;
+            return false;
+        }
         if (descriptor->has(entity)) return true;
         if (!visiting.insert(typeName).second) {
             if (error) *error = "component prerequisite cycle at " + typeName;

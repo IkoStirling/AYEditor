@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetTilePresenter.h"
+#include <AYAssetFormat/AssetFormat.h>
 
 #include "AYUI/UnicodeText.h"
 #include <AYAnimationEditor/SkeletonEditorCore.h>
@@ -124,6 +125,8 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::GameFlow: return L"FLOW";
     case EditorAssetType::SkeletonMapping: return L"RIG";
     case EditorAssetType::Sequence: return L"SEQ";
+    case EditorAssetType::ParticleEffect: return L"VFX";
+    case EditorAssetType::StatsRecipe: return L"STAT";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -142,6 +145,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
         return EditorAssetTileCategory::Texture;
     case EditorAssetType::Scene:
         return EditorAssetTileCategory::Scene;
+    case EditorAssetType::ParticleEffect:
     case EditorAssetType::Animation:
     case EditorAssetType::Sequence:
     case EditorAssetType::Skeleton:
@@ -158,6 +162,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
     case EditorAssetType::Tilemap:
         return EditorAssetTileCategory::Scene;
     case EditorAssetType::GameFlow:
+    case EditorAssetType::StatsRecipe:
         return EditorAssetTileCategory::Code;
     case EditorAssetType::Unknown:
         break;
@@ -196,12 +201,17 @@ ayt::math::FVector4 EditorAssetTilePresenter::categoryColor(
 bool EditorAssetTilePresenter::isEngineNativeFileName(
     std::string_view fileName) noexcept
 {
+    for (const auto id : {ayt::asset_format::Id::Scene,
+                          ayt::asset_format::Id::Mesh,
+                          ayt::asset_format::Id::Material,
+                          ayt::asset_format::Id::Texture}) {
+        if (ayt::asset_format::matchesPath(fileName, id)) return true;
+    }
     // Keep compound suffixes before their shorter constituents if the table
     // grows. Metadata sidecars are not listed: the asset database deliberately
     // filters .aydep.json out of the browser.
-    constexpr std::array<std::string_view, 16> nativeSuffixes = {
-        ".gameflow.json", ".uiflow.json", ".aytilemap.json", ".ui.json", ".aytilemap",
-        ".aymesh", ".aymat", ".aytex", ".ayscene",
+    constexpr std::array<std::string_view, 15> nativeSuffixes = {
+        ".ayparticle", ".aystats.json", ".aystats", ".gameflow.json", ".uiflow.json", ".aytilemap.json", ".ui.json", ".aytilemap",
         ".ayanm", ".ayanim", ".ayskel", ".ayrig", ".aysmap", ".logia", ".phoskia",
     };
     for (const std::string_view suffix : nativeSuffixes) {

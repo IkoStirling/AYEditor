@@ -1,17 +1,21 @@
 #include "AYEditor/EditorSceneDocument.h"
+#include <AYAssetFormat/AssetFormat.h>
 #include "AYEditor/EditorComponentPolicy.h"
 
 #include "AYEntity/ComponentFactory.h"
+#include "AYEntity/ActorClassAsset.h"
 #include "AYEntity/ComponentRegistry.h"
 #include "AYEntity/EntityImpl.h"
 #include "AYEntity/World.h"
 #include "AYEntity/components/TransformComponent.h"
+#include "AYEntity/components/ActorInstanceComponent.h"
 #include "AYScene.h"
 #include "AYSerializer/SerializeError.h"
 #include "AYSerializer/SerializerCore.h"
 
 #include <cmath>
 #include <filesystem>
+#include <unordered_set>
 #include <utility>
 
 namespace ayt::editor {
@@ -51,6 +55,33 @@ bool sameTransform(const EditorTransformState& a,
         && nearlyEqual(a.scale.x, b.scale.x)
         && nearlyEqual(a.scale.y, b.scale.y)
         && nearlyEqual(a.scale.z, b.scale.z);
+}
+
+bool validateScenePersistence(const ayt::scene::Scene& scene,
+                              std::string* error)
+{
+    for (const ayt::entity::Entity* entity : scene.world().getAllEntities()) {
+        if (entity == nullptr) continue;
+        for (const ayt::entity::IComponent* component : entity->getComponents()) {
+            if (component == nullptr) continue;
+            const char* typeName =
+                ayt::entity::ComponentFactory::registeredTypeName(*component);
+            if (typeName != nullptr
+                && ayt::entity::ComponentFactory::isSceneSerializable(typeName)) {
+                continue;
+            }
+            const char* entityName = entity->getName();
+            const char* componentName = component->getName();
+            setError(error, "Scene contains a component that cannot be saved: "
+                + std::string(typeName != nullptr ? typeName
+                    : (componentName != nullptr ? componentName : "unknown"))
+                + " on entity "
+                + (entityName != nullptr && *entityName != '\0'
+                    ? entityName : std::to_string(entity->getId())));
+            return false;
+        }
+    }
+    return true;
 }
 
 } // namespace
@@ -133,6 +164,8 @@ private:
 struct EditorSceneDocument::ComponentSnapshot {
     std::string typeName;
     std::string payload;
+    std::string actorAssetsRoot;
+    std::string actorClassDefaultsJson;
 };
 
 struct EditorSceneDocument::EntitySnapshot {
@@ -447,6 +480,11 @@ bool EditorSceneDocument::saveAs(const std::string& path, std::string* error)
         setError(error, "Scene path is empty.");
         return false;
     }
+    if (!ayt::asset_format::isCanonicalPath(path, ayt::asset_format::Id::Scene)) {
+        setError(error, "New Scene files must use the current Scene extension.");
+        return false;
+    }
+    if (!validateScenePersistence(*_scene, error)) return false;
     if (!_scene->save(path)) {
         setError(error, "Unable to save scene: " + path);
         return false;
@@ -465,6 +503,7 @@ bool EditorSceneDocument::writeRecoveryCopy(
         setError(error, "Recovery scene path is empty.");
         return false;
     }
+    if (!validateScenePersistence(*_scene, error)) return false;
     std::error_code directoryError;
     std::filesystem::create_directories(
         std::filesystem::path(path).parent_path(), directoryError);
@@ -570,6 +609,12 @@ bool EditorSceneDocument::addComponent(
     uint32_t entityId, const std::string& componentType,
     std::vector<std::string>* added, std::string* error)
 {
+    const auto* descriptor =
+        ayt::entity::ComponentRegistry::instance().find(componentType);
+    if (descriptor != nullptr && !descriptor->sceneSerializable) {
+        setError(error, "Component cannot be saved in a Scene: " + componentType);
+        return false;
+    }
     auto command = std::make_unique<AddComponentCommand>(
         *this, _contentGeneration, logicalEntityId(entityId), componentType);
     AddComponentCommand* result = command.get();
@@ -597,6 +642,15 @@ bool EditorSceneDocument::removeComponent(
             *entity, componentType, &removeReason)) {
         setError(error, removeReason);
         return false;
+    }
+    if (component != nullptr && descriptor != nullptr
+        && !descriptor->sceneSerializable && descriptor->remove != nullptr) {
+        // Transient components predate the Scene authoring restriction. They
+        // have no serializable state to capture for undo, but must be removable
+        // so a document can be made persistable again.
+        descriptor->remove(*entity);
+        if (error != nullptr) error->clear();
+        return true;
     }
     ComponentSnapshot snapshot;
     if (component == nullptr || !snapshotComponent(*component, snapshot)) {
@@ -635,7 +689,9 @@ bool EditorSceneDocument::mutateComponent(
         (void)restoreComponent(*entity, before);
         return false;
     }
-    if (before.payload == after.payload) {
+    if (before.payload == after.payload
+        && before.actorAssetsRoot == after.actorAssetsRoot
+        && before.actorClassDefaultsJson == after.actorClassDefaultsJson) {
         (void)restoreComponent(*entity, before);
         return false;
     }
@@ -643,6 +699,97 @@ bool EditorSceneDocument::mutateComponent(
     return _history.execute(std::make_unique<ComponentMutationCommand>(
         *this, _contentGeneration, logicalEntityId(entityId), std::move(before),
         std::move(after), std::move(label), std::move(mergeKey)));
+}
+
+bool EditorSceneDocument::restoreActorDefaults(uint32_t entityId,
+                                               std::string* error)
+{
+    auto* entity = _scene->world().findEntity(entityId);
+    auto* instance = entity != nullptr
+        ? entity->getComponent<ayt::entity::ActorInstanceComponent>() : nullptr;
+    if (!instance) {
+        setError(error, "Entity is not an Actor instance");
+        return false;
+    }
+    auto* baseline = _scene->world().createEntity();
+    if (!baseline) return false;
+    auto* baselineInstance = baseline->addComponent<ayt::entity::ActorInstanceComponent>();
+    baselineInstance->classPath = instance->classPath;
+    baselineInstance->assetsRoot = instance->assetsRoot;
+    std::string actorError;
+    const bool expanded = ayt::entity::expandActorInstance(
+        *baseline, *baselineInstance, &actorError);
+    EntitySnapshot defaults;
+    const bool captured = expanded && snapshotEntity(*baseline, defaults);
+    const std::string defaultSnapshot = baselineInstance->classDefaultsJson;
+    _scene->world().destroyEntity(baseline);
+    if (!captured) {
+        setError(error, actorError.empty()
+            ? "Could not capture Actor class defaults" : actorError);
+        return false;
+    }
+    if (!_history.beginTransaction("Restore Actor Defaults")) return false;
+    bool changed = false;
+    auto abort = [&]() {
+        (void)_history.cancelTransaction();
+        setError(error, "Could not restore Actor defaults");
+        return false;
+    };
+    std::unordered_set<std::string> expected;
+    for (const auto& component : defaults.components)
+        expected.insert(component.typeName);
+    std::vector<std::string> remove;
+    for (auto* component : entity->getComponents()) {
+        const char* type = component != nullptr
+            ? ayt::entity::ComponentFactory::registeredTypeName(*component) : nullptr;
+        if (type && !expected.contains(type)) remove.emplace_back(type);
+    }
+    for (const auto& type : remove) {
+        if (!removeComponent(entityId, type)) return abort();
+        changed = true;
+    }
+    for (const auto& component : defaults.components) {
+        if (component.typeName == "ActorInstanceComponent") continue;
+        const auto* descriptor = ayt::entity::ComponentRegistry::instance()
+            .find(component.typeName);
+        if (!descriptor || !descriptor->has) return abort();
+        if (!descriptor->has(*entity)) {
+            if (!addComponent(entityId, component.typeName)) return abort();
+            changed = true;
+        }
+        ComponentSnapshot current;
+        if (!snapshotComponent(*descriptor->get(*entity), current)) return abort();
+        if (current.payload != component.payload) {
+            if (!mutateComponent(entityId, component.typeName,
+                    "Restore Actor component", {},
+                    [this, entity, component](ayt::entity::IComponent&) {
+                        return restoreComponent(*entity, component);
+                    })) return abort();
+            changed = true;
+        }
+    }
+    if (instance->propertyOverridesJson != "{}"
+        || instance->componentOverridesJson != "{}"
+        || instance->classDefaultsJson != defaultSnapshot) {
+        if (!mutateComponent(entityId, "ActorInstanceComponent",
+                "Restore Actor properties", {},
+                [defaultSnapshot](ayt::entity::IComponent& component) {
+                    auto& actor = static_cast<ayt::entity::ActorInstanceComponent&>(component);
+                    actor.propertyOverridesJson = "{}";
+                    actor.componentOverridesJson = "{}";
+                    actor.classDefaultsJson = defaultSnapshot;
+                    return true;
+                })) return abort();
+        changed = true;
+    }
+    if (!changed) {
+        (void)_history.cancelTransaction();
+        if (error) error->clear();
+        return true;
+    }
+    if (!_history.commitTransaction()) return abort();
+    if (error) error->clear();
+    return true;
 }
 
 bool EditorSceneDocument::undo() { return _history.undo(); }
@@ -712,6 +859,11 @@ bool EditorSceneDocument::snapshotComponent(
     if (!writer->lastError().ok()) return false;
     snapshot.typeName = typeName;
     snapshot.payload = writer->output();
+    if (auto* actor = dynamic_cast<ayt::entity::ActorInstanceComponent*>(
+            &component)) {
+        snapshot.actorAssetsRoot = actor->assetsRoot;
+        snapshot.actorClassDefaultsJson = actor->classDefaultsJson;
+    }
     return !snapshot.payload.empty();
 }
 
@@ -742,6 +894,11 @@ bool EditorSceneDocument::restoreComponent(
     }
     ayt::entity::ComponentFactory::afterSceneDeserialize(
         entity, snapshot.typeName.c_str(), *component);
+    if (auto* actor = dynamic_cast<ayt::entity::ActorInstanceComponent*>(
+            component)) {
+        actor->assetsRoot = snapshot.actorAssetsRoot;
+        actor->classDefaultsJson = snapshot.actorClassDefaultsJson;
+    }
     return true;
 }
 
@@ -756,7 +913,7 @@ bool EditorSceneDocument::snapshotEntity(
             ayt::entity::ComponentFactory::registeredTypeName(*component);
         if (typeName == nullptr
             || !ayt::entity::ComponentFactory::isSceneSerializable(typeName)) {
-            continue;
+            return false;
         }
         ComponentSnapshot componentSnapshot;
         if (!snapshotComponent(*component, componentSnapshot)) return false;

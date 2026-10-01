@@ -107,6 +107,7 @@ TEST_CASE(editor_asset_type_classification_covers_runtime_and_source_files)
     CHECK(std::string(editorAssetTypeName(EditorAssetType::SkeletonMapping))
           == "Rig Profile");
     CHECK(classifyEditorAssetPath("scene.ayscene") == EditorAssetType::Scene);
+    CHECK(classifyEditorAssetPath("scene.scn") == EditorAssetType::Scene);
     CHECK(classifyEditorAssetPath("editor.ui.json") == EditorAssetType::UiLayout);
     CHECK(classifyEditorAssetPath("ground.aytilemap.json")
           == EditorAssetType::Tilemap);
@@ -115,6 +116,8 @@ TEST_CASE(editor_asset_type_classification_covers_runtime_and_source_files)
     CHECK(classifyEditorAssetPath("material.phoskia") == EditorAssetType::Shader);
     CHECK(classifyEditorAssetPath("controller.logia") == EditorAssetType::Script);
     CHECK(classifyEditorAssetPath("music.ayaudio") == EditorAssetType::Audio);
+    CHECK(classifyEditorAssetPath("combat.aystats.json") == EditorAssetType::StatsRecipe);
+    CHECK(classifyEditorAssetPath("combat.aystats") == EditorAssetType::StatsRecipe);
 }
 
 TEST_CASE(editor_runtime_cache_follows_open_project_root)

@@ -58,7 +58,7 @@ uses each 2D component's plane bounds. The 2D Universal Gizmo provides XY
 translation, Z rotation, and XY/uniform scale at a stable screen size; these
 edits use the shared command stack and therefore support Undo/Redo.
 
-Save the resulting document as an `.ayscene` through the normal Scene workflow.
+Save the resulting document as an `.scn` through the normal Scene workflow. Existing `.ayscene` files can still be opened.
 Sprite and Tilemap references remain portable project paths, and reopening the
 Scene restores the same components without requiring hand-edited JSON.
 
@@ -130,7 +130,7 @@ unless absolute paths are explicitly supplied.
 {
   "executable": "out/build/windows-client-debug/BSimmer.exe",
   "workingDirectory": ".",
-  "arguments": ["--scene", "Assets/worlds/main.ayscene"]
+  "arguments": ["--scene", "Assets/worlds/main.scn"]
 }
 ```
 
@@ -161,7 +161,7 @@ Application UI orchestration is additive to the existing project schema:
   "worlds": [
     {
       "id": "village",
-      "scene": "worlds/village.ayscene",
+      "scene": "worlds/village.scn",
       "uiContext": "Gameplay"
     }
   ]
@@ -199,7 +199,7 @@ editor Console; it does not replace project content with validation objects.
 of `AYApplication` itself. `AYProjectDoctor`, the Editor runtime validator and
 CI use the same project-level API for manifests, content, Build Profiles,
 CMake presets and runtime artifacts. `AYProjectContentValidator` remains the
-content-only adapter and loads every `.ayscene`,
+content-only adapter and loads every `.scn` or legacy `.ayscene`,
 `.ui.json`, and `.aytilemap`/`.aytilemap.json` from an actual selected build
 profile. Headless validation checks UI structure without constructing widgets;
 Full Client validation also builds the tree through `UILayoutLoader`.

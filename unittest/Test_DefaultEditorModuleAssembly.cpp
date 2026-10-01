@@ -31,6 +31,12 @@ TEST_CASE(editor_graph_installs_all_default_gameloop_subsystems)
         "AYEntity.Components",
         "AYEditor.Components",
         "AYEntity.Runtime",
+#ifdef AYEDITOR_TEST_HAS_STATS
+        "AYStats.Integration",
+#ifdef AYEDITOR_TEST_HAS_STATS_HOST
+        "AYStats.HostIntegration",
+#endif
+#endif
         "AYRenderer.Runtime",
         "AYEntity.AnimationIntegration",
         "AYEntity.RenderIntegration",

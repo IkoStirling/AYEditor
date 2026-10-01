@@ -13,6 +13,7 @@ enum class EditorDslLanguage {
     Unknown = 0,
     Phoskia,
     Logia,
+    ActorClassJson,
 };
 
 enum class EditorDslDiagnosticSeverity {

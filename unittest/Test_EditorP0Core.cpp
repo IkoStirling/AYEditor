@@ -7,6 +7,7 @@
 #include "AYEntity/components/TransformComponent.h"
 #include "AYEntity/components/SpriteAnimationComponent.h"
 #include "AYEntity/components/SpriteComponent.h"
+#include "AYEntity/components/ScriptComponent.h"
 #include "AYScene.h"
 
 #include <chrono>
@@ -34,7 +35,7 @@ TEST_CASE(editor_document_save_and_open_preserve_scene_identity)
 {
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::filesystem::path path = std::filesystem::temp_directory_path()
-        / ("ayeditor_p0_" + std::to_string(nonce) + ".ayscene");
+        / ("ayeditor_p0_" + std::to_string(nonce) + ".scn");
 
     EditorSceneDocument document;
     ayt::scene::Scene* scene = &document.scene();
@@ -49,6 +50,59 @@ TEST_CASE(editor_document_save_and_open_preserve_scene_identity)
     CHECK(&document.scene() == scene);
     CHECK(!document.isDirty());
 
+    std::error_code removeError;
+    std::filesystem::remove(path, removeError);
+}
+
+TEST_CASE(editor_document_reads_legacy_scene_but_writes_current_suffix)
+{
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto stem = std::filesystem::temp_directory_path()
+        / ("ayeditor_legacy_" + std::to_string(nonce));
+    const auto legacy = stem.string() + ".ayscene";
+    const auto current = stem.string() + ".scn";
+    EditorSceneDocument source;
+    CHECK(source.scene().save(legacy));
+
+    EditorSceneDocument document;
+    std::string error;
+    CHECK(document.open(legacy, &error));
+    CHECK_FALSE(document.save(&error));
+    CHECK_FALSE(document.saveAs(legacy, &error));
+    CHECK(document.saveAs(current, &error));
+    CHECK(std::filesystem::is_regular_file(current));
+
+    std::error_code ignored;
+    std::filesystem::remove(legacy, ignored);
+    std::filesystem::remove(current, ignored);
+}
+
+TEST_CASE(editor_scene_rejects_transient_script_component_without_losing_file)
+{
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const std::filesystem::path path = std::filesystem::temp_directory_path()
+        / ("ayeditor_transient_" + std::to_string(nonce) + ".scn");
+    EditorSceneDocument document;
+    auto* entity = document.scene().world().createEntity();
+    CHECK(entity != nullptr);
+    if (entity == nullptr) return;
+    entity->setName("Transient Script");
+    std::string error;
+    CHECK_FALSE(document.addComponent(entity->getId(), "ScriptComponent",
+                                      nullptr, &error));
+    CHECK(error.find("cannot be saved") != std::string::npos);
+    CHECK(entity->getComponent<ayt::entity::ScriptComponent>() == nullptr);
+
+    CHECK(entity->addComponent<ayt::entity::ScriptComponent>() != nullptr);
+    CHECK_FALSE(document.saveAs(path.string(), &error));
+    CHECK(error.find("ScriptComponent") != std::string::npos);
+    CHECK_FALSE(std::filesystem::exists(path));
+
+    CHECK(document.removeComponent(entity->getId(), "ScriptComponent", &error));
+    CHECK(document.saveAs(path.string(), &error));
+    document.newScene();
+    CHECK(document.open(path.string(), &error));
+    CHECK(document.scene().world().findEntity("Transient Script") != nullptr);
     std::error_code removeError;
     std::filesystem::remove(path, removeError);
 }
@@ -112,7 +166,7 @@ TEST_CASE(editor_scene_history_tracks_save_cursor_and_reload_boundary)
 {
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
     const std::filesystem::path path = std::filesystem::temp_directory_path()
-        / ("ayeditor_history_" + std::to_string(nonce) + ".ayscene");
+        / ("ayeditor_history_" + std::to_string(nonce) + ".scn");
 
     EditorSceneDocument document;
     ayt::entity::World& world = document.scene().world();

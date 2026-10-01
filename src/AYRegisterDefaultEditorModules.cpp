@@ -1,4 +1,8 @@
 #include "AYEditor/RegisterDefaultEditorModules.h"
+#ifdef AYEDITOR_HAS_STATS
+#include <AYStats/EntityIntegration.h>
+#include <AYStats/SceneIntegration.h>
+#endif
 
 #include <AYApplication/EngineModuleRuntime.h>
 #include <AYAudio/AudioRuntimeModule.h>
@@ -70,6 +74,12 @@ ayt::module::ModuleResult configureDefaultEditorModules(
             ayt::entity::EntityRuntimeModule>(); !result) {
         return result;
     }
+#ifdef AYEDITOR_HAS_STATS
+    if(auto result=runtime.modules().emplace<ayt::stats::StatsIntegrationModule>();!result)return result;
+#ifdef AYEDITOR_HAS_STATS_HOST
+    if(auto result=runtime.modules().emplace<ayt::stats::StatsHostIntegrationModule>();!result)return result;
+#endif
+#endif
     if (auto result = runtime.modules().emplace<
             ayt::render::RendererRuntimeModule>(); !result) {
         return result;

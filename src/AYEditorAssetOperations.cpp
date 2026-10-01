@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetOperations.h"
+#include <AYAssetFormat/AssetFormat.h>
 
 #include <algorithm>
 #include <cctype>
@@ -48,11 +49,14 @@ bool validFileName(const std::string& name)
 bool isReferenceText(const fs::path& path, std::uintmax_t size)
 {
     if (size > 4u * 1024u * 1024u) return false;
+    if (ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Scene)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Material))
+        return true;
     std::string name = path.filename().string();
     std::transform(name.begin(), name.end(), name.begin(),
         [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     static constexpr const char* suffixes[] = {
-        ".ayscene", ".aymat", ".ui.json", ".aytilemap",
+        ".ayactor", ".ui.json", ".aytilemap",
         ".aytilemap.json", ".json", ".toml", ".yaml", ".yml",
         ".lua", ".js", ".ts", ".glsl", ".vert", ".frag"
     };

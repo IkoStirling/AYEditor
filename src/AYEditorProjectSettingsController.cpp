@@ -1,4 +1,5 @@
 #include "AYEditorProjectSettingsController.h"
+#include <AYAssetFormat/AssetFormat.h>
 
 #include "AYEditor/EditorProjectDescriptor.h"
 
@@ -121,7 +122,8 @@ ayt::resource::ProjectBuildProfile defaultProfile(
          ayt::resource::ProjectAssetStorage::Loose, "core", false},
         {"**/*.ui.json", ayt::resource::ProjectAssetTransform::Raw,
          ayt::resource::ProjectAssetStorage::Loose, "core", false},
-        {"**/*.ayscene", ayt::resource::ProjectAssetTransform::Raw,
+        {"**/*" + std::string(ayt::asset_format::suffix(ayt::asset_format::Id::Scene)),
+         ayt::resource::ProjectAssetTransform::Raw,
          ayt::resource::ProjectAssetStorage::Loose, "core", false},
     };
     profile.cache.enabled = true;
@@ -1076,7 +1078,8 @@ struct EditorProjectSettingsController::Impl {
             captureWorld();
             const std::size_t number = project.worlds.size() + 1u;
             project.worlds.push_back({"world_" + std::to_string(number),
-                "worlds/world_" + std::to_string(number) + ".ayscene",
+                ayt::asset_format::appendSuffix(
+                    "worlds/world_" + std::to_string(number), ayt::asset_format::Id::Scene),
                 {}, {}, {}});
             selectedWorld = static_cast<int>(project.worlds.size() - 1u);
             refreshWorldList();

@@ -59,6 +59,10 @@ std::wstring formatCompileReport(const EditorDslCompileReport& report,
             }
         }
     }
+    if (report.language == EditorDslLanguage::Logia) {
+        output << "\n\nNote: script-level var is shared by all instances of this script; "
+                  "keep per-entity state in host properties or components.";
+    }
     return ayt::ui::decodeUtf8Text(output.str());
 }
 
@@ -345,27 +349,37 @@ private:
         _host.setStatusText(
             L"Saved DSL: "
             + ayt::ui::decodeUtf8Text(_document->displayPath()));
+        if (_document->language() == EditorDslLanguage::Logia
+            || _document->language() == EditorDslLanguage::ActorClassJson) {
+            // The saved file is what the Play watcher will reload. Show
+            // diagnostics immediately, including for invalid saved source.
+            compile(true);
+        }
         return true;
     }
 
-    void compile()
+    void compile(bool saved = false)
     {
         const EditorDslCompileReport report = _document->compile();
         _diagnostics->setText(
             formatCompileReport(report, _document->displayPath()));
         _diagnostics->setCaret(0, 0);
         _status->setText(report.success
-            ? (_document->isDirty()
-                ? L"Compile succeeded (unsaved buffer)"
-                : L"Compile succeeded")
-            : L"Compile failed - see Diagnostics");
+            ? (saved ? L"Saved and compiled"
+                : (_document->isDirty()
+                    ? L"Compile succeeded (unsaved buffer)"
+                    : L"Compile succeeded"))
+            : (saved ? L"Saved, compile failed - see Diagnostics"
+                : L"Compile failed - see Diagnostics"));
         _status->setTextColor(report.success
             ? ayt::math::FVector4(0.42f, 0.78f, 0.52f, 1.0f)
             : ayt::math::FVector4(0.95f, 0.35f, 0.35f, 1.0f));
         _host.setStatusText(
             ayt::ui::decodeUtf8Text(
                 editorDslLanguageName(report.language))
-            + (report.success ? L" compile succeeded" : L" compile failed"));
+            + (report.success
+                ? (saved ? L" saved and compiled" : L" compile succeeded")
+                : (saved ? L" saved, compile failed" : L" compile failed")));
         _host.requestRepaint();
     }
 
@@ -383,14 +397,14 @@ EditorDescriptor makeEditorDslDescriptor()
 {
     EditorDescriptor descriptor;
     descriptor.id = kEditorDslExtensionId;
-    descriptor.displayName = L"Phoskia / Logia Editor";
+    descriptor.displayName = L"Code and Actor Data Editor";
     descriptor.iconPath = "icons/outline/code.svg";
     descriptor.surfaceKind = EditorSurfaceKind::Document;
     descriptor.openPolicy = EditorOpenPolicy::PerResource;
     descriptor.defaultDockSlot = EditorDockSlot::Center;
     descriptor.priority = 100;
-    descriptor.extensions = {".phoskia", ".logia"};
-    descriptor.assetTypes = {"shader", "script"};
+    descriptor.extensions = {".phoskia", ".logia", ".ayactor"};
+    descriptor.assetTypes = {"shader", "script", "actor-class"};
     descriptor.createDocument =
         [](const EditorOpenRequest& request,
            std::string& error) -> std::shared_ptr<IEditorDocument> {

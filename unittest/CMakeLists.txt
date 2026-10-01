@@ -27,6 +27,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorSkeletonExtension.cpp
     Test_EditorAnimationExtension.cpp
     Test_EditorSequence.cpp
+    Test_EditorParticle.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
@@ -155,6 +156,20 @@ target_link_libraries(DefaultEditorModuleAssemblyTest PRIVATE
     AYEntity
     AYTest
 )
+if(TARGET AYEntityStatsIntegration)
+    target_compile_definitions(DefaultEditorModuleAssemblyTest PRIVATE AYEDITOR_TEST_HAS_STATS=1)
+endif()
+if(TARGET AYStatsHostIntegration)
+    target_compile_definitions(DefaultEditorModuleAssemblyTest PRIVATE AYEDITOR_TEST_HAS_STATS_HOST=1)
+endif()
+if(TARGET AYEntityStatsIntegration AND TARGET AYStatsAssets)
+    add_executable(AYStats_EditorTests
+        "${AY_STATS_SOURCE_DIR}/unittest/main.cpp"
+        "${AY_STATS_SOURCE_DIR}/unittest/Test_Editor.cpp")
+    target_link_libraries(AYStats_EditorTests PRIVATE AYEditor AYEntityStatsIntegration AYTest)
+    ay_add_test(AYStats_EditorTests CASE_REPORT LABELS "stats;stats-full;stats-integration;integration" TIMEOUT 60 RUN_SERIAL)
+    ay_stats_write_test_features()
+endif()
 
 target_compile_options(DefaultEditorModuleAssemblyTest PRIVATE
     $<$<CXX_COMPILER_ID:MSVC>: /W4>
@@ -168,3 +183,22 @@ if(MSVC)
 endif()
 
 ay_add_test(DefaultEditorModuleAssemblyTest CASE_REPORT LABELS "ayeditor;editor-full" TIMEOUT 30 RUN_SERIAL)
+
+if(TARGET AYParticleResources)
+    add_executable(AYEditor_ParticleTests main.cpp Test_EditorParticle.cpp)
+    target_link_libraries(AYEditor_ParticleTests PRIVATE AYEditor AYTest AYEntity AYScene)
+    if(MSVC)
+        target_link_options(AYEditor_ParticleTests PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+    ay_add_test(AYEditor_ParticleTests CASE_REPORT LABELS "ayeditor;particle;integration" TIMEOUT 60 RUN_SERIAL)
+endif()
+
+# Opt-in real D3D11 authoring viewport regression, isolated from Noop suites.
+if(WIN32 AND TARGET AYEntityParticleIntegration)
+    add_executable(AYEditor_ParticlePreviewRenderTest EXCLUDE_FROM_ALL ParticlePreviewRenderTest.cpp)
+    target_link_libraries(AYEditor_ParticlePreviewRenderTest PRIVATE AYEditor AYRenderer)
+    target_include_directories(AYEditor_ParticlePreviewRenderTest PRIVATE ../../AYRenderer/src)
+    if(MSVC)
+        target_link_options(AYEditor_ParticlePreviewRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+endif()

@@ -1,5 +1,6 @@
 #include "AYEditor/EditorAssetDatabase.h"
 
+#include <AYAssetFormat/AssetFormat.h>
 #include <AYIO/FileWatcher.h>
 
 #include <algorithm>
@@ -264,7 +265,7 @@ bool readIndex(const std::filesystem::path& path,
     while (input >> record.id >> std::quoted(record.logicalPath)
                  >> type >> origin >> importState
                  >> record.size >> record.lastModified) {
-        if (type > static_cast<unsigned>(EditorAssetType::Sequence)
+        if (type > static_cast<unsigned>(EditorAssetType::StatsRecipe)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -330,6 +331,9 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::GameFlow: return "Game Flow";
     case EditorAssetType::SkeletonMapping: return "Rig Profile";
     case EditorAssetType::Sequence: return "Scene Sequence";
+    case EditorAssetType::ParticleEffect: return "Particle Effect";
+    case EditorAssetType::StatsRecipe: return "Stats Recipe";
+    case EditorAssetType::ActorClass: return "Actor Class";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -349,49 +353,50 @@ const char* editorAssetImportStateName(EditorAssetImportState state) noexcept
 EditorAssetType classifyEditorAssetPath(const std::string& path)
 {
     const std::string lower = lowerAscii(slashNormalized(path));
-    if (lower.size() >= 14
-        && lower.compare(lower.size() - 14, 14, ".gameflow.json") == 0) {
-        return EditorAssetType::GameFlow;
-    }
-    if (lower.size() >= 12
-        && lower.compare(lower.size() - 12, 12, ".uiflow.json") == 0) {
-        return EditorAssetType::UiFlow;
-    }
-    if (lower.size() >= 8
-        && lower.compare(lower.size() - 8, 8, ".ui.json") == 0) {
-        return EditorAssetType::UiLayout;
-    }
-    if (lower.size() >= 15
-        && lower.compare(lower.size() - 15, 15, ".aytilemap.json") == 0) {
-        return EditorAssetType::Tilemap;
+    if(lower.ends_with(".aystats.json") || lower.ends_with(".aystats"))
+        return EditorAssetType::StatsRecipe;
+    if (const auto match = ayt::asset_format::matchPath(lower)) {
+        using ayt::asset_format::Id;
+        switch (match->descriptor->id) {
+        case Id::GameFlow: return EditorAssetType::GameFlow;
+        case Id::UiFlow: return EditorAssetType::UiFlow;
+        case Id::UiLayout: return EditorAssetType::UiLayout;
+        case Id::TilemapSource:
+        case Id::Tilemap: return EditorAssetType::Tilemap;
+        case Id::ParticleEffect: return EditorAssetType::ParticleEffect;
+        case Id::Mesh: return EditorAssetType::Mesh;
+        case Id::Material: return EditorAssetType::Material;
+        case Id::Texture: return EditorAssetType::Texture;
+        case Id::Scene: return EditorAssetType::Scene;
+        case Id::SceneSequence: return EditorAssetType::Sequence;
+        case Id::Animation: return EditorAssetType::Animation;
+        case Id::Skeleton: return EditorAssetType::Skeleton;
+        case Id::RigProfile: return EditorAssetType::SkeletonMapping;
+        case Id::LogiaScript: return EditorAssetType::Script;
+        case Id::ActorClass: return EditorAssetType::ActorClass;
+        case Id::PhoskiaShader: return EditorAssetType::Shader;
+        case Id::Audio: return EditorAssetType::Audio;
+        default: break;
+        }
     }
     const std::string extension =
         lowerAscii(std::filesystem::path(lower).extension().string());
-    if (extension == ".aymesh") return EditorAssetType::Mesh;
-    if (extension == ".aymat") return EditorAssetType::Material;
-    if (extension == ".aytex" || extension == ".png"
+    if (extension == ".png"
         || extension == ".jpg" || extension == ".jpeg"
         || extension == ".tga" || extension == ".bmp"
         || extension == ".dds" || extension == ".hdr") {
         return EditorAssetType::Texture;
     }
-    if (extension == ".ayscene") return EditorAssetType::Scene;
-    if (extension == ".ayseq") return EditorAssetType::Sequence;
-    if (extension == ".aytilemap") return EditorAssetType::Tilemap;
-    if (extension == ".ayanm" || extension == ".ayanim") {
+    if (extension == ".ayanim") {
         return EditorAssetType::Animation;
     }
-    if (extension == ".ayskel") return EditorAssetType::Skeleton;
-    if (extension == ".ayrig" || extension == ".aysmap") {
-        return EditorAssetType::SkeletonMapping;
-    }
-    if (extension == ".lua" || extension == ".logia"
+    if (extension == ".lua"
         || extension == ".py") return EditorAssetType::Script;
-    if (extension == ".phoskia" || extension == ".shader" || extension == ".sc"
+    if (extension == ".shader" || extension == ".sc"
         || extension == ".vert" || extension == ".frag") {
         return EditorAssetType::Shader;
     }
-    if (extension == ".ayaudio" || extension == ".wav" || extension == ".ogg"
+    if (extension == ".wav" || extension == ".ogg"
         || extension == ".mp3" || extension == ".flac") {
         return EditorAssetType::Audio;
     }

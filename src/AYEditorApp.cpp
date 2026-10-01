@@ -1,9 +1,7 @@
 #include "AYEditor/EditorApp.h"
 #include "AYEditor/EditorChildWindowManager.h"
 
-#if defined(_DEBUG) && defined(_MSC_VER)
 #include "AYEditor/EditorHeapDebug.h"
-#endif
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorStartupSplash.h"

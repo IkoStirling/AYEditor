@@ -16,9 +16,12 @@ struct EditorProjectAssetCreateResult {
     explicit operator bool() const noexcept { return success; }
 };
 
-// Creates valid authoring documents in the conventional project folders.
-// Names are made unique, so a menu action never overwrites existing content.
+/// Creates valid authoring documents in the project's Assets tree and returns
+/// their browser paths. AYStats creation also writes a starter definition,
+/// recipe book, source manifest, and cooked preview resource as one asset set.
+/// Names are made unique so a menu action never overwrites existing content.
 EditorProjectAssetCreateResult createEditorProjectAsset(
-    const std::string& projectRoot, EditorAssetType type);
+    const std::string& projectRoot, EditorAssetType type,
+    const std::string& parentActorClassPath = {});
 
 } // namespace ayt::editor

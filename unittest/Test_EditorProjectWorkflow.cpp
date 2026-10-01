@@ -1,5 +1,8 @@
 #include "AYTest.h"
 #include <AYEntity/World.h>
+#include <AYEntity/ActorClassAsset.h>
+#include <AYEntity/components/ActorInstanceComponent.h>
+#include <AYEntity/components/TransformComponent.h>
 #include <AYEntity.h>
 
 #include "AYEditor/EditorAssetTrash.h"
@@ -11,6 +14,7 @@
 #include "AYEditor/EditorProjectRuntimeValidator.h"
 #include "AYEditor/EditorRecoveryStore.h"
 #include "AYEditor/EditorSceneDocument.h"
+#include "AYEditor/EditorDslDocument.h"
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorSelectionContext.h"
 #include "AYEditor/EditorWorkspace.h"
@@ -21,6 +25,7 @@
 #include <AYResource/assetsImpl/TilemapAsset.h>
 #include <AYResource/assetsImpl/Texture.h>
 #include <AYScene.h>
+#include <AYScene/SceneManager.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/Modal.h>
@@ -320,6 +325,170 @@ TEST_CASE(project_asset_factory_creates_valid_assets_in_conventional_folders)
         == EditorAssetType::Tilemap);
     CHECK(classifyEditorAssetPath(flow.absolutePath)
         == EditorAssetType::UiFlow);
+}
+
+TEST_CASE(project_asset_factory_creates_actor_class_and_editable_script)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("actor_factory")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto created = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::ActorClass);
+    CHECK(created);
+    CHECK(classifyEditorAssetPath(created.absolutePath)
+        == EditorAssetType::ActorClass);
+    ayt::entity::ActorClassAsset actor;
+    std::string error;
+    CHECK(ayt::entity::loadActorClassAsset(created.absolutePath, actor, &error));
+    CHECK(actor.id == "NewActor");
+    const auto scriptPath = cleanup.root / "Assets" / actor.scriptPath;
+    CHECK(std::filesystem::exists(scriptPath));
+    EditorDslDocument script;
+    CHECK(script.open(scriptPath.string(), "Assets/actors/NewActor.logia", &error));
+    const auto compiled = script.compile();
+    CHECK(compiled.success);
+    CHECK(compiled.diagnostics.empty());
+    EditorDslDocument classData;
+    CHECK(classData.open(created.absolutePath,
+                         "Assets/actors/NewActor.ayactor", &error));
+    CHECK(classData.compile().success);
+    classData.setSourceUtf8("{invalid");
+    CHECK_FALSE(classData.compile().success);
+
+    const auto second = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::ActorClass);
+    CHECK(second);
+    ayt::entity::ActorClassAsset secondActor;
+    CHECK(ayt::entity::loadActorClassAsset(second.absolutePath, secondActor, &error));
+    CHECK(secondActor.id == "NewActor2");
+    CHECK(std::filesystem::exists(cleanup.root / "Assets" / secondActor.scriptPath));
+    CHECK(std::filesystem::path(second.absolutePath).stem()
+        == std::filesystem::path(secondActor.scriptPath).stem());
+    const auto child = createEditorProjectAsset(cleanup.root.string(),
+        EditorAssetType::ActorClass, "actors/NewActor.ayactor");
+    CHECK(child);
+    ayt::entity::ActorClassAsset childActor;
+    CHECK(ayt::entity::loadActorClassAsset(child.absolutePath,
+                                            childActor, &error));
+    CHECK(childActor.parentPath == "actors/NewActor.ayactor");
+    ayt::entity::ActorClassAsset effective;
+    CHECK(ayt::entity::resolveActorClassAsset(
+        (cleanup.root / "Assets").string(),
+        std::filesystem::path(child.logicalPath)
+            .lexically_relative("Assets").generic_string(),
+        effective, &error));
+}
+
+TEST_CASE(actor_script_move_repairs_class_reference_and_editor_context)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("actor_script_move")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto created = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::ActorClass);
+    CHECK(created);
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const EditorAssetRecord* script = database.findByLogicalPath(
+        "Assets/actors/NewActor.logia");
+    CHECK_NOT_NULL(script);
+    if (!script) return;
+    EditorAssetOperations operations(cleanup.root.string());
+    const auto moved = operations.move(database, {*script}, "Assets/scripts");
+    CHECK(moved);
+    ayt::entity::ActorClassAsset actor;
+    CHECK(ayt::entity::loadActorClassAsset(created.absolutePath, actor, &error));
+    CHECK(actor.scriptPath == "scripts/NewActor.logia");
+    EditorDslDocument document;
+    CHECK(document.open((cleanup.root / "Assets/scripts/NewActor.logia").string(),
+                        "Assets/scripts/NewActor.logia", &error));
+    const auto compiled = document.compile();
+    CHECK(compiled.success);
+    CHECK(compiled.diagnostics.empty());
+}
+
+TEST_CASE(actor_parent_move_repairs_child_reference)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("actor_parent_move")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto parent = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::ActorClass);
+    CHECK(parent);
+    const auto child = createEditorProjectAsset(cleanup.root.string(),
+        EditorAssetType::ActorClass, "actors/NewActor.ayactor");
+    CHECK(child);
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const EditorAssetRecord* parentRecord = database.findByLogicalPath(
+        "Assets/actors/NewActor.ayactor");
+    CHECK_NOT_NULL(parentRecord);
+    if (!parentRecord) return;
+    EditorAssetOperations operations(cleanup.root.string());
+    CHECK(operations.move(database, {*parentRecord}, "Assets/monsters"));
+    ayt::entity::ActorClassAsset childActor;
+    CHECK(ayt::entity::loadActorClassAsset(child.absolutePath,
+                                           childActor, &error));
+    CHECK(childActor.parentPath == "monsters/NewActor.ayactor");
+    ayt::entity::ActorClassAsset effective;
+    CHECK(ayt::entity::resolveActorClassAsset(
+        (cleanup.root / "Assets").string(),
+        std::filesystem::path(child.logicalPath)
+            .lexically_relative("Assets").generic_string(),
+        effective, &error));
+}
+
+TEST_CASE(actor_instance_undo_redo_retains_assets_root_and_saves)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("actor_undo")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto created = createEditorProjectAsset(
+        cleanup.root.string(), EditorAssetType::ActorClass);
+    CHECK(created);
+    ayt::entity::ActorClassAsset actor;
+    std::string error;
+    CHECK(ayt::entity::loadActorClassAsset(created.absolutePath, actor, &error));
+    EditorSceneDocument document;
+    document.newScene();
+    const std::string root = (cleanup.root / "Assets").string();
+    CHECK(document.createEntity("Create Actor", [&](ayt::entity::Entity& entity) {
+        entity.setName("Enemy");
+        return ayt::entity::instantiateActorClass(entity, actor,
+            "actors/NewActor.ayactor", root, &error);
+    }));
+    CHECK(document.undo());
+    CHECK(document.redo());
+    auto* entity = document.scene().world().findEntity("Enemy");
+    CHECK_NOT_NULL(entity);
+    auto* instance = entity->getComponent<ayt::entity::ActorInstanceComponent>();
+    CHECK_NOT_NULL(instance);
+    CHECK(instance->assetsRoot == root);
+    entity->getComponent<ayt::entity::Transform>()->setPosition(7.0f, 0.0f, 0.0f);
+    CHECK(document.restoreActorDefaults(entity->getId(), &error));
+    CHECK_FLOAT_EQ(entity->getComponent<ayt::entity::Transform>()->position.x,
+                   0.0f, 0.001f);
+    CHECK(document.undo());
+    CHECK_FLOAT_EQ(entity->getComponent<ayt::entity::Transform>()->position.x,
+                   7.0f, 0.001f);
+    CHECK(document.redo());
+    CHECK_FLOAT_EQ(entity->getComponent<ayt::entity::Transform>()->position.x,
+                   0.0f, 0.001f);
+    std::filesystem::create_directories(cleanup.root / "Assets/worlds");
+    CHECK(document.saveAs((cleanup.root / "Assets/worlds/Test.scn").string(),
+                          &error));
+    auto& scenes = ayt::scene::SceneManager::instance();
+    scenes.setEdit(&document.scene());
+    scenes.setCurrent(&document.scene());
+    CHECK(scenes.beginPlay());
+    CHECK_NOT_NULL(scenes.play()->world().findEntity("Enemy"));
+    scenes.endPlay();
+    scenes.setEdit(nullptr);
+    scenes.setCurrent(nullptr);
 }
 
 TEST_CASE(project_asset_trash_moves_and_restores_one_transaction)

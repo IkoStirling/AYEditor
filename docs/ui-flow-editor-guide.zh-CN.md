@@ -22,7 +22,7 @@ UI Flow 用来编排“什么时候显示哪套 UI”，布局编辑器则负责
   "worlds": [
     {
       "id": "village",
-      "scene": "worlds/village.ayscene",
+      "scene": "worlds/village.scn",
       "uiContext": "Gameplay"
     }
   ]

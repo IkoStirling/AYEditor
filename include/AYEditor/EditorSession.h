@@ -262,7 +262,8 @@ public:
     bool openNewProject();
     bool openProject(const std::string& selectedPath = {});
     bool openProjectSettings();
-    bool createProjectAsset(EditorAssetType type);
+    bool createProjectAsset(EditorAssetType type,
+                            const std::string& parentActorClassPath = {});
     bool restoreLastDeletedAssets();
     bool runCurrentProject();
     bool autosaveNow();

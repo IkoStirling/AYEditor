@@ -173,7 +173,7 @@ TEST_CASE(StandardMixedProjectUsesOneSceneAcrossValidationProfiles)
     const fs::path projectRoot = fs::path(AY_EDITOR_TEST_SOURCE_DIR)
         .parent_path() / "Validation" / "Mixed2D3DProject";
     const fs::path scenePath = projectRoot / "Assets" / "worlds"
-        / "mixed_room.ayscene";
+        / "mixed_room.scn";
 
     const EditorRuntimeValidationResult headless =
         EditorProjectRuntimeValidator::validate(
@@ -400,7 +400,7 @@ TEST_CASE(SceneViewFiltersPersistAndUiPreviewIsPassive)
     std::string error;
     CHECK_TRUE(workspace.open(projectRoot.string(), &error));
     const EditorSceneVisibility* restored = workspace.findVisibility(
-        (projectRoot / "Assets" / "worlds" / "mixed_room.ayscene").string());
+        (projectRoot / "Assets" / "worlds" / "mixed_room.scn").string());
     CHECK(restored != nullptr);
     CHECK(restored != nullptr && !restored->meshes);
     CHECK(restored != nullptr && restored->worldLit2D);
@@ -825,7 +825,7 @@ TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
           && tilemapComponent->tilemapPath == "tilemaps/ground.aytilemap");
 
     fs::create_directories(root / "Assets" / "worlds", ignored);
-    const fs::path scenePath = root / "Assets" / "worlds" / "stage4.ayscene";
+    const fs::path scenePath = root / "Assets" / "worlds" / "stage4.scn";
     CHECK_TRUE(session.document()->saveAs(scenePath.string(), &error));
     EditorSceneDocument reopened;
     CHECK_TRUE(reopened.open(scenePath.string(), &error));

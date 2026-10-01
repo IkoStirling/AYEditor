@@ -51,6 +51,8 @@ TEST_CASE(asset_tile_presenter_marks_native_suffixes_case_insensitively)
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("hero.ayrig"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("legacy.aysmap"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("editor.ui.json"));
+    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("combat.aystats.json"));
+    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("combat.aystats"));
     CHECK(EditorAssetTilePresenter::isEngineNativeFileName("lit.phoskia"));
     CHECK(!EditorAssetTilePresenter::isEngineNativeFileName("albedo.png"));
     CHECK(!EditorAssetTilePresenter::isEngineNativeFileName("hero.fbx"));

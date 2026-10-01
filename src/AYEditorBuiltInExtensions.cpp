@@ -5,6 +5,9 @@
 #include "AYEditor/EditorSequenceDocument.h"
 #endif
 #include "AYEditor/EditorSpriteAnimationExtension.h"
+#ifdef AYEDITOR_HAS_PARTICLE
+#include <AYEditor/EditorParticleDocument.h>
+#endif
 
 #include "AYEditor/EditorCommandSystem.h"
 #include "AYEditor/EditorProductPaths.h"
@@ -4827,6 +4830,9 @@ bool registerEditorBuiltInExtensions(
         return add(registry, std::move(descriptor), error);
     };
     if (!registerEditorAnimationExtension(registry, error)) return false;
+#ifdef AYEDITOR_HAS_PARTICLE
+    if (!registerEditorParticleExtension(registry,error)) return false;
+#endif
 #ifdef AYEDITOR_HAS_SEQUENCE
     if (!registerEditorSequenceExtension(registry, error)) return false;
 #endif

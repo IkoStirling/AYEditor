@@ -25,7 +25,8 @@ std::string lower(std::string value)
 
 bool textAuthoringAsset(const EditorAssetRecord& record)
 {
-    if (record.type == EditorAssetType::Scene
+    if (record.type == EditorAssetType::ParticleEffect
+        || record.type == EditorAssetType::Scene
         || record.type == EditorAssetType::Material
         || record.type == EditorAssetType::Script
         || record.type == EditorAssetType::Shader

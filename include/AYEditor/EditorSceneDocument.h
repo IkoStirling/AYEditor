@@ -41,10 +41,13 @@ public:
     const ayt::scene::Scene& scene() const;
 
     void newScene();
+    /// Opens the current Scene suffix or its legacy read alias.
     bool open(const std::string& path, std::string* error = nullptr);
     const std::string& typeId() const noexcept override { return _typeId; }
+    // Rejects components without Scene serialization instead of dropping them.
     bool save(std::string* error = nullptr) override;
     bool canSaveAs() const noexcept override { return true; }
+    /// Writes the current Scene suffix; legacy paths must be saved under a new name.
     bool saveAs(const std::string& path,
                 std::string* error = nullptr) override;
     bool writeRecoveryCopy(const std::string& path,
@@ -70,6 +73,9 @@ public:
         uint32_t entityId, const std::string& componentType,
         std::string label, std::string mergeKey,
         const std::function<bool(ayt::entity::IComponent&)>& mutation);
+    /// Restore class defaults (including component presence and properties)
+    /// as one undoable Actor instance edit.
+    bool restoreActorDefaults(uint32_t entityId, std::string* error = nullptr);
     bool undo();
     bool redo();
     bool canUndo() const noexcept { return _history.canUndo(); }

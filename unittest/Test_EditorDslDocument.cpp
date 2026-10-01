@@ -245,6 +245,36 @@ material Unlit {
     CHECK_FALSE(phoskiaFailed.diagnostics.empty());
 }
 
+TEST_CASE(actor_class_document_checks_unsaved_parent_and_script_references)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("actor_references")};
+    const auto root = cleanup.root / "Assets" / "actors";
+    const auto base = root / "Base.ayactor";
+    const auto child = root / "Child.ayactor";
+    CHECK(ayt::io::File::createParentDirectories(base.string()));
+    CHECK(ayt::io::File::writeAllText(base.string(),
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Base","script":"","properties":{},"components":[]})"));
+    CHECK(ayt::io::File::writeAllText(child.string(),
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"","properties":{},"components":[]})"));
+    EditorDslDocument document;
+    CHECK(document.open(child.string(), "actors/Child.ayactor"));
+    CHECK(document.compile().success);
+
+    document.setSourceUtf8(
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Missing.ayactor","script":"","properties":{},"components":[]})");
+    CHECK_FALSE(document.compile().success);
+    document.setSourceUtf8(
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"actors/Missing.logia","properties":{},"components":[]})");
+    CHECK_FALSE(document.compile().success);
+    CHECK(ayt::io::File::writeAllText(base.string(),
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Base","parent":"actors/Child.ayactor","script":"","properties":{},"components":[]})"));
+    document.setSourceUtf8(
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"","properties":{},"components":[]})");
+    const auto cycle = document.compile();
+    CHECK_FALSE(cycle.success);
+    CHECK_FALSE(cycle.diagnostics.empty());
+}
+
 TEST_CASE(engine_player_controller_template_compiles)
 {
 #ifndef AY_EDITOR_TEST_SOURCE_DIR

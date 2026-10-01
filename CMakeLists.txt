@@ -220,6 +220,24 @@ set(HEAD_FILES
 )
 
 add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
+if(TARGET AYStatsInspector AND TARGET AYEntityStatsIntegration)
+    target_link_libraries(${MODULE_NAME} PUBLIC AYStatsInspector AYEntityStatsIntegration)
+    target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_STATS=1)
+endif()
+if(TARGET AYStatsHostIntegration)
+    target_link_libraries(${MODULE_NAME} PUBLIC AYStatsHostIntegration)
+    target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_STATS_HOST=1)
+endif()
+if(TARGET AYParticleResources)
+    target_sources(${MODULE_NAME} PRIVATE src/AYEditorParticleDocument.cpp src/AYEditorParticleExtension.cpp src/AYEditorParticlePreview.cpp)
+    target_link_libraries(${MODULE_NAME} PUBLIC AYParticleResources)
+    if(TARGET AYEntityParticleIntegration)
+        target_link_libraries(${MODULE_NAME} PRIVATE AYEntityParticleIntegration)
+        target_include_directories(${MODULE_NAME} PRIVATE ../AYEntity/src)
+        target_compile_definitions(${MODULE_NAME} PRIVATE AYEDITOR_PARTICLE_RUNTIME_PREVIEW=1)
+    endif()
+    target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_PARTICLE=1)
+endif()
 if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
     target_sources(${MODULE_NAME} PRIVATE
         src/AYEditorSequenceDocument.cpp src/AYEditorSequenceSource.cpp
@@ -230,7 +248,7 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=28)
+    AYEDITOR_SOURCE_ABI_VERSION=30)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

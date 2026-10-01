@@ -37,6 +37,9 @@ enum class EditorAssetType : std::uint8_t {
     // Appended for ABI stability; the enum name is retained for compatibility.
     SkeletonMapping,
     Sequence,
+    ParticleEffect,
+    StatsRecipe,
+    ActorClass,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

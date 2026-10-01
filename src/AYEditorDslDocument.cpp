@@ -1,6 +1,7 @@
 #include "AYEditor/EditorDslDocument.h"
 
 #include "AYIO/File.h"
+#include <AYEntity/ActorClassAsset.h>
 #include "AYScript/logia/LogiaPipeline.h"
 #include "AYShader/Phoskia.h"
 
@@ -9,6 +10,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <unordered_set>
 #include <utility>
 
 namespace ayt::editor {
@@ -65,6 +67,55 @@ void appendUnexpectedFailure(EditorDslCompileReport& report,
         EditorDslDiagnosticSeverity::Error, 0, 0, message, {}});
 }
 
+bool validateActorClassReferences(const std::string& absolutePath,
+                                  const ayt::entity::ActorClassAsset& actor,
+                                  std::string& error)
+{
+    if (actor.parentPath.empty() && actor.scriptPath.empty()) return true;
+    const auto root = ayt::entity::assetsRootForScene(absolutePath);
+    if (root.empty()) {
+        error = "Actor class must be inside an Assets or Content root";
+        return false;
+    }
+    std::string path;
+    if (!actor.scriptPath.empty()) {
+        if (!ayt::entity::resolveActorScriptPath(root, actor.scriptPath,
+                                                 path, &error)) return false;
+        if (!std::filesystem::is_regular_file(path)) {
+            error = "Actor script is missing: " + actor.scriptPath;
+            return false;
+        }
+    }
+    std::unordered_set<std::string> visited;
+    visited.insert(std::filesystem::weakly_canonical(absolutePath).string());
+    std::string next = actor.parentPath;
+    while (!next.empty()) {
+        if (visited.size() >= 32) {
+            error = "Actor inheritance exceeds 32 classes";
+            return false;
+        }
+        if (!ayt::entity::resolveActorClassPath(root, next, path, &error))
+            return false;
+        if (!visited.insert(path).second) {
+            error = "Actor inheritance cycle at " + next;
+            return false;
+        }
+        ayt::entity::ActorClassAsset parent;
+        if (!ayt::entity::loadActorClassAsset(path, parent, &error)) return false;
+        if (!parent.scriptPath.empty()) {
+            std::string script;
+            if (!ayt::entity::resolveActorScriptPath(root, parent.scriptPath,
+                                                     script, &error)) return false;
+            if (!std::filesystem::is_regular_file(script)) {
+                error = "Actor script is missing: " + parent.scriptPath;
+                return false;
+            }
+        }
+        next = parent.parentPath;
+    }
+    return true;
+}
+
 } // namespace
 
 EditorDslLanguage editorDslLanguageFromPath(
@@ -75,6 +126,7 @@ EditorDslLanguage editorDslLanguageFromPath(
             std::filesystem::path(path).extension().string());
         if (extension == ".phoskia") return EditorDslLanguage::Phoskia;
         if (extension == ".logia") return EditorDslLanguage::Logia;
+        if (extension == ".ayactor") return EditorDslLanguage::ActorClassJson;
     } catch (...) {
         // Invalid platform path syntax is simply not an editor DSL.
     }
@@ -86,6 +138,7 @@ const char* editorDslLanguageName(EditorDslLanguage language) noexcept
     switch (language) {
     case EditorDslLanguage::Phoskia: return "Phoskia";
     case EditorDslLanguage::Logia: return "Logia";
+    case EditorDslLanguage::ActorClassJson: return "Actor Class";
     case EditorDslLanguage::Unknown: break;
     }
     return "DSL";
@@ -99,7 +152,7 @@ bool EditorDslDocument::open(const std::string& absolutePath,
         editorDslLanguageFromPath(absolutePath);
     if (language == EditorDslLanguage::Unknown) {
         if (error != nullptr) {
-            *error = "Only .phoskia and .logia files can be opened in the DSL editor.";
+            *error = "Only .phoskia, .logia and .ayactor files can be opened in the code editor.";
         }
         return false;
     }
@@ -237,6 +290,25 @@ EditorDslCompileReport EditorDslDocument::compile() const
     }
 
     try {
+        if (_language == EditorDslLanguage::ActorClassJson) {
+            ayt::entity::ActorClassAsset actor;
+            std::string error;
+            report.success = ayt::entity::parseActorClassAsset(
+                _source, actor, &error);
+            if (report.success) {
+                report.success = validateActorClassReferences(
+                    _absolutePath, actor, error);
+            }
+            if (!report.success) {
+                report.diagnostics.push_back(EditorDslDiagnostic{
+                    EditorDslDiagnosticSeverity::Error, 0, 0,
+                    error.empty() ? "Invalid Actor class" : error, {}});
+            }
+            report.summary = report.success
+                ? "Actor class data is valid."
+                : "Actor class data is invalid.";
+            return report;
+        }
         if (_language == EditorDslLanguage::Phoskia) {
             auto compiler =
                 std::make_unique<ayt::shader::phoskia::Compiler>();
@@ -259,8 +331,42 @@ EditorDslCompileReport EditorDslDocument::compile() const
             return report;
         }
 
-        ayt::script::logia::LogiaToLuaResult compiled =
-            ayt::script::logia::compileLogiaToLua(_source);
+        bool actorHost = false;
+        if (!_absolutePath.empty()) {
+            const auto scriptPath = std::filesystem::weakly_canonical(
+                _absolutePath);
+            const auto root = ayt::entity::assetsRootForScene(_absolutePath);
+            auto classPath = std::filesystem::path(_absolutePath);
+            classPath.replace_extension(".ayactor");
+            ayt::entity::ActorClassAsset actor;
+            std::string ignored;
+            if (ayt::entity::loadActorClassAsset(classPath.string(), actor,
+                                                  &ignored)) {
+                std::string resolvedScript;
+                actorHost = ayt::entity::resolveActorScriptPath(root,
+                    actor.scriptPath, resolvedScript, &ignored)
+                    && resolvedScript == scriptPath.string();
+            }
+            if (!actorHost && !root.empty()) {
+                std::error_code scanError;
+                for (std::filesystem::recursive_directory_iterator it(root, scanError), end;
+                     !scanError && it != end; it.increment(scanError)) {
+                    if (!it->is_regular_file(scanError)
+                        || it->path().extension() != ".ayactor") continue;
+                    if (!ayt::entity::loadActorClassAsset(it->path().string(),
+                                                           actor, &ignored)) continue;
+                    std::string resolvedScript;
+                    actorHost = ayt::entity::resolveActorScriptPath(root,
+                        actor.scriptPath, resolvedScript, &ignored)
+                        && resolvedScript == scriptPath.string();
+                    if (actorHost) break;
+                }
+            }
+        }
+        ayt::script::logia::LogiaToLuaResult compiled = actorHost
+            ? ayt::script::logia::compileLogiaToLua(
+                _source, ayt::script::logia::actorLogiaHostContext())
+            : ayt::script::logia::compileLogiaToLua(_source);
         for (const auto& diagnostic : compiled.diagnostics) {
             report.diagnostics.push_back(EditorDslDiagnostic{
                 toEditorSeverity(diagnostic.severity),

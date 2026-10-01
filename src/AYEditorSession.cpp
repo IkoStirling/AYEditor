@@ -1,8 +1,20 @@
 #include "AYEditor/EditorSession.h"
-
-#if defined(_DEBUG) && defined(_MSC_VER)
-#include "AYEditor/EditorHeapDebug.h"
+#include <AYAssetFormat/AssetFormat.h>
+#ifdef AYEDITOR_HAS_STATS
+#include <AYStats/Inspector.h>
+#include <AYStats/EntityIntegration.h>
+#include <AYStats/RecipeAsset.h>
 #endif
+#ifdef AYEDITOR_HAS_PARTICLE
+#include <AYEditor/EditorParticleDocument.h>
+#include <AYParticle/EffectResource.h>
+#include <AYEntity/ParticleSystem.h>
+#include <AYResource/AssetPath.h>
+#include <AYEntity/components/ParticleEmitterComponent.h>
+#include <AYEntity/components/ParticleEffectComponent.h>
+#endif
+
+#include "AYEditor/EditorHeapDebug.h"
 #include "AYEditor/EditorProductPaths.h"
 #include "AYEditor/EditorVisualStyle.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
@@ -91,6 +103,8 @@
 
 #include <AYEntity/components/AnimationComponent.h>
 #include <AYEntity/ComponentRegistry.h>
+#include <AYEntity/ActorClassAsset.h>
+#include <AYEntity/components/ActorInstanceComponent.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYEntity/components/OrthoCameraComponent.h>
 #include <AYEntity/components/SpriteAnimationComponent.h>
@@ -970,6 +984,8 @@ bool pointHitsEditor2DShape(const Editor2DSelectionShape& shape,
 bool isEditor2DResourceField(const std::string& componentType,
                              const std::string& fieldName)
 {
+    if(componentType=="ParticleEffectComponent") return fieldName=="effectPath";
+    if(componentType=="ParticleEmitterComponent") return fieldName=="texturePath";
     if (componentType == "SpriteComponent") {
         return fieldName == "texturePath"
             || fieldName == "normalTexturePath"
@@ -1193,11 +1209,38 @@ std::string showAssetReferenceDialog(HWND owner, const std::string& projectRoot)
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrInitialDir = initialDirectory.c_str();
     ofn.lpstrFilter =
-        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.aytex;*.aytilemap;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
+        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.aytex;*.aytilemap;*.ayparticle;*.aystats;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
         "All files (*.*)\0*.*\0";
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
+}
+
+std::string sceneDialogFilter(bool includeLegacy)
+{
+    using namespace ayt::asset_format;
+    std::string patterns = "*" + std::string(suffix(Id::Scene));
+    if (includeLegacy) {
+        for (const auto alias : describe(Id::Scene).readAliases) {
+            patterns += ";*";
+            patterns += alias;
+        }
+    }
+    std::string filter = "AY Scene (" + patterns + ")";
+    filter.push_back('\0');
+    filter += patterns;
+    filter.push_back('\0');
+    filter += "All files (*.*)";
+    filter.push_back('\0');
+    filter += "*.*";
+    filter.push_back('\0');
+    filter.push_back('\0');
+    return filter;
+}
+
+std::string sceneDefaultExtension()
+{
+    return std::string(ayt::asset_format::suffix(ayt::asset_format::Id::Scene).substr(1));
 }
 
 std::string showProjectSettingsPathDialog(
@@ -1214,6 +1257,8 @@ std::string showProjectSettingsPathDialog(
         : projectRoot;
     const char* filter = "All files (*.*)\0*.*\0";
     const char* defaultExtension = nullptr;
+    const std::string sceneFilter = sceneDialogFilter(true);
+    const std::string sceneExtension = sceneDefaultExtension();
     switch (kind) {
     case EditorProjectPathKind::GameFlow:
         filter = "GameFlow (*.gameflow.json)\0*.gameflow.json\0JSON (*.json)\0*.json\0";
@@ -1228,8 +1273,8 @@ std::string showProjectSettingsPathDialog(
         defaultExtension = "uiflow.json";
         break;
     case EditorProjectPathKind::Scene:
-        filter = "AY Scene (*.ayscene)\0*.ayscene\0";
-        defaultExtension = "ayscene";
+        filter = sceneFilter.c_str();
+        defaultExtension = sceneExtension.c_str();
         break;
     case EditorProjectPathKind::Tilemap:
         filter = "AY Tilemap (*.aytilemap;*.aytilemap.json)\0*.aytilemap;*.aytilemap.json\0";
@@ -1345,10 +1390,12 @@ std::string showSceneOpenDialog(HWND owner,
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
     if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
-    ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
+    const std::string filter = sceneDialogFilter(true);
+    const std::string extension = sceneDefaultExtension();
+    ofn.lpstrFilter = filter.c_str();
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    ofn.lpstrDefExt = "ayscene";
+    ofn.lpstrDefExt = extension.c_str();
     return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
 }
 
@@ -1365,11 +1412,19 @@ std::string showSceneSaveDialog(HWND owner,
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
     if (!initialDirectory.empty()) ofn.lpstrInitialDir = initialDirectory.c_str();
-    ofn.lpstrFilter = "AY Scene (*.ayscene)\0*.ayscene\0All files (*.*)\0*.*\0";
+    const std::string filter = sceneDialogFilter(false);
+    const std::string extension = sceneDefaultExtension();
+    ofn.lpstrFilter = filter.c_str();
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    ofn.lpstrDefExt = "ayscene";
-    return ::GetSaveFileNameA(&ofn) ? std::string(path) : std::string{};
+    ofn.lpstrDefExt = extension.c_str();
+    if (!::GetSaveFileNameA(&ofn)) return {};
+    if (!ayt::asset_format::isCanonicalPath(path, ayt::asset_format::Id::Scene)) {
+        ::MessageBoxW(owner, L"New scenes must use the current Scene extension.",
+                      L"Save Scene", MB_OK | MB_ICONWARNING);
+        return {};
+    }
+    return std::string(path);
 }
 
 std::string sceneFileNameForTitle(std::string title)
@@ -1382,7 +1437,7 @@ std::string sceneFileNameForTitle(std::string title)
             value = '_';
         }
     }
-    return title + ".ayscene";
+    return ayt::asset_format::appendSuffix(title, ayt::asset_format::Id::Scene);
 }
 
 bool pathIsInside(const std::filesystem::path& path,
@@ -2787,6 +2842,21 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         // Keep last rendered frame visible; stepOnce drives simulation separately.
     }
 
+#ifdef AYEDITOR_HAS_PARTICLE
+    if(auto* status=dynamic_cast<ayt::ui::TextLabel*>(
+        findDescendantById(_componentPropertyBody,"particle_inspector_status"))) {
+        auto* e=_selection.resolve(hierarchyWorldMutable());
+        std::string error,backend="CPU"; size_t count=0; bool gpu=false;
+        if(e && _inspectedComponentTypeName=="ParticleEmitterComponent") {
+            auto* c=e->getComponent<ayt::entity::ParticleEmitterComponent>();
+            if(c) { error=c->error; backend=c->backendStatus; gpu=c->usingGpu; count=gpu?c->gpuCapacity:(c->runtime?c->runtime->particles().size():0); }
+        } else if(e && _inspectedComponentTypeName=="ParticleEffectComponent") {
+            auto* c=e->getComponent<ayt::entity::ParticleEffectComponent>();
+            if(c) { error=c->error; backend=c->backendStatus; gpu=c->usingGpu; count=gpu?c->gpuCapacity:(c->runtime?c->runtime->liveParticles():0); }
+        }
+        status->setText(error.empty()?ayt::ui::decodeUtf8Text(backend)+(gpu?L" · Reserved slots: ":L" · Live particles: ")+std::to_wstring(count):ayt::ui::decodeUtf8Text(error));
+    }
+#endif
     // Inspector edits, Undo/Redo and scene systems may all change the selected
     // transform without a pointer event. Publish the latest pose every frame;
     // the renderer compares geometry mode/highlight before rebuilding buffers.
@@ -4518,7 +4588,8 @@ void EditorSession::bindAssetBrowser()
                 if (record == nullptr
                     || (record->type != EditorAssetType::Mesh
                         && record->type != EditorAssetType::Texture
-                        && record->type != EditorAssetType::Tilemap)) {
+                        && record->type != EditorAssetType::Tilemap
+                        && record->type != EditorAssetType::ActorClass)) {
                     return {};
                 }
                 _assetDragData.id = record->id;
@@ -4580,7 +4651,8 @@ void EditorSession::bindAssetBrowser()
             if (drag != &_assetDragData
                 || (drag->type != EditorAssetType::Mesh
                     && drag->type != EditorAssetType::Texture
-                    && drag->type != EditorAssetType::Tilemap)) {
+                    && drag->type != EditorAssetType::Tilemap
+                    && drag->type != EditorAssetType::ActorClass)) {
                 return;
             }
             const ayt::math::FVector2 physical = _ui.logicalToPhysical(
@@ -5914,10 +5986,11 @@ void EditorSession::showCrashRecoveryDialog()
     if (_repaintCallback) _repaintCallback();
 }
 
-bool EditorSession::createProjectAsset(EditorAssetType type)
+bool EditorSession::createProjectAsset(EditorAssetType type,
+                                      const std::string& parentActorClassPath)
 {
     const EditorProjectAssetCreateResult created = createEditorProjectAsset(
-        _assetDatabase.projectRoot(), type);
+        _assetDatabase.projectRoot(), type, parentActorClassPath);
     if (!created) {
         setAssetBrowserStatus(L"Create asset failed: "
             + ayt::ui::decodeUtf8Text(created.error), true);
@@ -5963,6 +6036,21 @@ bool EditorSession::openAsset(EditorAssetId assetId)
             + ayt::ui::decodeUtf8Text(record->logicalPath));
         return true;
     }
+    case EditorAssetType::ActorClass: {
+        ayt::entity::ActorClassAsset actor;
+        std::string error;
+        if (!ayt::entity::resolveActorClassAsset(_assetDatabase.sourceRoot(),
+                _assetDatabase.portableAssetPath(*record), actor, &error)) {
+            setAssetBrowserStatus(L"Actor class open failed: "
+                + ayt::ui::decodeUtf8Text(error), true);
+            return false;
+        }
+        const EditorAssetRecord* scriptRecord =
+            _assetDatabase.findByLogicalPath("Assets/" + actor.scriptPath);
+        if (scriptRecord != nullptr) return openDslAsset(scriptRecord->id);
+        setAssetBrowserStatus(L"Actor script is missing", true);
+        return false;
+    }
     case EditorAssetType::UiLayout:
         return openUiLayoutEditor(record->absolutePath);
     case EditorAssetType::UiFlow:
@@ -5997,6 +6085,9 @@ bool EditorSession::openAsset(EditorAssetId assetId)
 #ifdef AYEDITOR_HAS_SEQUENCE
     case EditorAssetType::Sequence:
 #endif
+#ifdef AYEDITOR_HAS_PARTICLE
+    case EditorAssetType::ParticleEffect:
+#endif
     case EditorAssetType::Audio: {
         if (_dockViewHost == nullptr) return false;
         EditorOpenRequest request;
@@ -6009,6 +6100,9 @@ bool EditorSession::openAsset(EditorAssetId assetId)
             : kEditorAudioTimelineExtensionId;
 #ifdef AYEDITOR_HAS_SEQUENCE
         if (record->type == EditorAssetType::Sequence) request.preferredEditorId = kEditorSequenceExtensionId;
+#endif
+#ifdef AYEDITOR_HAS_PARTICLE
+        if(record->type==EditorAssetType::ParticleEffect) request.preferredEditorId=kEditorParticleExtensionId;
 #endif
         EditorDockViewOptions options;
         options.cardId = "card_timed_asset_" + std::to_string(assetId);
@@ -6468,7 +6562,8 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     const bool isMesh = record->type == EditorAssetType::Mesh;
     const bool isTexture = record->type == EditorAssetType::Texture;
     const bool isTilemap = record->type == EditorAssetType::Tilemap;
-    if ((!isMesh && !isTexture && !isTilemap)
+    const bool isActor = record->type == EditorAssetType::ActorClass;
+    if ((!isMesh && !isTexture && !isTilemap && !isActor)
         || ((isTexture || isTilemap) && !_sceneCamera.isTwoD())) {
         return false;
     }
@@ -6477,6 +6572,47 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     ayt::math::FVector3 origin{};
     ayt::math::FVector3 direction{};
     if (!viewportRay(physicalX, physicalY, origin, direction)) return false;
+
+    if (isActor) {
+        ayt::entity::ActorClassAsset actor;
+        std::string error;
+        if (!ayt::entity::loadActorClassAsset(record->absolutePath, actor, &error)) {
+            setAssetBrowserStatus(L"Actor class load failed: "
+                + ayt::ui::decodeUtf8Text(error), true);
+            return false;
+        }
+        const std::string classPath = _assetDatabase.portableAssetPath(*record);
+        const std::string root = _assetDatabase.sourceRoot();
+        ayt::math::FVector3 position = origin + direction * 5.0f;
+        const float planeDirection = _sceneCamera.isTwoD() ? direction.z : direction.y;
+        const float planeOrigin = _sceneCamera.isTwoD() ? origin.z : origin.y;
+        if (std::fabs(planeDirection) > 1.0e-5f) {
+            const float distance = -planeOrigin / planeDirection;
+            if (distance >= 0.0f) position = origin + direction * distance;
+        }
+        uint32_t entityId = 0;
+        if (!_document->createEntity("Create Actor", [&](ayt::entity::Entity& candidate) {
+            candidate.setName(uniqueEntityName(*world, actor.id).c_str());
+            if (!ayt::entity::instantiateActorClass(candidate, actor, classPath,
+                                                    root, &error)) return false;
+            auto* transform = candidate.getComponent<ayt::entity::Transform>();
+            if (!transform) return false;
+            transform->setPosition(position.x, position.y, position.z);
+            return true;
+        }, &entityId)) {
+            setAssetBrowserStatus(L"Actor placement failed: "
+                + ayt::ui::decodeUtf8Text(error), true);
+            return false;
+        }
+        setSelectedEntity(world, world->findEntity(entityId));
+        _inspectedComponentTypeName = "ActorInstanceComponent";
+        _outlinerRefreshPending = true;
+        refreshInspectorLabels();
+        refreshTransformInspector();
+        refreshUnsavedIndicator();
+        if (_repaintCallback) _repaintCallback();
+        return true;
+    }
 
     ayt::math::FVector3 position = origin + direction * 5.0f;
     const float planeDirection = _sceneCamera.isTwoD()
@@ -8334,7 +8470,9 @@ void EditorSession::openSceneDocument()
 void EditorSession::saveSceneDocument()
 {
     if (_document == nullptr || _gameView.mode() != EditorMode::Edit) return;
-    if (_document->path().empty()) {
+    if (_document->path().empty()
+        || !ayt::asset_format::isCanonicalPath(
+            _document->path(), ayt::asset_format::Id::Scene)) {
         saveSceneDocumentAs();
         return;
     }
@@ -8690,9 +8828,45 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::Sequence); });
         }
 #endif
+#ifdef AYEDITOR_HAS_PARTICLE
+        if(auto* item=addLocalizedItem(fileMenu,"ui.editor.menu.file.new_particle",L"New Particle Effect")) {
+            item->setOnActivate([this] { (void)createProjectAsset(EditorAssetType::ParticleEffect); });
+        }
+#endif
+#ifdef AYEDITOR_HAS_STATS
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_stats", L"New AYStats")) {
+            item->setOnActivate([this] { (void)createProjectAsset(EditorAssetType::StatsRecipe); });
+        }
+#endif
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_tilemap", L"New Tilemap")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
+            });
+        }
+        if (auto* item = fileMenu->addItem(L"New Actor Class")) {
+            item->setOnActivate([this]() {
+                (void)createProjectAsset(EditorAssetType::ActorClass);
+            });
+        }
+        if (auto* item = fileMenu->addItem(L"New Child Actor Class")) {
+            item->setOnActivate([this]() {
+                const auto* parent = _assetDatabase.find(_selectedAssetId);
+                if (!parent || parent->type != EditorAssetType::ActorClass) {
+                    setAssetBrowserStatus(L"Select an Actor class asset first.", true);
+                    return;
+                }
+                (void)createProjectAsset(EditorAssetType::ActorClass,
+                    _assetDatabase.portableAssetPath(*parent));
+            });
+        }
+        if (auto* item = fileMenu->addItem(L"Edit Selected Actor Data")) {
+            item->setOnActivate([this]() {
+                const auto* actor = _assetDatabase.find(_selectedAssetId);
+                if (!actor || actor->type != EditorAssetType::ActorClass) {
+                    setAssetBrowserStatus(L"Select an Actor class asset first.", true);
+                    return;
+                }
+                (void)openDslAsset(actor->id);
             });
         }
         fileMenu->addSeparator();
@@ -10453,7 +10627,8 @@ void EditorSession::refreshComponentBrowser()
         const bool present = entity != nullptr && descriptor.has != nullptr
             && descriptor.has(*entity);
         if (present) attached.push_back(&descriptor);
-        if (canAdd && descriptor.editorAddable && descriptor.add != nullptr
+        if (canAdd && descriptor.editorAddable && descriptor.sceneSerializable
+            && descriptor.add != nullptr
             && !present) {
             available.push_back(&descriptor);
         }
@@ -10790,6 +10965,329 @@ void EditorSession::rebuildComponentPropertyEditor()
         return;
     }
 
+    if (_inspectedComponentTypeName == "ActorInstanceComponent") {
+        auto* restore = new ayt::ui::Button();
+        restore->setId("inspector_actor_restore_defaults");
+        restore->setText(L"Restore Actor Defaults");
+        restore->setSize({240.0f, 27.0f});
+        restore->setEnabled(_gameView.mode() == EditorMode::Edit);
+        restore->setOnClicked([this]() {
+            if (!_document || _gameView.mode() != EditorMode::Edit) return;
+            auto* selected = _selection.resolve(hierarchyWorldMutable());
+            if (!selected) return;
+            std::string error;
+            if (!_document->restoreActorDefaults(selected->getId(), &error)) {
+                setAssetBrowserStatus(L"Restore Actor defaults failed: "
+                    + ayt::ui::decodeUtf8Text(error), true);
+                return;
+            }
+            _inspectorRefreshPending = true;
+            refreshUnsavedIndicator();
+            if (_repaintCallback) _repaintCallback();
+        });
+        propertyTarget->addWidget(restore, 27.0f);
+    }
+
+#ifdef AYEDITOR_HAS_STATS
+    if(_inspectedComponentTypeName=="StatsRecipeComponent") {
+        auto* recipe=dynamic_cast<ayt::stats::StatsRecipeComponent*>(component);
+        if(recipe) {
+            auto* view=new ayt::ui::VBox();view->setId("stats_recipe_asset_inspector");view->setSpacing(3);
+            const auto addLabel=[view](const std::string& value,const char* id="") {
+                auto* label=new ayt::ui::TextLabel();label->setId(id);
+                label->setText(ayt::ui::decodeUtf8Text(value));label->setSize({240,24});
+                view->addWidget(label,24);return label;
+            };
+            const auto addInput=[view,addLabel](const char* id,const char* title,const std::string& value) {
+                addLabel(title);auto* input=new ayt::ui::TextInput();input->setId(id);
+                input->setMaxLength(1024);input->setText(ayt::ui::decodeUtf8Text(value));
+                input->setSize({240,25});view->addWidget(input,25);return input;
+            };
+            const auto addButton=[view](const char* id,const wchar_t* title) {
+                auto* button=new ayt::ui::Button();button->setId(id);button->setText(title);
+                button->setSize({240,27});view->addWidget(button,27);return button;
+            };
+            const auto assetsRoot=std::filesystem::path(_assetDatabase.projectRoot())/"Assets";
+            auto* create=addButton("stats_asset_new_attach",L"Create new AYStats and attach");
+            auto* manifest=addInput("stats_asset_manifest","Source manifest under Assets (.aystats.json)",
+                recipe->assetPath.empty()?"":recipe->assetPath+".json");
+            auto* browse=addButton("stats_asset_browse_manifest",L"Choose source manifest");
+            auto* load=addButton("stats_asset_load_manifest",L"Load source manifest");
+            auto* target=addInput("stats_asset_target","Target definitions under Assets","");
+            auto* source=addInput("stats_asset_source","Source definitions under Assets (optional)","");
+            auto* book=addInput("stats_asset_book","Recipe book under Assets","");
+            auto* targetBrowse=addButton("stats_asset_browse_target",L"Choose target definitions");
+            auto* sourceBrowse=addButton("stats_asset_browse_source",L"Choose source definitions");
+            auto* bookBrowse=addButton("stats_asset_browse_book",L"Choose recipe book");
+            auto* save=addButton("stats_asset_create_attach",L"Validate, build and attach");
+            auto* select=addButton("stats_asset_select_cooked",L"Attach existing .aystats");
+            auto* status=addLabel("Choose or create a recipe asset","stats_asset_status");
+            if(recipe->lastError())addLabel(recipe->lastError()->message,"stats_asset_runtime_error");
+            const auto handle=hierarchyWorldMutable()->getEntityHandle(entity->getId());
+            auto* const ownerWorld=hierarchyWorldMutable();
+            auto validOwner=[this,handle,ownerWorld,recipe]() {
+                auto* world=hierarchyWorldMutable();
+                auto* owner=world==ownerWorld?world->getEntityByHandle(handle):nullptr;
+                return _gameView.mode()==EditorMode::Edit && owner &&
+                    _selection.resolve(world)==owner &&
+                    owner->getComponent<ayt::stats::StatsRecipeComponent>()==recipe;
+            };
+            create->setEnabled(_gameView.mode()==EditorMode::Edit);
+            create->setOnClicked([=] {
+                if(!validOwner())return;
+                const auto created=createEditorProjectAsset(
+                    _assetDatabase.projectRoot(),EditorAssetType::StatsRecipe);
+                if(!created) {
+                    status->setText(ayt::ui::decodeUtf8Text(created.error));return;
+                }
+                const auto inspected=ayt::stats::inspectRecipeAssetSource(
+                    created.absolutePath,assetsRoot);
+                if(!inspected) {
+                    status->setText(ayt::ui::decodeUtf8Text(inspected.error().message));return;
+                }
+                manifest->setText(ayt::ui::decodeUtf8Text(
+                    std::filesystem::path(created.absolutePath).lexically_relative(assetsRoot).generic_string()));
+                target->setText(ayt::ui::decodeUtf8Text(
+                    inspected->targetDefinitions.lexically_relative(assetsRoot).generic_string()));
+                source->setText(L"");
+                book->setText(ayt::ui::decodeUtf8Text(
+                    inspected->recipeBook.lexically_relative(assetsRoot).generic_string()));
+                auto* owner=hierarchyWorldMutable()->getEntityByHandle(handle);
+                const bool attached=owner && _document->mutateComponent(
+                    owner->getId(),"StatsRecipeComponent","Attach new AYStats","",
+                    [path=inspected->logicalPath](ayt::entity::IComponent& component) {
+                        auto* reference=dynamic_cast<ayt::stats::StatsRecipeComponent*>(&component);
+                        if(!reference || reference->assetPath==path)return false;
+                        reference->assetPath=path;return true;
+                    });
+                status->setText(attached
+                    ? L"AYStats created and attached; save the scene to keep the reference"
+                    : L"AYStats created, but attachment failed; choose the new asset to attach");
+                _pendingAssetSelectionPath=created.absolutePath;
+                _assetCurrentFolder=std::filesystem::path(created.logicalPath).parent_path().generic_string();
+                _assetDatabase.requestScan();
+            });
+             auto expected=std::make_shared<std::optional<std::string>>();
+             auto loadedManifest=std::make_shared<std::filesystem::path>();
+            const auto browseJson=[this,status,validOwner](ayt::ui::TextInput* input,
+                const char* suffix) {
+                if(!validOwner())return;
+                const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
+                if(selected.empty())return;
+                const auto relative=_assetDatabase.portableAssetPath(selected);
+                if(!endsWithInsensitive(relative,suffix)) {
+                    status->setText(L"Choose a matching Stats JSON file");return;
+                }
+                input->setText(ayt::ui::decodeUtf8Text(relative));
+            };
+            targetBrowse->setOnClicked([=]{browseJson(target,".stats.json");});
+            sourceBrowse->setOnClicked([=]{browseJson(source,".stats.json");});
+            bookBrowse->setOnClicked([=]{browseJson(book,".stats-recipes.json");});
+            browse->setOnClicked([this,manifest,status,validOwner] {
+                if(!validOwner())return;
+                const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
+                if(selected.empty())return;
+                const auto relative=_assetDatabase.portableAssetPath(selected);
+                if(!endsWithInsensitive(relative,".aystats.json")) {
+                    status->setText(L"Choose a .aystats.json source manifest");return;
+                }
+                manifest->setText(ayt::ui::decodeUtf8Text(relative));
+            });
+             load->setOnClicked([=] {
+                 if(!validOwner())return;
+                 const auto path=assetsRoot/ayt::ui::encodeUtf8Text(manifest->getText());
+                 expected->reset();
+                 loadedManifest->clear();
+                 auto inspected=ayt::stats::inspectRecipeAssetSource(path,assetsRoot);
+                if(!inspected) {
+                    status->setText(ayt::ui::decodeUtf8Text(inspected.error().message));return;
+                }
+                auto original=ayt::stats::readText(inspected->manifest);
+                 if(!original){status->setText(ayt::ui::decodeUtf8Text(original.error().message));return;}
+                 *expected=*original;
+                 *loadedManifest=inspected->manifest;
+                target->setText(ayt::ui::decodeUtf8Text(inspected->targetDefinitions.lexically_relative(assetsRoot).generic_string()));
+                source->setText(ayt::ui::decodeUtf8Text(inspected->sourceDefinitions.empty()?"":
+                    inspected->sourceDefinitions.lexically_relative(assetsRoot).generic_string()));
+                book->setText(ayt::ui::decodeUtf8Text(inspected->recipeBook.lexically_relative(assetsRoot).generic_string()));
+                status->setText(L"Manifest loaded and validated");
+            });
+            save->setEnabled(_gameView.mode()==EditorMode::Edit);
+             save->setOnClicked([=] {
+                 if(!validOwner())return;
+                 const auto path=assetsRoot/ayt::ui::encodeUtf8Text(manifest->getText());
+                 std::error_code pathError;
+                 const auto normalized=std::filesystem::weakly_canonical(path,pathError);
+                 const bool editingLoaded=!pathError && normalized==*loadedManifest;
+                 auto saved=ayt::stats::saveRecipeAssetSource(path,assetsRoot,
+                    ayt::ui::encodeUtf8Text(target->getText()),
+                    ayt::ui::encodeUtf8Text(source->getText()),
+                    ayt::ui::encodeUtf8Text(book->getText()),
+                     editingLoaded && expected->has_value()
+                         ?std::optional<std::string_view>{**expected}:std::nullopt);
+                if(!saved){status->setText(ayt::ui::decodeUtf8Text(saved.error().message));return;}
+                 auto authored=ayt::stats::readText(saved->manifest);
+                 if(authored)*expected=*authored;
+                 *loadedManifest=saved->manifest;
+                const auto cooked=(assetsRoot/saved->logicalPath).string();
+                ayt::resource::ResourceManager::instance().reloadResource(cooked);
+                ayt::resource::ResourceManager::instance().reloadResource(
+                    ayt::resource::resolveAssetPath({},saved->logicalPath));
+                status->setText(L"Recipe built and attached; save the scene to keep the reference");
+                commitInspectorTextField("StatsRecipeComponent","assetPath",-1,
+                    ayt::ui::decodeUtf8Text(saved->logicalPath));
+                _assetDatabase.requestScan();
+            });
+            select->setEnabled(_gameView.mode()==EditorMode::Edit);
+            select->setOnClicked([=] {
+                if(!validOwner())return;
+                const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
+                if(selected.empty())return;
+                const auto relative=_assetDatabase.portableAssetPath(selected);
+                const auto cooked=assetsRoot/relative;
+                if(!endsWithInsensitive(relative,".aystats")) {
+                    status->setText(L"Choose a cooked .aystats asset");return;
+                }
+                std::error_code error;
+                const auto root=std::filesystem::weakly_canonical(assetsRoot,error);
+                const auto candidate=std::filesystem::weakly_canonical(cooked,error);
+                const auto inside=candidate.lexically_relative(root);
+                if(error || inside.empty() || inside=="." || *inside.begin()=="..") {
+                    status->setText(L"Recipe asset must be inside project Assets");return;
+                }
+                auto text=ayt::stats::readText(candidate);
+                if(!text){status->setText(ayt::ui::decodeUtf8Text(text.error().message));return;}
+                auto decoded=ayt::stats::decodeRecipeAsset(*text);
+                if(!decoded){status->setText(ayt::ui::decodeUtf8Text(decoded.error().message));return;}
+                status->setText(L"Recipe attached; save the scene to keep the reference");
+                commitInspectorTextField("StatsRecipeComponent","assetPath",-1,
+                    ayt::ui::decodeUtf8Text(inside.generic_string()));
+            });
+            propertyTarget->addWidget(view);propertyUi->invalidateLayout();return;
+        }
+    }
+    if(_inspectedComponentTypeName=="StatsComponent") {
+        auto* stats=dynamic_cast<ayt::stats::StatsComponent*>(component);
+        if(stats) {
+            const auto handle=hierarchyWorldMutable()->getEntityHandle(entity->getId());
+            const auto generation=stats->generation();
+            const auto* ownerWorld=hierarchyWorldMutable();
+            auto* view=ayt::stats::makeStatsInspector(stats->definitionsJson,stats->state(),
+                _gameView.mode()==EditorMode::Edit,
+                [this,handle,generation,ownerWorld](std::string before,std::string after) {
+                    auto* world=hierarchyWorldMutable();
+                    auto* owner=world==ownerWorld?world->getEntityByHandle(handle):nullptr;
+                    auto* current=owner?owner->getComponent<ayt::stats::StatsComponent>():nullptr;
+                    if(!current || current->generation()!=generation || current->definitionsJson!=before
+                        || _selection.resolve(world)!=owner || _gameView.mode()!=EditorMode::Edit)return;
+                    commitInspectorTextField("StatsComponent","definitionsJson",-1,ayt::ui::decodeUtf8Text(after));
+                    _inspectorRefreshPending=true;
+                });
+            if(stats->state()) {
+                const auto definitionsAtOpen=stats->definitionsJson;
+                const auto assetsRoot=std::filesystem::path(_assetDatabase.projectRoot())/"Assets";
+                auto* recipes=ayt::stats::makeStatsRecipeInspector(assetsRoot,stats->state()->schema(),
+                    _gameView.mode()==EditorMode::Edit,
+                    [this,handle,generation,ownerWorld,definitionsAtOpen,assetsRoot](
+                        const std::filesystem::path& path,std::string_view before,std::string_view after)
+                        -> ayt::stats::Result<void> {
+                        auto* world=hierarchyWorldMutable();
+                        auto* owner=world==ownerWorld?world->getEntityByHandle(handle):nullptr;
+                        auto* current=owner?owner->getComponent<ayt::stats::StatsComponent>():nullptr;
+                        if(!current || current->generation()!=generation
+                            || current->definitionsJson!=definitionsAtOpen
+                            || _selection.resolve(world)!=owner || _gameView.mode()!=EditorMode::Edit)
+                            return std::unexpected(ayt::stats::Diagnostic{ayt::stats::Error::Stale,
+                                "Stats Inspector selection changed"});
+                        auto disk=ayt::stats::readText(path);
+                        if(!disk)return std::unexpected(disk.error());
+                        if(*disk!=before)return std::unexpected(ayt::stats::Diagnostic{
+                            ayt::stats::Error::Stale,"recipe file changed on disk",path.generic_string()});
+                        auto cooked=ayt::stats::saveRecipeBookAndRecook(path,assetsRoot,before,after);
+                        if(!cooked)return std::unexpected(cooked.error());
+                        for(const auto& output:*cooked) {
+                            ayt::resource::ResourceManager::instance().reloadResource(output.string());
+                            ayt::resource::ResourceManager::instance().reloadResource(
+                                ayt::resource::resolveAssetPath({},output.lexically_relative(assetsRoot).generic_string()));
+                        }
+                        if(!cooked->empty())_assetDatabase.requestScan();
+                        return {};
+                    });
+                recipes->setSize({240,760});
+                static_cast<ayt::ui::VBox*>(view)->addWidget(recipes,760);
+            }
+            propertyTarget->addWidget(view);propertyUi->invalidateLayout();return;
+        }
+    }
+#endif
+#ifdef AYEDITOR_HAS_PARTICLE
+    if(_inspectedComponentTypeName=="ParticleEmitterComponent" || _inspectedComponentTypeName=="ParticleEffectComponent") {
+        const uint32_t id=entity->getId();
+        const std::string typeName=_inspectedComponentTypeName;
+        auto* row=new ayt::ui::HBox(); row->setSpacing(3);
+        const auto control=[this,id,typeName](int action) {
+            if(_gameView.mode()!=EditorMode::Edit) return;
+            auto* world=hierarchyWorldMutable();
+            auto* entity=world ? world->findEntity(id) : nullptr; if(!entity) return;
+            particle::Pose pose;
+            if(const auto* t=entity->getComponent<ayt::entity::Transform>()) {
+                const auto m=ayt::math::Transform::getMatrix(t->position,t->rotation,t->scale);
+                pose={{m(0,3),m(1,3),m(2,3)},{m(0,0),m(1,0),m(2,0)},
+                      {m(0,1),m(1,1),m(2,1)},{m(0,2),m(1,2),m(2,2)}};
+            }
+            const auto allowance=[&]() {
+                uint64_t live=0;
+                for(auto* e:world->query<ayt::entity::ParticleEmitterComponent>()) {
+                    auto* c=e->getComponent<ayt::entity::ParticleEmitterComponent>();
+                    if(c->runtime) live+=c->runtime->particles().size();
+                }
+                for(auto* e:world->query<ayt::entity::ParticleEffectComponent>()) {
+                    auto* c=e->getComponent<ayt::entity::ParticleEffectComponent>();
+                    if(c->runtime) live+=c->runtime->liveParticles();
+                }
+                const auto* system=dynamic_cast<const ayt::entity::ParticleSimulationSystem*>(
+                    world->findSystemByName("ParticleSimulationSystem"));
+                const uint32_t limit=system?system->maxParticles:100000;
+                if(system) live+=system->gpuReservedParticles;
+                return live<limit?static_cast<uint32_t>(limit-live):0;
+            };
+            const auto invoke=[&](auto* c) {
+                if(!c || !c->runtime) return;
+                if(action==0) { if(c->usingGpu?!c->playback.playing:c->runtime->finished()) c->play(); else c->resume(); }
+                if(action==1) c->pause();
+                if(action==2) { c->play(); if(!c->usingGpu) c->runtime->update(0,pose,allowance()); }
+                if(action==3) c->stop(true);
+                if(action==4) {
+                    if(c->usingGpu) { if(!c->playback.playing) c->play(); c->pause(); c->playback.stepSeconds+=1.0f/60; }
+                    else { if(c->runtime->finished()) c->play(); c->resume(); c->runtime->update(1.0f/60,pose,allowance()); c->pause(); }
+                }
+            };
+            if(typeName=="ParticleEmitterComponent") invoke(entity->getComponent<ayt::entity::ParticleEmitterComponent>());
+            else invoke(entity->getComponent<ayt::entity::ParticleEffectComponent>());
+            if(_repaintCallback) _repaintCallback();
+        };
+        const wchar_t* titles[]={L"Play",L"Pause",L"Restart",L"Stop",L"Step"};
+        for(int i=0;i<5;++i) {
+            auto* b=new ayt::ui::Button(); b->setText(titles[i]); b->setId("particle_inspector_"+std::to_string(i));
+            b->setEnabled(_gameView.mode()==EditorMode::Edit);
+            b->setOnClicked([control,i] { control(i); }); row->addWidget(b,45);
+        }
+        propertyTarget->addWidget(row,28);
+        addLabel(L"Preparing particle preview...",24,"particle_inspector_status");
+        if(typeName=="ParticleEffectComponent") {
+            auto* reload=new ayt::ui::Button(); reload->setText(L"Reload effect");
+            reload->setEnabled(_gameView.mode()==EditorMode::Edit);
+            reload->setOnClicked([this,id] {
+                if(_gameView.mode()!=EditorMode::Edit) return;
+                auto* world=hierarchyWorldMutable(); auto* e=world?world->findEntity(id):nullptr;
+                auto* c=e?e->getComponent<ayt::entity::ParticleEffectComponent>():nullptr;
+                if(c) ayt::particle::reloadEffectResource(
+                    ayt::resource::resolveAssetPath({},c->effectPath));
+            });
+            propertyTarget->addWidget(reload,28);
+        }
+    }
+#endif
     auto* type = ayt::reflect::TypeRegistryImpl::instance().findType(
         descriptor->type.hash_code());
     if (type == nullptr || type->getFieldCount() == 0) {
@@ -10880,6 +11378,20 @@ void EditorSession::rebuildComponentPropertyEditor()
             return input;
         };
 
+#ifdef AYEDITOR_HAS_PARTICLE
+        if(fieldName=="backend" && (componentTypeName=="ParticleEmitterComponent"||componentTypeName=="ParticleEffectComponent")) {
+            addLabel(L"Simulation backend",18,"inspector_field_label_backend");
+            auto* choice=new ayt::ui::ComboBox(); choice->setId("inspector_field_backend");
+            std::vector<std::wstring> choices={L"CPU",L"GPU (CPU fallback)",L"Auto"};
+            if(componentTypeName=="ParticleEffectComponent") choices.push_back(L"Effect resource preference");
+            choice->setItems(choices); choice->setSelectedIndex(*static_cast<int32_t*>(fieldValue));
+            choice->setEnabled(!readOnly);
+            choice->setOnSelectionChanged([this,componentTypeName](int index) {
+                if(index>=0) commitInspectorTextField(componentTypeName,"backend",-1,std::to_wstring(index));
+            });
+            propertyTarget->addWidget(choice,28); continue;
+        }
+#endif
         if (elementCount > 0) {
             auto* row = new ayt::ui::HBox();
             row->setId("inspector_field_" + fieldName);
