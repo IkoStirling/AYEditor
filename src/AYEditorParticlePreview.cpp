@@ -229,8 +229,7 @@ bool EditorParticleRuntimePreview::render(render::UIRenderBackend& ui,const math
         auto asset=p.document->asset();asset.seed=p.document->previewSeed();
         for(auto& layer:asset.emitters)if(!layer.effect.texturePath.empty())
             layer.effect.texturePath=resource::resolveAssetPath(p.document->path(),layer.effect.texturePath);
-        if(settings.scene3D) p.status=settings.backend==particle::Backend::Cpu?"CPU · perspective / depth":"CPU fallback: 3D preview requires CPU";
-        else useGpu=p.gpu->select(1,asset,int(settings.backend),particle::EffectAsset::kMaxTotalCapacity,p.status);
+        useGpu=p.gpu->select(1,asset,int(settings.backend),particle::EffectAsset::kMaxTotalCapacity,p.status);
         p.gpu->endFrame();
 #else
         p.status=settings.backend==particle::Backend::Cpu?"CPU":"CPU fallback: GPU integration is not built";
@@ -257,7 +256,13 @@ bool EditorParticleRuntimePreview::render(render::UIRenderBackend& ui,const math
             for(size_t i=0;i<draws.size();++i) {
                 if(!p.document->previewLayerVisible(i))continue;
                 auto& b=p.batches.emplace_back();b.data=std::move(draws[i]);b.payload.packedSortKey=uint32_t(i);
-                render::DrawItem item;item.particleBatch=&b.data;item.payload=&b.payload;
+                render::DrawItem item;item.particleBatch=&b.data;
+                if(b.data.world3D) {
+                    item.sortKey=static_cast<int32_t>(i);
+                    item.world(0,3)=b.data.sortPosition[0];
+                    item.world(1,3)=b.data.sortPosition[1];
+                    item.world(2,3)=b.data.sortPosition[2];
+                } else item.payload=&b.payload;
                 item.shadowFlags=render::ShadowFlags::None;scene.add(item);
             }
             p.status="GPU · "+std::to_string(draws.size())+" emitters · no CPU particle arrays";

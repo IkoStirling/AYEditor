@@ -82,7 +82,37 @@ int main(int argc,char** argv) {
         require(std::abs(f.document->previewTime()-.05)<1e-6,"GPU paused seek preserves requested time");
         f.document->stop();const auto stopped=f.capture("gpu-stop.png");require(stopped[0]<40,"GPU stop clears pixels");
         f.document->play();const auto restarted=f.capture("gpu-restart.png");require(restarted[0]>150,"GPU play after stop reseeds births");
-        f.document->previewSettings().scene3D=true;f.frame();require(f.preview.status().find("CPU fallback")!=std::string::npos,"3D diagnoses CPU fallback");
+        auto billboard=asset;billboard.emitters[0].effect.dimension=particle::Dimension::ThreeD;
+        require(f.document->replaceAsset(billboard,&error),"3D billboard candidate");
+        auto& view=f.document->previewSettings();view.scene3D=true;view.yaw=0;view.testObject=false;
+        f.document->play();const auto worldVisible=f.capture("gpu-billboard-visible.png");
+        require(f.preview.status().starts_with("GPU"),"3D billboard uses actual GPU runtime");
+        require(f.document->preview()==nullptr,"3D GPU preview has no CPU particle arrays");
+        require(worldVisible[0]>150&&worldVisible[1]<25,"3D GPU billboard renders red");
+        view.yaw=.7f;const auto orbited=f.capture("gpu-billboard-orbit.png");
+        require(orbited[0]>150&&orbited[1]<25,"3D GPU billboard faces orbit camera");
+        view.yaw=0;view.testObject=true;const auto worldBlocked=f.capture("gpu-billboard-blocked.png");
+        require(worldBlocked[0]<120&&worldBlocked[1]>30,"3D GPU billboard respects test object depth");
+        view.testObject=false;
+        for(const auto shape:{particle::Shape::Box,particle::Shape::Sphere}) {
+            billboard.emitters[0].effect.shape=shape;
+            billboard.emitters[0].effect.extent={.2f,.2f,.2f};
+            require(f.document->replaceAsset(billboard,&error),"3D volume candidate");
+            f.document->play();f.frame();
+            require(f.preview.status().starts_with("GPU"),"3D volume births use GPU preview");
+        }
+        auto mixed=billboard;
+        mixed.emitters.push_back(asset.emitters[0]);
+        mixed.emitters.back().id=2;mixed.emitters.back().name="Overlay";
+        mixed.emitters.back().offset={10,0,0};
+        require(f.document->replaceAsset(mixed,&error),"mixed 2D/3D composition");
+        f.document->play();f.frame();
+        require(f.preview.status().starts_with("GPU")&&f.document->preview()==nullptr,
+            "mixed 2D overlay and 3D transparent layers remain GPU-owned");
+        billboard.emitters[0].effect.facing=particle::ParticleFacing::Plane;
+        require(f.document->replaceAsset(billboard,&error),"oriented-plane fallback candidate");
+        f.document->play();f.frame();
+        require(f.preview.status().find("CPU fallback")!=std::string::npos,"3D oriented plane diagnoses CPU fallback");
         require(f.document->preview()->liveParticles()>0,"GPU to CPU handoff restores isolated samples");
         f.frame({}, {0,0,96,96});f.frame();
         // A second target in the same frame must receive distinct compute/draw views.
@@ -93,7 +123,7 @@ int main(int argc,char** argv) {
         // Actual authored examples, including a source PNG atlas.
         auto assets=std::filesystem::absolute("AYRuntime/AYParticle/examples/FallingLeaves/Assets");
         resource::setAssetRoot(assets.string());
-        require(f.document->initialize({(assets/"effects/GpuRain.ayparticle").string()},error),error.c_str());
+        require(f.document->initialize({(assets/"effects/GpuRain.pfx").string()},error),error.c_str());
         f.document->previewSettings().scene3D=false;f.document->previewSettings().backend=particle::Backend::Gpu;
         f.document->play();f.document->tick(.25f);for(int i=0;i<20;++i)f.frame();
         f.capture("gpu-rain.png");require(f.preview.status().starts_with("GPU"),"GPU rain example uses GPU");
@@ -101,11 +131,11 @@ int main(int argc,char** argv) {
         for(size_t i=0;i<rain.rgba8.size();i+=4)if(rain.rgba8[i+2]>rain.rgba8[i]+25)++drops;
         require(drops>50,"GPU rain produces visible blue drops");
         require(f.document->preview()==nullptr,"GPU rain never retains CPU particles");
-        require(f.document->initialize({(assets/"effects/FallingLeaves.ayparticle").string()},error),error.c_str());
+        require(f.document->initialize({(assets/"effects/FallingLeaves.pfx").string()},error),error.c_str());
         f.document->previewSettings().scene3D=false;f.document->play();f.document->tick(.25f);
         for(int i=0;i<20;++i)f.frame();f.capture("gpu-leaves.png");
         require(f.preview.status().starts_with("GPU"),"source PNG leaf atlas uses real GPU preview");
-        require(f.document->initialize({(assets/"effects/TumblingLeaves3D.ayparticle").string()},error),error.c_str());
+        require(f.document->initialize({(assets/"effects/TumblingLeaves3D.pfx").string()},error),error.c_str());
         require(f.document->seek(1),"3D leaf pose seek");f.frame();f.preview.focus();f.capture("cpu-leaves-3d.png");
         require(f.preview.status().find("CPU fallback")!=std::string::npos,"3D atlas tumble uses CPU/depth preview");
         require(f.document->preview()->liveParticles()>0,"3D leaves are live");
@@ -139,7 +169,7 @@ material PreviewCompatibilityGlow {
         };
         require(submitted("BloomBlur")&&submitted("AutoExposure"),"main scene actually submits Bloom and exposure");
         f.mainScene=nullptr;f.renderer.destroyMesh(mesh);f.renderer.destroyMaterial(glow);
-        std::cout<<"PASS D3D11 particle editor: perspective/depth, CPU/GPU handoff, no CPU arrays, visibility, seek, stop/restart, resize, multiple targets, GPU rain, source atlas, 3D leaves, main Bloom/exposure coexistence\n";
+        std::cout<<"PASS D3D11 particle editor: 3D GPU billboard/depth/orbit, CPU/GPU handoff, no CPU arrays, visibility, seek, stop/restart, resize, multiple targets, GPU rain, source atlas, 3D leaves, main Bloom/exposure coexistence\n";
         return 0;
     } catch(const std::exception& ex) {std::cerr<<"FAIL: "<<ex.what()<<'\n';return 1;}
 }

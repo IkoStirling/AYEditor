@@ -1412,6 +1412,19 @@ the toolbar/menu regression opens then refocuses one live Tilemap workspace.
 - 文档所有权保持在 Workspace：跳转优先聚焦已有文档；补全或重构若会覆盖一个已打开的 dirty Flow，
   必须拒绝并要求用户先保存或放弃。磁盘事务完成后只重载未修改的打开文档。
 
+### 10.24 Particle 3D GPU preview
+
+The isolated particle viewport selects the same `ParticleGpuState` backend as
+scene playback for supported 2D and 3D billboard layers. `ParticleDrawData`
+routes 3D GPU streams through the preview transparent pass using the orbit
+camera and depth attachment; 2D layers keep the overlay lane. The test cube
+occludes 3D particles, while GPU draws do not write depth. Unsupported oriented
+planes fall back for the complete composition with a visible diagnostic.
+Viewport backend choice and environment controls remain session-only; GPU
+selection clears live CPU arrays and CPU restoration replays bounded history.
+`AYEditor_ParticlePreviewRenderTest` checks orbit-facing pixels, depth occlusion,
+Box/Sphere selection and CPU fallback on D3D11.
+
 ---
 
 ## 11. Decisions log
