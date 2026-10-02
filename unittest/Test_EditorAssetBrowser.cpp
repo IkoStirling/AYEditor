@@ -7,6 +7,7 @@
 
 #include "AYEditor/EditorAssetDatabase.h"
 #include "AYEditor/EditorAssetDeleteAnalysis.h"
+#include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorShortcutRegistry.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorSession.h"
@@ -14,6 +15,7 @@
 #include "AYApplication/IEngineHost.h"
 #include "AYProject/Project.h"
 #include "AYUI/Button.h"
+#include "AYUI/ComboBox.h"
 #include "AYUI/Image.h"
 #include "AYUI/ModalDialog.h"
 #include "AYUI/TileView.h"
@@ -24,7 +26,10 @@
 #include "AYUI/UIKeyCode.h"
 #include "../src/EditorAssetPreviewCache.h"
 
+#include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -184,6 +189,86 @@ TEST_CASE(editor_asset_database_scans_filters_searches_and_keeps_stable_ids)
     mesh = database.findByLogicalPath("Imported/meshes/Hero.aymesh");
     CHECK(mesh != nullptr);
     if (mesh != nullptr) CHECK(mesh->id == stableId);
+}
+
+TEST_CASE(editor_asset_database_flat_view_and_empty_folders_survive_index_reopen)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("flat_index")};
+    std::filesystem::create_directories(cleanup.root / "Assets/Empty/Child");
+    writeAssetBrowserFile(cleanup.root / "Assets/One/Hero.png", "source");
+    writeAssetBrowserFile(cleanup.root
+        / ".ayeditor_cache/assets/Two/Hero.png", "imported");
+
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const auto all = database.allEntries();
+    CHECK(all.size() == 2u);
+    CHECK(all[0].assetId != all[1].assetId);
+    CHECK(!all[0].folder);
+    CHECK(!all[1].folder);
+    CHECK(database.allEntries("two/hero", EditorAssetType::Texture).size() == 1u);
+    CHECK(database.entries("Assets/Empty").size() == 1u);
+    database.close();
+
+    EditorAssetDatabase reopened;
+    CHECK(reopened.open(cleanup.root.string(), &error));
+    CHECK(reopened.loadedFromIndex());
+    const auto empty = reopened.entries("Assets/Empty");
+    CHECK(empty.size() == 1u);
+    if (!empty.empty()) CHECK(empty[0].folderPath == "Assets/Empty/Child");
+}
+
+TEST_CASE(editor_asset_database_uses_configured_project_asset_root)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("configured_root")};
+    writeAssetBrowserFile(cleanup.root / "project.ayproject.json",
+        "{\"schemaVersion\":2,\"templateVersion\":1,"
+        "\"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},"
+        "\"id\":\"custom\",\"paths\":{\"assets\":\"Content\"},"
+        "\"worlds\":[]}");
+    writeAssetBrowserFile(cleanup.root / "Content/Source/Hero.png", "image");
+    std::filesystem::create_directories(cleanup.root / "Content/Destination");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const auto* record = database.findByLogicalPath("Assets/Source/Hero.png");
+    CHECK(record != nullptr);
+    CHECK(std::filesystem::path(database.sourceRoot()).filename() == "Content");
+    if (record != nullptr) {
+        EditorAssetOperations operations(cleanup.root.string());
+        const auto result = operations.move(database, {*record},
+            "Assets/Destination");
+        CHECK(result);
+        CHECK(std::filesystem::is_regular_file(
+            cleanup.root / "Content/Destination/Hero.png"));
+    }
+}
+
+TEST_CASE(editor_asset_database_watches_moved_directory_subtree)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("moved_directory")};
+    writeAssetBrowserFile(cleanup.root / "Assets/Old/Nested/Hero.png", "image");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const auto beforeRevision = database.folderRevision();
+
+    std::filesystem::rename(cleanup.root / "Assets/Old",
+                            cleanup.root / "Assets/New");
+    bool settled = false;
+    for (int attempt = 0; attempt < 200 && !settled; ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        (void)database.pollFileChanges();
+        settled = database.findByLogicalPath("Assets/Old/Nested/Hero.png") == nullptr
+            && database.findByLogicalPath("Assets/New/Nested/Hero.png") != nullptr;
+    }
+    CHECK(settled);
+    CHECK(database.folderRevision() > beforeRevision);
+    CHECK(database.entries("Assets/New/Nested").size() == 1u);
 }
 
 TEST_CASE(editor_asset_database_restores_disk_index_before_rescan)
@@ -597,6 +682,110 @@ TEST_CASE(editor_asset_browser_layout_selects_asset_and_shows_asset_inspector)
         CHECK_FALSE(viewport->isVisible());
         session.flushFrame();
         CHECK(viewport->isVisible());
+    }
+    session.shutdown();
+}
+
+TEST_CASE(editor_asset_browser_switches_between_flat_and_directory_views)
+{
+    const std::string layout = resolveAssetBrowserLayout();
+    CHECK(!layout.empty());
+    if (layout.empty()) return;
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("view_modes")};
+    writeAssetBrowserFile(cleanup.root / "Assets/First/Same.png", "one");
+    writeAssetBrowserFile(cleanup.root / "Assets/Second/Same.png", "two");
+
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::ui::MockRenderer renderer;
+    EditorSessionDesc desc;
+    desc.uiBackend = &renderer;
+    desc.layoutPath = layout;
+    desc.projectRoot = cleanup.root.string();
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    CHECK(session.rescanAssetsNow());
+
+    auto* mode = dynamic_cast<ayt::ui::ComboBox*>(
+        session.ui().findById("cmb_assets_view"));
+    auto* tree = dynamic_cast<ayt::ui::TreeView*>(
+        session.ui().findById("tree_assets"));
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
+        session.ui().findById("list_assets"));
+    CHECK(mode != nullptr);
+    CHECK(tree != nullptr);
+    CHECK(list != nullptr);
+    if (mode && tree && list) {
+        CHECK(tree->isVisible());
+        CHECK(list->getItemCount() == 2u); // two folders
+        mode->setSelectedIndexAndNotify(1);
+        session.update(0.0f);
+        CHECK(session.currentPreferences().assetBrowserFlatMode);
+        CHECK_FALSE(tree->isVisible());
+        CHECK(list->getItemCount() == 2u); // two files
+        CHECK(list->getItem(0).find(L"/Same.png") != std::wstring::npos);
+        CHECK(list->getItem(1).find(L"/Same.png") != std::wstring::npos);
+        CHECK(list->getItem(0) != list->getItem(1));
+        mode->setSelectedIndexAndNotify(0);
+        session.update(0.0f);
+        CHECK_FALSE(session.currentPreferences().assetBrowserFlatMode);
+        CHECK(tree->isVisible());
+        CHECK(list->getItemCount() == 2u);
+    }
+    session.shutdown();
+}
+
+TEST_CASE(asset_browser_large_project_probe)
+{
+    const char* configured = std::getenv("AY_EDITOR_ASSET_BENCHMARK_COUNT");
+    if (configured == nullptr) return;
+    const int count = std::clamp(std::atoi(configured), 1, 100000);
+    const std::string layout = resolveAssetBrowserLayout();
+    CHECK(!layout.empty());
+    if (layout.empty()) return;
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("large_project")};
+    for (int i = 0; i < count; ++i) {
+        writeAssetBrowserFile(cleanup.root / "Assets/Many"
+            / ("asset_" + std::to_string(i) + ".txt"), "x");
+    }
+
+    using clock = std::chrono::steady_clock;
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    ayt::ui::MockRenderer renderer;
+    EditorSessionDesc desc;
+    desc.uiBackend = &renderer;
+    desc.layoutPath = layout;
+    desc.projectRoot = cleanup.root.string();
+    EditorSession session;
+    CHECK(session.initialize(desc));
+    session.setClientSize(1280.0f, 720.0f);
+    const auto scanStart = clock::now();
+    CHECK(session.rescanAssetsNow());
+    const auto scanEnd = clock::now();
+    session.update(0.0f);
+    auto* mode = dynamic_cast<ayt::ui::ComboBox*>(
+        session.ui().findById("cmb_assets_view"));
+    auto* list = dynamic_cast<ayt::ui::TileView*>(
+        session.ui().findById("list_assets"));
+    CHECK(mode != nullptr);
+    CHECK(list != nullptr);
+    if (mode && list) {
+        const auto switchStart = clock::now();
+        mode->setSelectedIndexAndNotify(1);
+        const auto modeEnd = clock::now();
+        session.update(0.0f);
+        const auto switchEnd = clock::now();
+        CHECK(list->getItemCount() == static_cast<std::size_t>(count));
+        const auto idleStart = clock::now();
+        for (int i = 0; i < 100; ++i) session.update(0.0f);
+        const auto idleEnd = clock::now();
+        std::printf("asset-browser benchmark count=%d scan_ms=%.3f mode_ms=%.3f update_ms=%.3f flat_switch_ms=%.3f idle_100_frames_ms=%.3f\n",
+            count,
+            std::chrono::duration<double, std::milli>(scanEnd - scanStart).count(),
+            std::chrono::duration<double, std::milli>(modeEnd - switchStart).count(),
+            std::chrono::duration<double, std::milli>(switchEnd - modeEnd).count(),
+            std::chrono::duration<double, std::milli>(switchEnd - switchStart).count(),
+            std::chrono::duration<double, std::milli>(idleEnd - idleStart).count());
     }
     session.shutdown();
 }

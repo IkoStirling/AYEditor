@@ -8,7 +8,16 @@ features below are not demo-specific copies.
 
 ## Content Browser operations
 
-- Rename, Move, and Copy operate inside the open project's `Assets` and
+- The view selector switches between **Folders** (the real project directory
+  hierarchy, including empty folders) and **All files** (one flat list with
+  relative paths to distinguish same-named files). The same asset identity,
+  selection, search, type filter, and operations work in either view. **Locate**
+  returns a selected flat-list asset to its containing folder. The selected
+  view and each view's scroll position survive ordinary refreshes; the view
+  choice is saved with editor preferences.
+- The physical source directory follows the project's configured asset root;
+  the browser still labels it `Assets` and stores portable asset references.
+- Rename, Move, and Copy operate inside the open project's source asset root and
   `.ayeditor_cache/assets` trees.
 - Rename and Move update portable references in authored text assets before
   completing the transaction. If an update fails, moved files and already
@@ -19,10 +28,13 @@ features below are not demo-specific copies.
 - Raster and supported cooked-resource thumbnails are decoded asynchronously.
   Their disk cache is stored below `.ayeditor/cache/previews`; source size and
   modification time invalidate stale entries.
-- `.ayeditor/cache/asset-index.tsv` stores the scanned file metadata and import
-  status. Startup restores this index before the first directory walk, then
-  recursive `AYIO::FileWatcher` subscriptions patch changed files and import
-  dependency state in place. Source models appear as `Needs import`, `Ready`,
+- `.ayeditor/cache/asset-index.tsv` stores scanned file metadata, empty folders,
+  and import status. Startup restores this index before a background directory
+  walk. On Windows, two recursive `AYIO::FileWatcher` subscriptions cover the
+  source and imported roots. Directory changes patch the virtual hierarchy;
+  file metadata updates refresh visible previews and Inspector details without
+  rebuilding the directory tree. Index writes are deferred to a background
+  task. Source models appear as `Needs import`, `Ready`,
   or `Failed` in the asset Inspector. Generated assets are `Ready`.
 - Imports run through one sequential background queue. The Content Browser
   remains responsive, reports progress and the converter's failure reason,

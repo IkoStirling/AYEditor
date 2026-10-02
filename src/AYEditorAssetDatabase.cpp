@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetDatabase.h"
+#include "AYEditor/EditorProjectDescriptor.h"
 
 #include <AYAssetFormat/AssetFormat.h>
 #include <AYIO/FileWatcher.h>
@@ -117,9 +118,10 @@ void appendRoot(SnapshotT& snapshot,
     for (; !ec && it != end; it.increment(ec)) {
         if (cancellation != nullptr && cancellation->requested()) return;
         const std::filesystem::directory_entry& entry = *it;
+        // The iterator is rooted at this absolute path. A lexical relative
+        // path avoids canonicalizing every entry (an extra disk walk per file).
         const std::filesystem::path relative =
-            std::filesystem::relative(entry.path(), root, ec);
-        if (ec) break;
+            entry.path().lexically_relative(root);
         const std::string relativeText = slashNormalized(relative.string());
         if (relativeText.empty() || relativeText == ".") continue;
         const std::string logical =
@@ -139,9 +141,7 @@ void appendRoot(SnapshotT& snapshot,
         record.id = stableAssetId(logical);
         record.name = entry.path().filename().string();
         record.logicalPath = logical;
-        record.absolutePath = slashNormalized(
-            std::filesystem::absolute(entry.path(), ec).lexically_normal().string());
-        if (ec) break;
+        record.absolutePath = slashNormalized(entry.path().lexically_normal().string());
         record.runtimePath = record.absolutePath;
         record.type = classifyEditorAssetPath(record.name);
         record.origin = origin;
@@ -188,7 +188,8 @@ void appendRoot(SnapshotT& snapshot,
 }
 
 void writeIndex(const std::filesystem::path& path,
-                const std::vector<EditorAssetRecord>& records)
+                const std::vector<EditorAssetRecord>& records,
+                const std::vector<EditorAssetFolder>& folders)
 {
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
@@ -196,9 +197,15 @@ void writeIndex(const std::filesystem::path& path,
     const std::filesystem::path temporary = path.string() + ".tmp";
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) return;
-    output << "AYEDITOR_ASSET_INDEX\t1\n";
+    output << "AYEDITOR_ASSET_INDEX\t2\n";
+    for (const EditorAssetFolder& folder : folders) {
+        if (folder.parentPath.empty()) continue;
+        output << 'D' << '\t' << std::quoted(folder.logicalPath) << '\t'
+               << static_cast<unsigned>(folder.origin) << '\n';
+    }
     for (const EditorAssetRecord& record : records) {
-        output << record.id << '\t' << std::quoted(record.logicalPath) << '\t'
+        output << 'A' << '\t' << record.id << '\t'
+               << std::quoted(record.logicalPath) << '\t'
                << static_cast<unsigned>(record.type) << '\t'
                << static_cast<unsigned>(record.origin) << '\t'
                << static_cast<unsigned>(record.importState) << '\t'
@@ -252,9 +259,12 @@ bool readIndex(const std::filesystem::path& path,
 {
     std::ifstream input(path, std::ios::binary);
     std::string marker;
-    if (!std::getline(input, marker) || marker != "AYEDITOR_ASSET_INDEX\t1") {
+    if (!std::getline(input, marker)
+        || (marker != "AYEDITOR_ASSET_INDEX\t1"
+            && marker != "AYEDITOR_ASSET_INDEX\t2")) {
         return false;
     }
+    const bool version2 = marker == "AYEDITOR_ASSET_INDEX\t2";
     snapshot.folders.push_back(EditorAssetFolder{
         "Assets", "Assets", {}, EditorAssetOrigin::Source});
     snapshot.folders.push_back(EditorAssetFolder{
@@ -263,10 +273,33 @@ bool readIndex(const std::filesystem::path& path,
     unsigned type = 0;
     unsigned origin = 0;
     unsigned importState = 0;
-    while (input >> record.id >> std::quoted(record.logicalPath)
-                 >> type >> origin >> importState
-                 >> record.size >> record.lastModified) {
-        if (type > static_cast<unsigned>(EditorAssetType::StatsRecipe)
+    while (true) {
+        if (version2) {
+            char kind = 0;
+            if (!(input >> kind)) break;
+            if (kind == 'D') {
+                std::string logicalPath;
+                if (!(input >> std::quoted(logicalPath) >> origin)
+                    || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)) {
+                    return false;
+                }
+                const auto folderOrigin = static_cast<EditorAssetOrigin>(origin);
+                std::filesystem::path relative;
+                if (!safeRelativeLogicalPath(logicalPath,
+                    folderOrigin == EditorAssetOrigin::Source ? "Assets" : "Imported",
+                    relative)) return false;
+                snapshot.folders.push_back(EditorAssetFolder{
+                    logicalPath, logicalName(logicalPath), logicalParent(logicalPath),
+                    folderOrigin});
+                appendFolderChain(snapshot, logicalPath + "/placeholder", folderOrigin);
+                continue;
+            }
+            if (kind != 'A') return false;
+        }
+        if (!(input >> record.id >> std::quoted(record.logicalPath)
+                    >> type >> origin >> importState
+                    >> record.size >> record.lastModified)) break;
+        if (type > static_cast<unsigned>(EditorAssetType::ActorClass)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -308,7 +341,7 @@ bool readIndex(const std::filesystem::path& path,
 
 struct EditorAssetDatabase::WatchState {
     ayt::io::FileWatcher watcher;
-    std::unordered_set<std::string> directories;
+    std::unordered_map<std::string, std::string> directories;
 };
 
 EditorAssetDatabase::EditorAssetDatabase() = default;
@@ -428,7 +461,12 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
         return false;
     }
     root = root.lexically_normal();
-    const std::filesystem::path source = root / "Assets";
+    std::string configuredAssetRoot = "Assets";
+    if (const auto descriptor = EditorProjectDescriptor::load(root.string());
+        descriptor && !descriptor.assetRoot.empty()) {
+        configuredAssetRoot = descriptor.assetRoot;
+    }
+    const std::filesystem::path source = root / configuredAssetRoot;
     const std::filesystem::path derived = root / ".ayeditor_cache" / "assets";
     std::filesystem::create_directories(source, ec);
     if (!ec) std::filesystem::create_directories(derived, ec);
@@ -460,6 +498,11 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
 
 void EditorAssetDatabase::close()
 {
+    if (_indexWriteFuture.valid()) _indexWriteFuture.wait();
+    if (_indexDirty && !_indexPath.empty()) {
+        writeIndex(_indexPath, _records, _folders);
+    }
+    _indexDirty = false;
     if (_watchState) {
         // Stop the directory watcher first so it cannot enqueue new
         // requests against _records / _folders while we tear them down.
@@ -479,6 +522,10 @@ void EditorAssetDatabase::close()
     _recordById.clear();
     _recordByLogicalPath.clear();
     _loadedFromIndex = false;
+    _lastFileChangeAffectsEntries = false;
+    _folderRevision = 0;
+    _changeRevision = 0;
+    _scanStartRevision = 0;
 }
 
 EditorAssetDatabase::Snapshot EditorAssetDatabase::scanRoots(
@@ -512,14 +559,24 @@ EditorAssetDatabase::Snapshot EditorAssetDatabase::scanRoots(
 
 void EditorAssetDatabase::applySnapshot(Snapshot snapshot)
 {
+    if (_indexWriteFuture.valid()) _indexWriteFuture.wait();
+    _indexDirty = false;
+    const auto sameFolders = [this, &snapshot]() {
+        if (_folders.size() != snapshot.folders.size()) return false;
+        for (std::size_t i = 0; i < _folders.size(); ++i) {
+            if (_folders[i].logicalPath != snapshot.folders[i].logicalPath) return false;
+        }
+        return true;
+    }();
     _records = std::move(snapshot.records);
     _folders = std::move(snapshot.folders);
+    if (!sameFolders) ++_folderRevision;
     _lastError = std::move(snapshot.error);
     rebuildLookupsAndPersist();
     refreshDirectoryWatches();
 }
 
-void EditorAssetDatabase::rebuildLookupsAndPersist()
+void EditorAssetDatabase::rebuildLookupsAndPersist(bool persist)
 {
     auto byPath = [](const auto& a, const auto& b) {
         return lowerAscii(a.logicalPath) < lowerAscii(b.logicalPath);
@@ -546,22 +603,51 @@ void EditorAssetDatabase::rebuildLookupsAndPersist()
         _recordByLogicalPath.emplace(
             lowerAscii(_records[i].logicalPath), i);
     }
-    if (!_indexPath.empty()) writeIndex(_indexPath, _records);
+    if (persist && !_indexPath.empty()) writeIndex(_indexPath, _records, _folders);
+}
+
+void EditorAssetDatabase::flushDeferredIndex()
+{
+    if (!_indexDirty || _indexPath.empty()) return;
+    if (_indexWriteFuture.valid()) {
+        if (_indexWriteFuture.wait_for(std::chrono::seconds(0))
+            != std::future_status::ready) return;
+        try { _indexWriteFuture.get(); } catch (...) { /* Retry below. */ }
+    }
+    if (std::chrono::steady_clock::now() - _lastIndexChange
+        < std::chrono::milliseconds(500)) return;
+    auto records = _records;
+    auto folders = _folders;
+    const std::string path = _indexPath;
+    _indexWriteFuture = std::async(std::launch::async,
+        [path, records = std::move(records), folders = std::move(folders)]() {
+            writeIndex(path, records, folders);
+        });
+    _indexDirty = false;
 }
 
 void EditorAssetDatabase::refreshDirectoryWatches()
 {
     if (!_watchState) return;
-    const auto addRoot = [this](const std::filesystem::path& root) {
+#if defined(_WIN32)
+    for (const auto& root : {_sourceRoot, _derivedRoot}) {
+        if (root.empty()) continue;
+        const std::string key = lowerAscii(root);
+        if (!_watchState->directories.contains(key)
+            && _watchState->watcher.watch(root, nullptr, true)) {
+            _watchState->directories.emplace(key, root);
+        }
+    }
+    return;
+#endif
+    std::unordered_map<std::string, std::string> present;
+    const auto collect = [&present](const std::filesystem::path& root) {
         std::error_code error;
         if (!std::filesystem::is_directory(root, error)) return;
-        const auto add = [this](const std::filesystem::path& directory) {
+        const auto add = [&present](const std::filesystem::path& directory) {
             const std::string normalized = slashNormalized(
                 directory.lexically_normal().string());
-            const std::string key = lowerAscii(normalized);
-            if (_watchState->directories.insert(key).second) {
-                (void)_watchState->watcher.watch(normalized, nullptr);
-            }
+            present.emplace(lowerAscii(normalized), normalized);
         };
         add(root);
         std::filesystem::recursive_directory_iterator it(root,
@@ -571,8 +657,64 @@ void EditorAssetDatabase::refreshDirectoryWatches()
             if (it->is_directory(error)) add(it->path());
         }
     };
-    addRoot(_sourceRoot);
-    addRoot(_derivedRoot);
+    collect(_sourceRoot);
+    collect(_derivedRoot);
+    for (auto it = _watchState->directories.begin();
+         it != _watchState->directories.end();) {
+        if (present.contains(it->first)) { ++it; continue; }
+        (void)_watchState->watcher.unwatch(it->second);
+        it = _watchState->directories.erase(it);
+    }
+    for (const auto& [key, path] : present) {
+        if (!_watchState->directories.contains(key)
+            && _watchState->watcher.watch(path, nullptr)) {
+            _watchState->directories.emplace(key, path);
+        }
+    }
+}
+
+void EditorAssetDatabase::watchDirectorySubtree(const std::filesystem::path& root)
+{
+#if defined(_WIN32)
+    (void)root; // The two root handles already watch every descendant.
+    return;
+#endif
+    if (!_watchState) return;
+    std::error_code error;
+    if (!std::filesystem::is_directory(root, error)) return;
+    const auto add = [this](const std::filesystem::path& directory) {
+        const std::string normalized = slashNormalized(
+            directory.lexically_normal().string());
+        const std::string key = lowerAscii(normalized);
+        if (!_watchState->directories.contains(key)
+            && _watchState->watcher.watch(normalized, nullptr)) {
+            _watchState->directories.emplace(key, normalized);
+        }
+    };
+    add(root);
+    std::filesystem::recursive_directory_iterator it(root,
+        std::filesystem::directory_options::skip_permission_denied, error);
+    const std::filesystem::recursive_directory_iterator end;
+    for (; !error && it != end; it.increment(error)) {
+        if (it->is_directory(error)) add(it->path());
+    }
+}
+
+void EditorAssetDatabase::unwatchDirectorySubtree(const std::filesystem::path& root)
+{
+#if defined(_WIN32)
+    (void)root;
+    return;
+#endif
+    if (!_watchState) return;
+    const std::string key = lowerAscii(slashNormalized(
+        root.lexically_normal().string()));
+    for (auto it = _watchState->directories.begin();
+         it != _watchState->directories.end();) {
+        if (!startsWithFolder(it->first, key)) { ++it; continue; }
+        (void)_watchState->watcher.unwatch(it->second);
+        it = _watchState->directories.erase(it);
+    }
 }
 
 bool EditorAssetDatabase::scanNow(std::string* error)
@@ -596,6 +738,7 @@ bool EditorAssetDatabase::requestScan()
     if (_projectRoot.empty() || _scanPending) return false;
     const std::filesystem::path source(_sourceRoot);
     const std::filesystem::path derived(_derivedRoot);
+    _scanStartRevision = _changeRevision;
     _scanFuture = ayt::task::launchBackground(
         [source, derived](ayt::task::CancellationToken token) {
             token.report(0.0f, "Scanning source assets");
@@ -611,7 +754,16 @@ bool EditorAssetDatabase::pollScan()
     if (_scanFuture.wait_for(std::chrono::seconds(0))
         != std::future_status::ready) return false;
     try {
-        applySnapshot(_scanFuture.get());
+        Snapshot snapshot = _scanFuture.get();
+        if (_scanStartRevision == _changeRevision) {
+            applySnapshot(std::move(snapshot));
+        } else {
+            // Notifications applied while this scan ran are newer than its
+            // snapshot. Reconcile from disk instead of publishing stale data.
+            _scanPending = false;
+            (void)requestScan();
+            return false;
+        }
     } catch (const std::exception& e) {
         _lastError = std::string("asset scan failed: ") + e.what();
     } catch (...) {
@@ -624,10 +776,16 @@ bool EditorAssetDatabase::pollScan()
 bool EditorAssetDatabase::pollFileChanges()
 {
     if (!_watchState || _projectRoot.empty()) return false;
+    _lastFileChangeAffectsEntries = false;
     std::vector<ayt::io::FileWatchEvent> events;
-    if (_watchState->watcher.pollPending(events) == 0u) return false;
+    if (_watchState->watcher.pollPending(events) == 0u) {
+        flushDeferredIndex();
+        return false;
+    }
 
     bool changed = false;
+    bool foldersChanged = false;
+    bool lookupsChanged = false;
     bool sidecarChanged = false;
     for (const auto& event : events) {
         const std::string absolute = slashNormalized(
@@ -649,10 +807,45 @@ bool EditorAssetDatabase::pollFileChanges()
         if (std::filesystem::is_directory(path, error)) {
             const EditorAssetOrigin origin = source
                 ? EditorAssetOrigin::Source : EditorAssetOrigin::Imported;
-            _folders.push_back(EditorAssetFolder{
-                logical, path.filename().string(), logicalParent(logical), origin});
-            refreshDirectoryWatches();
-            changed = true;
+            Snapshot subtree;
+            appendRoot(subtree, path, logical.c_str(), origin,
+                source ? std::filesystem::path(_derivedRoot)
+                       : std::filesystem::path{});
+            if (!subtree.error.empty()) {
+                _lastError = subtree.error;
+                continue;
+            }
+            std::unordered_set<std::string> knownFolders;
+            knownFolders.reserve(_folders.size() + subtree.folders.size());
+            for (const auto& folder : _folders)
+                knownFolders.insert(lowerAscii(folder.logicalPath));
+            for (auto& folder : subtree.folders) {
+                if (knownFolders.insert(lowerAscii(folder.logicalPath)).second) {
+                    _folders.push_back(std::move(folder));
+                    foldersChanged = true;
+                    changed = true;
+                    lookupsChanged = true;
+                }
+            }
+            std::unordered_map<std::string, std::size_t> knownRecords;
+            knownRecords.reserve(_records.size() + subtree.records.size());
+            for (std::size_t i = 0; i < _records.size(); ++i)
+                knownRecords.emplace(lowerAscii(_records[i].logicalPath), i);
+            for (auto& record : subtree.records) {
+                const std::string key = lowerAscii(record.logicalPath);
+                if (const auto old = knownRecords.find(key);
+                    old != knownRecords.end()) {
+                    _records[old->second] = std::move(record);
+                } else {
+                    knownRecords.emplace(key, _records.size());
+                    _records.push_back(std::move(record));
+                    lookupsChanged = true;
+                }
+                changed = true;
+            }
+            watchDirectorySubtree(path);
+            _lastFileChangeAffectsEntries = _lastFileChangeAffectsEntries
+                || lookupsChanged;
             continue;
         }
         const auto existing = std::find_if(_records.begin(), _records.end(),
@@ -660,9 +853,11 @@ bool EditorAssetDatabase::pollFileChanges()
                 return lowerAscii(record.logicalPath) == lowerAscii(logical);
             });
         if (!std::filesystem::is_regular_file(path, error)) {
+            unwatchDirectorySubtree(path);
             if (existing != _records.end()) {
                 _records.erase(existing);
                 changed = true;
+                lookupsChanged = true;
             }
             const std::string logicalKey = lowerAscii(logical);
             const auto oldFolderCount = _folders.size();
@@ -682,6 +877,12 @@ bool EditorAssetDatabase::pollFileChanges()
                 }), _records.end());
             changed = changed || oldFolderCount != _folders.size()
                 || oldRecordCount != _records.size();
+            foldersChanged = foldersChanged || oldFolderCount != _folders.size();
+            lookupsChanged = lookupsChanged
+                || oldFolderCount != _folders.size()
+                || oldRecordCount != _records.size();
+            _lastFileChangeAffectsEntries = _lastFileChangeAffectsEntries
+                || lookupsChanged;
             continue;
         }
 
@@ -705,8 +906,13 @@ bool EditorAssetDatabase::pollFileChanges()
             record.importState = EditorAssetImportState::NeedsImport;
             sidecarChanged = true;
         }
-        if (existing == _records.end()) _records.push_back(std::move(record));
-        else *existing = std::move(record);
+        if (existing == _records.end()) {
+            _records.push_back(std::move(record));
+            lookupsChanged = true;
+            _lastFileChangeAffectsEntries = true;
+        } else {
+            *existing = std::move(record);
+        }
         changed = true;
     }
 
@@ -743,7 +949,13 @@ bool EditorAssetDatabase::pollFileChanges()
             }
         }
     }
-    if (changed) rebuildLookupsAndPersist();
+    if (changed) {
+        ++_changeRevision;
+        if (lookupsChanged) rebuildLookupsAndPersist(false);
+        _indexDirty = true;
+        _lastIndexChange = std::chrono::steady_clock::now();
+    }
+    if (foldersChanged) ++_folderRevision;
     return changed;
 }
 
@@ -819,6 +1031,24 @@ std::vector<EditorAssetEntry> EditorAssetDatabase::entries(
             if (a.folder != b.folder) return a.folder > b.folder;
             return lowerAscii(a.displayName) < lowerAscii(b.displayName);
         });
+    return result;
+}
+
+std::vector<EditorAssetEntry> EditorAssetDatabase::allEntries(
+    const std::string& query, std::optional<EditorAssetType> type) const
+{
+    const std::string needle = lowerAscii(query);
+    std::vector<EditorAssetEntry> result;
+    result.reserve(_records.size());
+    for (const EditorAssetRecord& record : _records) {
+        if (type && record.type != *type) continue;
+        if (!needle.empty()) {
+            const std::string haystack = lowerAscii(record.name + " " + record.logicalPath);
+            if (haystack.find(needle) == std::string::npos) continue;
+        }
+        result.push_back(EditorAssetEntry{
+            false, {}, record.id, record.name, record.type, record.origin});
+    }
     return result;
 }
 

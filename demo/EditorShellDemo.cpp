@@ -288,6 +288,8 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Workspace.Panel.Console", out.panelConsoleVisible);
     out.panelAssetsVisible = saved.getBool(
         "Editor.Workspace.Panel.Assets", out.panelAssetsVisible);
+    out.assetBrowserFlatMode = saved.getBool(
+        "Editor.Workspace.AssetBrowser.Flat", out.assetBrowserFlatMode);
 
     out.viewportOrientationAxisVisible = saved.getBool(
         kViewportOrientationAxisVisibleKey,
@@ -401,6 +403,8 @@ bool saveEditorPreferences(const std::string& path,
     config.setBool("Editor.Workspace.Panel.Hierarchy", value.panelOutlinerVisible);
     config.setBool("Editor.Workspace.Panel.Console", value.panelConsoleVisible);
     config.setBool("Editor.Workspace.Panel.Assets", value.panelAssetsVisible);
+    config.setBool("Editor.Workspace.AssetBrowser.Flat",
+                   value.assetBrowserFlatMode);
     config.setBool(kViewportOrientationAxisVisibleKey,
                    value.viewportOrientationAxisVisible);
     config.setBool("Editor.Viewport.Camera.Valid", value.cameraPoseValid);
