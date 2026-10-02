@@ -314,7 +314,7 @@ private:
         inspector->addWidget(_properties, 124.0f);
         inspector->addWidget(makeHeader(L"AYHUMANOID MAPPING"), 20.0f);
         auto* targetRow = new ayt::ui::authoring::ResourceReferenceField(
-            {L"", L"Target .ayskel path", L"Set target", "skeleton_retarget_target", 0, 78});
+            {L"", L"Target .skl path", L"Set target", "skeleton_retarget_target", 0, 78});
         _targetSkeletonPath = targetRow->input();
         targetRow->setOnLoad([this](const auto&) { return configureRetarget(); });
         inspector->addWidget(targetRow, 28.0f);
@@ -533,7 +533,7 @@ private:
                 + L"  [" + ayt::ui::decodeUtf8Text(
                     std::filesystem::path(profile.path).filename().string()) + L"]");
         }
-        if (templates.empty()) templates.push_back(L"<No .ayrig templates>");
+        if (templates.empty()) templates.push_back(L"<No .rig templates>");
         _templatePicker->setItems(templates);
         _templatePicker->setSelectedIndex(0);
         _templatePicker->setEnabled(!_document->templates().empty());
@@ -836,7 +836,7 @@ private:
         }
         _bake->setTextColor(bakeColor(status.bake));
         const std::wstring legacy = _document->core().openedLegacyMapping()
-            ? L"LEGACY .aysmap | Save migrates to .ayrig | " : L"";
+            ? L"LEGACY .aysmap | Save migrates to .rig | " : L"";
         const std::wstring message = legacy
             + (_document->isDirty() ? L"Modified | " : L"")
             + ayt::ui::decodeUtf8Text(status.message);
@@ -1061,7 +1061,7 @@ EditorDescriptor makeEditorSkeletonDescriptor()
     descriptor.openPolicy = EditorOpenPolicy::PerResource;
     descriptor.defaultDockSlot = EditorDockSlot::Center;
     descriptor.priority = 130;
-    descriptor.extensions = {".ayskel", ".ayrig", ".aysmap"};
+    descriptor.extensions = {".skl", ".ayskel", ".rig", ".ayrig", ".aysmap"};
     descriptor.assetTypes = {"Skeleton", "Rig Profile"};
     descriptor.createDocument = [](const EditorOpenRequest& request,
                                    std::string& error) {

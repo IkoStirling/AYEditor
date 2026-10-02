@@ -157,7 +157,7 @@ EditorAnimationRigPanel::EditorAnimationRigPanel(
   create->setSpacing(4);
   _profile = new TextInput();
   _profile->setId("animation_rig_profile");
-  _profile->setPlaceholder(L"Optional mapping .ayrig; empty = canonical names");
+  _profile->setPlaceholder(L"Optional mapping .rig; empty = canonical names");
   create->addWidget(_profile, 0);
   auto *generate = new Button();
   generate->setId("animation_rig_create");

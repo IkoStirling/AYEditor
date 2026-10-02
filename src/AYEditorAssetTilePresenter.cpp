@@ -201,23 +201,9 @@ ayt::math::FVector4 EditorAssetTilePresenter::categoryColor(
 bool EditorAssetTilePresenter::isEngineNativeFileName(
     std::string_view fileName) noexcept
 {
-    for (const auto id : {ayt::asset_format::Id::Scene,
-                          ayt::asset_format::Id::Mesh,
-                          ayt::asset_format::Id::Material,
-                          ayt::asset_format::Id::Texture}) {
-        if (ayt::asset_format::matchesPath(fileName, id)) return true;
-    }
-    // Keep compound suffixes before their shorter constituents if the table
-    // grows. Metadata sidecars are not listed: the asset database deliberately
-    // filters .aydep.json out of the browser.
-    constexpr std::array<std::string_view, 15> nativeSuffixes = {
-        ".ayparticle", ".aystats.json", ".aystats", ".gameflow.json", ".uiflow.json", ".aytilemap.json", ".ui.json", ".aytilemap",
-        ".ayanm", ".ayanim", ".ayskel", ".ayrig", ".aysmap", ".logia", ".phoskia",
-    };
-    for (const std::string_view suffix : nativeSuffixes) {
-        if (endsWithAsciiInsensitive(fileName, suffix)) return true;
-    }
-    return false;
+    if (const auto match = ayt::asset_format::matchPath(fileName))
+        return match->descriptor->id != ayt::asset_format::Id::ImportDependency;
+    return endsWithAsciiInsensitive(fileName, ".ayanim");
 }
 
 } // namespace ayt::editor

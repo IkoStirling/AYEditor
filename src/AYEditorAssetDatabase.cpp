@@ -95,8 +95,7 @@ EditorAssetId stableAssetId(const std::string& logicalPath)
 bool isMetadataSidecar(const std::filesystem::path& path)
 {
     const std::string name = lowerAscii(path.filename().string());
-    return name.size() >= 11
-        && name.compare(name.size() - 11, 11, ".aydep.json") == 0;
+    return ayt::asset_format::matchesPath(name, ayt::asset_format::Id::ImportDependency);
 }
 
 template<typename SnapshotT>
@@ -162,8 +161,10 @@ void appendRoot(SnapshotT& snapshot,
             record.importState = EditorAssetImportState::Ready;
         } else if (record.type == EditorAssetType::SourceModel) {
             record.importState = EditorAssetImportState::NeedsImport;
-            const std::filesystem::path sidecar = importSidecarRoot
-                / (entry.path().stem().string() + ".aydep.json");
+            std::filesystem::path sidecar = importSidecarRoot
+                / ayt::asset_format::appendSuffix(entry.path().stem().string(), ayt::asset_format::Id::ImportDependency);
+            if (!std::filesystem::is_regular_file(sidecar))
+                sidecar = importSidecarRoot / (entry.path().stem().string() + ".aydep.json");
             const auto sidecarSize = std::filesystem::file_size(sidecar, ec);
             if (!ec) {
                 if (sidecarSize == 0u) {
@@ -353,7 +354,8 @@ const char* editorAssetImportStateName(EditorAssetImportState state) noexcept
 EditorAssetType classifyEditorAssetPath(const std::string& path)
 {
     const std::string lower = lowerAscii(slashNormalized(path));
-    if(lower.ends_with(".aystats.json") || lower.ends_with(".aystats"))
+    if(ayt::asset_format::matchesPath(lower, ayt::asset_format::Id::StatsSource)
+        || ayt::asset_format::matchesPath(lower, ayt::asset_format::Id::StatsRecipes))
         return EditorAssetType::StatsRecipe;
     if (const auto match = ayt::asset_format::matchPath(lower)) {
         using ayt::asset_format::Id;
@@ -716,10 +718,13 @@ bool EditorAssetDatabase::pollFileChanges()
             const auto sourceModified = std::filesystem::last_write_time(
                 record.absolutePath, error);
             if (error) continue;
-            const std::filesystem::path sidecar =
+            std::filesystem::path sidecar =
                 std::filesystem::path(_derivedRoot)
-                / (std::filesystem::path(record.absolutePath).stem().string()
-                    + ".aydep.json");
+                / ayt::asset_format::appendSuffix(std::filesystem::path(record.absolutePath).stem().string(),
+                    ayt::asset_format::Id::ImportDependency);
+            if (!std::filesystem::is_regular_file(sidecar))
+                sidecar = std::filesystem::path(_derivedRoot)
+                    / (std::filesystem::path(record.absolutePath).stem().string() + ".aydep.json");
             const auto size = std::filesystem::file_size(sidecar, error);
             EditorAssetImportState state = EditorAssetImportState::NeedsImport;
             if (!error) {

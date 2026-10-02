@@ -1,4 +1,5 @@
 #include <AYEditor/EditorParticleDocument.h>
+#include <AYAssetFormat/AssetFormat.h>
 #include <AYParticle/EffectResource.h>
 #include <AYResource/ResourceManager.h>
 #include <chrono>
@@ -53,11 +54,13 @@ bool EditorParticleDocument::save(std::string* error) {
     return saveAs(_path,error);
 }
 bool EditorParticleDocument::saveAs(const std::string& path,std::string* error) {
-    if(!particle::saveEffectAsset(path,_asset,error)) return false;
-    _path=path; _title=std::filesystem::path(path).filename().string(); _saved=_asset; ++_revision;
+    const auto canonical = ayt::asset_format::canonicalizePath(path, ayt::asset_format::Id::ParticleEffect);
+    if (!canonical) { if (error) *error = "Use a .pfx particle effect path."; return false; }
+    if(!particle::saveEffectAsset(*canonical,_asset,error)) return false;
+    _path=*canonical; _title=std::filesystem::path(*canonical).filename().string(); _saved=_asset; ++_revision;
     particle::registerEffectResourceLoader();
     auto& resources=resource::ResourceManager::instance();
-    if(resources.isLoaded(path) || resources.hasLoadFailed(path)) (void)particle::reloadEffectResource(path);
+    if(resources.isLoaded(*canonical) || resources.hasLoadFailed(*canonical)) (void)particle::reloadEffectResource(*canonical);
     return true;
 }
 bool EditorParticleDocument::reload(std::string* error) {

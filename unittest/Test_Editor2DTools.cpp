@@ -778,7 +778,7 @@ TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
     CHECK_TRUE(tilemap.create(4u, 2u, 16u, 8u, 0u));
     std::string error;
     CHECK_TRUE(tilemap.save(
-        (root / "Assets" / "tilemaps" / "ground.aytilemap.json").string(),
+        (root / "Assets" / "tilemaps" / "ground.tls").string(),
         &error));
 
     const std::string layoutPath = resolveEditorShellLayoutPath();
@@ -797,7 +797,7 @@ TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
         "Assets/textures/marker.png");
     const EditorAssetRecord* sourceTilemap =
         session.assetDatabase().findByLogicalPath(
-            "Assets/tilemaps/ground.aytilemap.json");
+            "Assets/tilemaps/ground.tls");
     CHECK(texture != nullptr);
     CHECK(sourceTilemap != nullptr);
 
@@ -823,7 +823,7 @@ TEST_CASE(TwoDAssetsPlaceAsSpriteAndCookedTilemapReferences)
         ? tilemapEntity->getComponent<ayt::entity::TilemapComponent>() : nullptr;
     CHECK(tilemapComponent != nullptr);
     CHECK(tilemapComponent != nullptr
-          && tilemapComponent->tilemapPath == "tilemaps/ground.aytilemap");
+          && tilemapComponent->tilemapPath == "tilemaps/ground.tlm");
 
     fs::create_directories(root / "Assets" / "worlds", ignored);
     const fs::path scenePath = root / "Assets" / "worlds" / "stage4.scn";

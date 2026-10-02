@@ -403,7 +403,7 @@ EditorDescriptor makeEditorDslDescriptor()
     descriptor.openPolicy = EditorOpenPolicy::PerResource;
     descriptor.defaultDockSlot = EditorDockSlot::Center;
     descriptor.priority = 100;
-    descriptor.extensions = {".phoskia", ".logia", ".ayactor"};
+    descriptor.extensions = {".phoskia", ".logia", ".act", ".ayactor"};
     descriptor.assetTypes = {"shader", "script", "actor-class"};
     descriptor.createDocument =
         [](const EditorOpenRequest& request,

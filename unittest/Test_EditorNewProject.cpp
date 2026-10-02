@@ -72,7 +72,7 @@ TEST_CASE(editor_adapter_uses_shared_identity_and_2d_template)
     CHECK(created.error.empty());
     CHECK(fs::path(created.projectRoot).filename() == "first-editor-game");
     CHECK(fs::is_regular_file(
-        fs::path(created.projectRoot) / "project.ayproject.json"));
+        fs::path(created.projectRoot) / "project.prj"));
     CHECK(readText(fs::path(created.projectRoot) / "CMakeLists.txt")
         .find("PROFILE CLIENT_2D") != std::string::npos);
 

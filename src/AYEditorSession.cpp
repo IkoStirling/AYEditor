@@ -859,12 +859,28 @@ bool endsWithInsensitive(const std::string& value, const char* suffix)
 std::string tilemapRuntimeReference(const EditorAssetDatabase& database,
                                     const EditorAssetRecord& record)
 {
-    if (!endsWithInsensitive(record.name, ".aytilemap.json")) {
+    const auto match = ayt::asset_format::matchPath(record.name);
+    if (!match || match->descriptor->id != ayt::asset_format::Id::TilemapSource) {
         return database.portableAssetPath(record);
     }
-    std::filesystem::path stem(record.name);
-    stem = stem.stem().stem();
-    return ayt::resource::makeTilemapVirtualPath(stem.string());
+    const std::string stem = record.name.substr(0, record.name.size() - match->suffix.size());
+    return ayt::resource::makeTilemapVirtualPath(stem);
+}
+
+std::string uiComponentCatalogPath(const std::string& assetRoot)
+{
+    const auto folder = std::filesystem::path(assetRoot) / "ui";
+    const auto canonical = folder / ayt::asset_format::appendSuffix(
+        "project", ayt::asset_format::Id::UiComponentCatalog);
+    const auto legacy = folder / "project.ayuicomponents.json";
+    if (!std::filesystem::is_regular_file(canonical)
+        && std::filesystem::is_regular_file(legacy)) {
+        std::error_code error;
+        std::filesystem::copy_file(legacy, canonical,
+            std::filesystem::copy_options::none, error);
+        if (error) return legacy.string();
+    }
+    return canonical.string();
 }
 
 std::string editorRuntimeAssetPath(const EditorAssetDatabase& database,
@@ -1211,9 +1227,32 @@ std::string showAssetReferenceDialog(HWND owner, const std::string& projectRoot)
     ofn.lpstrFile = path;
     ofn.nMaxFile = MAX_PATH;
     ofn.lpstrInitialDir = initialDirectory.c_str();
-    ofn.lpstrFilter =
-        "Project assets\0*.aymesh;*.aymat;*.ayanim;*.ayskel;*.aytex;*.aytilemap;*.ayparticle;*.aystats;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json\0"
-        "All files (*.*)\0*.*\0";
+    std::string patterns;
+    for (const auto id : {ayt::asset_format::Id::Mesh,
+                          ayt::asset_format::Id::Material,
+                          ayt::asset_format::Id::Texture,
+                          ayt::asset_format::Id::Skeleton,
+                          ayt::asset_format::Id::Animation,
+                          ayt::asset_format::Id::Tilemap,
+                          ayt::asset_format::Id::ParticleEffect,
+                          ayt::asset_format::Id::StatsRecipes,
+                          ayt::asset_format::Id::StatsSource}) {
+        const auto& format = ayt::asset_format::describe(id);
+        patterns += "*" + std::string(format.suffix) + ";";
+        for (const auto alias : format.readAliases)
+            patterns += "*" + std::string(alias) + ";";
+    }
+    patterns += "*.ayanim;*.png;*.jpg;*.jpeg;*.bmp;*.tga;*.wav;*.mp3;*.ogg;*.json";
+    std::string filter = "Project assets";
+    filter.push_back('\0');
+    filter += patterns;
+    filter.push_back('\0');
+    filter += "All files (*.*)";
+    filter.push_back('\0');
+    filter += "*.*";
+    filter.push_back('\0');
+    filter.push_back('\0');
+    ofn.lpstrFilter = filter.c_str();
     ofn.nFilterIndex = 1;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return ::GetOpenFileNameA(&ofn) ? std::string(path) : std::string{};
@@ -1280,7 +1319,7 @@ std::string showProjectSettingsPathDialog(
         defaultExtension = sceneExtension.c_str();
         break;
     case EditorProjectPathKind::Tilemap:
-        filter = "AY Tilemap (*.aytilemap;*.aytilemap.json)\0*.aytilemap;*.aytilemap.json\0";
+        filter = "AY Tilemap (*.tlm;*.tls;*.aytilemap;*.aytilemap.json)\0*.tlm;*.tls;*.aytilemap;*.aytilemap.json\0";
         break;
     case EditorProjectPathKind::Executable:
     case EditorProjectPathKind::BuildArtifact:
@@ -1688,7 +1727,7 @@ std::string showProjectManifestDialog(
     const std::wstring initial = std::filesystem::u8path(
         initialDirectory).wstring();
     constexpr wchar_t filter[] =
-        L"Aliyat Project (project.ayproject.json)\0project.ayproject.json\0"
+        L"Aliyat Project (project.prj;project.ayproject.json)\0project.prj;project.ayproject.json\0"
         L"JSON Files (*.json)\0*.json\0\0";
     OPENFILENAMEW dialog{};
     dialog.lStructSize = sizeof(dialog);
@@ -1899,9 +1938,8 @@ EditorSession::EditorSession()
             _assetDatabase.projectRoot());
     };
     layoutConfig.externalComponentLibraryPath = [this]() {
-        return (std::filesystem::path(resolveProjectAssetRoot(
-                    _assetDatabase.projectRoot()))
-                / "ui" / "project.ayuicomponents.json").string();
+        return uiComponentCatalogPath(resolveProjectAssetRoot(
+            _assetDatabase.projectRoot()));
     };
     layoutConfig.openOwningFlowAction = [this](
         const std::string& layoutPath, std::string& message) {
@@ -9219,9 +9257,8 @@ bool EditorSession::openUiLayoutEditor(const std::string& path) {
             _assetDatabase.projectRoot());
     };
     controllerConfig.externalComponentLibraryPath = [this]() {
-        return (std::filesystem::path(resolveProjectAssetRoot(
-                    _assetDatabase.projectRoot()))
-                / "ui" / "project.ayuicomponents.json").string();
+        return uiComponentCatalogPath(resolveProjectAssetRoot(
+            _assetDatabase.projectRoot()));
     };
     controllerConfig.openOwningFlowAction = [this](
         const std::string& layoutPath, std::string& message) {
@@ -11092,7 +11129,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             };
             const auto assetsRoot=std::filesystem::path(_assetDatabase.projectRoot())/"Assets";
             auto* create=addButton("stats_asset_new_attach",L"Create new AYStats and attach");
-            auto* manifest=addInput("stats_asset_manifest","Source manifest under Assets (.aystats.json)",
+            auto* manifest=addInput("stats_asset_manifest","Source manifest under Assets (.srs)",
                 recipe->assetPath.empty()?"":recipe->assetPath+".json");
             auto* browse=addButton("stats_asset_browse_manifest",L"Choose source manifest");
             auto* load=addButton("stats_asset_load_manifest",L"Load source manifest");
@@ -11103,7 +11140,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             auto* sourceBrowse=addButton("stats_asset_browse_source",L"Choose source definitions");
             auto* bookBrowse=addButton("stats_asset_browse_book",L"Choose recipe book");
             auto* save=addButton("stats_asset_create_attach",L"Validate, build and attach");
-            auto* select=addButton("stats_asset_select_cooked",L"Attach existing .aystats");
+            auto* select=addButton("stats_asset_select_cooked",L"Attach existing .sts");
             auto* status=addLabel("Choose or create a recipe asset","stats_asset_status");
             if(recipe->lastError())addLabel(recipe->lastError()->message,"stats_asset_runtime_error");
             const auto handle=hierarchyWorldMutable()->getEntityHandle(entity->getId());
@@ -11171,8 +11208,8 @@ void EditorSession::rebuildComponentPropertyEditor()
                 const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
                 if(selected.empty())return;
                 const auto relative=_assetDatabase.portableAssetPath(selected);
-                if(!endsWithInsensitive(relative,".aystats.json")) {
-                    status->setText(L"Choose a .aystats.json source manifest");return;
+                if(!ayt::asset_format::matchesPath(relative, ayt::asset_format::Id::StatsSource)) {
+                    status->setText(L"Choose a .srs source manifest");return;
                 }
                 manifest->setText(ayt::ui::decodeUtf8Text(relative));
             });
@@ -11228,8 +11265,8 @@ void EditorSession::rebuildComponentPropertyEditor()
                 if(selected.empty())return;
                 const auto relative=_assetDatabase.portableAssetPath(selected);
                 const auto cooked=assetsRoot/relative;
-                if(!endsWithInsensitive(relative,".aystats")) {
-                    status->setText(L"Choose a cooked .aystats asset");return;
+                if(!ayt::asset_format::matchesPath(relative, ayt::asset_format::Id::StatsRecipes)) {
+                    status->setText(L"Choose a cooked .sts asset");return;
                 }
                 std::error_code error;
                 const auto root=std::filesystem::weakly_canonical(assetsRoot,error);
@@ -11800,11 +11837,12 @@ void EditorSession::rebuildComponentPropertyEditor()
                         _assetDatabase.portableAssetPath(selected);
                     if (componentTypeName == "TilemapComponent"
                         && fieldName == "tilemapPath"
-                        && endsWithInsensitive(selected, ".aytilemap.json")) {
-                        std::filesystem::path stem(selected);
-                        stem = stem.stem().stem();
+                        && ayt::asset_format::matchesPath(selected, ayt::asset_format::Id::TilemapSource)) {
+                        const auto match = ayt::asset_format::matchPath(selected);
+                        const std::string stem = std::filesystem::path(
+                            selected.substr(0, selected.size() - match->suffix.size())).filename().string();
                         reference = ayt::resource::makeTilemapVirtualPath(
-                            stem.string());
+                            stem);
                     }
                     const std::wstring portable =
                         ayt::ui::decodeUtf8Text(reference);

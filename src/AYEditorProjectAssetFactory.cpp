@@ -138,7 +138,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             if (!std::filesystem::exists(manifest)
                 && !std::filesystem::exists(folder / (stem + ".target.stats.json"))
                 && !std::filesystem::exists(folder / (stem + ".stats-recipes.json"))
-                && !std::filesystem::exists(folder / (stem + ".aystats"))) {
+                && !std::filesystem::exists(folder / ayt::asset_format::appendSuffix(stem, ayt::asset_format::Id::StatsRecipes))) {
                 destination = manifest;
                 break;
             }
@@ -154,7 +154,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             0, destination.filename().string().size() - assetTemplate.suffix.size());
         const auto definitionsPath = folder / (stem + ".target.stats.json");
         const auto bookPath = folder / (stem + ".stats-recipes.json");
-        const auto cookedPath = folder / (stem + ".aystats");
+        const auto cookedPath = folder / ayt::asset_format::appendSuffix(stem, ayt::asset_format::Id::StatsRecipes);
         const auto schema = Schema::compile({{
             .name = "value", .shape = Shape::Pool, .current = 100, .capacity = 100}});
         const auto plan = CalculationPlan::compile({{.id = 1, .op = Op::Input}}, 1, 1);

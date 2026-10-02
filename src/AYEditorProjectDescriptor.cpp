@@ -270,7 +270,8 @@ EditorProjectDescriptor EditorProjectDescriptor::load(
     try {
         const fs::path root = fs::absolute(projectRoot.empty()
             ? fs::current_path() : fs::path(projectRoot)).lexically_normal();
-        const fs::path path = root / kEditorProjectDescriptorFile;
+        fs::path path = root / kEditorProjectDescriptorFile;
+        if (!fs::is_regular_file(path)) path = root / kLegacyEditorProjectDescriptorFile;
         if (!fs::is_regular_file(path)) {
             if (error != nullptr) {
                 *error = "Project descriptor was not found: " + path.string();
@@ -547,9 +548,10 @@ std::string resolveEditorProjectRoot(
             root = selected;
         } else if (!filesystemError
                    && fs::is_regular_file(selected, filesystemError)) {
-            if (selected.filename() != kEditorProjectDescriptorFile) {
+            if (selected.filename() != kEditorProjectDescriptorFile
+                && selected.filename() != kLegacyEditorProjectDescriptorFile) {
                 if (error != nullptr) {
-                    *error = "Select project.ayproject.json or its containing folder.";
+                    *error = "Select project.prj or its containing folder.";
                 }
                 return {};
             }
@@ -606,7 +608,8 @@ EditorProjectStartupSceneResolution resolveEditorProjectStartupScene(
     try {
         const fs::path root = fs::absolute(projectRoot.empty()
             ? fs::current_path() : fs::path(projectRoot)).lexically_normal();
-        const fs::path descriptorPath = root / kEditorProjectDescriptorFile;
+        fs::path descriptorPath = root / kEditorProjectDescriptorFile;
+        if (!fs::exists(descriptorPath)) descriptorPath = root / kLegacyEditorProjectDescriptorFile;
         std::error_code fileError;
         const bool descriptorExists = fs::exists(descriptorPath, fileError);
         if (fileError) {

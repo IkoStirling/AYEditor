@@ -374,8 +374,8 @@ public:
             const auto folder=(std::filesystem::path(_host.projectRoot())/"Assets/effects").wstring();
             OPENFILENAMEW dialog{}; dialog.lStructSize=sizeof(dialog); dialog.hwndOwner=GetActiveWindow();
             dialog.lpstrFile=path; dialog.nMaxFile=32768; dialog.lpstrInitialDir=folder.c_str();
-            dialog.lpstrFilter=L"Particle Effect (*.ayparticle)\0*.ayparticle\0";
-            dialog.lpstrDefExt=L"ayparticle";
+            dialog.lpstrFilter=L"Particle Effect (*.pfx)\0*.pfx\0Legacy Particle Effect (*.ayparticle)\0*.ayparticle\0";
+            dialog.lpstrDefExt=L"pfx";
             dialog.Flags=OFN_OVERWRITEPROMPT|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
             return GetSaveFileNameW(&dialog)?encodeUtf8Text(path):std::string{};
 #else
@@ -767,7 +767,7 @@ private:
             const auto root=std::filesystem::path(_host.projectRoot())/(project?project.assetRoot:"Assets");
             const auto folder=(root/"textures").wstring();OPENFILENAMEW dialog{};dialog.lStructSize=sizeof(dialog);
             dialog.hwndOwner=GetActiveWindow();dialog.lpstrFile=path;dialog.nMaxFile=32768;
-            dialog.lpstrInitialDir=folder.c_str();dialog.lpstrFilter=L"Textures (*.png;*.aytex)\0*.png;*.aytex\0All files (*.*)\0*.*\0";
+            dialog.lpstrInitialDir=folder.c_str();dialog.lpstrFilter=L"Textures (*.png;*.txr;*.aytex)\0*.png;*.txr;*.aytex\0All files (*.*)\0*.*\0";
             dialog.Flags=OFN_FILEMUSTEXIST|OFN_PATHMUSTEXIST|OFN_NOCHANGEDIR;
             if(!GetOpenFileNameW(&dialog))return;
             const auto selected=std::filesystem::weakly_canonical(std::filesystem::path(path));
@@ -794,11 +794,11 @@ private:
                 if(!it->is_regular_file(ec))continue;
                 auto ext=it->path().extension().string();
                 std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return char(std::tolower(c));});
-                if(ext!=".png"&&ext!=".aytex")continue;
+                if(ext!=".png"&&ext!=".txr"&&ext!=".aytex")continue;
                 candidates.emplace_back(it->path().lexically_relative(root).generic_string(),it->path().string());
             }
             std::sort(candidates.begin(),candidates.end());
-            if(candidates.empty())_properties->addWidget(label(L"No PNG/aytex in project textures"),25);
+            if(candidates.empty())_properties->addWidget(label(L"No PNG or cooked textures in project textures"),25);
             else {
                 constexpr size_t pageSize=8;
                 const size_t pages=(candidates.size()+pageSize-1)/pageSize;
@@ -887,7 +887,7 @@ private:
 }
 bool registerEditorParticleExtension(EditorExtensionRegistry& registry,std::string* error) {
     EditorDescriptor descriptor; descriptor.id=kEditorParticleExtensionId;
-    descriptor.displayName=L"Particle Effect"; descriptor.extensions={".ayparticle"};
+    descriptor.displayName=L"Particle Effect"; descriptor.extensions={".pfx", ".ayparticle"};
     descriptor.assetTypes={"Particle Effect"}; descriptor.priority=80;
     descriptor.createDocument=[](const EditorOpenRequest& request,std::string& error) {
         auto document=std::make_shared<EditorParticleDocument>();

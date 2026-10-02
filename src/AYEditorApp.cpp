@@ -1,4 +1,5 @@
 #include "AYEditor/EditorApp.h"
+#include <AYAssetFormat/AssetFormat.h>
 #include "AYEditor/EditorChildWindowManager.h"
 
 #include "AYEditor/EditorHeapDebug.h"
@@ -1323,7 +1324,8 @@ void EditorApp::run()
                 };
 
                 if (frameIndex == 20) {
-                    selectValidationTarget("cube_shadow.aymat");
+                    selectValidationTarget(ayt::asset_format::appendSuffix(
+                        "cube_shadow", ayt::asset_format::Id::Material).c_str());
                     ayt::game::GameLoop::instance().pause();
                 } else if (frameIndex == 30) {
                     r6Capture.queue("_selection_taa_settled");
@@ -1444,14 +1446,16 @@ void EditorApp::run()
                     queueSelectionCapture("_none");
                 } else if (frameIndex == 60) {
                     ayt::game::GameLoop::instance().resume();
-                    selectCaptureTarget("ground_shadow.aymat");
+                    selectCaptureTarget(ayt::asset_format::appendSuffix(
+                        "ground_shadow", ayt::asset_format::Id::Material).c_str());
                 } else if (frameIndex == 65) {
                     ayt::game::GameLoop::instance().pause();
                 } else if (frameIndex == 80) {
                     queueSelectionCapture("_ground");
                 } else if (frameIndex == 90) {
                     ayt::game::GameLoop::instance().resume();
-                    selectCaptureTarget("cube_shadow.aymat");
+                    selectCaptureTarget(ayt::asset_format::appendSuffix(
+                        "cube_shadow", ayt::asset_format::Id::Material).c_str());
                 } else if (frameIndex == 95) {
                     ayt::game::GameLoop::instance().pause();
                 } else if (frameIndex == 105) {

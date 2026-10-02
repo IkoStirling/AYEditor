@@ -10,7 +10,8 @@
 namespace ayt::editor {
 
 inline constexpr std::string_view kEditorProjectDescriptorFile =
-    "project.ayproject.json";
+    "project.prj";
+inline constexpr std::string_view kLegacyEditorProjectDescriptorFile = "project.ayproject.json";
 inline constexpr std::uint32_t kEditorProjectDescriptorSchemaVersion = 2u;
 
 struct EditorProjectRunDescriptor {

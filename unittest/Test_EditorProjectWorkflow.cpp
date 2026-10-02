@@ -247,9 +247,9 @@ TEST_CASE(project_startup_scene_resolution_opens_the_declared_world)
         "  \"id\": \"sample\",\n"
         "  \"paths\": {\"assets\": \"Assets\"},\n"
         "  \"startupWorld\": \"main\",\n"
-        "  \"worlds\": [{\"id\": \"main\", \"scene\": \"worlds/main.ayscene\"}]\n"
+        "  \"worlds\": [{\"id\": \"main\", \"scene\": \"worlds/main.scn\"}]\n"
         "}\n");
-    writeWorkflowFile(cleanup.root / "Assets/worlds/main.ayscene",
+    writeWorkflowFile(cleanup.root / "Assets/worlds/main.scn",
         "{\n"
         "  \"__schemaVersion\": 2,\n"
         "  \"__coordConvention\": \"ay-coordinates-lh-yup-zfwd-ccw-uvtop-m-v1\",\n"
@@ -259,12 +259,12 @@ TEST_CASE(project_startup_scene_resolution_opens_the_declared_world)
     const EditorProjectStartupSceneResolution resolution =
         resolveEditorProjectStartupScene(cleanup.root.string());
     CHECK(resolution.projectDescriptorPresent);
-    CHECK(resolution);
+    CHECK_MSG(resolution, resolution.error.c_str());
     CHECK(resolution.error.empty());
     CHECK(std::filesystem::path(resolution.assetRootPath).lexically_normal()
           == (cleanup.root / "Assets").lexically_normal());
     CHECK(std::filesystem::path(resolution.scenePath).lexically_normal()
-          == (cleanup.root / "Assets/worlds/main.ayscene").lexically_normal());
+          == (cleanup.root / "Assets/worlds/main.scn").lexically_normal());
 
     EditorSceneDocument document;
     std::string error;
@@ -350,7 +350,7 @@ TEST_CASE(project_asset_factory_creates_actor_class_and_editable_script)
     CHECK(compiled.diagnostics.empty());
     EditorDslDocument classData;
     CHECK(classData.open(created.absolutePath,
-                         "Assets/actors/NewActor.ayactor", &error));
+                         "Assets/actors/NewActor.act", &error));
     CHECK(classData.compile().success);
     classData.setSourceUtf8("{invalid");
     CHECK_FALSE(classData.compile().success);
@@ -365,12 +365,12 @@ TEST_CASE(project_asset_factory_creates_actor_class_and_editable_script)
     CHECK(std::filesystem::path(second.absolutePath).stem()
         == std::filesystem::path(secondActor.scriptPath).stem());
     const auto child = createEditorProjectAsset(cleanup.root.string(),
-        EditorAssetType::ActorClass, "actors/NewActor.ayactor");
+        EditorAssetType::ActorClass, "actors/NewActor.act");
     CHECK(child);
     ayt::entity::ActorClassAsset childActor;
     CHECK(ayt::entity::loadActorClassAsset(child.absolutePath,
                                             childActor, &error));
-    CHECK(childActor.parentPath == "actors/NewActor.ayactor");
+    CHECK(childActor.parentPath == "actors/NewActor.act");
     ayt::entity::ActorClassAsset effective;
     CHECK(ayt::entity::resolveActorClassAsset(
         (cleanup.root / "Assets").string(),
@@ -418,14 +418,14 @@ TEST_CASE(actor_parent_move_repairs_child_reference)
         cleanup.root.string(), EditorAssetType::ActorClass);
     CHECK(parent);
     const auto child = createEditorProjectAsset(cleanup.root.string(),
-        EditorAssetType::ActorClass, "actors/NewActor.ayactor");
+        EditorAssetType::ActorClass, "actors/NewActor.act");
     CHECK(child);
     EditorAssetDatabase database;
     std::string error;
     CHECK(database.open(cleanup.root.string(), &error));
     CHECK(database.scanNow(&error));
     const EditorAssetRecord* parentRecord = database.findByLogicalPath(
-        "Assets/actors/NewActor.ayactor");
+        "Assets/actors/NewActor.act");
     CHECK_NOT_NULL(parentRecord);
     if (!parentRecord) return;
     EditorAssetOperations operations(cleanup.root.string());
@@ -433,7 +433,7 @@ TEST_CASE(actor_parent_move_repairs_child_reference)
     ayt::entity::ActorClassAsset childActor;
     CHECK(ayt::entity::loadActorClassAsset(child.absolutePath,
                                            childActor, &error));
-    CHECK(childActor.parentPath == "monsters/NewActor.ayactor");
+    CHECK(childActor.parentPath == "monsters/NewActor.act");
     ayt::entity::ActorClassAsset effective;
     CHECK(ayt::entity::resolveActorClassAsset(
         (cleanup.root / "Assets").string(),
@@ -459,7 +459,7 @@ TEST_CASE(actor_instance_undo_redo_retains_assets_root_and_saves)
     CHECK(document.createEntity("Create Actor", [&](ayt::entity::Entity& entity) {
         entity.setName("Enemy");
         return ayt::entity::instantiateActorClass(entity, actor,
-            "actors/NewActor.ayactor", root, &error);
+            "actors/NewActor.act", root, &error);
     }));
     CHECK(document.undo());
     CHECK(document.redo());
@@ -650,7 +650,7 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
     const char* executable = "bin/ProjectApp";
 #endif
     writeWorkflowFile(cleanup.root / executable, "placeholder");
-    writeWorkflowFile(cleanup.root / "project.ayproject.json",
+    writeWorkflowFile(cleanup.root / "project.prj",
         (std::string("{\"schemaVersion\":2,\"templateVersion\":1,"
          "\"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},\"id\":\"project\","
          "\"run\":{\"executable\":\"") + executable
@@ -663,7 +663,7 @@ TEST_CASE(project_runner_resolves_canonical_project_descriptor)
     CHECK(config.arguments.size() == 1u);
     CHECK(config.arguments[0] == "--smoke");
     CHECK(std::filesystem::path(config.source).filename()
-        == "project.ayproject.json");
+        == "project.prj");
 }
 
 TEST_CASE(project_runner_marks_a_first_build_as_recoverable)
@@ -966,7 +966,7 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     std::error_code ignored;
     std::filesystem::remove_all(cleanup.root, ignored);
     const auto source = cleanup.root
-        / "Assets/maps/rich.aytilemap.json";
+        / "Assets/maps/rich.tls";
     std::filesystem::create_directories(source.parent_path());
     const auto externalAtlas = cleanup.root / "External/sheet.png";
     writeWorkflowPng(externalAtlas);
@@ -1008,7 +1008,8 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     CHECK(error.empty());
     CHECK_FALSE(document->isDirty());
     CHECK(std::filesystem::is_regular_file(source));
-    const auto cookedPath = cleanup.root / "Assets/tilemaps/rich.aytilemap";
+    CHECK(std::filesystem::is_regular_file(cleanup.root / "Assets/maps/rich.tls"));
+    const auto cookedPath = cleanup.root / "Assets/tilemaps/rich.tlm";
     CHECK(std::filesystem::is_regular_file(cookedPath));
     std::ifstream cookedFile(cookedPath, std::ios::binary | std::ios::ate);
     CHECK(cookedFile.is_open());
@@ -1026,7 +1027,7 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
     const std::string runtimeTexturePath =
         runtime.getAtlasEntries()[0].sourcePath;
     CHECK(runtimeTexturePath.starts_with("textures/"));
-    CHECK(runtimeTexturePath.ends_with("_tilemap.aytex"));
+    CHECK(runtimeTexturePath.ends_with("_tilemap.txr"));
     const auto cookedTexturePath = cleanup.root / "Assets"
         / std::filesystem::u8path(runtimeTexturePath);
     CHECK(std::filesystem::is_regular_file(cookedTexturePath));
@@ -1186,7 +1187,7 @@ TEST_CASE(tilemap_first_save_chooses_and_exposes_source_path)
     EditorWorkspace workspace;
     TilemapTestHostServices host(workspace);
     host.savePath = (cleanup.root / "Assets" / "tilemaps"
-        / "FirstSave.aytilemap.json").string();
+        / "FirstSave.tls").string();
     auto view = descriptor->createView(document, host);
     CHECK(view != nullptr);
     if (view == nullptr) return;
@@ -1198,14 +1199,14 @@ TEST_CASE(tilemap_first_save_chooses_and_exposes_source_path)
     CHECK(host.savePathRequests == 1);
     CHECK_FALSE(host.lastSaveAs);
     CHECK(document->path() == host.savePath);
-    CHECK(document->title() == "FirstSave.aytilemap.json");
+    CHECK(document->title() == "FirstSave.tls");
     CHECK(std::filesystem::is_regular_file(host.savePath));
 
     auto* pathLabel = dynamic_cast<ayt::ui::TextLabel*>(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_document_path"));
     CHECK(pathLabel != nullptr);
     CHECK(pathLabel != nullptr
-        && pathLabel->getText().find(L"FirstSave.aytilemap.json")
+        && pathLabel->getText().find(L"FirstSave.tls")
             != std::wstring::npos);
     CHECK(host.statusText.find(L"Tilemap saved to") != std::wstring::npos);
     CHECK(findWorkflowWidget(
@@ -1403,7 +1404,7 @@ TEST_CASE(tilemap_stamp_selection_preserves_top_to_bottom_source_order)
     std::error_code ignored;
     std::filesystem::remove_all(cleanup.root, ignored);
     const auto sourcePath = cleanup.root
-        / "Assets/maps/stamp.aytilemap.json";
+        / "Assets/maps/stamp.tls";
     std::filesystem::create_directories(sourcePath.parent_path());
 
     ayt::ay2d::editor::TilemapEditorModel authored;

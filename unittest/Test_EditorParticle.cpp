@@ -28,7 +28,7 @@ struct Host : IEditorHostServices, IEditorDocumentSavePathProvider {
     const std::string& projectRoot() const noexcept override { return root; }
     void requestRepaint() override {}
     void setStatusText(const std::wstring&) override {}
-    std::string chooseDocumentSavePath(const IEditorDocument&,bool) override { return (std::filesystem::path(root)/"from-ui.ayparticle").string(); }
+    std::string chooseDocumentSavePath(const IEditorDocument&,bool) override { return (std::filesystem::path(root)/"from-ui.pfx").string(); }
 };
 ayt::ui::Widget* find(ayt::ui::Widget* root,const std::string& id) {
     if(root->getId()==id) return root;
@@ -95,13 +95,13 @@ TEST_CASE(composition_history_save_reopen_and_recovery) {
     Fixture f; auto asset=f.document->asset(); asset.emitters[1].offset={2,3,0}; asset.emitters[2].delay=0.25f;
     asset.backend=ayt::particle::Backend::Gpu;
     CHECK(f.document->replaceAsset(asset)); CHECK(f.document->isDirty());
-    const auto path=(f.root/"saved.ayparticle").string(); CHECK(f.document->saveAs(path)); CHECK_FALSE(f.document->isDirty());
+    const auto path=(f.root/"saved.pfx").string(); CHECK(f.document->saveAs(path)); CHECK_FALSE(f.document->isDirty());
     CHECK(f.document->undo()); CHECK(f.document->isDirty());
     CHECK(f.document->redo()); CHECK_FALSE(f.document->isDirty());
     auto invalid=asset; invalid.emitters.clear();
     CHECK_FALSE(f.document->replaceAsset(invalid)); CHECK(f.document->asset()==asset);
     auto edited=asset; edited.name="Edited"; CHECK(f.document->replaceAsset(edited));
-    const auto recovery=(f.root/"recovery.ayparticle").string();
+    const auto recovery=(f.root/"recovery.pfx").string();
     CHECK(f.document->writeRecoveryCopy(recovery)); CHECK(f.document->path()==path); CHECK(f.document->isDirty());
     EditorParticleDocument reopened; std::string error;
     CHECK(reopened.initialize({path},error)); CHECK(reopened.asset()==asset);
@@ -112,7 +112,7 @@ TEST_CASE(project_asset_creation_classification_and_extension_routing) {
     const auto second=createEditorProjectAsset(f.root.string(),EditorAssetType::ParticleEffect);
     CHECK(first && second); CHECK(first.absolutePath!=second.absolutePath);
     CHECK(classifyEditorAssetPath(first.absolutePath)==EditorAssetType::ParticleEffect);
-    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("test.ayparticle"));
+    CHECK(EditorAssetTilePresenter::isEngineNativeFileName("test.pfx"));
     EditorExtensionRegistry registry; CHECK(registerEditorParticleExtension(registry));
     EditorOpenRequest request; request.resourcePath=first.absolutePath;
     const auto* descriptor=registry.resolve(request); CHECK_NOT_NULL(descriptor);
@@ -293,7 +293,7 @@ TEST_CASE(layer_duplicate_reorder_and_save_keep_stable_ids) {
     CHECK(f.document->asset().emitters[2].id==id);
     click(root,"particle_layer_up");view->tick(0);
     CHECK(f.document->asset().emitters[1].id==id);
-    const auto saved=f.document->asset();CHECK(f.document->saveAs((f.root/"organized.ayparticle").string()));
+    const auto saved=f.document->asset();CHECK(f.document->saveAs((f.root/"organized.pfx").string()));
     EditorParticleDocument loaded;std::string error;CHECK(loaded.initialize({f.document->path()},error));CHECK(loaded.asset()==saved);
     CHECK(f.document->undo());CHECK(f.document->redo());CHECK(f.document->asset()==saved);
 }
@@ -345,7 +345,7 @@ TEST_CASE(overlapping_canvas_handles_prefer_selected_layer) {
 }
 TEST_CASE(visual_color_and_packaged_composite_example) {
     const auto effectPath=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path()
-        /"AYParticle/examples/FallingLeaves/Assets/effects/AutumnGust.ayparticle";
+        /"AYParticle/examples/FallingLeaves/Assets/effects/AutumnGust.pfx";
     EditorParticleDocument example;std::string error;CHECK(example.initialize({effectPath.string()},error));
     CHECK(example.asset().emitters.size()==3);
     CHECK(example.asset().emitters[0].effect.texturePath=="textures/leaf-flipbook.png");

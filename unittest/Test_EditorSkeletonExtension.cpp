@@ -117,7 +117,7 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
     auto legacyMappingPath = skeletonPath;
     legacyMappingPath.replace_extension(".aysmap");
     auto rigProfilePath = skeletonPath;
-    rigProfilePath.replace_extension(".ayrig");
+    rigProfilePath.replace_extension(".rig");
     std::error_code ignored;
     std::filesystem::remove(legacyMappingPath, ignored);
     std::filesystem::remove(rigProfilePath, ignored);
@@ -125,9 +125,9 @@ TEST_CASE(skeleton_descriptor_creates_thin_document_and_workspace)
     const ayt::editor::EditorDescriptor descriptor =
         ayt::editor::makeEditorSkeletonDescriptor();
     CHECK(descriptor.id == ayt::editor::kEditorSkeletonExtensionId);
-    CHECK(descriptor.extensions.size() == 3u);
+    CHECK(descriptor.extensions.size() == 5u);
     CHECK(std::find(descriptor.extensions.begin(), descriptor.extensions.end(),
-                    ".ayrig") != descriptor.extensions.end());
+                    ".rig") != descriptor.extensions.end());
 
     std::string error;
     const auto document = descriptor.createDocument(
@@ -212,16 +212,16 @@ TEST_CASE(skeleton_document_persists_explicit_profile_binding_and_discovers_temp
     ayt::anim::editor::SkeletonEditorCore complete;
     CHECK(complete.open(skeletonPath.string(), &error));
     CHECK(complete.applyCanonicalNameTemplate());
-    const auto completePath = profiles / "complete.ayrig";
+    const auto completePath = profiles / "complete.rig";
     CHECK(complete.saveMappingAs(completePath.string(), &error));
 
     ayt::anim::editor::SkeletonEditorCore minimal;
     CHECK(minimal.open(skeletonPath.string(), &error));
     CHECK(minimal.bind(ayt::anim::HumanoidBone::Hips, 2));
-    const auto minimalPath = profiles / "minimal.ayrig";
+    const auto minimalPath = profiles / "minimal.rig";
     CHECK(minimal.saveMappingAs(minimalPath.string(), &error));
 
-    const auto templatePath = profiles / "canonical-names.ayrig";
+    const auto templatePath = profiles / "canonical-names.rig";
     const nlohmann::json rigTemplate = {
         {"type", "RigProfile"}, {"version", 1},
         {"id", "template-editor-test"}, {"kind", "template"},
@@ -246,7 +246,7 @@ TEST_CASE(skeleton_document_persists_explicit_profile_binding_and_discovers_temp
     CHECK(bindingJson["bindings"]["editor_fixture.ayskel"]
         ["profileId"].is_string());
 
-    const auto movedCompletePath = profiles / "complete-renamed.ayrig";
+    const auto movedCompletePath = profiles / "complete-renamed.rig";
     ignored.clear();
     std::filesystem::rename(completePath, movedCompletePath, ignored);
     CHECK(!ignored);

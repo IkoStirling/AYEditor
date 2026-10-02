@@ -79,7 +79,7 @@ std::filesystem::path writeAnimationEditorClip()
     animation.addNotify({"footstep", 0.5f, 1.0f});
     std::vector<ayt::math::UInt8> bytes;
     CHECK(animation.saveToBinary(bytes));
-    const auto path = animationExtensionFixtureRoot() / "Assets" / "walk.ayanm";
+    const auto path = animationExtensionFixtureRoot() / "Assets" / "walk.anm";
     CHECK(ayt::io::File::writeAllBytes(path.string(), bytes));
     return path;
 }
@@ -127,7 +127,7 @@ ayt::ui::Widget* findAuthoringWidget(ayt::ui::Widget* root, const std::string& i
 
 TEST_SUITE(AYEditor_AnimationExtension)
 TEST_CASE(control_rig_corrupt_metadata_blocks_silent_save_and_clear_is_undoable) {
-    ayt::test::ScratchDirectory scratch("rig-corrupt-metadata"); const auto clip=scratch.path()/"clip.ayanm"; std::string error;
+    ayt::test::ScratchDirectory scratch("rig-corrupt-metadata"); const auto clip=scratch.path()/"clip.anm"; std::string error;
     CHECK(ayt::io::File::writeAllBytes(clip.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
     ayt::editor::EditorAnimationDocument document; CHECK(document.initialize({clip.string()},error)); document.configureProjectRoot(scratch.path().string());
     CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string())); CHECK(document.createControlRig()); CHECK(document.save());
@@ -141,7 +141,7 @@ TEST_CASE(control_rig_corrupt_metadata_blocks_silent_save_and_clear_is_undoable)
 }
 TEST_CASE(control_rig_rebind_preserves_live_edits_and_clear_binding_history_is_safe) {
     ayt::test::ScratchDirectory scratch("rig-rebind"); std::string error;
-    const auto clip=scratch.path()/"clip.ayanm",skeletonPath=writeAnimationEditorSkeleton();
+    const auto clip=scratch.path()/"clip.anm",skeletonPath=writeAnimationEditorSkeleton();
     CHECK(ayt::io::File::writeAllBytes(clip.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
     ayt::editor::EditorAnimationDocument document; CHECK(document.initialize({clip.string()},error)); document.configureProjectRoot(scratch.path().string());
     CHECK(document.bindSkeleton(skeletonPath.string())); CHECK(document.createControlRig()); CHECK(document.recordControlRigKey());
@@ -171,7 +171,7 @@ TEST_CASE(control_rig_clip_shortening_rejects_out_of_range_keys_without_mutation
 
 TEST_CASE(control_rig_keys_preview_save_reopen_and_bake_are_undoable) {
     ayt::test::ScratchDirectory scratch("rig-document");
-    const auto path=scratch.path()/"rig.ayanm";
+    const auto path=scratch.path()/"rig.anm";
     CHECK(ayt::io::File::writeAllBytes(path.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
     auto document=std::make_shared<ayt::editor::EditorAnimationDocument>(); std::string error;
     CHECK(document->initialize({path.string()},error)); document->configureProjectRoot(scratch.path().string());
@@ -235,14 +235,14 @@ TEST_CASE(control_rig_canvas_drag_cancel_and_page_controls_use_one_history) {
 }
 
 TEST_CASE(control_rig_save_failure_stays_dirty_and_legacy_refuses_creation) {
-    ayt::test::ScratchDirectory scratch("rig-save-failure"); const auto path=scratch.path()/"clip.ayanm";
+    ayt::test::ScratchDirectory scratch("rig-save-failure"); const auto path=scratch.path()/"clip.anm";
     CHECK(ayt::io::File::writeAllBytes(path.string(),ayt::io::File::readAllBytes(writeAnimationEditorClip().string())));
     ayt::editor::EditorAnimationDocument document; std::string error;
     CHECK(document.initialize({path.string()},error)); document.configureProjectRoot(scratch.path().string()); CHECK(document.bindSkeleton(writeAnimationEditorSkeleton().string()));
     CHECK(document.createControlRig()); CHECK(document.recordControlRigKey());
     const auto original=ayt::io::File::readAllBytes(path.string());
     auto properties=document.animationClipProperties(); properties.name="unsaved-clip"; CHECK(document.setAnimationClipProperties(properties));
-    CHECK(!document.writeRecoveryCopy((scratch.path()/"recovery.ayanm").string(),&error)); CHECK(!error.empty());
+    CHECK(!document.writeRecoveryCopy((scratch.path()/"recovery.anm").string(),&error)); CHECK(!error.empty());
     const auto metadata=std::filesystem::path(document.metadataPath());
     // Existing metadata already has a directory after bind; a directory at the file target must be refused.
     std::error_code ec; std::filesystem::remove(metadata,ec); std::filesystem::create_directory(metadata,ec);
@@ -255,8 +255,8 @@ TEST_CASE(control_rig_save_failure_stays_dirty_and_legacy_refuses_creation) {
 TEST_CASE(session_clipboard_survives_source_close_and_pastes_compatible_clip) {
     ayt::test::ScratchDirectory scratch("cross-clip-authoring");
     const auto data = ayt::io::File::readAllBytes(writeAnimationEditorClip().string());
-    const auto sourcePath = scratch.path() / "source.ayanm";
-    const auto targetPath = scratch.path() / "target.ayanm";
+    const auto sourcePath = scratch.path() / "source.anm";
+    const auto targetPath = scratch.path() / "target.anm";
     CHECK(ayt::io::File::writeAllBytes(sourcePath.string(), data));
     CHECK(ayt::io::File::writeAllBytes(targetPath.string(), data));
     const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
@@ -318,7 +318,7 @@ TEST_CASE(large_clip_playback_reuses_snapshots_and_old_samples_survive_edit) {
         }
         clip.addTrack(track);
     }
-    const auto path = scratch.path() / "large.ayanm";
+    const auto path = scratch.path() / "large.anm";
     std::vector<ayt::math::UInt8> bytes;
     CHECK(clip.saveToBinary(bytes)); CHECK(ayt::io::File::writeAllBytes(path.string(), bytes));
     auto document = std::make_shared<ayt::editor::EditorAnimationDocument>();
@@ -449,7 +449,7 @@ TEST_CASE(clipboard_binding_and_readonly_guards_never_mutate) {
     std::vector<std::string> ids{"keep"};
     CHECK(!document.pasteAnimationKeyframes(clipboard, .5, ids, &error));
     CHECK(!document.isDirty());
-    const auto baked = animationExtensionFixtureRoot() / "Assets" / "readonly.baked.ayanm";
+    const auto baked = animationExtensionFixtureRoot() / "Assets" / "readonly.baked.anm";
     CHECK(ayt::io::File::writeAllBytes(baked.string(),
         ayt::io::File::readAllBytes(document.path())));
     ayt::editor::EditorAnimationDocument readonly;
@@ -510,7 +510,7 @@ TEST_CASE(animation_descriptor_opens_full_preview_document)
     const auto descriptor = ayt::editor::makeEditorAnimationDescriptor();
     CHECK(descriptor.id == ayt::editor::kEditorAnimationTimelineExtensionId);
     CHECK(std::find(descriptor.extensions.begin(), descriptor.extensions.end(),
-                    ".ayanm") != descriptor.extensions.end());
+                    ".anm") != descriptor.extensions.end());
     std::string error;
     const auto base = descriptor.createDocument(
         ayt::editor::EditorOpenRequest{writeAnimationEditorClip().string()}, error);
@@ -585,7 +585,7 @@ TEST_CASE(animation_tracks_and_timeline_are_editable_undoable_and_persistent)
     CHECK(document.timelineUndo());
     CHECK(document.timelineTracks().size() == 3u);
 
-    const auto recovery = animationExtensionFixtureRoot() / "walk.recovery.ayanm";
+    const auto recovery = animationExtensionFixtureRoot() / "walk.recovery.anm";
     CHECK(document.writeRecoveryCopy(recovery.string(), &error));
     CHECK(std::filesystem::is_regular_file(recovery));
     CHECK(document.save(&error));
@@ -805,12 +805,12 @@ TEST_CASE(animation_preview_bindings_use_project_editor_metadata)
     const auto metadata = nlohmann::json::parse(
         ayt::io::File::readAllText(document.metadataPath()));
     CHECK(metadata["version"] == 2);
-    CHECK(metadata["bindings"].contains("Assets/walk.ayanm"));
-    CHECK(metadata["bindings"]["Assets/walk.ayanm"]["skeleton"]
+    CHECK(metadata["bindings"].contains("Assets/walk.anm"));
+    CHECK(metadata["bindings"]["Assets/walk.anm"]["skeleton"]
         == "Assets/hero.ayskel");
-    CHECK(metadata["bindings"]["Assets/walk.ayanm"]["mesh"]
+    CHECK(metadata["bindings"]["Assets/walk.anm"]["mesh"]
         == "Assets/hero.aymesh");
-    CHECK(document.path().find(".ayanm") != std::string::npos);
+    CHECK(document.path().find(".anm") != std::string::npos);
     CHECK_FALSE(std::filesystem::is_regular_file(document.path() + ".timeline.json"));
 
     ayt::editor::EditorAnimationDocument reopened;

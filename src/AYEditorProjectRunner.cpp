@@ -233,7 +233,9 @@ EditorProjectRunConfig loadLastSuccessfulBuild(const fs::path& root,
 EditorProjectRunConfig loadProjectDescriptor(const fs::path& root,
                                              std::string* error)
 {
-    const fs::path descriptorPath = root / kEditorProjectDescriptorFile;
+    fs::path descriptorPath = root / kEditorProjectDescriptorFile;
+    if (!fs::is_regular_file(descriptorPath))
+        descriptorPath = root / kLegacyEditorProjectDescriptorFile;
     if (!fs::is_regular_file(descriptorPath)) return {};
     std::string descriptorError;
     const EditorProjectDescriptor descriptor =
@@ -386,7 +388,7 @@ EditorProjectRunConfig EditorProjectRunner::resolve(
     }
     if (error != nullptr) {
         *error = "No runnable " + executableName
-            + " was found. Configure project.ayproject.json or "
+            + " was found. Configure project.prj or "
               ".ayeditor/run.json.";
     }
     if (failure != nullptr) {

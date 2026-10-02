@@ -418,6 +418,12 @@ TEST_CASE(editor_asset_preview_cache_reuses_persisted_thumbnail_after_restart)
         populate(cache, firstUploads);
         CHECK(firstUploads == 1);
         CHECK(cache.diskCacheHitCount() == 0u);
+        bool foundPreview = false;
+        for (const auto& entry : std::filesystem::directory_iterator(cacheRoot)) {
+            CHECK(entry.path().extension() == ".prv");
+            foundPreview = true;
+        }
+        CHECK(foundPreview);
     }
     int secondUploads = 0;
     {

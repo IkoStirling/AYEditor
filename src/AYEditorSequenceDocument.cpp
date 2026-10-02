@@ -1,4 +1,5 @@
 #include <AYEditor/EditorSequenceDocument.h>
+#include <AYAssetFormat/AssetFormat.h>
 #include <AYEntity.h>
 #include <AYEntity/components/SkeletonComponent.h>
 #include <AYResource.h>
@@ -91,8 +92,13 @@ bool EditorSequenceDocument::save(std::string *error) {
             *error = "Finish/cancel the current edit before saving.";
         return false;
     }
-    if (!writeRecoveryCopy(_path, error))
+    const auto canonical = ayt::asset_format::canonicalizePath(
+        _path, ayt::asset_format::Id::SceneSequence);
+    if (!canonical) return false;
+    if (!writeRecoveryCopy(*canonical, error))
         return false;
+    _path = *canonical;
+    _title = std::filesystem::path(_path).filename().string();
     return _history.markSaved();
 }
 bool EditorSequenceDocument::reload(std::string *error) {

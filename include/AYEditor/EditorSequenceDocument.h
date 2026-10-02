@@ -65,7 +65,7 @@ class EditorSequenceDocument final : public IEditorDocument, public IEditorComma
 std::shared_ptr<ayt::ui::authoring::ICurveEditorSource>
     makeEditorSequenceSource(std::shared_ptr<EditorSequenceDocument>);
 EditorDescriptor makeEditorSequenceDescriptor();
-/// Register loose .ayseq authoring (normally automatic in built-in Editor setup).
+/// Register loose .seq authoring (normally automatic in built-in Editor setup).
 /// Requires Sequence AssetIO/Animation integration; no Resource loader or cook/pak.
 bool registerEditorSequenceExtension(EditorExtensionRegistry &, std::string *error = nullptr);
 } // namespace ayt::editor

@@ -249,27 +249,27 @@ TEST_CASE(actor_class_document_checks_unsaved_parent_and_script_references)
 {
     DslEditorTempCleanup cleanup{dslEditorTempRoot("actor_references")};
     const auto root = cleanup.root / "Assets" / "actors";
-    const auto base = root / "Base.ayactor";
-    const auto child = root / "Child.ayactor";
+    const auto base = root / "Base.act";
+    const auto child = root / "Child.act";
     CHECK(ayt::io::File::createParentDirectories(base.string()));
     CHECK(ayt::io::File::writeAllText(base.string(),
         R"({"type":"ay.actorClass","schemaVersion":2,"id":"Base","script":"","properties":{},"components":[]})"));
     CHECK(ayt::io::File::writeAllText(child.string(),
-        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"","properties":{},"components":[]})"));
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.act","script":"","properties":{},"components":[]})"));
     EditorDslDocument document;
-    CHECK(document.open(child.string(), "actors/Child.ayactor"));
+    CHECK(document.open(child.string(), "actors/Child.act"));
     CHECK(document.compile().success);
 
     document.setSourceUtf8(
-        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Missing.ayactor","script":"","properties":{},"components":[]})");
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Missing.act","script":"","properties":{},"components":[]})");
     CHECK_FALSE(document.compile().success);
     document.setSourceUtf8(
-        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"actors/Missing.logia","properties":{},"components":[]})");
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.act","script":"actors/Missing.logia","properties":{},"components":[]})");
     CHECK_FALSE(document.compile().success);
     CHECK(ayt::io::File::writeAllText(base.string(),
-        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Base","parent":"actors/Child.ayactor","script":"","properties":{},"components":[]})"));
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Base","parent":"actors/Child.act","script":"","properties":{},"components":[]})"));
     document.setSourceUtf8(
-        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.ayactor","script":"","properties":{},"components":[]})");
+        R"({"type":"ay.actorClass","schemaVersion":2,"id":"Child","parent":"actors/Base.act","script":"","properties":{},"components":[]})");
     const auto cycle = document.compile();
     CHECK_FALSE(cycle.success);
     CHECK_FALSE(cycle.diagnostics.empty());

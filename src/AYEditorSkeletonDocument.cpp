@@ -85,7 +85,7 @@ bool EditorSkeletonDocument::initialize(const EditorOpenRequest& request,
     if (!_core.open(request.resourcePath, &error)) return false;
     _openedResourcePath = normalizedAbsolute(request.resourcePath);
     const std::string extension = lowerExtension(request.resourcePath);
-    _openedProfileExplicitly = extension == ".ayrig" || extension == ".aysmap";
+    _openedProfileExplicitly = extension == ".rig" || extension == ".ayrig" || extension == ".aysmap";
     _path = _core.skeletonPath();
     const std::string display = request.displayPath.empty()
         ? _path : request.displayPath;
@@ -107,7 +107,7 @@ void EditorSkeletonDocument::configureProjectRoot(
             std::string ignored;
             (void)_core.open(bound, &ignored);
         }
-    } else if (lowerExtension(_openedResourcePath) == ".ayrig") {
+    } else if (lowerExtension(_openedResourcePath) == ".rig") {
         (void)persistProfileBinding(nullptr);
     }
     discoverProfiles();
@@ -198,7 +198,7 @@ void EditorSkeletonDocument::discoverProfiles()
     const std::filesystem::recursive_directory_iterator end;
     for (; !error && it != end; it.increment(error)) {
         if (!it->is_regular_file(error)
-            || lowerExtension(it->path()) != ".ayrig") {
+            || (lowerExtension(it->path()) != ".rig" && lowerExtension(it->path()) != ".ayrig")) {
             continue;
         }
         ayt::anim::editor::RigProfileInfo info;
@@ -314,7 +314,7 @@ std::string EditorSkeletonDocument::resolveBoundProfilePath(
         const std::filesystem::recursive_directory_iterator end;
         for (; !existsError && it != end; it.increment(existsError)) {
             if (!it->is_regular_file(existsError)
-                || lowerExtension(it->path()) != ".ayrig") {
+                || (lowerExtension(it->path()) != ".rig" && lowerExtension(it->path()) != ".ayrig")) {
                 continue;
             }
             ayt::anim::editor::RigProfileInfo profile;

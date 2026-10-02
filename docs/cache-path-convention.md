@@ -37,10 +37,10 @@ For hosts/tests that have not opened a project, the compatibility fallback is
     │   ├── skeletons/          (created on demand by FBXConverter)
     │   ├── animations/         (created on demand by FBXConverter)
     │   ├── textures/           (created on demand by FBXConverter)
-    │   └── <basename>.aydep.json   ← sidecar dependency graph per import
+    │   └── <basename>.dep   ← sidecar dependency graph per import
     │
-    ├── shaders/             ← compiled .phosc shader cache (AYShader owns)
-    │   └── *.phosc
+    ├── shaders/             ← compiled .shc shader cache (AYShader owns)
+    │   └── *.shc
     │
     └── shader_dump/         ← AYShader debug: human-readable disasm
         └── *.txt
@@ -53,7 +53,7 @@ kept in a separate tree:
 <project>/.ayeditor/
 ├── cache/
 │   ├── asset-index.tsv
-│   └── previews/*.aypreview
+│   └── previews/*.prv
 ├── recovery/
 └── trash/<transaction>/manifest.tsv
 ```
@@ -71,7 +71,7 @@ when they emit their first file of that type. The editor does not
 pre-create them — if an import only produces a mesh, no `materials/`
 directory will appear.
 
-### `<basename>.aydep.json`
+### `<basename>.dep`
 
 For every imported FBX/GLTF source, FBXConverter writes a sidecar file
 next to the imported assets (same stem as the source) describing the
@@ -91,7 +91,7 @@ the editor.
 
 | Caller | Path passed | Reference |
 |---|---|---|
-| `EditorPlayRuntime::ensureAssets` (bootstrap cube/material/texture) | `<cacheRoot>/assets/cube.aymesh` etc. | `AYEditorPlayRuntime.cpp:188-198` |
+| `EditorPlayRuntime::ensureAssets` (bootstrap cube/material/texture) | `<cacheRoot>/assets/cube.msh` etc. | `AYEditorPlayRuntime.cpp` |
 | `EditorPlayRuntime::syncRendererBootstrap` | `<cacheRoot>/shaders`, `<cacheRoot>/shader_dump` | `AYEditorPlayRuntime.cpp:243-248` |
 | `Importer::importFile(srcPath, destDir)` | caller passes `<cacheRoot>/assets/` | `AYImporter.cpp:64-103` |
 
@@ -102,9 +102,9 @@ the editor.
    the project source tree (when that exists) or wherever the user
    keeps them.
 
-2. **Never use absolute paths in serialized assets.** `.aymesh` /
-   `.ayskel` / `.ayanm` reference dependencies via relative paths
-   (`materials/hero.aymat`, `textures/albedo.aytex`) per
+2. **Never use absolute paths in serialized assets.** `.msh` /
+   `.skl` / `.anm` reference dependencies via relative paths
+   (`materials/hero.mat`, `textures/albedo.txr`) per
    `AYResource/docs/runtime-conventions.md` §3. The cache root is
    the implicit prefix the loader assumes via the engine asset root.
 
@@ -138,3 +138,4 @@ the Content Browser's `Imported` virtual root.
 |---|---|---|
 | 1.0 | 2026-07-09 | ED-01 acceptance; freeze initial layout |
 | 1.1 | 2026-08-31 | Prefer `<project>/.ayeditor_cache`; expose `assets/` as Content Browser `Imported` |
+| 1.2 | 2026-10-02 | Use current short resource and cache suffixes; old `.aypreview` / `.aysc` caches are regenerated. |

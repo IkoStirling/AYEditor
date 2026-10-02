@@ -50,13 +50,22 @@ bool isReferenceText(const fs::path& path, std::uintmax_t size)
 {
     if (size > 4u * 1024u * 1024u) return false;
     if (ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Scene)
-        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Material))
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Material)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::ActorClass)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::TilemapSource)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::AtlasSource)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::ParticleEffect)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::StatsSource)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::StatsRecipes)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::SceneSequence)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::AudioGraph)
+        || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::RigProfile))
         return true;
     std::string name = path.filename().string();
     std::transform(name.begin(), name.end(), name.begin(),
         [](unsigned char value) { return static_cast<char>(std::tolower(value)); });
     static constexpr const char* suffixes[] = {
-        ".ayactor", ".ui.json", ".aytilemap",
+        ".ui.json", ".aytilemap",
         ".aytilemap.json", ".json", ".toml", ".yaml", ".yml",
         ".lua", ".js", ".ts", ".glsl", ".vert", ".frag"
     };

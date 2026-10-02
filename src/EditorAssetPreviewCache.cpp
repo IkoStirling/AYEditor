@@ -1,5 +1,7 @@
 #include "EditorAssetPreviewCache.h"
 
+#include <AYAssetFormat/AssetFormat.h>
+
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYResource/assetsImpl/Material.h>
 #include <AYResource/assetsImpl/Mesh.h>
@@ -73,7 +75,8 @@ std::string EditorAssetPreviewCache::cachePathFor(
     if (_diskCacheRoot.empty()) return {};
     std::ostringstream name;
     name << std::hex << std::setw(16) << std::setfill('0')
-         << stableHash(absolutePath) << ".aypreview";
+         << stableHash(absolutePath)
+         << asset_format::suffix(asset_format::Id::EditorPreview);
     return (std::filesystem::path(_diskCacheRoot) / name.str()).string();
 }
 

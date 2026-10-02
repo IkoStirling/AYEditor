@@ -578,7 +578,7 @@ class SequenceView final : public IEditorView {
                 source->removeKeys(source->selectionState()->keyIds);
         });
         auto *clipRow = row(*inspector);
-        clipPath = input(*clipRow, "sequence_clip", L"Clip relative to Assets (.ayanm)");
+        clipPath = input(*clipRow, "sequence_clip", L"Clip relative to Assets (.anm)");
         sectionFields = new NumericFields({"sequence_start", "sequence_end", "sequence_offset",
                                            "sequence_speed", "sequence_source_duration"},
                                           {L"Start", L"End", L"Offset", L"Speed", L"Clip sec"});
@@ -846,7 +846,7 @@ EditorDescriptor makeEditorSequenceDescriptor() {
     d.id = kEditorSequenceExtensionId;
     d.displayName = L"Scene Sequence";
     d.priority = 100;
-    d.extensions = {".ayseq"};
+    d.extensions = {".seq", ".ayseq"};
     d.assetTypes = {"Scene Sequence", "authoring.scene-sequence"};
     d.createDocument = [](const EditorOpenRequest &request, std::string &error) {
         auto d = std::make_shared<EditorSequenceDocument>();

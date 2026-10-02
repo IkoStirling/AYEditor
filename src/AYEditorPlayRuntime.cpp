@@ -1,4 +1,5 @@
 #include "AYEditor/EditorPlayRuntime.h"
+#include <AYAssetFormat/AssetFormat.h>
 
 #include "AYEntity/CharacterEntity.h"  // ED-02 spawnCharacterFromPaths / destroyCharacter
 #include "AYEntity.h"
@@ -752,12 +753,16 @@ bool EditorPlayRuntime::ensureAssets() {
     } else {
         ayt::resource::setAssetRoots({_projectAssetRoot, _assetRoot});
     }
-    _meshPath             = _assetRoot + "cube.aymesh";
-    _materialPath         = _assetRoot + "cube_shadow.aymat";
-    _groundMeshPath       = _assetRoot + "cube.aymesh";
-    _groundMaterialPath   = _assetRoot + "ground_shadow.aymat";
-    _glassMeshPath        = _assetRoot + "cube.aymesh";
-    _glassMaterialPath    = _assetRoot + "glass_shadow.aymat";
+    using ayt::asset_format::Id;
+    using ayt::asset_format::appendSuffix;
+    _meshPath             = _assetRoot + appendSuffix("cube", Id::Mesh);
+    _materialPath         = _assetRoot + appendSuffix("cube_shadow", Id::Material);
+    _groundMeshPath       = _meshPath;
+    _groundMaterialPath   = _assetRoot + appendSuffix("ground_shadow", Id::Material);
+    _glassMeshPath        = _meshPath;
+    _glassMaterialPath    = _assetRoot + appendSuffix("glass_shadow", Id::Material);
+    const std::string cubeTextureName = appendSuffix("cube_albedo", Id::Texture);
+    const std::string groundTextureName = appendSuffix("ground_albedo", Id::Texture);
 
     if (!ensureAssetDirectory(_cacheRoot) || !ensureAssetDirectory(_assetRoot)) {
         return false;
@@ -817,7 +822,7 @@ bool EditorPlayRuntime::ensureAssets() {
         ayt::resource::Material material;
         material.setShader("simple_lit_shadow.phoskia");
         material.setFloat4("baseColor", glassColor);
-        material.setTexture("albedoMap", "cube_albedo.aytex");
+        material.setTexture("albedoMap", cubeTextureName.c_str());
         std::vector<ayt::resource::UInt8> matBinary;
         if (material.saveToBinary(matBinary)) {
             writeBytes(_glassMaterialPath, matBinary.data(), matBinary.size());
@@ -838,7 +843,7 @@ bool EditorPlayRuntime::ensureAssets() {
         return true;
     }
 
-    const std::string texturePath      = _assetRoot + "albedo.aytex";
+    const std::string texturePath = _assetRoot + appendSuffix("albedo", Id::Texture);
 
     if (!fileExists(texturePath)) {
         ayt::resource::Texture texture;
@@ -868,8 +873,8 @@ bool EditorPlayRuntime::ensureAssets() {
     };
 
     // Solid albedos (avoid checkerboard black cells swallowing lit/shadow).
-    const std::string cubeTexPath   = _assetRoot + "cube_albedo.aytex";
-    const std::string groundTexPath = _assetRoot + "ground_albedo.aytex";
+    const std::string cubeTexPath = _assetRoot + cubeTextureName;
+    const std::string groundTexPath = _assetRoot + groundTextureName;
     {
         ayt::resource::Texture cubeTex;
         cubeTex.createSolidColor(4, 4, 255, 140, 40);
@@ -898,11 +903,11 @@ bool EditorPlayRuntime::ensureAssets() {
     // baseColor carries chroma so a missing/wrong albedo sampler still
     // shows tint instead of R32F-depth grayscale.
     if (!bakeMaterial(_materialPath, "simple_lit_shadow.phoskia", cubeColor,
-                      "cube_albedo.aytex") ||
+                      cubeTextureName.c_str()) ||
         !bakeMaterial(_groundMaterialPath, "simple_lit_shadow.phoskia", groundColor,
-                      "ground_albedo.aytex") ||
+                      groundTextureName.c_str()) ||
         !bakeMaterial(_glassMaterialPath, "simple_lit_shadow.phoskia", glassColor,
-                      "cube_albedo.aytex")) {
+                      cubeTextureName.c_str())) {
         return false;
     }
 

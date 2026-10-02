@@ -1,4 +1,5 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
+#include <AYAssetFormat/AssetFormat.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include "AYEditor/EditorAnimationExtension.h"
 #ifdef AYEDITOR_HAS_SEQUENCE
@@ -350,16 +351,7 @@ bool hasTilemapSourceExtension(const std::filesystem::path& path)
                    [](unsigned char ch) {
                        return static_cast<char>(std::tolower(ch));
                    });
-    constexpr const char* sourceExtension = ".aytilemap.json";
-    constexpr const char* legacyExtension = ".aytilemap";
-    return (value.size() >= std::strlen(sourceExtension)
-            && value.compare(value.size() - std::strlen(sourceExtension),
-                             std::strlen(sourceExtension), sourceExtension)
-                == 0)
-        || (value.size() >= std::strlen(legacyExtension)
-            && value.compare(value.size() - std::strlen(legacyExtension),
-                             std::strlen(legacyExtension), legacyExtension)
-                == 0);
+    return ayt::asset_format::matchesPath(value, ayt::asset_format::Id::TilemapSource);
 }
 
 std::string showTilemapSaveDialog(const std::string& projectRoot,
@@ -384,7 +376,7 @@ std::string showTilemapSaveDialog(const std::string& projectRoot,
 
     std::array<char, 4096> selected{};
     const std::string suggested = currentPath.empty()
-        ? "NewTilemap.aytilemap.json"
+        ? ayt::asset_format::appendSuffix("NewTilemap", ayt::asset_format::Id::TilemapSource)
         : std::filesystem::path(currentPath).filename().string();
     std::snprintf(selected.data(), selected.size(), "%s", suggested.c_str());
     const std::string initial = initialDirectory.string();
@@ -397,17 +389,18 @@ std::string showTilemapSaveDialog(const std::string& projectRoot,
     dialog.nMaxFile = static_cast<DWORD>(selected.size());
     dialog.lpstrInitialDir = initial.empty() ? nullptr : initial.c_str();
     dialog.lpstrFilter =
-        "AY Tilemap Source (*.aytilemap.json)\0*.aytilemap.json\0"
+        "AY Tilemap Source (*.tls)\0*.tls\0"
+        "Legacy AY Tilemap Source (*.aytilemap.json)\0*.aytilemap.json\0"
         "Legacy AY Tilemap (*.aytilemap)\0*.aytilemap\0"
         "All files (*.*)\0*.*\0";
     dialog.nFilterIndex = 1;
     dialog.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT
         | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    dialog.lpstrDefExt = "aytilemap.json";
+    dialog.lpstrDefExt = "tls";
     if (!::GetSaveFileNameA(&dialog)) return {};
 
     std::filesystem::path result(selected.data());
-    if (!hasTilemapSourceExtension(result)) result += ".aytilemap.json";
+    if (!hasTilemapSourceExtension(result)) result += std::string(ayt::asset_format::suffix(ayt::asset_format::Id::TilemapSource));
     return result.lexically_normal().string();
 #else
     (void)projectRoot;
@@ -551,12 +544,7 @@ public:
             }
             return saveAs(selected, error);
         }
-        const TilemapSaveResult result = saveTilemapSourceAndTryCook(
-            _model, _path, error);
-        _lastSaveResult = result;
-        _lastSaveNotice = result.notice;
-        if (result.sourceSaved) ++_revision;
-        return result.sourceSaved;
+        return saveAs(_path, error);
     }
     bool canSaveAs() const noexcept override { return true; }
     bool saveAs(const std::string& path, std::string* error) override {
@@ -564,13 +552,19 @@ public:
             if (error != nullptr) *error = "Tilemap has no file path.";
             return false;
         }
+        const auto canonical = ayt::asset_format::canonicalizePath(
+            path, ayt::asset_format::Id::TilemapSource);
+        if (!canonical) {
+            if (error != nullptr) *error = "Tilemap source path must use .tls.";
+            return false;
+        }
         const TilemapSaveResult result = saveTilemapSourceAndTryCook(
-            _model, path, error);
+            _model, *canonical, error);
         _lastSaveResult = result;
         _lastSaveNotice = result.notice;
         if (result.sourceSaved) {
-            _path = path;
-            _title = std::filesystem::path(path).filename().string();
+            _path = *canonical;
+            _title = std::filesystem::path(*canonical).filename().string();
             ++_revision;
         }
         return result.sourceSaved;
@@ -4780,7 +4774,7 @@ bool registerEditorBuiltInExtensions(
     tilemap.surfaceKind = EditorSurfaceKind::Document;
     tilemap.openPolicy = EditorOpenPolicy::PerResource;
     tilemap.defaultDockSlot = EditorDockSlot::Center;
-    tilemap.extensions = {".aytilemap", ".aytilemap.json"};
+    tilemap.extensions = {".tlm", ".aytilemap", ".tls", ".aytilemap.json"};
     tilemap.assetTypes = {"Tilemap"};
     tilemap.createDocument = [](const EditorOpenRequest& request,
                                 std::string& localError) {
@@ -4836,8 +4830,14 @@ bool registerEditorBuiltInExtensions(
 #ifdef AYEDITOR_HAS_SEQUENCE
     if (!registerEditorSequenceExtension(registry, error)) return false;
 #endif
+    std::vector<std::string> audioExtensions{
+        std::string(ayt::asset_format::suffix(ayt::asset_format::Id::Audio))};
+    for (const auto alias : ayt::asset_format::describe(ayt::asset_format::Id::Audio).readAliases)
+        audioExtensions.emplace_back(alias);
+    for (const auto loose : {".wav", ".ogg", ".mp3", ".flac"})
+        audioExtensions.emplace_back(loose);
     if (!addTimedAsset(kEditorAudioTimelineExtensionId, L"Audio",
-            true, {".ayaudio", ".wav", ".ogg", ".mp3", ".flac"},
+            true, std::move(audioExtensions),
             {"Audio"})) return false;
 
     EditorDescriptor audio;

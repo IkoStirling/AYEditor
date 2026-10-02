@@ -1,4 +1,5 @@
 #include "AYEditor/EditorDslDocument.h"
+#include <AYAssetFormat/AssetFormat.h>
 
 #include "AYIO/File.h"
 #include <AYEntity/ActorClassAsset.h>
@@ -126,7 +127,7 @@ EditorDslLanguage editorDslLanguageFromPath(
             std::filesystem::path(path).extension().string());
         if (extension == ".phoskia") return EditorDslLanguage::Phoskia;
         if (extension == ".logia") return EditorDslLanguage::Logia;
-        if (extension == ".ayactor") return EditorDslLanguage::ActorClassJson;
+        if (ayt::asset_format::matchesPath(path, ayt::asset_format::Id::ActorClass)) return EditorDslLanguage::ActorClassJson;
     } catch (...) {
         // Invalid platform path syntax is simply not an editor DSL.
     }
@@ -152,7 +153,7 @@ bool EditorDslDocument::open(const std::string& absolutePath,
         editorDslLanguageFromPath(absolutePath);
     if (language == EditorDslLanguage::Unknown) {
         if (error != nullptr) {
-            *error = "Only .phoskia, .logia and .ayactor files can be opened in the code editor.";
+            *error = "Only .phoskia, .logia and .act files can be opened in the code editor.";
         }
         return false;
     }
@@ -337,11 +338,17 @@ EditorDslCompileReport EditorDslDocument::compile() const
                 _absolutePath);
             const auto root = ayt::entity::assetsRootForScene(_absolutePath);
             auto classPath = std::filesystem::path(_absolutePath);
-            classPath.replace_extension(".ayactor");
+            classPath.replace_extension(".act");
             ayt::entity::ActorClassAsset actor;
             std::string ignored;
-            if (ayt::entity::loadActorClassAsset(classPath.string(), actor,
-                                                  &ignored)) {
+            bool loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
+                                                            &ignored);
+            if (!loaded) {
+                classPath.replace_extension(".ayactor");
+                loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
+                                                           &ignored);
+            }
+            if (loaded) {
                 std::string resolvedScript;
                 actorHost = ayt::entity::resolveActorScriptPath(root,
                     actor.scriptPath, resolvedScript, &ignored)
@@ -352,7 +359,7 @@ EditorDslCompileReport EditorDslDocument::compile() const
                 for (std::filesystem::recursive_directory_iterator it(root, scanError), end;
                      !scanError && it != end; it.increment(scanError)) {
                     if (!it->is_regular_file(scanError)
-                        || it->path().extension() != ".ayactor") continue;
+                        || !ayt::asset_format::matchesPath(it->path().string(), ayt::asset_format::Id::ActorClass)) continue;
                     if (!ayt::entity::loadActorClassAsset(it->path().string(),
                                                            actor, &ignored)) continue;
                     std::string resolvedScript;

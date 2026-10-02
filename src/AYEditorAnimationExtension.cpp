@@ -1198,7 +1198,7 @@ EditorDescriptor makeEditorAnimationDescriptor()
     descriptor.openPolicy = EditorOpenPolicy::PerResource;
     descriptor.defaultDockSlot = EditorDockSlot::Center;
     descriptor.priority = 100;
-    descriptor.extensions = {".ayanm", ".ayanim"};
+    descriptor.extensions = {".anm", ".ayanm", ".ayanim"};
     descriptor.assetTypes = {"Animation"};
     descriptor.createDocument = [](const EditorOpenRequest& request,
                                    std::string& error) {

@@ -372,8 +372,7 @@ struct EditorProjectSettingsController::Impl {
                  !scanError && it != end; it.increment(scanError)) {
                 if (!it->is_regular_file()) continue;
                 const std::string name = it->path().filename().string();
-                if (name.size() < 13u
-                    || name.substr(name.size() - 13u) != ".aybuild.json") {
+                if (!ayt::asset_format::matchesPath(name, ayt::asset_format::Id::BuildProfile)) {
                     continue;
                 }
                 std::string profileError;
@@ -396,7 +395,7 @@ struct EditorProjectSettingsController::Impl {
         if (profiles.empty()) {
             ayt::resource::ProjectBuildProfile profile = defaultProfile(project.id);
             const std::string path = (profileRoot
-                / "windows-development.aybuild.json").string();
+                / ayt::asset_format::appendSuffix("windows-development", ayt::asset_format::Id::BuildProfile)).string();
             profile.sourcePath = path;
             profiles.push_back({path, std::move(profile), true});
         }
@@ -1042,7 +1041,7 @@ struct EditorProjectSettingsController::Impl {
             fs::path path;
             do {
                 path = fs::path(config.projectRoot) / "BuildProfiles"
-                    / (profile.id + ".aybuild.json");
+                    / ayt::asset_format::appendSuffix(profile.id, ayt::asset_format::Id::BuildProfile);
                 ++suffix;
             } while (fs::exists(path));
             profile.sourcePath = path.string();
@@ -1060,11 +1059,11 @@ struct EditorProjectSettingsController::Impl {
             auto copy = *current;
             copy.id += "-copy";
             fs::path path = fs::path(config.projectRoot) / "BuildProfiles"
-                / (copy.id + ".aybuild.json");
+                / ayt::asset_format::appendSuffix(copy.id, ayt::asset_format::Id::BuildProfile);
             for (int suffix = 2; fs::exists(path); ++suffix) {
                 path = fs::path(config.projectRoot) / "BuildProfiles"
-                    / (copy.id + "-" + std::to_string(suffix)
-                        + ".aybuild.json");
+                    / ayt::asset_format::appendSuffix(copy.id + "-" + std::to_string(suffix),
+                        ayt::asset_format::Id::BuildProfile);
             }
             copy.sourcePath = path.string();
             profiles.push_back({path.string(), std::move(copy), true});

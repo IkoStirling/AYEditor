@@ -314,13 +314,13 @@ bool EditorAnimationDocument::save(std::string* error)
     const std::string filename = resourcePath.filename().string();
     if (filename.find(".baked.") != std::string::npos) {
         if (error != nullptr) {
-            *error = "Baked animation outputs are read-only. Edit the source .ayanm clip.";
+            *error = "Baked animation outputs are read-only. Edit the source .anm clip.";
         }
         return false;
     }
-    if (resourcePath.extension() != ".ayanm") {
+    if (resourcePath.extension() != ".anm") {
         if (error != nullptr) {
-            *error = "Legacy animation aliases are read-only; migrate to the canonical .ayanm format.";
+            *error = "Legacy animation aliases are read-only; migrate to the canonical .anm format.";
         }
         return false;
     }
@@ -927,7 +927,7 @@ EditorAnimationDocument::animationNotifies() const
 bool EditorAnimationDocument::authoringReadOnly() const
 {
     const std::filesystem::path resourcePath(_path);
-    return resourcePath.extension() != ".ayanm"
+    return resourcePath.extension() != ".anm"
         || resourcePath.filename().string().find(".baked.") != std::string::npos;
 }
 
@@ -1262,7 +1262,7 @@ bool EditorAnimationDocument::commitEditedAnimation(
     const std::vector<std::string>* beforeIds)
 {
     if (authoringReadOnly()) {
-        if (error) *error = "Animation is read-only; edit the canonical source .ayanm clip.";
+        if (error) *error = "Animation is read-only; edit the canonical source .anm clip.";
         return false;
     }
     std::vector<std::uint8_t> bytes;

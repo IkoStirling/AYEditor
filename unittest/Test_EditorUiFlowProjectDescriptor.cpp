@@ -41,7 +41,7 @@ struct ProjectRoot {
                 "\n        \"templateVersion\":1,"
                 "\n        \"engineCompatibility\":{\"minimum\":\"1\",\"tested\":\"1\"},");
         }
-        std::ofstream output(path / "project.ayproject.json",
+        std::ofstream output(path / "project.prj",
                              std::ios::binary | std::ios::trunc);
         output << current;
     }
@@ -266,7 +266,7 @@ TEST_CASE(project_validation_resolves_flow_layout_dependencies_for_packaging)
     CHECK_FALSE(static_cast<bool>(malformedDescriptor));
     CHECK(malformedDescriptor.issues.size() == 1u);
     CHECK(malformedDescriptor.issues.front().path.find(
-              "project.ayproject.json") != std::string::npos);
+              "project.prj") != std::string::npos);
 }
 
 TEST_SUITE_END

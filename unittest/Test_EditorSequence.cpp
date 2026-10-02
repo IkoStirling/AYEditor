@@ -49,7 +49,7 @@ struct Fixture {
                          {{"key0", 0, {0, 0, 0, 0}}, {"key1", 4, {8, 0, 0, 0}}}}};
         s.eventTracks = {{"events", {{"event", 1, "marker", "payload"}}}};
         if (withScene) {
-            s.scenePath = "worlds/test.ayscene";
+            s.scenePath = "worlds/test.scn";
             ayt::entity::registerEntityCoreComponents(ayt::entity::ComponentRegistry::instance());
             ayt::scene::Scene scene(ayt::scene::SceneMode::Edit, "saved");
             auto *e = scene.world().createEntity();
@@ -58,7 +58,7 @@ struct Fixture {
             if (!scene.save((root / "Assets" / s.scenePath).string()))
                 throw std::runtime_error("Scene save failed");
         }
-        auto path = (root / "Assets" / "test.ayseq").string();
+        auto path = (root / "Assets" / "test.seq").string();
         if (!saveSequence(path, s))
             throw std::runtime_error("Sequence save failed");
         std::string error;
@@ -219,7 +219,7 @@ TEST_CASE(asset_factory_and_double_click_descriptor_route_sequence) {
 TEST_CASE(isolated_scene_preview_never_changes_author_scene_or_active_world) {
     Fixture f(true);
     ayt::scene::Scene author(ayt::scene::SceneMode::Edit, "author");
-    CHECK_TRUE(author.load((f.root / "Assets" / "worlds" / "test.ayscene").string()));
+    CHECK_TRUE(author.load((f.root / "Assets" / "worlds" / "test.scn").string()));
     auto *actor = author.world().getAllEntities().front();
     auto *active = ayt::entity::World::activeWorld();
     CHECK_TRUE(f.document->seek(2));
@@ -261,7 +261,7 @@ TEST_CASE(missing_and_duplicate_entity_locators_are_diagnostics_not_guessing) {
         e->setName("Actor");
         e->addComponent<ayt::entity::Transform>();
     }
-    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.ayscene").string()));
+    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.scn").string()));
     CHECK_FALSE(f.document->seek(1));
     CHECK(f.document->diagnostic().find("Ambiguous") != std::string::npos);
 }
@@ -394,7 +394,7 @@ TEST_CASE(real_skeletal_preview_loads_owned_clips_and_reports_missing_source) {
     e->setName("Actor");
     e->addComponent<ayt::entity::Transform>();
     e->addComponent<ayt::entity::SkeletonComponent>()->skeletonPath = "rig.ayskel";
-    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.ayscene").string()));
+    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.scn").string()));
     CHECK_TRUE(f.document->edit("animation", [](Sequence &s) {
         s.animations = {{"clips", "actor", {{"section", "walk.ayanm", 0, 4, 0, 1, 4}}}};
         return true;
@@ -445,7 +445,7 @@ TEST_CASE(bad_skeleton_is_rejected_before_player_initialization_or_clip_load) {
     e->setName("Actor");
     e->addComponent<ayt::entity::Transform>();
     e->addComponent<ayt::entity::SkeletonComponent>()->skeletonPath = "rig.ayskel";
-    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.ayscene").string()));
+    CHECK_TRUE(scene.save((f.root / "Assets" / "worlds" / "test.scn").string()));
     CHECK_TRUE(f.document->edit("bad-rig", [](Sequence &s) {
         s.animations = {{"clips", "actor", {{"section", "walk.ayanm", 0, 4, 0, 1, 4}}}};
         return true;
