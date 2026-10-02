@@ -700,6 +700,16 @@ private:
     ayt::ui::TreeView* _assetTree = nullptr;
     ayt::ui::TextInput* _assetSearch = nullptr;
     ayt::ui::ComboBox* _assetTypeFilter = nullptr;
+    ayt::ui::ComboBox* _assetViewMode = nullptr;
+    bool _assetFlatMode = false;
+    std::uint64_t _assetTreeFolderRevision = 0;
+    bool _assetListPresented = false;
+    bool _assetListWasFlat = false;
+    std::string _assetListFolder;
+    std::string _assetListQuery;
+    int _assetListTypeIndex = 0;
+    float _assetFlatScroll = 0.0f;
+    float _assetDirectoryScroll = 0.0f;
     std::vector<EditorAssetEntry> _assetEntries;
     std::vector<std::string> _assetFolderSourcePaths;
     std::vector<std::string> _assetFolderFlatPaths;

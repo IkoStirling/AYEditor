@@ -251,11 +251,14 @@ EditorAssetOperationResult relocate(
 }
 
 fs::path absoluteFolder(const fs::path& projectRoot,
+                        const fs::path& sourceRoot,
                         const std::string& logicalFolder)
 {
     const std::string normalized = slashes(logicalFolder);
     if (normalized == "Assets" || normalized.rfind("Assets/", 0) == 0) {
-        return projectRoot / normalized;
+        const std::string tail = normalized.size() > 6
+            ? normalized.substr(7) : std::string{};
+        return sourceRoot / tail;
     }
     if (normalized == "Imported" || normalized.rfind("Imported/", 0) == 0) {
         const std::string tail = normalized.size() > 8
@@ -354,7 +357,7 @@ EditorAssetOperationResult EditorAssetOperations::move(
     const std::vector<EditorAssetRecord>& records,
     const std::string& destinationLogicalFolder) const
 {
-    const fs::path folder = absoluteFolder(_projectRoot,
+    const fs::path folder = absoluteFolder(_projectRoot, database.sourceRoot(),
         destinationLogicalFolder).lexically_normal();
     if (folder.empty()) return {0u, 0u, {}, "Destination must be under Assets or Imported."};
     std::vector<MoveEntry> entries;
@@ -375,7 +378,7 @@ EditorAssetOperationResult EditorAssetOperations::copy(
     const std::vector<EditorAssetRecord>& records,
     const std::string& destinationLogicalFolder) const
 {
-    const fs::path folder = absoluteFolder(_projectRoot,
+    const fs::path folder = absoluteFolder(_projectRoot, database.sourceRoot(),
         destinationLogicalFolder).lexically_normal();
     if (folder.empty()) return {0u, 0u, {}, "Destination must be under Assets or Imported."};
     std::vector<MoveEntry> entries;

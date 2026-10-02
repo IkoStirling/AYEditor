@@ -4,6 +4,13 @@
 
 AYEditor 是 AY Engine 的编辑器产品层，负责 Editor Shell、Edit/Play 会话、场景隔离、视口合成、导入流程和编辑器工具窗口。
 
+资源管理器提供 **Folders** 与 **All files** 两种视图：前者显示项目资源根的真实
+目录结构（含空目录），后者按相对路径平铺全部资源。两种视图共享搜索、类型过滤、
+选择及资源操作；在平铺视图可用 **Locate** 跳转到所选资源的目录。项目配置的
+`assetRoot` 映射为逻辑 `Assets`。索引启动时优先恢复缓存，随后后台校验磁盘；
+文件和目录通知增量更新映射，界面在空闲帧无全量遍历。详见
+[项目工作流](docs/project-workflow.md)。
+
 Scene 实体可由 Hierarchy 顶部的 `+` 或树内右键菜单创建：空实体、Sprite、Tilemap
 和 2D Camera。创建后自动展开层级树并选中实体，在 Inspector 继续配置组件；创建
 使用同一 Scene 命令历史，支持撤销/重做。Play 和 Paused 状态下创建入口禁用。

@@ -3,6 +3,7 @@
 #include "AYEditor/EditorVersion.h"
 
 #include <cstdint>
+#include <chrono>
 #include <filesystem>
 #include <future>
 #include <AYTask/BackgroundJob.h>
@@ -117,7 +118,11 @@ public:
     // Drain filesystem notifications and update only the affected records.
     // Returns true when the visible catalog changed.
     bool pollFileChanges();
+    bool lastFileChangeAffectsEntries() const noexcept {
+        return _lastFileChangeAffectsEntries;
+    }
     bool loadedFromIndex() const noexcept { return _loadedFromIndex; }
+    std::uint64_t folderRevision() const noexcept { return _folderRevision; }
 
     const std::string& projectRoot() const noexcept { return _projectRoot; }
     const std::string& sourceRoot() const noexcept { return _sourceRoot; }
@@ -150,6 +155,11 @@ public:
         const std::string& query = {},
         std::optional<EditorAssetType> type = std::nullopt) const;
 
+    // Lists every indexed file under both virtual roots, without folders.
+    std::vector<EditorAssetEntry> allEntries(
+        const std::string& query = {},
+        std::optional<EditorAssetType> type = std::nullopt) const;
+
 private:
     struct WatchState;
     struct Snapshot {
@@ -162,8 +172,11 @@ private:
                               const std::filesystem::path& derivedRoot,
                               const ayt::task::CancellationToken* cancellation = nullptr);
     void applySnapshot(Snapshot snapshot);
-    void rebuildLookupsAndPersist();
+    void rebuildLookupsAndPersist(bool persist = true);
+    void flushDeferredIndex();
     void refreshDirectoryWatches();
+    void watchDirectorySubtree(const std::filesystem::path& root);
+    void unwatchDirectorySubtree(const std::filesystem::path& root);
 
     std::string _projectRoot;
     std::string _sourceRoot;
@@ -175,9 +188,16 @@ private:
     std::unordered_map<EditorAssetId, std::size_t> _recordById;
     std::unordered_map<std::string, std::size_t> _recordByLogicalPath;
     ayt::task::BackgroundJob<Snapshot> _scanFuture;
+    std::future<void> _indexWriteFuture;
+    std::chrono::steady_clock::time_point _lastIndexChange{};
+    bool _indexDirty = false;
     std::unique_ptr<WatchState> _watchState;
     bool _scanPending = false;
     bool _loadedFromIndex = false;
+    bool _lastFileChangeAffectsEntries = false;
+    std::uint64_t _folderRevision = 0;
+    std::uint64_t _changeRevision = 0;
+    std::uint64_t _scanStartRevision = 0;
 };
 
 } // namespace ayt::editor

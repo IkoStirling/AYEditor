@@ -86,6 +86,8 @@ struct EditorPreferences {
     // Global project history used by File > Recent Projects. Paths are
     // normalized absolute project roots and never written into project data.
     std::vector<std::string> recentProjectRoots;
+    // Resource browser presentation only; does not affect asset identity.
+    bool assetBrowserFlatMode = false;
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -141,7 +143,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.taaEnabled == b.taaEnabled
         && a.language == b.language
         && a.autoExposureEnabled == b.autoExposureEnabled
-        && a.recentProjectRoots == b.recentProjectRoots;
+        && a.recentProjectRoots == b.recentProjectRoots
+        && a.assetBrowserFlatMode == b.assetBrowserFlatMode;
 }
 
 inline bool operator!=(const EditorPreferences& a,
