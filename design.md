@@ -5,6 +5,12 @@
 **Status:** E2-composite + native SVG shell icons + Transform Gizmo baseline + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX
 **Owner:** AYEditor
 
+> **2026-10-03 渲染线程迁移状态**：先落地 Renderer 的 OwnedCpu 场景提取，复制骨骼/映射、
+> 2D 参数和 CPU 粒子数据。编辑器仍由主线程调用 `renderCompositeFrame`，尚未启用独立
+> Pass/UI 提交线程；不能把 `setRenderThreadEnabled(true)` 当作已完成迁移。下一阶段必须将
+> 完整 UI 帧、资源生命周期、GPU 粒子与隔离 preview/子窗口纳入单一 render owner，方案与
+> 开启默认并行前的验收见 [AYRenderer design](../AYRenderer/design.md#2026-10-03--编辑器渲染线程迁移阶段-1-cpu-数据所有权)。
+
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
 > **2026-09-28 动画编辑状态**：独立 `.ayanm` 动画页面已具备轨道、图形曲线与 Dope Sheet 三种协同作者视图。除 TRS/Float 轨道和逐分量数值、插值、切线编辑外，现已支持曲线缩放/平移/框选、关键帧与切线手柄拖动、多关键帧批量时间和值变换、批量删除、事件轨 Notify 的名称/时间/payload 作者，以及 clip 名称、时长和 tick 速率属性。曲线、Dope Sheet、属性面板和播放头共享选择与正式模型/骨架预览；所有修改继续使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。
 > **2026-09-23 渲染收尾状态**：`AYEditorShell_Demo` 增加仅在 `AY_EDITOR_R6_CAPTURE_BASE` 存在且 RenderDoc 已注入时启用的 R6-6 自动验证序列，普通产品运行零行为变化；序列覆盖 resize、camera cut、效果关闭/重开、透明边界、raw resource/TAA diagnostics 和双阴影灯。Renderer presentation bootstrap 失败时关闭 splash、写入持久日志位置、显示模态错误并安全 shutdown。新构建的 D3D12 后端已通过 15 秒启动烟测；完整跨后端画面对齐仍由 Renderer 后续专项负责。
