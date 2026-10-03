@@ -11,6 +11,15 @@
 > 完整 UI 帧、资源生命周期、GPU 粒子与隔离 preview/子窗口纳入单一 render owner，方案与
 > 开启默认并行前的验收见 [AYRenderer design](../AYRenderer/design.md#2026-10-03--编辑器渲染线程迁移阶段-1-cpu-数据所有权)。
 
+> **阶段 2 基础（2026-10-03）**：AYUI 新增自包含 `UIFrameSnapshot`，主线程展开普通控件/
+> SVG 绘制，消费端不遍历控件树；支持 populate/flush 分段。借用纹理、资源与 preview/Layer
+> pass 明确拒绝，尚不具备整套编辑器的异步提交条件。EditorSession、输入、布局与 World
+> 仍在主线程，现有 `renderCompositeFrame` 路线不变。后续依次补资源 lease、统一 GPU owner
+> 和有界帧/控制/结果队列；详见 [AYUI 快照契约](../AYUI/design.md#ui-帧快照与线程边界2026-10-03)。
+> 本轮 ABI 131 依赖重编、UI full 13/13 分区、UI 1245 用例清单核验、Editor full 和 Renderer
+> Contracts 回归及 SDK doctor 已通过。用户手动窗口检查暂未见异常；尚无独立 GPU owner/
+> 默认并行的画面或性能验收，不将 MockRenderer worker 回放当作该验收。
+
 > **2026-09-21 实现状态**：§4.3.skeletal 已落地 UI-free `AYAnimationEditorCore` 与 AYEditor 薄适配，覆盖源骨架检查、线框交互、骨树搜索、57 角色映射/诊断、mapping/template/retarget RigProfile、源/目标拖放与选择映射、参考姿势/骨轴修正、目标/platform 配置、双状态标志和动画/时间轴预览；真实 source→target pose/clip 求解与 `BakeToTarget` 已接入，源/目标骨架可并排、同步预览正式转换结果。当前正式资源集的完整引用安全烘焙及发布门禁已闭环；模型蒙皮并排预览仍待续，跨骨架蒙皮几何 rebind 未实现时会明确阻止烘焙。SKA 优先级和验收统一见 [骨骼动画资源管线设计](../../AYDocs/SKELETAL-ANIMATION-RESOURCE-PIPELINE.md)。
 > **2026-09-28 动画编辑状态**：独立 `.ayanm` 动画页面已具备轨道、图形曲线与 Dope Sheet 三种协同作者视图。除 TRS/Float 轨道和逐分量数值、插值、切线编辑外，现已支持曲线缩放/平移/框选、关键帧与切线手柄拖动、多关键帧批量时间和值变换、批量删除、事件轨 Notify 的名称/时间/payload 作者，以及 clip 名称、时长和 tick 速率属性。曲线、Dope Sheet、属性面板和播放头共享选择与正式模型/骨架预览；所有修改继续使用公共 `EditorCommandHistory` 撤销/重做，并经验证后原子保存回规范 `.ayanm`。`.baked.ayanm` 与 Legacy `.ayanim` 仍只读。
 > **2026-09-23 渲染收尾状态**：`AYEditorShell_Demo` 增加仅在 `AY_EDITOR_R6_CAPTURE_BASE` 存在且 RenderDoc 已注入时启用的 R6-6 自动验证序列，普通产品运行零行为变化；序列覆盖 resize、camera cut、效果关闭/重开、透明边界、raw resource/TAA diagnostics 和双阴影灯。Renderer presentation bootstrap 失败时关闭 splash、写入持久日志位置、显示模态错误并安全 shutdown。新构建的 D3D12 后端已通过 15 秒启动烟测；完整跨后端画面对齐仍由 Renderer 后续专项负责。
