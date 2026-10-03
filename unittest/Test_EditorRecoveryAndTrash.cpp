@@ -12,6 +12,12 @@
 #include <iterator>
 #include <string_view>
 #include <thread>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#endif
 
 namespace {
 
@@ -89,6 +95,72 @@ bool pathEndsWith(const std::string& path, std::string_view suffix)
 
 TEST_SUITE(AYEditor_RecoveryAndTrash)
 
+#if defined(_WIN32)
+TEST_CASE(editor_recovery_retries_short_windows_file_contention)
+{
+    using namespace ayt::editor;
+    RecoveryTrashCleanup cleanup{recoveryTrashRoot("retry")};
+    const auto original = cleanup.root / "Assets/document.logia";
+    writeRecoveryTrashFile(original, "old");
+    SelectiveRecoveryDocument document(original.string(), "Document", "recovered");
+    std::string error;
+    {
+        EditorRecoveryStore crashed(cleanup.root.string());
+        CHECK_MSG(crashed.beginSession(&error), error.c_str());
+        CHECK(crashed.autosave({&document}).documents == 1u);
+    }
+    const auto lockPath = cleanup.root / ".ayeditor/recovery/session.lock";
+    const HANDLE held = CreateFileW(lockPath.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(held != INVALID_HANDLE_VALUE);
+    if (held == INVALID_HANDLE_VALUE) return;
+    std::thread release([held] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));
+        CloseHandle(held);
+    });
+    EditorRecoveryStore restarted(cleanup.root.string());
+    const bool begun = restarted.beginSession(&error);
+    release.join();
+    CHECK_MSG(begun, error.c_str());
+    CHECK(restarted.recoverableDocuments().size() == 1u);
+    CHECK(restarted.restorePrevious().documents == 1u);
+    CHECK(readRecoveryTrashFile(original) == "recovered");
+    restarted.markCleanShutdown();
+}
+
+TEST_CASE(editor_recovery_retains_stale_session_when_contention_exhausts)
+{
+    using namespace ayt::editor;
+    RecoveryTrashCleanup cleanup{recoveryTrashRoot("exhaustion")};
+    const auto original = cleanup.root / "Assets/document.logia";
+    writeRecoveryTrashFile(original, "old");
+    SelectiveRecoveryDocument document(original.string(), "Document", "recovered");
+    std::string error;
+    {
+        EditorRecoveryStore crashed(cleanup.root.string());
+        CHECK_MSG(crashed.beginSession(&error), error.c_str());
+        CHECK(crashed.autosave({&document}).documents == 1u);
+    }
+    const auto recoveryRoot = cleanup.root / ".ayeditor/recovery";
+    const auto lockPath = recoveryRoot / "session.lock";
+    const HANDLE held = CreateFileW(lockPath.c_str(), GENERIC_READ,
+        FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0, nullptr);
+    CHECK(held != INVALID_HANDLE_VALUE);
+    if (held == INVALID_HANDLE_VALUE) return;
+    EditorRecoveryStore restarted(cleanup.root.string());
+    CHECK_FALSE(restarted.beginSession(&error));
+    CHECK(error.find("retry budget exhausted") != std::string::npos);
+    CHECK(std::filesystem::is_regular_file(recoveryRoot / "manifest.tsv"));
+    CHECK(std::filesystem::is_regular_file(lockPath));
+    CHECK(readRecoveryTrashFile(original) == "old");
+    CloseHandle(held);
+    CHECK_MSG(restarted.beginSession(&error), error.c_str());
+    CHECK(restarted.restorePrevious().documents == 1u);
+    CHECK(readRecoveryTrashFile(original) == "recovered");
+    restarted.markCleanShutdown();
+}
+#endif
+
 TEST_CASE(editor_recovery_restores_only_selected_documents)
 {
     using namespace ayt::editor;
@@ -104,13 +176,15 @@ TEST_CASE(editor_recovery_restores_only_selected_documents)
     {
         EditorRecoveryStore crashed(cleanup.root.string());
         std::string error;
-        CHECK(crashed.beginSession(&error));
-        CHECK(crashed.autosave({&firstDocument, &secondDocument}).documents == 2u);
+        CHECK_MSG(crashed.beginSession(&error), error.c_str());
+        const auto saved = crashed.autosave({&firstDocument, &secondDocument});
+        CHECK_MSG(static_cast<bool>(saved), saved.error.c_str());
+        CHECK(saved.documents == 2u);
     }
 
     EditorRecoveryStore restarted(cleanup.root.string());
     std::string error;
-    CHECK(restarted.beginSession(&error));
+    CHECK_MSG(restarted.beginSession(&error), error.c_str());
     CHECK(restarted.recoverableDocuments().size() == 2u);
     const EditorRecoveryResult selected = restarted.restorePrevious({1u});
     CHECK(selected);
@@ -152,7 +226,7 @@ TEST_CASE(editor_recovery_preserves_compound_suffixes_for_named_and_untitled_doc
     {
         EditorRecoveryStore crashed(cleanup.root.string());
         std::string error;
-        CHECK(crashed.beginSession(&error));
+        CHECK_MSG(crashed.beginSession(&error), error.c_str());
         const EditorRecoveryResult saved = crashed.autosave({
             &namedGameFlowDocument, &namedUiFlowDocument, &namedUiDocument,
             &untitledGameFlowDocument, &untitledUiFlowDocument,
@@ -164,7 +238,7 @@ TEST_CASE(editor_recovery_preserves_compound_suffixes_for_named_and_untitled_doc
 
     EditorRecoveryStore restarted(cleanup.root.string());
     std::string error;
-    CHECK(restarted.beginSession(&error));
+    CHECK_MSG(restarted.beginSession(&error), error.c_str());
     const auto recoverable = restarted.recoverableDocuments();
     CHECK(recoverable.size() == 6u);
     const std::array<std::string_view, 6> expectedSuffixes = {

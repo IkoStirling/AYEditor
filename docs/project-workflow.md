@@ -264,3 +264,7 @@ When an old session lock is found, its transaction is preserved as
 document separately; selected files can be restored while the rest remain for
 later. Every replaced file is kept beside it with the `.before-recovery`
 suffix.
+On Windows, rotation retries short access/sharing contention within 250 ms and
+26 attempts using AYIO's publication policy. Exhaustion reports the source,
+destination and error while retaining the stale session; a later retry can
+recover it. It does not replace failed rotation with deletion or a copy fallback.

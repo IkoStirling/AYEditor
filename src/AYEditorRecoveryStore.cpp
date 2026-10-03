@@ -1,9 +1,14 @@
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+
 #include "AYEditor/EditorRecoveryStore.h"
 
 #include "AYEditor/EditorExtension.h"
 #include "AYEditor/EditorAssetOperations.h"
 
 #include <AYIO/File.h>
+#include <AYIO/detail/PublicationRetry.h>
 #include <sstream>
 #include <algorithm>
 #include <array>
@@ -118,10 +123,12 @@ bool EditorRecoveryStore::beginSession(std::string* error)
             std::chrono::system_clock::now().time_since_epoch()).count();
         const fs::path previous = editorRoot
             / ("recovery-crash-" + std::to_string(serial));
-        fs::rename(current, previous, ioError);
-        if (ioError) {
-            if (error != nullptr) *error = "Could not preserve crash recovery: "
-                + ioError.message();
+        const auto preserved = ayt::io::detail::retryPublishFileOperation(
+            [&](std::error_code& error) { fs::rename(current, previous, error); },
+            [](auto, const auto&) {});
+        if (preserved.error) {
+            if (error != nullptr) *error = ayt::io::detail::publishFileError(
+                "preserve crash recovery", current, previous, preserved);
             return false;
         }
         _previousRoot = previous.string();

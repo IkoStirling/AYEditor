@@ -32,6 +32,9 @@ public:
     EditorRecoveryStore& operator=(const EditorRecoveryStore&) = delete;
 
     void setProjectRoot(std::string projectRoot);
+    /// Rotate stale recovery before creating a new session. Windows directory
+    /// contention is retried within 250 ms/26 attempts; exhaustion returns an
+    /// error and retains the stale recovery files for a later retry.
     bool beginSession(std::string* error = nullptr);
     EditorRecoveryResult autosave(
         const std::vector<const IEditorDocument*>& documents);
