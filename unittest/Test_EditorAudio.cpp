@@ -413,4 +413,48 @@ TEST_CASE(WorkbenchTransposeZoomMixerAndResourceSidecar)
     session.detach();
     audio.shutdown();
 }
+
+TEST_CASE(WorkbenchAttachesAfterNativeHostLayoutWithoutResize) {
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager primary;primary.initialize(&renderer);
+    ayt::ui::UIManager child;child.initialize(&renderer);
+    const auto root=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    // Native child: viewport first, layout loader computes and caches geometry,
+    // then the session mounts its programmatic subtree. There is no resize.
+    child.setClientSize(960,900);
+    CHECK(child.loadLayout((root/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    child.layout();
+    ayt::ui::UIManager::makeActive(&primary);
+    AudioEditorSession session;
+    for(int attach=0;attach<2;++attach){
+        CHECK(session.attach(child));
+        auto* piano=child.findById("piano_keyboard");auto* meter=child.findById("audio_output_meter");
+        CHECK(piano!=nullptr);CHECK(meter!=nullptr);
+        if(piano&&meter){
+            const auto p=piano->getWorldBounds(),m=meter->getWorldBounds();
+            CHECK(p.maxX-p.minX>600);CHECK(p.maxY-p.minY>=150);
+            CHECK(m.minX>p.maxX);CHECK(m.maxY-m.minY>600);
+            CHECK(m.maxX<=960);CHECK(m.maxY<=900);
+        }
+        auto* tabs=dynamic_cast<ayt::ui::TabControl*>(child.findById("audio_tabs"));
+        CHECK(tabs!=nullptr);
+        tabs->setSelectedIndex(2);
+        auto* slider=child.findById("sld_master");const auto mixer=slider->getWorldBounds();
+        CHECK(mixer.maxX-mixer.minX>400);CHECK(mixer.minY>150);
+        tabs->setSelectedIndex(1);
+        auto* wave=child.findById("resource_waveform");const auto resource=wave->getWorldBounds();
+        CHECK(resource.maxX-resource.minX>600);CHECK(resource.minY>150);
+        tabs->setSelectedIndex(0);
+        CHECK(piano->getWorldBounds().maxX-piano->getWorldBounds().minX>600);
+        // GDI child painting has no layout() call in its per-frame loop.
+        child.render();CHECK(!renderer.getDrawCalls().empty());session.detach();
+    }
+    // Standalone: loader then viewport size, still before session attachment.
+    CHECK(child.loadLayout((root/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    child.setClientSize(1100,820);child.layout();CHECK(session.attach(child));
+    auto* meter=child.findById("audio_output_meter");const auto initial=meter->getWorldBounds();
+    CHECK(initial.minX>900);CHECK(initial.maxY-initial.minY>600);
+    child.setClientSize(900,700);child.layout();const auto resized=meter->getWorldBounds();
+    CHECK(resized.minX<initial.minX);CHECK(resized.maxX<=900);CHECK(resized.maxY<=700);
+    session.detach();
+}
 TEST_SUITE_END

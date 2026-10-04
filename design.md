@@ -1562,3 +1562,10 @@ Focus loss also clears stale modifiers. Mixing writes current Host engine state;
 the UI makes that scope explicit and does not auto-save project mix settings.
 Single-resource sidecars map a selected source interval into one timeline clip
 at zero; unsupported/complex metadata is read-only. No new persisted format.
+
+Audio workbench layout regression (2026-10-04): native child viewport and layout
+loading precede session attachment. The session now activates the target
+UIManager and invalidates/recalculates geometry after mounting, and tab changes
+recalculate immediately. The regression preserves this production order and
+renders without adding a host-side layout call or resize; it also covers
+reattachment, another active UIManager, all tab pages and standalone resize.

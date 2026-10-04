@@ -147,3 +147,8 @@ the selection; source PCM stays intact. Save uses an atomic `*.timeline.json`
 schema v2 sidecar; schema v1 remains readable. One source and one audible clip
 at a time are supported; multi-file/multi-track export is deferred. The existing
 Timeline remains the waveform and clip-arrangement surface.
+
+`EditorAudioTests.WorkbenchAttachesAfterNativeHostLayoutWithoutResize` covers
+viewport/load/layout before session attachment, reopening, immediate tab
+switching and standalone resize. This prevents the native child from rendering
+the dynamic workbench at default sizes in the top-left corner.
