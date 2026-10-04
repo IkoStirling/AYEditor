@@ -2737,6 +2737,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     }
     syncAudioEditorLifetime();
     if (_audioEditor != nullptr) {
+        _audioEditor->setDriveAudioUpdate(!_playRuntime.isPlaying());
         _audioEditor->tick(dt);
     }
     // D5+.5: tick every open child (each via pushActive scope) before
@@ -10382,7 +10383,7 @@ bool EditorSession::openUiFlowEditor(const std::string& requestedPath)
     cfg.x = 112;
     cfg.y = 80;
     cfg.width = 1440;
-    cfg.height = 860;
+    cfg.height = 900;
     cfg.beforeCloseRequested = [this](ayt::ui::UIManager&) {
         return confirmUiFlowDesignerClose();
     };
@@ -10498,7 +10499,6 @@ void EditorSession::syncAudioEditorLifetime() {
     if (_childWindows == nullptr || _audioEditorHandle == nullptr) {
     _audioEditor.reset();
     _audioEditorHandle = nullptr;
-    releaseUiFlowDesigner(true);
         return;
     }
     bool alive = false;
@@ -10531,7 +10531,20 @@ void EditorSession::openAudioEditorWindow() {
     cfg.x = 140;
     cfg.y = 100;
     cfg.width = 960;
-    cfg.height = 640;
+    cfg.height = 900;
+    cfg.beforeKey=[this](ayt::ui::UIManager&,ayt::device::KeyCode key,bool pressed) {
+        if (!_audioEditor) return false;
+        int native=key==ayt::device::KeyCode::Space ? 32 : 0;
+        if (key>=ayt::device::KeyCode::A && key<=ayt::device::KeyCode::Z) native='A'+static_cast<int>(key)-static_cast<int>(ayt::device::KeyCode::A);
+        return native && _audioEditor->handleKey(native,pressed);
+    };
+    cfg.beforeMouseButton=[this](ayt::ui::UIManager&,float x,float y,int button,bool pressed) {
+        if (!_audioEditor || !_audioEditor->handleMouseButton(x,y,button,pressed)) return false;
+        if (pressed) ::SetCapture(static_cast<HWND>(_audioEditorHandle));
+        else if (::GetCapture()==static_cast<HWND>(_audioEditorHandle)) ::ReleaseCapture();
+        return true;
+    };
+    cfg.onFocusChanged=[this](ayt::ui::UIManager&,bool focused) { if (!focused && _audioEditor) _audioEditor->releaseKeys(); };
     cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
         if (_audioEditor != nullptr) {
             _audioEditor->detach();
@@ -10585,6 +10598,7 @@ void EditorSession::openAudioEditorWindow() {
         }
     }
     session->setAudio(audioSub);
+    session->setAssetRoot((std::filesystem::path(_engineAssetsRoot)/"AYAudio").string());
     HWND owner = static_cast<HWND>(_hostWindow);
     session->setPathPicker([owner]() { return showOpenAudioFileDialog(owner); });
     if (!session->attach(*childUi)) {

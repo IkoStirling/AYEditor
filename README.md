@@ -126,3 +126,18 @@ Project Safe Rename 面板：可以选择引用类型、预览文件级改动及
 既有 UIJobPresentation 仍只负责显示，Foundation 不依赖 UI。
 
 阶段、模式矩阵和编辑器 UI 契约见 [design.md](design.md)。
+
+### Audio authoring and virtual piano
+
+Tools → Audio Editor now provides a shared virtual piano, mouse/key note gates,
+velocity/preview volume, sustain and octave controls, and sample import. Preview
+pause/stop is local; mixer buses/effects remain global. The child scrolls when
+space is insufficient and reads staged EngineAssets, not AssetRepo at runtime.
+
+Audio asset documents expose resource metadata, preview begin/end and looping,
+plus editable source offset, duration, gain and fade-in/out on the selected clip.
+Apply Range / Apply Clip validate before recording undo. Play Range auditions
+the selection; source PCM stays intact. Save uses an atomic `*.timeline.json`
+schema v2 sidecar; schema v1 remains readable. One source and one audible clip
+at a time are supported; multi-file/multi-track export is deferred. The existing
+Timeline remains the waveform and clip-arrangement surface.

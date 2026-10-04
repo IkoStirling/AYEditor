@@ -1534,3 +1534,21 @@ AYEditor Source ABI 升至 26，必须重编译消费者。
 - [AYGameLoop/design.md](../AYGameLoop/design.md) — `tickOnce`, Unscaled editor time
 - [AYDevice/design.md §3 WindowManager](../AYDevice/design.md#3-窗口管理-windowmanager) — native handle owner for E3+
 - [AYSerializer/README.md](../../AYFoundation/AYSerializer/README.md) — future scene/Inspector I/O
+
+## Audio authoring update (2026-10-04)
+
+Shared AudioEditorSession no longer initializes global mixer/listener settings
+on attachment. Session preview controls address owned voice identities; engine
+mix controls remain explicitly global. Before-key and mouse hooks provide
+press/release gates and focus loss clears notes. Session updates AudioSubSystem
+in Edit; active Play owns its regular GameLoop update. Engine replacement is
+detected before touching borrowed sampler voices or releasing clips.
+
+TimedAssetDocument audio interval playback enforces decoded source bounds and
+uses the engine output rate after resampling. Only the document's source audio
+is supported; different source paths are rejected instead of playing the wrong
+file. Non-overlapping clips are scheduled as the playhead traverses gaps; overlapping
+clips resolve to the first active sorted clip. Preview ranges, loops, gain and
+fades are authoring data, never destructive PCM edits. Clip/preview changes have
+undo/redo and atomic save; v2 sidecars add `preview`, `fadeIn`, and `fadeOut`,
+with v1 defaults. Future multi-track rendering must use a dedicated scheduler.

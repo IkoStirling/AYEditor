@@ -50,6 +50,13 @@ struct EditorTimelineClip {
     double durationSeconds = 0.0;
     double sourceOffsetSeconds = 0.0;
     float gain = 1.0f;
+    double fadeInSeconds = 0.0;
+    double fadeOutSeconds = 0.0;
+};
+
+struct EditorAudioPreviewSettings {
+    double beginSeconds = 0.0, endSeconds = 0.0;
+    bool loop = false;
 };
 
 // Optional document capability consumed by the contextual Timeline panel.
@@ -90,6 +97,11 @@ public:
     }
     virtual bool timelineRemoveKeyframe(const std::string&) { return false; }
     virtual bool timelineAddClip(const EditorTimelineClip&) { return false; }
+    // Non-destructive audio edits; source PCM remains unchanged.
+    virtual bool timelineUpdateClip(const EditorTimelineClip&) { return false; }
+    virtual EditorAudioPreviewSettings audioPreviewSettings() const { return {}; }
+    virtual bool setAudioPreviewSettings(const EditorAudioPreviewSettings&) { return false; }
+    virtual std::string audioResourceInfo() const { return {}; }
     virtual bool timelineMoveClip(const std::string&, double) { return false; }
     virtual bool timelineRemoveClip(const std::string&) { return false; }
     virtual bool timelineCanUndo() const noexcept { return false; }

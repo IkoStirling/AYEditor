@@ -37,6 +37,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
     Test_EditorProjectWorkflow.cpp
+    Test_EditorAudio.cpp
     Test_EditorNewProject.cpp
     Test_EditorUiFlowProjectDescriptor.cpp
     Test_EditorUiFlowEditor.cpp
@@ -226,3 +227,6 @@ if(WIN32 AND TARGET AYEntityParticleIntegration)
         target_link_options(AYEditor_ParticlePreviewRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
     endif()
 endif()
+
+# Audio authoring/session regression tests consume the public runtime surface.
+target_link_libraries(${MODULE_NAME} PRIVATE AYAudio)
