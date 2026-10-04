@@ -1,3 +1,6 @@
+#include "../../AYAudio/demo/audio_editor/ChartDocument.h"
+#include <thread>
+#include <chrono>
 #include <AYAudio/AudioRecorder.h>
 #include <AYEditor/EditorAudioFramePacer.h>
 #include "../../AYAudio/demo/audio_editor/AudioEditorSession.h"
@@ -580,7 +583,7 @@ TEST_CASE(RecordingTabSavesVirtualWavAndWaveSelectionStaysBelowPeaks) {
     std::string saved;session.setRecordingRootProvider([&]{return assets.string();});
     session.setRecordingSavedCallback([&](const std::string& value){saved=value;});CHECK(session.attach(ui));
     auto* tabs=dynamic_cast<ayt::ui::TabControl*>(ui.findById("audio_tabs"));CHECK(tabs);
-    CHECK(tabs->getTabCount()==4);CHECK(tabs->getTabLabel(3)==L"录音台");CHECK(tabs->getTabStrip()->isFlatHeader());
+    CHECK(tabs->getTabCount()==5);CHECK(tabs->getTabLabel(3)==L"录音台");CHECK(tabs->getTabStrip()->isFlatHeader());
     tabs->setSelectedIndex(3);CHECK_FALSE(session.handleKey('A',true));
     auto* recorder=session.recorder();CHECK(recorder);
     RecordingConfig config;config.sampleRate=8000;config.channels=1;config.maxSeconds=2;
@@ -611,5 +614,64 @@ TEST_CASE(RecordingTabSavesVirtualWavAndWaveSelectionStaysBelowPeaks) {
     CHECK(rangeFound);CHECK(peaksAfter);
     tabs->setSelectedIndex(3);click("recording_discard");session.tick(.02f);CHECK(recorder->samples().empty());CHECK(fs::exists(assets/fs::u8path(saved)));
     session.detach();ui.shutdown();audio.shutdown();
+}
+TEST_SUITE_END
+
+
+TEST_SUITE(EditorAudioChartTests)
+namespace {
+std::filesystem::path chartTone(const std::filesystem::path& assets) {
+    AudioRecorder r;RecordingConfig config;config.sampleRate=8000;config.channels=1;config.maxSeconds=2;
+    if(!AudioRecorderTestAccess::beginBuffered(r,config))throw std::runtime_error("fixture capture failed");
+    std::vector<float> samples(8000);for(size_t i=0;i<samples.size();++i)samples[i]=float(std::sin(i*.1)*.2);
+    AudioRecorderTestAccess::receive(r,samples.data(),8000);r.update();r.stop();std::string error;
+    if(!r.saveWav(ayt::audio::chart::utf8(assets),"audio/music.wav",&error))throw std::runtime_error(error);
+    return assets/"audio/music.wav";
+}
+void chartClick(ayt::ui::UIManager& ui,const char* id) {
+    auto* button=dynamic_cast<ayt::ui::Button*>(ui.findById(id));CHECK(button);if(!button)return;
+    const auto b=button->getWorldBounds();ayt::ui::UIMouseEvent e({(b.minX+b.maxX)/2,(b.minY+b.maxY)/2},0);
+    button->onMouseMove(e);button->onMouseButtonDown(e);button->onMouseButtonUp(e);
+}
+void chartSet(ayt::ui::UIManager& ui,const char* id,const wchar_t* value) {auto* input=dynamic_cast<ayt::ui::TextInput*>(ui.findById(id));CHECK(input);if(input)input->setText(value);}
+}
+TEST_CASE(ChartEditorSavesRelativeMusicAndRunsUnsavedSnapshot) {
+    namespace fs=std::filesystem;const auto assets=ayt::test::testTmpDir()/"chart_editor_assets";fs::create_directories(assets);const auto music=chartTone(assets);
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;ui.initialize(&renderer);ui.setClientSize(1100,900);
+    ayt::ui::ThemeManager::get().ensureDefaultThemes();ayt::ui::ThemeManager::get().setActiveTheme("dark");
+    const auto repo=fs::path(__FILE__).parent_path().parent_path().parent_path().parent_path();CHECK(ui.loadLayout((repo/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    AudioSubSystem audio;CHECK(audio.initialize());AudioEditorSession session;session.setAudio(&audio);session.setRecordingRootProvider([&]{return ayt::audio::chart::utf8(assets);});session.setPathPicker([&]{return music.string();});
+    std::string saved,snapshot;session.setRecordingSavedCallback([&](const std::string& path){saved=path;});session.setChartLauncher([&](const std::string& file,std::string&){snapshot=file;return true;});
+    CHECK(session.attach(ui));auto* tabs=dynamic_cast<ayt::ui::TabControl*>(ui.findById("audio_tabs"));CHECK(tabs);CHECK(tabs->getTabCount()==5);CHECK(tabs->getTabLabel(4)==L"谱面编辑");tabs->setSelectedIndex(4);
+    CHECK_FALSE(session.handleKey('D',true));chartClick(ui,"chart_music_open");
+    chartSet(ui,"chart_note_start",L"0.5");chartSet(ui,"chart_note_end",L"0.5");chartClick(ui,"chart_note_apply");
+    // Canvas drag creates a second-lane hold without altering the audio resource.
+    auto* canvas=ui.findById("chart_editor");CHECK(canvas);const auto b=canvas->getWorldBounds();const float row=(b.maxY-b.minY-24)/4;
+    canvas->onMouseButtonDown({{b.minX+(b.maxX-b.minX)*.25f,b.minY+24+row*1.5f},0});
+    canvas->onMouseMove({{b.minX+(b.maxX-b.minX)*.75f,b.minY+24+row*1.5f}});canvas->onMouseButtonUp({{0,0},0});
+    chartSet(ui,"chart_path",L"audio/charts/谱面测试.chart.json");chartClick(ui,"chart_save");CHECK(saved=="audio/charts/谱面测试.chart.json");
+    const auto savedFile=assets/fs::u8path(saved);CHECK(fs::exists(savedFile));const auto savedBytes=ayt::audio::chart::read(savedFile);
+    const auto doc=ayt::audio::chart::Document::fromJson(nlohmann::json::parse(savedBytes));CHECK(doc.notes.size()==2);CHECK(doc.audioRelative);CHECK(doc.audio=="audio/music.wav");CHECK(doc.notes[1].end>doc.notes[1].time);
+    chartClick(ui,"chart_undo");chartClick(ui,"chart_run");CHECK_FALSE(snapshot.empty());
+    auto unsaved=ayt::audio::chart::Document::fromJson(nlohmann::json::parse(ayt::audio::chart::read(fs::u8path(snapshot))));CHECK(unsaved.notes.size()==1);CHECK_FALSE(unsaved.audioRelative);CHECK(ayt::audio::chart::read(savedFile)==savedBytes);
+    chartClick(ui,"chart_redo");chartClick(ui,"chart_load");CHECK(session.openChart(ayt::audio::chart::utf8(savedFile)));
+    // Project switching cannot redirect a take/document into a new project's assets.
+    const auto other=assets/"other";fs::create_directories(other);session.setRecordingRootProvider([&]{return ayt::audio::chart::utf8(other);});chartClick(ui,"chart_save");CHECK_FALSE(fs::exists(other/fs::u8path(saved)));
+    auto* status=dynamic_cast<ayt::ui::TextLabel*>(ui.findById("chart_status"));session.tick(.01f);CHECK(status->getText().find(L"保存失败")!=std::wstring::npos);
+    session.detach();ui.shutdown();audio.shutdown();std::error_code error;fs::remove(fs::u8path(snapshot),error);
+}
+TEST_CASE(IndependentChartPreviewJudgesInputAndFocusPausePreservesEngine) {
+    namespace fs=std::filesystem;const auto assets=ayt::test::testTmpDir()/"chart_preview_assets";fs::create_directories(assets);const auto music=chartTone(assets);
+    ayt::audio::chart::Document doc;doc.audio=ayt::audio::chart::utf8(music);doc.notes={{0,.5,.5},{1,.5,.9}};
+    const auto file=assets/"preview.chart.json";std::ofstream(file)<<doc.json();
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;ui.initialize(&renderer);ui.setClientSize(960,900);ayt::ui::ThemeManager::get().ensureDefaultThemes();ayt::ui::ThemeManager::get().setActiveTheme("dark");
+    const auto repo=fs::path(__FILE__).parent_path().parent_path().parent_path().parent_path();CHECK(ui.loadLayout((repo/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    AudioSubSystem audio;CHECK(audio.initialize());AudioEditorSession session;session.setAudio(&audio);session.setChartPreviewFile(ayt::audio::chart::utf8(file));CHECK(session.attach(ui));CHECK(ui.findById("chart_player"));CHECK_FALSE(ui.findById("piano_keyboard"));CHECK_FALSE(ui.findById("audio_tabs"));CHECK_FALSE(session.handleKey('A',true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2050));session.tick(.01f);const auto frames=audio.engine()->outputSampleRate()/2;std::vector<float> pcm(frames*audio.engine()->outputChannels());audio.engine()->render(pcm.data(),frames);
+    CHECK(session.handleKey('D',true));CHECK(session.handleKey('D',true));CHECK(session.handleKey('D',false));CHECK(session.handleKey('F',true));session.tick(.01f);
+    auto* status=dynamic_cast<ayt::ui::TextLabel*>(ui.findById("chart_status"));CHECK(status);CHECK(status->getText().find(L"Perfect 1")!=std::wstring::npos);
+    audio.engine()->render(pcm.data(),audio.engine()->outputSampleRate()*4/10);CHECK(session.handleKey('F',false));session.tick(.01f);CHECK(status->getText().find(L"Perfect 2")!=std::wstring::npos);
+    session.onFocusLost();session.tick(.01f);CHECK_FALSE(audio.engine()->isPaused());CHECK(status->getText().find(L"已暂停")!=std::wstring::npos);CHECK(session.handleKey(27,true));
+    session.detach();CHECK(audio.engine()->activeVoiceCount()==0);ui.shutdown();audio.shutdown();
 }
 TEST_SUITE_END

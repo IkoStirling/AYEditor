@@ -196,3 +196,20 @@ capture/loopback, waveform and WAV save. Its default virtual path is
 root. Save rescans the project; saved takes can open in the audio Resources tab.
 Device selection is local to recording, without replacing the shared Host audio
 engine. The workbench uses a continuous header and a waveform-visible selection.
+
+
+### Four-lane chart tab and preview
+
+The shared Audio Editor now has a fifth 谱面编辑 tab. Four D/F/J/K lanes support
+taps/holds, BPM/beat offset, snapping, waveform navigation and note undo/redo.
+Save/Open use project-relative `audio/charts/*.chart.json`; the existing asset
+root provider/save callback pins the project and refreshes its asset view.
+Standalone users choose an asset folder. Running preserves the document and
+launches the current unsaved snapshot in an independent audio host window.
+
+AYEditorStage depends on and stages AYAudio_AudioEditor plus its UI/sample assets
+next to the portable runtime executable. The preview owns a separate audio engine
+and music voice; focused audio-child pacing remains unchanged. EditorAudioChartTests
+covers the shared five-tab session and preview input/lifetime integration.
+The model and timing restrictions are documented in AYAudio/design.md; this demo
+preview does not expose a new recommended engine gameplay API.

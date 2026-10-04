@@ -1677,3 +1677,20 @@ run 文档选择 Tool；宿主可明确指定 schema/provider 签名。Complete 
 LogiaAnalysis，插入是 TextArea 单次 selection edit，保留撤销。Definition 根据声明身份导航当前文档或
 通过 DocumentManager 打开导入文档。navigation handler 将 UTF-8 字节列转换为 wide-code-unit 光标，
 视图转移/销毁清理 handler 与 popup。DSL document 回归覆盖未保存文本、模块错误、属性提示与导航命令。
+
+
+### Four-lane chart tab and preview
+
+The shared Audio Editor now has a fifth 谱面编辑 tab. Four D/F/J/K lanes support
+taps/holds, BPM/beat offset, snapping, waveform navigation and note undo/redo.
+Save/Open use project-relative `audio/charts/*.chart.json`; the existing asset
+root provider/save callback pins the project and refreshes its asset view.
+Standalone users choose an asset folder. Running preserves the document and
+launches the current unsaved snapshot in an independent audio host window.
+
+AYEditorStage depends on and stages AYAudio_AudioEditor plus its UI/sample assets
+next to the portable runtime executable. The preview owns a separate audio engine
+and music voice; focused audio-child pacing remains unchanged. EditorAudioChartTests
+covers the shared five-tab session and preview input/lifetime integration.
+The model and timing restrictions are documented in AYAudio/design.md; this demo
+preview does not expose a new recommended engine gameplay API.

@@ -480,7 +480,21 @@ if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
         RUNTIME DESTINATION "AYRuntime"
         COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
 
-    install(RUNTIME_DEPENDENCY_SET AYEditorRuntimeDependencies
+    set(_ay_editor_runtime_dependency_sets AYEditorRuntimeDependencies)
+    # Independent chart preview uses the same portable audio host with --play-chart.
+    if(TARGET AYAudio_AudioEditor)
+        list(APPEND _ay_editor_runtime_dependency_sets AYAudioPreviewRuntimeDependencies)
+        install(TARGETS AYAudio_AudioEditor
+            RUNTIME_DEPENDENCY_SET AYAudioPreviewRuntimeDependencies
+            RUNTIME DESTINATION "AYRuntime"
+            COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+        install(DIRECTORY "$<TARGET_FILE_DIR:AYAudio_AudioEditor>/assets/"
+            DESTINATION "AYRuntime/assets" COMPONENT ${AY_EDITOR_INSTALL_COMPONENT})
+    endif()
+
+    # Separate scans avoid conflicting app-local copies of identical DLLs.
+    foreach(_ay_editor_runtime_dependency_set IN LISTS _ay_editor_runtime_dependency_sets)
+    install(RUNTIME_DEPENDENCY_SET ${_ay_editor_runtime_dependency_set}
         DESTINATION "AYRuntime"
         COMPONENT ${AY_EDITOR_INSTALL_COMPONENT}
         PRE_EXCLUDE_REGEXES
@@ -493,6 +507,7 @@ if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
         POST_EXCLUDE_REGEXES
             ".*/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ss][Yy][Ss][Tt][Ee][Mm]32/.*"
             ".*/[Ww][Ii][Nn][Dd][Oo][Ww][Ss]/[Ss][Yy][Ss][Ww][Oo][Ww]64/.*")
+    endforeach()
 
     install(DIRECTORY "${AY_ENGINE_ASSETS_SOURCE_DIR}/"
         DESTINATION "EngineAssets"
@@ -503,7 +518,7 @@ if(WIN32 AND AY_EDITOR_ENABLE_PRODUCT_INSTALL)
             --config "$<CONFIG>"
             --component "${AY_EDITOR_INSTALL_COMPONENT}"
             --prefix "${AY_EDITOR_INSTALL_ROOT}"
-        DEPENDS AYEditorLauncher AYEditorShell_Demo
+        DEPENDS AYEditorLauncher AYEditorShell_Demo $<$<TARGET_EXISTS:AYAudio_AudioEditor>:AYAudio_AudioEditor>
         COMMENT "Stage portable AYEditor in ${AY_EDITOR_INSTALL_ROOT}"
         USES_TERMINAL
         VERBATIM)
@@ -516,4 +531,6 @@ message(STATUS "AYEditor v${PROJECT_VERSION} (Play/runtime + net-client + D5.5 C
 
 # The shared workbench is textually included; track it even without compiler dep scanning.
 set_property(SOURCE ../AYAudio/demo/audio_editor/AudioEditorSession.cpp APPEND PROPERTY OBJECT_DEPENDS
-    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartWorkbench.inl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartDocument.h")
