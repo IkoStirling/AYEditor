@@ -1580,3 +1580,8 @@ these interactions and the compact meter in the shared header.
 The host CMake directories explicitly list AudioWorkbench.inl as an
 OBJECT_DEPENDS of AudioEditorSession.cpp so included UI changes trigger a
 recompile even when compiler include-dependency scanning is unavailable.
+
+Audio shortcut octave correction (2026-10-04): Left Shift/Alt now add/subtract
+12 semitones. The regression compares their clip identity and playback pitch
+with ordinary C5/C3 bindings, and verifies additive cancellation and latched
+release. This supersedes the earlier two-semitone interpretation.

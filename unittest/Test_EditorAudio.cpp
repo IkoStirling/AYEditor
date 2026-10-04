@@ -472,6 +472,8 @@ TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
     auto firstVoice=[&] { VoiceRuntime voice{};bool found=false;for(uint32_t i=0;i<64;++i) if(engine->voiceStateAt(i,voice)){found=true;break;}CHECK(found);return voice; };
     auto drain=[&] {std::vector<float> pcm(engine->outputSampleRate()/2);engine->render(pcm.data(),engine->outputSampleRate()/4);};
     CHECK(session.handleKey('A',true));const auto upper=firstVoice();session.releaseKeys();
+    CHECK(session.handleKey('K',true));const auto octaveUp=firstVoice();session.releaseKeys();
+    CHECK(session.handleKey('Z',true));const auto octaveDown=firstVoice();session.releaseKeys();
     constexpr int lowerKeys[]={'Z','X','C','V','B','N','M',188};
     constexpr int pitches[]={48,50,52,53,55,57,59,60};
     constexpr const wchar_t* names[]={L"C3",L"D3",L"E3",L"F3",L"G3",L"A3",L"B3",L"C4"};
@@ -484,14 +486,16 @@ TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
         CHECK(session.handleKey(lowerKeys[i],false));drain();CHECK(engine->activeVoiceCount()==0);
     }
     CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey('A',true));
-    CHECK(std::abs(firstVoice().pitch-std::exp2(2.f/12))<1e-5f);
+    const auto raised=firstVoice();CHECK(raised.clip==octaveUp.clip);CHECK(raised.pitch==octaveUp.pitch);
+    CHECK(status->getText()==L"实际音高：C5");
     const auto count=engine->activeVoiceCount();CHECK(session.handleKey('A',true));CHECK(engine->activeVoiceCount()==count);
     CHECK(session.handleKey(0xA0,false));CHECK(session.handleKey('A',false));
-    CHECK(status->getText()==L"实际音高：D4");drain();CHECK(engine->activeVoiceCount()==0);
+    CHECK(status->getText()==L"实际音高：C5");drain();CHECK(engine->activeVoiceCount()==0);
     CHECK(session.handleKey(0xA4,true));ui.onKeyDown(18);CHECK(session.handleKey('A',true));
-    CHECK(std::abs(firstVoice().pitch-std::exp2(-2.f/12))<1e-5f);
+    const auto lowered=firstVoice();CHECK(lowered.clip==octaveDown.clip);CHECK(lowered.pitch==octaveDown.pitch);
+    CHECK(status->getText()==L"实际音高：C3");
     CHECK(session.handleKey(0xA4,false));ui.onKeyUp(18);CHECK(session.handleKey('A',false));drain();CHECK(engine->activeVoiceCount()==0);
-    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('A',true));CHECK(firstVoice().pitch==1);
+    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('A',true));const auto cancelled=firstVoice();CHECK(cancelled.pitch==upper.pitch);CHECK(cancelled.clip==upper.clip);
     session.onFocusLost();CHECK(engine->activeVoiceCount()==0);
     CHECK(!session.handleKey(0xA1,true));CHECK(session.handleKey('A',true));CHECK(firstVoice().pitch==1);session.releaseKeys();
     // Upper A and lower comma share C4: releasing either physical key must preserve the other.

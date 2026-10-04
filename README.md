@@ -157,3 +157,6 @@ Audio child input preserves Left Shift/Left Alt and comma through the native
 key bridge. EditorAudioTests verifies temporary transpose, the lower-octave
 white-key row, latched releases/duplicate mappings, text-focus suppression
 and focus-loss recovery, as well as compact header meter bounds.
+
+Left Shift temporarily raises new performance notes by one octave (C4 -> C5);
+Left Alt lowers one octave (C4 -> C3). Both held together cancel.
