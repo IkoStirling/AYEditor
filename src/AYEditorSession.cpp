@@ -10631,6 +10631,10 @@ void EditorSession::openAudioEditorWindow() {
     session->setAssetRoot((std::filesystem::path(_engineAssetsRoot)/"AYAudio").string());
     HWND owner = static_cast<HWND>(_hostWindow);
     session->setPathPicker([owner]() { return showOpenAudioFileDialog(owner); });
+    session->setRecordingRootProvider([this] {
+        return _projectRoot.empty()?std::string{}:resolveProjectAssetRoot(_projectRoot);
+    });
+    session->setRecordingSavedCallback([this](const std::string&) { (void)rescanAssetsNow(); });
     if (!session->attach(*childUi)) {
         std::fprintf(stderr,
             "[EditorSession] AudioEditorSession::attach failed\n");

@@ -1,3 +1,4 @@
+#include <AYAudio/AudioRecorder.h>
 #include <AYEditor/EditorAudioFramePacer.h>
 #include "../../AYAudio/demo/audio_editor/AudioEditorSession.h"
 #include <AYAudio.h>
@@ -565,5 +566,50 @@ TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
     renderer.clear();session.tick(1);ui.render();bool silenceReadout=false;
     for(const auto& call:renderer.getDrawCalls())if(call.text==L"-inf dBFS")silenceReadout=true;
     CHECK(silenceReadout);session.detach();audio.shutdown();
+}
+TEST_CASE(RecordingTabSavesVirtualWavAndWaveSelectionStaysBelowPeaks) {
+    namespace fs=std::filesystem;
+    const auto assets=ayt::test::testTmpDir()/"recording_ui_assets";
+    struct Cleanup {fs::path p;~Cleanup(){std::error_code e;fs::remove_all(p,e);}} cleanup{assets};
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;ui.initialize(&renderer);ui.setClientSize(1100,900);
+    ayt::ui::ThemeManager::get().ensureDefaultThemes();ayt::ui::ThemeManager::get().setActiveTheme("dark");
+    const auto source=fs::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    CHECK(ui.loadLayout((source/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    AudioSubSystem audio;CHECK(audio.initialize());AudioEditorSession session;session.setAudio(&audio);
+    session.setDriveAudioUpdate(false);session.setAssetRoot((source/"EngineAssets/AYAudio").string());
+    std::string saved;session.setRecordingRootProvider([&]{return assets.string();});
+    session.setRecordingSavedCallback([&](const std::string& value){saved=value;});CHECK(session.attach(ui));
+    auto* tabs=dynamic_cast<ayt::ui::TabControl*>(ui.findById("audio_tabs"));CHECK(tabs);
+    CHECK(tabs->getTabCount()==4);CHECK(tabs->getTabLabel(3)==L"录音台");CHECK(tabs->getTabStrip()->isFlatHeader());
+    tabs->setSelectedIndex(3);CHECK_FALSE(session.handleKey('A',true));
+    auto* recorder=session.recorder();CHECK(recorder);
+    RecordingConfig config;config.sampleRate=8000;config.channels=1;config.maxSeconds=2;
+    CHECK(AudioRecorderTestAccess::beginBuffered(*recorder,config));
+    std::vector<float> tone(8000);for(size_t i=0;i<tone.size();++i) tone[i]=std::sin(i*.07f)*.4f;
+    AudioRecorderTestAccess::receive(*recorder,tone.data(),8000);session.tick(.02f);
+    CHECK(recorder->status().frames==8000);
+    auto* save=dynamic_cast<ayt::ui::Button*>(ui.findById("recording_save"));CHECK(save);CHECK_FALSE(save->isEnabled());
+    auto click=[&](const char* id){auto* button=dynamic_cast<ayt::ui::Button*>(ui.findById(id));CHECK(button);
+        const auto b=button->getWorldBounds();ayt::ui::UIMouseEvent event({(b.minX+b.maxX)/2,(b.minY+b.maxY)/2},0);
+        button->onMouseMove(event);button->onMouseButtonDown(event);button->onMouseButtonUp(event);};
+    click("recording_stop");session.tick(.02f);CHECK(save->isEnabled());
+    auto* path=dynamic_cast<ayt::ui::TextInput*>(ui.findById("recording_path"));CHECK(path);path->setText(L"audio/recordings/录音测试.wav");
+    click("recording_save");session.tick(.02f);CHECK(saved=="audio/recordings/录音测试.wav");
+    CHECK(fs::exists(assets/fs::u8path(saved)));click("recording_edit");CHECK(tabs->getSelectedIndex()==1);
+    auto edit=[&](const char* id,const wchar_t* value){auto* field=dynamic_cast<ayt::ui::TextInput*>(ui.findById(id));CHECK(field);
+        ui.setFocus(field);field->setText(value);field->onKeyDown(13);ui.setFocus(nullptr);};
+    edit("range_begin",L"0.2");edit("range_end",L"0.8");
+    auto* wave=ui.findById("resource_waveform");CHECK(wave);renderer.clear();wave->render(renderer);
+    const auto bounds=wave->getWorldBounds();bool rangeFound=false,peaksAfter=false;
+    for(const auto& call:renderer.getDrawCalls()) if(call.type==ayt::ui::MockRenderer::DrawCall::Rect) {
+        const float width=call.bounds.maxX-call.bounds.minX;
+        if(width>(bounds.maxX-bounds.minX)*.5f && width<(bounds.maxX-bounds.minX)*.7f && call.bounds.minY==bounds.minY+24) {
+            rangeFound=true;CHECK(call.color.w==1);CHECK(call.color.z<.5f);
+        }
+        if(rangeFound && width<5 && call.bounds.minY>bounds.minY+24 && call.bounds.maxY<bounds.maxY) peaksAfter=true;
+    }
+    CHECK(rangeFound);CHECK(peaksAfter);
+    tabs->setSelectedIndex(3);click("recording_discard");session.tick(.02f);CHECK(recorder->samples().empty());CHECK(fs::exists(assets/fs::u8path(saved)));
+    session.detach();ui.shutdown();audio.shutdown();
 }
 TEST_SUITE_END

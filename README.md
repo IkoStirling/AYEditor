@@ -183,3 +183,11 @@ background isolation, invalid elapsed time and deferred teardown.
 The host disconnects its input bridge and clears focus/resize/close/message
 callbacks before session/UI shutdown. Native window destruction can emit focus
 events after the session's scope ends; no callback may retain that borrow.
+
+
+The Audio Editor now contains a Recording tab with OS/virtual endpoint choices,
+capture/loopback, waveform and WAV save. Its default virtual path is
+`audio/recordings/Take_<timestamp>.wav` under the open project's configured asset
+root. Save rescans the project; saved takes can open in the audio Resources tab.
+Device selection is local to recording, without replacing the shared Host audio
+engine. The workbench uses a continuous header and a waveform-visible selection.

@@ -1654,3 +1654,17 @@ These are scheduling diagnostics, not acoustic latency or a standalone parity
 benchmark; GDI/OS stalls remain possible. Play's existing scheduling is retained.
 SDK doctor passed: 72 capabilities, 53 modules, 162 entry symbols, no errors or
 warnings. Shared audio acquisition/lifecycle contracts remain accurate.
+
+
+## 2026-10-04 Recording root and workbench integration
+
+EditorSession supplies AudioEditorSession a live recording-root provider using
+the open project descriptor's assetRoot (Assets fallback), plus a save callback
+to rescanAssetsNow. Recording stores a root identity at take start and refuses a
+save to a different project's root. Logical paths remain project-relative; the
+standalone workbench instead requires an explicit asset-folder selection.
+The shared four-tab chrome is used unchanged by standalone and GDI child hosts.
+AudioRecorder device callbacks are independent of background scene rendering;
+the focused audio scheduling path also drains capture and refreshes its waveform.
+UI teardown stops/joins capture and playback before the recording pane is freed.
+Existing Host AudioEngine notes, buses and project schema are unchanged.
