@@ -1,4 +1,7 @@
 #include "AYEditor/EditorSession.h"
+#ifdef AYEDITOR_HAS_AVATAR
+#include <AYEditor/EditorAvatarDocument.h>
+#endif
 #include <AYAssetFormat/AssetFormat.h>
 #ifdef AYEDITOR_HAS_STATS
 #include <AYStats/Inspector.h>
@@ -6232,6 +6235,10 @@ bool EditorSession::openAsset(EditorAssetId assetId)
         return true;
     }
     case EditorAssetType::Animation:
+#ifdef AYEDITOR_HAS_AVATAR
+    case EditorAssetType::AvatarBundle:
+    case EditorAssetType::AvatarPreset:
+#endif
 #ifdef AYEDITOR_HAS_SEQUENCE
     case EditorAssetType::Sequence:
 #endif
@@ -6254,18 +6261,25 @@ bool EditorSession::openAsset(EditorAssetId assetId)
 #ifdef AYEDITOR_HAS_PARTICLE
         if(record->type==EditorAssetType::ParticleEffect) request.preferredEditorId=kEditorParticleExtensionId;
 #endif
+#ifdef AYEDITOR_HAS_AVATAR
+        if(record->type==EditorAssetType::AvatarBundle||record->type==EditorAssetType::AvatarPreset)
+            request.preferredEditorId=kEditorAvatarExtensionId;
+#endif
         EditorDockViewOptions options;
         options.cardId = "card_timed_asset_" + std::to_string(assetId);
         const EditorDockOpenResult opened = _dockViewHost->open(request, options);
         if (!opened) {
-            setAssetBrowserStatus(L"Timeline asset open failed: "
+            setAssetBrowserStatus(L"Asset editor open failed: "
                 + ayt::ui::decodeUtf8Text(opened.error), true);
             return false;
         }
-        (void)openRegisteredTool(kEditorTimelineToolExtensionId);
+#ifdef AYEDITOR_HAS_AVATAR
+        if(record->type!=EditorAssetType::AvatarBundle&&record->type!=EditorAssetType::AvatarPreset)
+#endif
+            (void)openRegisteredTool(kEditorTimelineToolExtensionId);
         wirePromoteCallback();
         _ui.invalidateLayout();
-        setAssetBrowserStatus(L"Opened timeline asset: "
+        setAssetBrowserStatus(L"Opened asset: "
             + ayt::ui::decodeUtf8Text(record->logicalPath));
         return true;
     }
@@ -9202,6 +9216,12 @@ void EditorSession::bindMenuBar() {
 
     ayt::ui::Menu* toolsMenu = addLocalizedMenu("ui.editor.menu.tools._label", L"Tools");
     if (toolsMenu != nullptr) {
+#ifdef AYEDITOR_HAS_AVATAR
+        if(auto* item=addLocalizedItem(toolsMenu,"ui.editor.menu.tools.avatar",L"Avatar Creator...")) {
+            item->setId("menu_tools_avatar_creator");
+            item->setOnActivate([this]{(void)openRegisteredTool(kEditorAvatarToolExtensionId);});
+        }
+#endif
         if (auto* item = addLocalizedItem(toolsMenu, "ui.editor.menu.tools.run_project", L"Run Current Project")) {
             item->setOnActivate([this]() { (void)runCurrentProject(); });
         }

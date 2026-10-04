@@ -1,4 +1,7 @@
 #include "AYEditor/EditorBuiltInExtensions.h"
+#ifdef AYEDITOR_HAS_AVATAR
+#include <AYEditor/EditorAvatarDocument.h>
+#endif
 #include <AYAssetFormat/AssetFormat.h>
 #include "AYEditorTimelinePlaybackSource.h"
 #include "AYEditor/EditorAnimationExtension.h"
@@ -4824,6 +4827,9 @@ bool registerEditorBuiltInExtensions(
         return add(registry, std::move(descriptor), error);
     };
     if (!registerEditorAnimationExtension(registry, error)) return false;
+#ifdef AYEDITOR_HAS_AVATAR
+    if (!registerEditorAvatarExtension(registry, error)) return false;
+#endif
 #ifdef AYEDITOR_HAS_PARTICLE
     if (!registerEditorParticleExtension(registry,error)) return false;
 #endif

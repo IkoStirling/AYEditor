@@ -1,5 +1,10 @@
 # AYEditor
 
+启用 `AY_ENABLE_AVATAR=ON` 时，**Tools → Avatar Creator…** 和资源浏览器的 `.avb/.avp`
+文档接入参数化角色编辑。角色视口复用编辑器右键观察、WASD/QE 移动、Shift 加速、滚轮和 F 聚焦，
+保存只写参数预设与编辑器素体关联，不改写 bundle。
+见 [Avatar Creator 操作与生命周期](docs/avatar-creator.zh-CN.md)。
+
 测试入口、隔离策略与用例报告见 [测试维护文档](docs/testing.md)。
 崩溃恢复目录轮换使用 AYIO 的限时 Windows 文件争用重试；超过预算明确返回错误，
 保留旧会话文件，释放争用后可重试恢复。

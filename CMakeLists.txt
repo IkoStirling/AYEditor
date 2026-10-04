@@ -242,6 +242,12 @@ if(TARGET AYParticleResources)
     endif()
     target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_PARTICLE=1)
 endif()
+if(TARGET AYAvatarEngine AND TARGET AYAvatarUI)
+    target_sources(${MODULE_NAME} PRIVATE src/AYEditorAvatarDocument.cpp
+        src/AYEditorAvatarExtension.cpp src/AYEditorAvatarCanvas.cpp)
+    target_link_libraries(${MODULE_NAME} PUBLIC AYAvatarEngine AYAvatarUI)
+    target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_AVATAR=1)
+endif()
 if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
     target_sources(${MODULE_NAME} PRIVATE
         src/AYEditorSequenceDocument.cpp src/AYEditorSequenceSource.cpp

@@ -22,6 +22,9 @@
 #include <AYEditor/EditorAssetTrash.h>
 #include <AYEditor/EditorAssetOperations.h>
 #include <AYEditor/EditorBuiltInExtensions.h>
+#ifdef AYEDITOR_HAS_AVATAR
+#include <AYEditor/EditorAvatarDocument.h>
+#endif
 #include <AYEditor/EditorDslDocument.h>
 #include <AYEditor/EditorDslExtension.h>
 #include <AYEditor/EditorProjectAssetFactory.h>

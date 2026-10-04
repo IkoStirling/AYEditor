@@ -41,6 +41,8 @@ enum class EditorAssetType : std::uint8_t {
     ParticleEffect,
     StatsRecipe,
     ActorClass,
+    AvatarBundle,
+    AvatarPreset,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

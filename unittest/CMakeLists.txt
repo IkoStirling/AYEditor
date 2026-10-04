@@ -5,7 +5,12 @@ set(_sequence_editor_tests OFF)
 if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
     set(_sequence_editor_tests ON)
 endif()
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test-features.json" "{\"sequence\":\"${_sequence_editor_tests}\"}\n")
+set(_avatar_editor_tests OFF)
+if(TARGET AYAvatarEngine AND TARGET AYAvatarUI)
+    set(_avatar_editor_tests ON)
+endif()
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/test-features.json"
+    "{\"sequence\":\"${_sequence_editor_tests}\",\"avatar\":\"${_avatar_editor_tests}\"}\n")
 
 add_executable(${MODULE_NAME} main.cpp)
 
@@ -40,6 +45,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorGameFlowPreview.cpp
     Test_EditorUiDesignerWorkflow.cpp
     Test_EditorRecoveryAndTrash.cpp
+    Test_EditorAvatar.cpp
 )
 list(TRANSFORM AY_EDITOR_EMBEDDED_TEST_SOURCES
      PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
@@ -194,6 +200,24 @@ if(TARGET AYParticleResources)
 endif()
 
 # Opt-in real D3D11 authoring viewport regression, isolated from Noop suites.
+if(TARGET AYAvatarUI AND TARGET AYAvatarEngine)
+    add_executable(AYEditor_AvatarTests main.cpp Test_EditorAvatar.cpp)
+    target_link_libraries(AYEditor_AvatarTests PRIVATE AYEditor AYTest AYEntity AYScene)
+    target_compile_definitions(AYEditor_AvatarTests PRIVATE
+        AY_EDITOR_TEST_SOURCE_DIR="${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor")
+    if(MSVC)
+        target_link_options(AYEditor_AvatarTests PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+    ay_add_test(AYEditor_AvatarTests CASE_REPORT LABELS "ayeditor;avatar;integration" TIMEOUT 60 RUN_SERIAL)
+    if(WIN32)
+        add_executable(AYEditor_AvatarPreviewRenderTest EXCLUDE_FROM_ALL AvatarPreviewRenderTest.cpp)
+        target_link_libraries(AYEditor_AvatarPreviewRenderTest PRIVATE AYEditor AYRenderer)
+        target_include_directories(AYEditor_AvatarPreviewRenderTest PRIVATE ../../AYRenderer/src)
+        if(MSVC)
+            target_link_options(AYEditor_AvatarPreviewRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+        endif()
+    endif()
+endif()
 if(WIN32 AND TARGET AYEntityParticleIntegration)
     add_executable(AYEditor_ParticlePreviewRenderTest EXCLUDE_FROM_ALL ParticlePreviewRenderTest.cpp)
     target_link_libraries(AYEditor_ParticlePreviewRenderTest PRIVATE AYEditor AYRenderer)

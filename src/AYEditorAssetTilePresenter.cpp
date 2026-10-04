@@ -127,6 +127,8 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::Sequence: return L"SEQ";
     case EditorAssetType::ParticleEffect: return L"VFX";
     case EditorAssetType::StatsRecipe: return L"STAT";
+    case EditorAssetType::AvatarBundle: return L"AVATAR";
+    case EditorAssetType::AvatarPreset: return L"PRESET";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -137,6 +139,8 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
 {
     switch (type) {
     case EditorAssetType::Mesh:
+    case EditorAssetType::AvatarBundle:
+    case EditorAssetType::AvatarPreset:
     case EditorAssetType::SourceModel:
         return EditorAssetTileCategory::Geometry;
     case EditorAssetType::Material:

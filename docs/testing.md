@@ -1,5 +1,11 @@
 # Editor 测试运行与报告
 
+启用 Avatar Engine/UI 后，聚合库存包括 `Test_EditorAvatar.cpp`；专项
+`AYEditor_AvatarTests` 覆盖资源注册、只读 bundle、预设保存/重开/历史、失败保留和
+真实输入桥的视口导航及 pending 数值保存。未启用 Avatar 时该源不注册套件。
+显式 `AYEditor_AvatarPreviewRenderTest` 用真实头部做 D3D11 像素回归，不加入 Noop 全量门禁；
+见 [操作与复现指南](avatar-creator.zh-CN.md)。
+
 Recovery 独立门禁覆盖 Windows 短暂占用后成功轮换，以及持续占用导致预算耗尽时
 保留旧会话、释放占用后再次恢复；使用真实无 delete-share 文件句柄复现目录占用。
 

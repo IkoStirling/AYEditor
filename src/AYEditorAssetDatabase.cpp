@@ -299,7 +299,7 @@ bool readIndex(const std::filesystem::path& path,
         if (!(input >> record.id >> std::quoted(record.logicalPath)
                     >> type >> origin >> importState
                     >> record.size >> record.lastModified)) break;
-        if (type > static_cast<unsigned>(EditorAssetType::ActorClass)
+        if (type > static_cast<unsigned>(EditorAssetType::AvatarPreset)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
@@ -368,6 +368,8 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::ParticleEffect: return "Particle Effect";
     case EditorAssetType::StatsRecipe: return "Stats Recipe";
     case EditorAssetType::ActorClass: return "Actor Class";
+    case EditorAssetType::AvatarBundle: return "Avatar Bundle";
+    case EditorAssetType::AvatarPreset: return "Avatar Preset";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -409,6 +411,8 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         case Id::RigProfile: return EditorAssetType::SkeletonMapping;
         case Id::LogiaScript: return EditorAssetType::Script;
         case Id::ActorClass: return EditorAssetType::ActorClass;
+        case Id::AvatarBundle: return EditorAssetType::AvatarBundle;
+        case Id::AvatarPreset: return EditorAssetType::AvatarPreset;
         case Id::PhoskiaShader: return EditorAssetType::Shader;
         case Id::Audio: return EditorAssetType::Audio;
         default: break;

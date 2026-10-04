@@ -1,6 +1,9 @@
 #include "AYTest.h"
 #include "fixtures/EditorShellLayout.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
+#ifdef AYEDITOR_HAS_AVATAR
+#include "AYEditor/EditorAvatarDocument.h"
+#endif
 #include "AYEditor/EditorSession.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorUiFlowExtension.h"
@@ -383,6 +386,36 @@ TEST_CASE(editor_session_loads_packaged_zh_cn_localization) {
     CHECK(workspace != nullptr && workspace->getText() == L"\u573A\u666F");
     session.shutdown();
 }
+
+#ifdef AYEDITOR_HAS_AVATAR
+TEST_CASE(avatar_menu_opens_and_refocuses_one_editor_tool)
+{
+    const auto layoutPath = resolveEditorShellLayoutPath();
+    CHECK(!layoutPath.empty());
+    if (layoutPath.empty()) return;
+    MockRenderer backend;
+    EditorSession session;
+    CHECK(session.initialize(&backend, layoutPath));
+    session.setClientSize(1280, 720);
+    auto* menuBar = dynamic_cast<MenuBar*>(session.ui().findById("menubar"));
+    auto* tools = findMenuByLocalizationKey(menuBar, "ui.editor.menu.tools._label");
+    auto* entry = findMenuItemByLocalizationKey(tools, "ui.editor.menu.tools.avatar");
+    CHECK_NOT_NULL(entry);
+    if (entry) {
+        CHECK(entry->handleClick());
+        session.update(.016f);
+        const auto* active = session.workspace().documents().active();
+        CHECK_NOT_NULL(active);
+        CHECK(active && active->editorId == kEditorAvatarToolExtensionId);
+        CHECK(findWidgetInTree(session.ui().root(), "avatar_viewport") != nullptr);
+        CHECK(findWidgetInTree(session.ui().root(), "avatar_open") != nullptr);
+        const auto count = session.workspace().documents().size();
+        CHECK(entry->handleClick());
+        CHECK(session.workspace().documents().size() == count);
+    }
+    session.shutdown();
+}
+#endif
 
 TEST_CASE(tilemap_tool_launcher_opens_and_refocuses_one_untitled_workspace)
 {

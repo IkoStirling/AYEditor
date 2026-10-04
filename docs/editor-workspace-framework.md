@@ -5,6 +5,11 @@ The DSL and UI Layout editors are migrated production surfaces. Scene
 selection/commands, Tilemap, Audio and Timeline now use the same workspace
 services, while Scene rendering remains the shell's dedicated center surface.
 
+With Avatar Engine/UI enabled, Avatar Creator is another center Dock tool and
+`.avb/.avp` document surface. It owns an isolated parameter session and preview,
+shares the command/dirty/recovery host, and reuses the editor camera navigation.
+See [Avatar Creator contract](avatar-creator.zh-CN.md).
+
 ## Editor surface kinds
 
 - `Document`: edits a saveable resource. Most documents live in the center
