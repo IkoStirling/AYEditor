@@ -3,6 +3,8 @@
 启用 `AY_ENABLE_AVATAR=ON` 时，**Tools → Avatar Creator…** 和资源浏览器的 `.avb/.avp`
 文档接入参数化角色编辑。角色视口复用编辑器右键观察、WASD/QE 移动、Shift 加速、滚轮和 F 聚焦，
 保存只写参数预设与编辑器素体关联，不改写 bundle。
+可从资源浏览器拖入 `.avb/.avp`，并用正视、侧视、俯视按钮回正正交画面。
+资源扫描、显示名称和索引统一使用 UTF-8；旧版索引自动重建，中文文件无需改名。
 见 [Avatar Creator 操作与生命周期](docs/avatar-creator.zh-CN.md)。
 
 测试入口、隔离策略与用例报告见 [测试维护文档](docs/testing.md)。

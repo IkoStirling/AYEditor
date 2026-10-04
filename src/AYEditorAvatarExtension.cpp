@@ -1,4 +1,5 @@
 #include "AYEditorAvatarCanvas.h"
+#include <AYAssetFormat/AssetFormat.h>
 #include <AYAvatar/CreatorPanel.h>
 #include <AYEditor/EditorAvatarDocument.h>
 #include <AYEditor/EditorCommandButtons.h>
@@ -10,6 +11,7 @@
 #include <AYUI/UIManager.h>
 #include <AYUI/UnicodeText.h>
 #include <filesystem>
+#include <utility>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -56,6 +58,17 @@ public:
     _root->setId("avatar_creator");
     _root->setSpacing(4);
     _root->setPadding(6, 6, 6, 6);
+    _root->setAcceptDrops(true);
+    _root->setAcceptDropKinds({kEditorAvatarResourceDragKind});
+    _root->setOnDrop([this](const ui::DragPayload &payload) {
+      if (payload.kind != kEditorAvatarResourceDragKind)
+        return;
+      auto path = ui::encodeUtf8Text(payload.text);
+      if (asset_format::matchesPath(path, asset_format::Id::AvatarBundle) ||
+          asset_format::matchesPath(path, asset_format::Id::AvatarPreset))
+        _pendingOpen = std::move(path);
+      // Wait for endDrag before replacing the borrowed parameter subtree.
+    });
     auto *toolbar = new ui::HBox();
     toolbar->setSpacing(4);
     auto *open = new ui::Button();
@@ -82,6 +95,28 @@ public:
     });
     toolbar->addWidget(_lod, 100);
     _root->addWidget(toolbar, 32);
+    auto *views = new ui::HBox();
+    views->setSpacing(4);
+    views->setPadding(4, 0, 4, 0);
+    auto addView = [&](const char *id, const wchar_t *label,
+                       AvatarStandardView view) {
+      auto *button = new ui::Button();
+      button->setId(id);
+      button->setText(label);
+      button->setOnClicked([this, view] {
+        if (_canvas && _document->creator()) {
+          _canvas->resetStandardView(view);
+          if (auto *manager = _host.uiManager())
+            manager->setFocus(_canvas);
+          _host.requestRepaint();
+        }
+      });
+      views->addWidget(button, 80);
+    };
+    addView("avatar_view_front", L"正视", AvatarStandardView::Front);
+    addView("avatar_view_right", L"侧视", AvatarStandardView::Right);
+    addView("avatar_view_top", L"俯视", AvatarStandardView::Top);
+    _root->addWidget(views, 32);
     auto *help = new ui::TextLabel();
     help->setText(
         host.localizedText("ui.editor.avatar.navigation",
@@ -124,6 +159,9 @@ public:
     if (_closed)
       return;
     _closed = true;
+    _pendingOpen.clear();
+    if (_root)
+      _root->setOnDrop({});
     _commands.detach();
     _document->setSavePathProvider({});
     clearPanel();
@@ -138,6 +176,8 @@ public:
   void tick(float dt) override {
     if (_closed)
       return;
+    if (!_pendingOpen.empty())
+      loadCharacter(std::exchange(_pendingOpen, {}));
     _canvas->tickNavigation(dt);
     if (_revision != _document->revision())
       refresh();
@@ -211,6 +251,11 @@ private:
     _host.requestRepaint();
   }
   void openCharacter() {
+    auto chosen = chooseFile(false);
+    if (!chosen.empty())
+      loadCharacter(chosen);
+  }
+  void loadCharacter(const std::string &chosen) {
     if (auto *manager = _host.uiManager())
       manager->setFocus(nullptr);
     if (_document->isDirty()) {
@@ -218,9 +263,6 @@ private:
           L"Save your parameter changes before opening another character.");
       return;
     }
-    const auto chosen = chooseFile(false);
-    if (chosen.empty())
-      return;
     clearPanel();
     std::string error;
     if (!_document->initialize({chosen}, error))
@@ -241,6 +283,7 @@ private:
   std::unique_ptr<avatar::CreatorPanel> _panel;
   bool _ownsRoot = true, _closed = false;
   uint64_t _revision = 0;
+  std::string _pendingOpen;
 };
 EditorDescriptor descriptor(bool tool) {
   EditorDescriptor result;

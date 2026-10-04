@@ -16,6 +16,17 @@ namespace ayt::editor {
 
 namespace {
 
+// Public editor paths are UTF-8; native filesystem paths stay wide on Windows.
+std::string pathUtf8(const std::filesystem::path& path)
+{
+    const auto text = path.generic_u8string();
+    return {text.begin(), text.end()};
+}
+std::filesystem::path nativePath(const std::string& path)
+{
+    return std::filesystem::u8path(path);
+}
+
 std::string slashNormalized(std::string value)
 {
     std::replace(value.begin(), value.end(), '\\', '/');
@@ -95,7 +106,7 @@ EditorAssetId stableAssetId(const std::string& logicalPath)
 
 bool isMetadataSidecar(const std::filesystem::path& path)
 {
-    const std::string name = lowerAscii(path.filename().string());
+    const std::string name = lowerAscii(pathUtf8(path.filename()));
     return ayt::asset_format::matchesPath(name, ayt::asset_format::Id::ImportDependency);
 }
 
@@ -122,14 +133,14 @@ void appendRoot(SnapshotT& snapshot,
         // path avoids canonicalizing every entry (an extra disk walk per file).
         const std::filesystem::path relative =
             entry.path().lexically_relative(root);
-        const std::string relativeText = slashNormalized(relative.string());
+        const std::string relativeText = slashNormalized(pathUtf8(relative));
         if (relativeText.empty() || relativeText == ".") continue;
         const std::string logical =
             std::string(virtualRoot) + "/" + relativeText;
 
         if (entry.is_directory(ec)) {
             snapshot.folders.push_back(EditorAssetFolder{
-                logical, entry.path().filename().string(),
+                logical, pathUtf8(entry.path().filename()),
                 logicalParent(logical), origin});
             continue;
         }
@@ -139,9 +150,9 @@ void appendRoot(SnapshotT& snapshot,
 
         EditorAssetRecord record;
         record.id = stableAssetId(logical);
-        record.name = entry.path().filename().string();
+        record.name = pathUtf8(entry.path().filename());
         record.logicalPath = logical;
-        record.absolutePath = slashNormalized(entry.path().lexically_normal().string());
+        record.absolutePath = slashNormalized(pathUtf8(entry.path().lexically_normal()));
         record.runtimePath = record.absolutePath;
         record.type = classifyEditorAssetPath(record.name);
         record.origin = origin;
@@ -162,9 +173,9 @@ void appendRoot(SnapshotT& snapshot,
         } else if (record.type == EditorAssetType::SourceModel) {
             record.importState = EditorAssetImportState::NeedsImport;
             std::filesystem::path sidecar = importSidecarRoot
-                / ayt::asset_format::appendSuffix(entry.path().stem().string(), ayt::asset_format::Id::ImportDependency);
+                / nativePath(ayt::asset_format::appendSuffix(pathUtf8(entry.path().stem()), ayt::asset_format::Id::ImportDependency));
             if (!std::filesystem::is_regular_file(sidecar))
-                sidecar = importSidecarRoot / (entry.path().stem().string() + ".aydep.json");
+                sidecar = importSidecarRoot / nativePath(pathUtf8(entry.path().stem()) + ".aydep.json");
             const auto sidecarSize = std::filesystem::file_size(sidecar, ec);
             if (!ec) {
                 if (sidecarSize == 0u) {
@@ -182,7 +193,7 @@ void appendRoot(SnapshotT& snapshot,
         snapshot.records.push_back(std::move(record));
     }
     if (ec && snapshot.error.empty()) {
-        snapshot.error = "asset scan failed under " + root.string()
+        snapshot.error = "asset scan failed under " + pathUtf8(root)
             + ": " + ec.message();
     }
 }
@@ -194,10 +205,11 @@ void writeIndex(const std::filesystem::path& path,
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
     if (error) return;
-    const std::filesystem::path temporary = path.string() + ".tmp";
+    auto temporary = path;
+    temporary += ".tmp";
     std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
     if (!output) return;
-    output << "AYEDITOR_ASSET_INDEX\t2\n";
+    output << "AYEDITOR_ASSET_INDEX\t3\n";
     for (const EditorAssetFolder& folder : folders) {
         if (folder.parentPath.empty()) continue;
         output << 'D' << '\t' << std::quoted(folder.logicalPath) << '\t'
@@ -228,7 +240,7 @@ bool safeRelativeLogicalPath(const std::string& logicalPath,
     const std::string normalized = slashNormalized(logicalPath);
     const std::string prefix = std::string(virtualRoot) + "/";
     if (lowerAscii(normalized).rfind(lowerAscii(prefix), 0) != 0) return false;
-    relative = std::filesystem::path(normalized.substr(prefix.size()))
+    relative = nativePath(normalized.substr(prefix.size()))
         .lexically_normal();
     return !relative.empty() && !relative.is_absolute()
         && *relative.begin() != "..";
@@ -260,11 +272,10 @@ bool readIndex(const std::filesystem::path& path,
     std::ifstream input(path, std::ios::binary);
     std::string marker;
     if (!std::getline(input, marker)
-        || (marker != "AYEDITOR_ASSET_INDEX\t1"
-            && marker != "AYEDITOR_ASSET_INDEX\t2")) {
+        || marker != "AYEDITOR_ASSET_INDEX\t3") {
         return false;
     }
-    const bool version2 = marker == "AYEDITOR_ASSET_INDEX\t2";
+    // v1/v2 caches contain locale-encoded paths. Rebuild them from disk.
     snapshot.folders.push_back(EditorAssetFolder{
         "Assets", "Assets", {}, EditorAssetOrigin::Source});
     snapshot.folders.push_back(EditorAssetFolder{
@@ -274,28 +285,26 @@ bool readIndex(const std::filesystem::path& path,
     unsigned origin = 0;
     unsigned importState = 0;
     while (true) {
-        if (version2) {
-            char kind = 0;
-            if (!(input >> kind)) break;
-            if (kind == 'D') {
-                std::string logicalPath;
-                if (!(input >> std::quoted(logicalPath) >> origin)
-                    || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)) {
-                    return false;
-                }
-                const auto folderOrigin = static_cast<EditorAssetOrigin>(origin);
-                std::filesystem::path relative;
-                if (!safeRelativeLogicalPath(logicalPath,
-                    folderOrigin == EditorAssetOrigin::Source ? "Assets" : "Imported",
-                    relative)) return false;
-                snapshot.folders.push_back(EditorAssetFolder{
-                    logicalPath, logicalName(logicalPath), logicalParent(logicalPath),
-                    folderOrigin});
-                appendFolderChain(snapshot, logicalPath + "/placeholder", folderOrigin);
-                continue;
+        char kind = 0;
+        if (!(input >> kind)) break;
+        if (kind == 'D') {
+            std::string logicalPath;
+            if (!(input >> std::quoted(logicalPath) >> origin)
+                || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)) {
+                return false;
             }
-            if (kind != 'A') return false;
+            const auto folderOrigin = static_cast<EditorAssetOrigin>(origin);
+            std::filesystem::path relative;
+            if (!safeRelativeLogicalPath(logicalPath,
+                folderOrigin == EditorAssetOrigin::Source ? "Assets" : "Imported",
+                relative)) return false;
+            snapshot.folders.push_back(EditorAssetFolder{
+                logicalPath, logicalName(logicalPath), logicalParent(logicalPath),
+                folderOrigin});
+            appendFolderChain(snapshot, logicalPath + "/placeholder", folderOrigin);
+            continue;
         }
+        if (kind != 'A') return false;
         if (!(input >> record.id >> std::quoted(record.logicalPath)
                     >> type >> origin >> importState
                     >> record.size >> record.lastModified)) break;
@@ -317,7 +326,7 @@ bool readIndex(const std::filesystem::path& path,
             (record.origin == EditorAssetOrigin::Source
                 ? sourceRoot : derivedRoot) / relative;
         record.absolutePath = slashNormalized(
-            absolute.lexically_normal().string());
+            pathUtf8(absolute.lexically_normal()));
         record.runtimePath = record.absolutePath;
         record.name = logicalName(record.logicalPath);
         appendFolderChain(snapshot, record.logicalPath, record.origin);
@@ -458,7 +467,7 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
     std::error_code ec;
     std::filesystem::path root = projectRoot.empty()
         ? std::filesystem::current_path(ec)
-        : std::filesystem::absolute(projectRoot, ec);
+        : std::filesystem::absolute(nativePath(projectRoot), ec);
     if (ec) {
         _lastError = "invalid project root: " + ec.message();
         if (error) *error = _lastError;
@@ -466,11 +475,11 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
     }
     root = root.lexically_normal();
     std::string configuredAssetRoot = "Assets";
-    if (const auto descriptor = EditorProjectDescriptor::load(root.string());
+    if (const auto descriptor = EditorProjectDescriptor::load(pathUtf8(root));
         descriptor && !descriptor.assetRoot.empty()) {
         configuredAssetRoot = descriptor.assetRoot;
     }
-    const std::filesystem::path source = root / configuredAssetRoot;
+    const std::filesystem::path source = root / nativePath(configuredAssetRoot);
     const std::filesystem::path derived = root / ".ayeditor_cache" / "assets";
     std::filesystem::create_directories(source, ec);
     if (!ec) std::filesystem::create_directories(derived, ec);
@@ -479,14 +488,19 @@ bool EditorAssetDatabase::open(const std::string& projectRoot,
         if (error) *error = _lastError;
         return false;
     }
-    _projectRoot = slashNormalized(root.string());
-    _sourceRoot = slashNormalized(source.string());
-    _derivedRoot = slashNormalized(derived.string());
-    _indexPath = slashNormalized((root / ".ayeditor" / "cache"
-        / "asset-index.tsv").string());
+    _projectRoot = slashNormalized(pathUtf8(root));
+    _sourceRoot = slashNormalized(pathUtf8(source));
+    _derivedRoot = slashNormalized(pathUtf8(derived));
+    _indexPath = slashNormalized(pathUtf8(root / ".ayeditor" / "cache" / "asset-index.tsv"));
     Snapshot initial;
-    _loadedFromIndex = readIndex(_indexPath, source, derived, initial);
+    try {
+        _loadedFromIndex = readIndex(nativePath(_indexPath), source, derived, initial);
+    } catch (const std::exception&) {
+        // Invalid cached UTF-8 is recoverable: enumerate native disk names.
+        _loadedFromIndex = false;
+    }
     if (!_loadedFromIndex) {
+        initial = {};
         initial.folders.push_back(EditorAssetFolder{
             "Assets", "Assets", {}, EditorAssetOrigin::Source});
         initial.folders.push_back(EditorAssetFolder{
@@ -504,7 +518,7 @@ void EditorAssetDatabase::close()
 {
     if (_indexWriteFuture.valid()) _indexWriteFuture.wait();
     if (_indexDirty && !_indexPath.empty()) {
-        writeIndex(_indexPath, _records, _folders);
+        writeIndex(nativePath(_indexPath), _records, _folders);
     }
     _indexDirty = false;
     if (_watchState) {
@@ -607,7 +621,7 @@ void EditorAssetDatabase::rebuildLookupsAndPersist(bool persist)
         _recordByLogicalPath.emplace(
             lowerAscii(_records[i].logicalPath), i);
     }
-    if (persist && !_indexPath.empty()) writeIndex(_indexPath, _records, _folders);
+    if (persist && !_indexPath.empty()) writeIndex(nativePath(_indexPath), _records, _folders);
 }
 
 void EditorAssetDatabase::flushDeferredIndex()
@@ -625,7 +639,7 @@ void EditorAssetDatabase::flushDeferredIndex()
     const std::string path = _indexPath;
     _indexWriteFuture = std::async(std::launch::async,
         [path, records = std::move(records), folders = std::move(folders)]() {
-            writeIndex(path, records, folders);
+            writeIndex(nativePath(path), records, folders);
         });
     _indexDirty = false;
 }
@@ -650,7 +664,7 @@ void EditorAssetDatabase::refreshDirectoryWatches()
         if (!std::filesystem::is_directory(root, error)) return;
         const auto add = [&present](const std::filesystem::path& directory) {
             const std::string normalized = slashNormalized(
-                directory.lexically_normal().string());
+                pathUtf8(directory.lexically_normal()));
             present.emplace(lowerAscii(normalized), normalized);
         };
         add(root);
@@ -661,8 +675,8 @@ void EditorAssetDatabase::refreshDirectoryWatches()
             if (it->is_directory(error)) add(it->path());
         }
     };
-    collect(_sourceRoot);
-    collect(_derivedRoot);
+    collect(nativePath(_sourceRoot));
+    collect(nativePath(_derivedRoot));
     for (auto it = _watchState->directories.begin();
          it != _watchState->directories.end();) {
         if (present.contains(it->first)) { ++it; continue; }
@@ -688,7 +702,7 @@ void EditorAssetDatabase::watchDirectorySubtree(const std::filesystem::path& roo
     if (!std::filesystem::is_directory(root, error)) return;
     const auto add = [this](const std::filesystem::path& directory) {
         const std::string normalized = slashNormalized(
-            directory.lexically_normal().string());
+            pathUtf8(directory.lexically_normal()));
         const std::string key = lowerAscii(normalized);
         if (!_watchState->directories.contains(key)
             && _watchState->watcher.watch(normalized, nullptr)) {
@@ -712,7 +726,7 @@ void EditorAssetDatabase::unwatchDirectorySubtree(const std::filesystem::path& r
 #endif
     if (!_watchState) return;
     const std::string key = lowerAscii(slashNormalized(
-        root.lexically_normal().string()));
+        pathUtf8(root.lexically_normal())));
     for (auto it = _watchState->directories.begin();
          it != _watchState->directories.end();) {
         if (!startsWithFolder(it->first, key)) { ++it; continue; }
@@ -732,7 +746,7 @@ bool EditorAssetDatabase::scanNow(std::string* error)
         try { (void)_scanFuture.get(); } catch (...) {}
         _scanPending = false;
     }
-    applySnapshot(scanRoots(_sourceRoot, _derivedRoot));
+    applySnapshot(scanRoots(nativePath(_sourceRoot), nativePath(_derivedRoot)));
     if (error) *error = _lastError;
     return _lastError.empty();
 }
@@ -740,8 +754,8 @@ bool EditorAssetDatabase::scanNow(std::string* error)
 bool EditorAssetDatabase::requestScan()
 {
     if (_projectRoot.empty() || _scanPending) return false;
-    const std::filesystem::path source(_sourceRoot);
-    const std::filesystem::path derived(_derivedRoot);
+    const auto source = nativePath(_sourceRoot);
+    const auto derived = nativePath(_derivedRoot);
     _scanStartRevision = _changeRevision;
     _scanFuture = ayt::task::launchBackground(
         [source, derived](ayt::task::CancellationToken token) {
@@ -793,13 +807,13 @@ bool EditorAssetDatabase::pollFileChanges()
     bool sidecarChanged = false;
     for (const auto& event : events) {
         const std::string absolute = slashNormalized(
-            std::filesystem::path(event.path).lexically_normal().string());
+            pathUtf8(nativePath(event.path).lexically_normal()));
         const std::string sourceRelative = stripRootPrefix(absolute, _sourceRoot);
         const std::string derivedRelative = stripRootPrefix(absolute, _derivedRoot);
         const bool source = !sourceRelative.empty();
         const bool derived = !derivedRelative.empty();
         if (!source && !derived) continue;
-        const std::filesystem::path path(absolute);
+        const auto path = nativePath(absolute);
         if (isMetadataSidecar(path)) {
             sidecarChanged = true;
             continue;
@@ -813,7 +827,7 @@ bool EditorAssetDatabase::pollFileChanges()
                 ? EditorAssetOrigin::Source : EditorAssetOrigin::Imported;
             Snapshot subtree;
             appendRoot(subtree, path, logical.c_str(), origin,
-                source ? std::filesystem::path(_derivedRoot)
+                source ? nativePath(_derivedRoot)
                        : std::filesystem::path{});
             if (!subtree.error.empty()) {
                 _lastError = subtree.error;
@@ -892,7 +906,7 @@ bool EditorAssetDatabase::pollFileChanges()
 
         EditorAssetRecord record;
         record.id = stableAssetId(logical);
-        record.name = path.filename().string();
+        record.name = pathUtf8(path.filename());
         record.logicalPath = logical;
         record.absolutePath = absolute;
         record.runtimePath = absolute;
@@ -926,15 +940,15 @@ bool EditorAssetDatabase::pollFileChanges()
                 || record.type != EditorAssetType::SourceModel) continue;
             std::error_code error;
             const auto sourceModified = std::filesystem::last_write_time(
-                record.absolutePath, error);
+                nativePath(record.absolutePath), error);
             if (error) continue;
             std::filesystem::path sidecar =
-                std::filesystem::path(_derivedRoot)
-                / ayt::asset_format::appendSuffix(std::filesystem::path(record.absolutePath).stem().string(),
-                    ayt::asset_format::Id::ImportDependency);
+                nativePath(_derivedRoot)
+                / nativePath(ayt::asset_format::appendSuffix(pathUtf8(nativePath(record.absolutePath).stem()),
+                    ayt::asset_format::Id::ImportDependency));
             if (!std::filesystem::is_regular_file(sidecar))
-                sidecar = std::filesystem::path(_derivedRoot)
-                    / (std::filesystem::path(record.absolutePath).stem().string() + ".aydep.json");
+                sidecar = nativePath(_derivedRoot)
+                    / nativePath(pathUtf8(nativePath(record.absolutePath).stem()) + ".aydep.json");
             const auto size = std::filesystem::file_size(sidecar, error);
             EditorAssetImportState state = EditorAssetImportState::NeedsImport;
             if (!error) {

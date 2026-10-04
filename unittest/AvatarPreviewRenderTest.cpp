@@ -177,8 +177,45 @@ int main(int argc, char **argv) {
     require(avatar::encodePreset(f.document->creator()->preset()) == preset &&
                 f.document->revision() == revision,
             "navigation preserves parameter document");
+    auto click = [&](const char *id) {
+      auto *button = f.manager.findById(id);
+      require(button != nullptr, "standard view button");
+      auto b = button->getWorldBounds();
+      device::DeviceInputEvent e;
+      e.type = device::DeviceInputEventType::MouseButton;
+      e.mouseButton = device::MouseButton::Left;
+      e.x = (b.minX + b.maxX) * .5f;
+      e.y = (b.minY + b.maxY) * .5f;
+      e.pressed = true; input.dispatch(e);
+      e.pressed = false; input.dispatch(e);
+    };
+    auto clayPixels = [&](const render::detail::DecodedImage &pixels) {
+      size_t count = 0;
+      for (int y = int(bounds.minY); y < int(bounds.maxY); ++y)
+        for (int x = int(bounds.minX); x < int(bounds.maxX); ++x) {
+          auto p = (size_t(y) * pixels.width + x) * 4;
+          if (pixels.rgba8[p] > 65 && pixels.rgba8[p] > pixels.rgba8[p + 1] + 10) ++count;
+        }
+      return count;
+    };
+    click("avatar_view_front");
+    auto front = f.capture("editor-front.tga");
+    require(f.canvas->standardView() == editor::AvatarStandardView::Front &&
+            f.canvas->cameraFrame().orthographic, "front button uses orthographic view");
+    click("avatar_view_right");
+    auto right = f.capture("editor-right.tga");
+    require(f.canvas->standardView() == editor::AvatarStandardView::Right, "side button");
+    click("avatar_view_top");
+    auto top = f.capture("editor-top.tga");
+    require(f.canvas->standardView() == editor::AvatarStandardView::Top, "top button");
+    require(clayPixels(front) > 5000 && clayPixels(right) > 5000 && clayPixels(top) > 5000,
+            "head renders in every standard view");
+    require(changed(front, right, bounds) > 5000 && changed(front, top, bounds) > 5000,
+            "standard axis views have distinct head silhouettes");
+    require(avatar::encodePreset(f.document->creator()->preset()) == preset &&
+            f.document->revision() == revision, "standard views preserve parameters");
     std::cout << "PASS embedded D3D11 head, morph, right-drag, wheel, "
-                 "teardown; clay pixels="
+                 "front/right/top, teardown; clay pixels="
               << clay << '\n';
     return 0;
   } catch (const std::exception &error) {

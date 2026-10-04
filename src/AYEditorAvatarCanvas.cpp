@@ -1,4 +1,5 @@
 #include "AYEditorAvatarCanvas.h"
+#include <AYMath/MathUtils.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/UnicodeText.h>
@@ -76,13 +77,15 @@ void EditorAvatarCanvas::updateViewport() {
   _camera.setViewport(uint32_t(std::max(1.f, bounds.maxX - bounds.minX)),
                       uint32_t(std::max(1.f, bounds.maxY - bounds.minY)));
 }
-void EditorAvatarCanvas::focusAvatar() {
+bool EditorAvatarCanvas::assetBounds(math::FVector3 &center,
+                                     math::FVector3 &extent) const {
   if (!_document->creator())
-    return;
+    return false;
   auto canonical =
       _document->catalog()->canonical(_document->creator()->preset().canonical);
-  if (!canonical || canonical->lods.empty() || canonical->lods[0].vertices.empty())
-    return;
+  if (!canonical || canonical->lods.empty() ||
+      canonical->lods[0].vertices.empty())
+    return false;
   auto low = canonical->lods[0].vertices.front().position, high = low;
   for (const auto &v : canonical->lods[0].vertices) {
     low = {std::min(low.x, v.position.x), std::min(low.y, v.position.y),
@@ -90,16 +93,65 @@ void EditorAvatarCanvas::focusAvatar() {
     high = {std::max(high.x, v.position.x), std::max(high.y, v.position.y),
             std::max(high.z, v.position.z)};
   }
-  const float radius =
-      std::max({high.x - low.x, high.y - low.y, high.z - low.z, .01f}) * .5f;
-  math::FVector3 center{(low.x + high.x) * .5f, (low.y + high.y) * .5f,
-                        (low.z + high.z) * .5f};
+  center = {(low.x + high.x) * .5f, (low.y + high.y) * .5f,
+            (low.z + high.z) * .5f};
+  extent = {high.x - low.x, high.y - low.y, high.z - low.z};
+  return true;
+}
+void EditorAvatarCanvas::focusAvatar() {
+  math::FVector3 center, extent;
+  if (!assetBounds(center, extent))
+    return;
+  const float radius = std::max({extent.x, extent.y, extent.z, .01f}) * .5f;
+  _standardView = AvatarStandardView::Free;
+  _camera.setThreeDProjection(ProjectionMode::Perspective);
   _camera.threeD().setPose(center + math::FVector3{0, 0, radius * 3.2f},
                            3.14159265f, 0);
   _camera.threeD().setMoveSpeed(std::max(radius * 3.f, .05f));
   cancelNavigation();
   _focusedAsset = true;
   markDirty();
+}
+void EditorAvatarCanvas::resetStandardView(AvatarStandardView view) {
+  focusAvatar();
+  if (view == AvatarStandardView::Free)
+    return;
+  math::FVector3 center, extent;
+  if (!assetBounds(center, extent))
+    return;
+  updateViewport();
+  const float distance = std::max({extent.x, extent.y, extent.z, .01f}) * 2;
+  auto state = _camera.state();
+  state.threeDProjection = ProjectionMode::Orthographic;
+  float width = extent.x, height = extent.y;
+  if (view == AvatarStandardView::Front) {
+    state.threeDEye = center + math::FVector3{0, 0, distance};
+    state.threeDYawRadians = 3.14159265f;
+  } else if (view == AvatarStandardView::Right) {
+    state.threeDEye = center + math::FVector3{distance, 0, 0};
+    state.threeDYawRadians = -1.57079633f;
+    width = extent.z;
+  } else {
+    state.threeDEye = center + math::FVector3{0, distance, 0};
+    state.threeDPitchRadians = -1.57079633f;
+    height = extent.z;
+  }
+  state.threeDOrthoHeight =
+      std::max({height, width / _camera.viewportAspect(), .01f}) * 1.2f;
+  _camera.restoreState(state);
+  _standardView = view;
+  _standardCenter = center;
+  cancelNavigation();
+  markDirty();
+}
+EditorSceneCameraFrame EditorAvatarCanvas::cameraFrame() const noexcept {
+  auto result = _camera.frame();
+  // Freecam clamps pitch to avoid its singularity. The locked top view has an
+  // exact -Y axis and a fixed -Z screen up, independent of that flycam limit.
+  if (_standardView == AvatarStandardView::Top)
+    result.view =
+        math::lh::lookAt(result.position, _standardCenter, {0, 0, -1});
+  return result;
 }
 void EditorAvatarCanvas::setLod(uint32_t value) {
   _lod = value;
@@ -122,8 +174,11 @@ bool EditorAvatarCanvas::onMouseButtonDown(const ui::UIMouseEvent &e) {
     return false;
   if (_ui)
     _ui->setFocus(this);
-  if (e.mouseButton == 1)
+  if (e.mouseButton == 1) {
+    _standardView = AvatarStandardView::Free;
+    _camera.setThreeDProjection(ProjectionMode::Perspective);
     _camera.threeD().beginLook(e.mousePos.x, e.mousePos.y);
+  }
   return true;
 }
 bool EditorAvatarCanvas::onMouseMove(const ui::UIMouseEvent &e) {
@@ -144,6 +199,12 @@ bool EditorAvatarCanvas::onMouseWheel(const ui::UIMouseWheelEvent &e) {
     return false;
   updateViewport();
   const auto b = getWorldBounds();
+  if (_standardView != AvatarStandardView::Free) {
+    _camera.zoomAt(std::pow(1.15f, std::clamp(-e.deltaY / 40.f, -8.f, 8.f)),
+                   {e.mousePos.x - b.minX, e.mousePos.y - b.minY});
+    markDirty();
+    return true;
+  }
   math::FVector3 origin, direction;
   if (!_camera.ray({e.mousePos.x - b.minX, e.mousePos.y - b.minY}, origin,
                    direction))
@@ -265,7 +326,7 @@ void EditorAvatarCanvas::onRender(ui::IRenderBackend &output) {
     _uploadedLod = _lod;
     _diagnostic.clear();
   }
-  const auto state = _camera.frame();
+  const auto state = cameraFrame();
   render::PreviewSceneCamera camera;
   camera.view = state.view;
   camera.projection = state.projection;

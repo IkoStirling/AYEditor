@@ -7,6 +7,7 @@
 #include <AYUI/FocusableWidget.h>
 #include <unordered_map>
 namespace ayt::editor {
+enum class AvatarStandardView { Free, Front, Right, Top };
 class EditorAvatarCanvas final : public ui::FocusableWidget {
 public:
   explicit EditorAvatarCanvas(std::shared_ptr<EditorAvatarDocument>,
@@ -16,6 +17,9 @@ public:
   void cancelNavigation();
   void tickNavigation(float dt);
   void focusAvatar();
+  void resetStandardView(AvatarStandardView);
+  AvatarStandardView standardView() const noexcept { return _standardView; }
+  EditorSceneCameraFrame cameraFrame() const noexcept;
   void setLod(uint32_t lod);
   uint32_t lod() const noexcept { return _lod; }
   const EditorSceneCamera &camera() const noexcept { return _camera; }
@@ -35,6 +39,9 @@ protected:
 
 private:
   void updateViewport();
+  bool assetBounds(math::FVector3 &center, math::FVector3 &extent) const;
+  AvatarStandardView _standardView = AvatarStandardView::Free;
+  math::FVector3 _standardCenter{};
   std::shared_ptr<EditorAvatarDocument> _document;
   ui::UIManager *_ui = nullptr;
   EditorSceneCamera _camera;

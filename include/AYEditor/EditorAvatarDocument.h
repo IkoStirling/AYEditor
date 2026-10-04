@@ -7,6 +7,10 @@ namespace ayt::editor {
 inline constexpr const char *kEditorAvatarExtensionId = "ayeditor.avatar";
 inline constexpr const char *kEditorAvatarToolExtensionId =
     "ayeditor.tool.avatar";
+/// Resource-browser drag kind. DragPayload::text owns the absolute UI path;
+/// no borrowed pointers. Only .avb/.avp are accepted by the creator.
+inline constexpr const char *kEditorAvatarResourceDragKind =
+    "EditorAvatarResource";
 /// Isolated Avatar authoring session. Bundles remain read-only; save writes a
 /// parameter-only .avp and an editor-only .avp.editor.json bundle association.
 /// path() always identifies the writable .avp, including when opened from .avb,
@@ -58,6 +62,8 @@ private:
 };
 /// Register the Avatar tool and .avb/.avp authoring documents when Avatar's
 /// Engine/UI adapters are linked. Uses the existing document/command host.
+/// Accepts owned .avb/.avp resource drops and provides orthographic axis views;
+/// camera operations never modify the character preset or document history.
 bool registerEditorAvatarExtension(EditorExtensionRegistry &,
                                    std::string *error = nullptr);
 } // namespace ayt::editor

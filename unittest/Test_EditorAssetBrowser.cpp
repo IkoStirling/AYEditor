@@ -220,6 +220,60 @@ TEST_CASE(editor_asset_database_flat_view_and_empty_folders_survive_index_reopen
     if (!empty.empty()) CHECK(empty[0].folderPath == "Assets/Empty/Child");
 }
 
+TEST_CASE(editor_asset_unicode_paths_survive_scan_index_and_native_notifications)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("utf8_index")};
+    const auto project = cleanup.root / std::filesystem::u8path("中文工程 🌙");
+    const auto relative = std::filesystem::u8path("模型 角色/青年女_头部 🌙.avb");
+    const auto file = project / "Assets" / relative;
+    writeAssetBrowserFile(file, "bundle fixture");
+    auto utf8 = [](const std::filesystem::path& p) {
+        const auto s = p.generic_u8string(); return std::string(s.begin(), s.end());
+    };
+    const std::string logical = "Assets/" + utf8(relative);
+    std::string error;
+    EditorAssetDatabase database;
+    CHECK(database.open(utf8(project), &error));
+    CHECK(database.scanNow(&error));
+    const auto* record = database.findByLogicalPath(logical);
+    CHECK_NOT_NULL(record);
+    EditorAssetId stableId = record ? record->id : 0;
+    if (record) {
+        CHECK(record->name == "青年女_头部 🌙.avb");
+        CHECK(record->absolutePath == utf8(file));
+        CHECK(record->runtimePath == utf8(file));
+        CHECK(record->type == EditorAssetType::AvatarBundle);
+    }
+    auto entries = database.entries("Assets/模型 角色");
+    CHECK(entries.size() == 1);
+    if (!entries.empty()) CHECK(entries[0].displayName == "青年女_头部 🌙.avb");
+    const auto indexPath = std::filesystem::u8path(database.indexPath());
+    database.close();
+    CHECK(database.open(utf8(project), &error));
+    CHECK(database.loadedFromIndex());
+    record = database.findByLogicalPath(logical);
+    CHECK(record && record->id == stableId && record->absolutePath == utf8(file));
+    auto second = file.parent_path() / std::filesystem::u8path("新增_头部.avb");
+    writeAssetBrowserFile(second, "second bundle");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!database.findByLogicalPath("Assets/模型 角色/新增_头部.avb") &&
+           std::chrono::steady_clock::now() < deadline) {
+        database.pollFileChanges();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    CHECK_NOT_NULL(database.findByLogicalPath("Assets/模型 角色/新增_头部.avb"));
+    database.close();
+    // Existing installations have locale-encoded v1/v2 cache records. They
+    // must be discarded automatically, without renaming the source file.
+    writeAssetBrowserFile(indexPath, "AYEDITOR_ASSET_INDEX\t2\n");
+    CHECK(database.open(utf8(project), &error));
+    CHECK_FALSE(database.loadedFromIndex());
+    CHECK(database.scanNow(&error));
+    record = database.findByLogicalPath(logical);
+    CHECK(record && record->id == stableId && record->name == "青年女_头部 🌙.avb");
+    CHECK(std::filesystem::exists(file));
+}
+
 TEST_CASE(editor_asset_database_uses_configured_project_asset_root)
 {
     AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("configured_root")};

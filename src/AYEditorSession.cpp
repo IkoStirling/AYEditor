@@ -4643,6 +4643,15 @@ void EditorSession::bindAssetBrowser()
                 const EditorAssetEntry& entry = _assetEntries[index];
                 const EditorAssetRecord* record = entry.folder
                     ? nullptr : _assetDatabase.find(entry.assetId);
+#ifdef AYEDITOR_HAS_AVATAR
+                if (record != nullptr && (record->type == EditorAssetType::AvatarBundle
+                    || record->type == EditorAssetType::AvatarPreset)) {
+                    ayt::ui::DragPayload payload;
+                    payload.kind = kEditorAvatarResourceDragKind;
+                    payload.text = ayt::ui::decodeUtf8Text(record->absolutePath);
+                    return payload;
+                }
+#endif
                 if (record == nullptr
                     || (record->type != EditorAssetType::Mesh
                         && record->type != EditorAssetType::Texture

@@ -3,6 +3,8 @@
 启用 Avatar Engine/UI 后，聚合库存包括 `Test_EditorAvatar.cpp`；专项
 `AYEditor_AvatarTests` 覆盖资源注册、只读 bundle、预设保存/重开/历史、失败保留和
 真实输入桥的视口导航及 pending 数值保存。未启用 Avatar 时该源不注册套件。
+专项也覆盖资源瓦片中文/emoji 路径拖入与脏编辑保护、正交三视图及返回自由导航。
+AssetBrowser 回归检查中文工程/目录/文件的扫描、索引重开、旧索引迁移和原生文件通知。
 显式 `AYEditor_AvatarPreviewRenderTest` 用真实头部做 D3D11 像素回归，不加入 Noop 全量门禁；
 见 [操作与复现指南](avatar-creator.zh-CN.md)。
 

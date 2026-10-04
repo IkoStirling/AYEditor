@@ -58,6 +58,7 @@ enum class EditorAssetImportState : std::uint8_t {
 };
 
 struct EditorAssetRecord {
+    // Names and all path strings are UTF-8, independent of the Windows ACP.
     EditorAssetId id = 0;
     std::string name;
     // Project-browser path. Always slash-normalized and rooted at either

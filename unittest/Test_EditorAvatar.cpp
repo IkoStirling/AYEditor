@@ -9,9 +9,13 @@
 #include <AYEditor/EditorSession.h>
 #include <AYEditor/EditorWorkspace.h>
 #include <AYTest.h>
+#include <AYUI/Button.h>
 #include <AYUI/DeviceInputBridge.h>
+#include <AYUI/Menu.h>
+#include <AYUI/MenuBar.h>
 #include <AYUI/MockRenderer.h>
 #include <AYUI/TextInput.h>
+#include <AYUI/TileView.h>
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
 #include <chrono>
@@ -350,6 +354,178 @@ TEST_CASE(crash_recovery_restores_parameter_file_and_preserves_source_bundle) {
   CHECK(recovered.creator()->preset().parameters.at("height") == .55f);
   CHECK_FALSE(recovered.isDirty());
   restarted.markCleanShutdown();
+}
+TEST_CASE(standard_view_buttons_recenter_axes_and_preserve_parameters) {
+  Fixture f;
+  Host host;
+  ui::UIManager manager;
+  manager.initialize(nullptr);
+  manager.setClientSize(1000, 720);
+  host.manager = &manager;
+  EditorExtensionRegistry registry;
+  CHECK(registerEditorAvatarExtension(registry));
+  auto view =
+      registry.find(kEditorAvatarExtensionId)->createView(f.document, host);
+  auto *root = view->releaseRootWidget();
+  root->setSize({1000, 720});
+  manager.root()->addChildExternal(root);
+  root->performLayout();
+  manager.layout();
+  auto *canvas =
+      dynamic_cast<EditorAvatarCanvas *>(manager.findById("avatar_viewport"));
+  CHECK_NOT_NULL(canvas);
+  const auto preset = avatar::encodePreset(f.document->creator()->preset());
+  const auto revision = f.document->revision();
+  ui::DeviceInputBridge input(manager);
+  auto click = [&](const char *id) {
+    auto *button = manager.findById(id);
+    CHECK_NOT_NULL(button);
+    if (!button)
+      return;
+    auto b = button->getWorldBounds();
+    device::DeviceInputEvent e;
+    e.type = device::DeviceInputEventType::MouseButton;
+    e.mouseButton = device::MouseButton::Left;
+    e.x = (b.minX + b.maxX) * .5f;
+    e.y = (b.minY + b.maxY) * .5f;
+    e.pressed = true;
+    input.dispatch(e);
+    e.pressed = false;
+    input.dispatch(e);
+  };
+  if (canvas) {
+    click("avatar_view_front");
+    CHECK(canvas->standardView() == AvatarStandardView::Front);
+    CHECK(canvas->cameraFrame().orthographic);
+    CHECK(std::abs(canvas->cameraFrame().position.x) < .001f);
+    CHECK(canvas->cameraFrame().position.z > 0);
+    click("avatar_view_right");
+    CHECK(canvas->standardView() == AvatarStandardView::Right);
+    CHECK(canvas->cameraFrame().position.x > 0);
+    CHECK(std::abs(canvas->cameraFrame().position.z) < .001f);
+    click("avatar_view_top");
+    CHECK(canvas->standardView() == AvatarStandardView::Top);
+    auto frame = canvas->cameraFrame();
+    CHECK(frame.orthographic);
+    CHECK(frame.position.y > 1);
+    auto center = frame.view.transformPoint({0, .5f, 0});
+    CHECK(std::abs(center.x) < .001f && std::abs(center.y) < .001f);
+    auto up = frame.view.transformPoint({0, .5f, -.2f});
+    CHECK(up.y > center.y);
+    CHECK(std::abs(up.z - center.z) < .001f); // exact top, no flycam pitch tilt
+    auto b = canvas->getWorldBounds();
+    device::DeviceInputEvent e;
+    e.type = device::DeviceInputEventType::MouseWheel;
+    e.x = (b.minX + b.maxX) * .5f;
+    e.y = (b.minY + b.maxY) * .5f;
+    e.deltaY = 1;
+    auto orthoHeight = canvas->camera().threeDOrthoHeight();
+    input.dispatch(e);
+    CHECK(canvas->camera().threeDOrthoHeight() < orthoHeight);
+    e.type = device::DeviceInputEventType::MouseButton;
+    e.mouseButton = device::MouseButton::Right;
+    e.pressed = true;
+    input.dispatch(e);
+    CHECK(canvas->standardView() == AvatarStandardView::Free);
+    CHECK_FALSE(canvas->cameraFrame().orthographic);
+    e.pressed = false;
+    input.dispatch(e);
+  }
+  CHECK(avatar::encodePreset(f.document->creator()->preset()) == preset);
+  CHECK(f.document->revision() == revision);
+  CHECK_FALSE(f.document->isDirty());
+  view->prepareForUiShutdown();
+  root->detachFromParent();
+  ui::destroyWidgetTree(root);
+  view.reset();
+  manager.shutdown();
+}
+TEST_CASE(resource_drag_unicode_paths_and_dirty_edit_protection) {
+  Fixture f;
+  auto file = f.root / "Assets" / std::filesystem::u8path("青年女_头部 🌙.avb");
+  std::filesystem::create_directories(file.parent_path());
+  std::filesystem::copy_file(f.bundle, file);
+  ui::MockRenderer backend;
+  EditorSessionDesc desc;
+  desc.uiBackend = &backend;
+  desc.layoutPath = testfixtures::resolveEditorShellLayoutPath();
+  desc.projectRoot = utf8(f.root);
+  EditorSession session;
+  CHECK(session.initialize(desc));
+  session.setClientSize(1280, 720);
+  CHECK(session.rescanAssetsNow());
+  auto *menus = dynamic_cast<ui::MenuBar *>(session.ui().findById("menubar"));
+  ui::MenuItem *launcher = nullptr;
+  if (menus)
+    for (size_t i = 0; i < menus->getMenuCount(); ++i)
+      for (size_t j = 0; j < menus->getMenu(i)->getItemCount(); ++j) {
+        auto *item = menus->getMenu(i)->getItem(j);
+        if (item->getId() == "menu_tools_avatar_creator")
+          launcher = item;
+      }
+  CHECK_NOT_NULL(launcher);
+  if (launcher)
+    CHECK(launcher->handleClick());
+  session.update(.016f);
+  auto *active = session.workspace().documents().active();
+  auto document =
+      active ? std::dynamic_pointer_cast<EditorAvatarDocument>(active->document)
+             : nullptr;
+  auto *canvas = session.ui().findById("avatar_viewport");
+  auto *tiles =
+      dynamic_cast<ui::TileView *>(session.ui().findById("list_assets"));
+  CHECK_NOT_NULL(document);
+  CHECK_NOT_NULL(canvas);
+  CHECK_NOT_NULL(tiles);
+  if (document && canvas && tiles) {
+    CHECK(document->creator() == nullptr);
+    auto drag = [&](int index) {
+      auto *cell = tiles->cellForLogicalIndex(index);
+      CHECK_NOT_NULL(cell);
+      if (!cell)
+        return;
+      const auto p = cell->getThumbnailRect(), b = canvas->getWorldBounds();
+      const auto press = session.ui().logicalToPhysical(
+          {(p.minX + p.maxX) * .5f, (p.minY + p.maxY) * .5f});
+      const auto drop = session.ui().logicalToPhysical(
+          {(b.minX + b.maxX) * .5f, (b.minY + b.maxY) * .5f});
+      session.onMouseMove(press.x, press.y);
+      session.onMouseButtonDown(press.x, press.y, 0);
+      session.onMouseMove(drop.x, drop.y);
+      CHECK(session.ui().isDragging());
+      session.onMouseButtonUp(drop.x, drop.y, 0);
+      CHECK_FALSE(session.ui().isDragging());
+      session.update(.016f);
+    };
+    drag(0);
+    CHECK_NOT_NULL(document->creator());
+    CHECK(document->bundlePath() == utf8(file));
+    CHECK(document->title() == "青年女_头部 🌙.avp");
+    CHECK(session.ui().findById("parameter-value:height") != nullptr);
+    CHECK_FALSE(document->isDirty());
+    CHECK(document->setParameter("height", .35f));
+    const auto value = avatar::encodePreset(document->creator()->preset());
+    drag(0);
+    CHECK(document->isDirty());
+    CHECK(avatar::encodePreset(document->creator()->preset()) == value);
+    CHECK(document->save());
+    CHECK(session.rescanAssetsNow());
+    session.update(.016f);
+    auto entries = session.assetDatabase().entries("Assets");
+    int preset = -1;
+    for (size_t i = 0; i < entries.size(); ++i) {
+      auto *record = session.assetDatabase().find(entries[i].assetId);
+      if (record && record->type == EditorAssetType::AvatarPreset)
+        preset = int(i);
+    }
+    CHECK(preset >= 0);
+    if (preset >= 0)
+      drag(preset);
+    CHECK(document->creator()->preset().parameters.at("height") == .35f);
+    CHECK_FALSE(document->isDirty());
+    CHECK(bytes(file) == bytes(f.bundle));
+  }
+  session.shutdown();
 }
 TEST_SUITE_END
 #endif

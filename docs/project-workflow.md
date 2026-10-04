@@ -30,7 +30,10 @@ features below are not demo-specific copies.
   modification time invalidate stale entries.
 - `.ayeditor/cache/asset-index.tsv` stores scanned file metadata, empty folders,
   and import status. Startup restores this index before a background directory
-  walk. On Windows, two recursive `AYIO::FileWatcher` subscriptions cover the
+  walk. It uses UTF-8 paths and display names in index version 3. Earlier locale-encoded
+  indexes are discarded and rebuilt without renaming source files. Native path
+  conversions preserve Chinese and emoji names in scanning and notifications.
+  On Windows, two recursive `AYIO::FileWatcher` subscriptions cover the
   source and imported roots. Directory changes patch the virtual hierarchy;
   file metadata updates refresh visible previews and Inspector details without
   rebuilding the directory tree. Index writes are deferred to a background
