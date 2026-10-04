@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorExtension.h"
+#include "AYShader/ShaderAnalysis.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +29,7 @@ struct EditorDslDiagnostic {
     int column = 0;
     std::string message;
     std::string hint;
+    std::string file;
 };
 
 struct EditorDslCompileReport {
@@ -35,10 +37,9 @@ struct EditorDslCompileReport {
     EditorDslLanguage language = EditorDslLanguage::Unknown;
     std::string summary;
     std::vector<EditorDslDiagnostic> diagnostics;
-    // Logia reports the generated Lua byte count. Phoskia's existing
-    // frontend/backend API does not expose its generated .sc text, so this is
-    // zero for Phoskia even after a successful compile.
+    // Lua or BGFX generated source bytes, not GPU binary size.
     std::size_t generatedBytes = 0;
+    ayt::shader::phoskia::ShaderAnalysisReport shaderAnalysis;
 };
 
 EditorDslLanguage editorDslLanguageFromPath(

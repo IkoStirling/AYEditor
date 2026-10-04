@@ -1,5 +1,16 @@
 # AYEditor Design
 
+## 2026-10-04 Phoskia 作者分析
+
+EditorDslDocument 为 Phoskia 调用 analyzePhoskia，sourcePath 提供相对模块 origin，
+不重读主文档取代未保存 text。EditorDslCompileReport 持有分析值，诊断保留 file/line/column；
+原有 DSL TextArea 报告区展示参数、default显示提示、UBO布局和成本/变体预算。
+不新建材质编辑系统、不触发shaderc/设备，也不自动应用GPU资源；仅Windows源目标。
+块字段位置指向块声明；准备/backend错误若无精确位置为0，整体消息仍保留来源。
+Test_EditorDslDocument 覆盖未保存反射、相对module、错误module行列和旧报告独立性。
+DSL专项8/123、全量349/6033及默认装配入口通过，inventory350/2。独立构建目录
+不覆盖并行运行的Editor；本提交不包含并行Audio/子窗口调度文件或其文档段落。
+
 **Version:** v0.3.2
 **Date:** 2026-09-18
 **Status:** E2-composite + native SVG shell icons + Transform Gizmo baseline + §4.2.x Editor 持 Edit Scene + §4.3.x Transport bar UX

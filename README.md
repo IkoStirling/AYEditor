@@ -1,5 +1,10 @@
 # AYEditor
 
+Phoskia DSL 文档编译按钮现使用 AYShader 共享作者分析核心，分析当前未保存文本，
+以文档路径解析相对模块。在原报告面板展示参数/default提示、UBO布局、模块来源、
+原始诊断行列、CPU耗时/源码字节及 variant 组合预算警告。Windows源码生成不启动
+shaderc/设备，不写源文件，也不是GPU验证；实际离线变体数量仍受 manifest 预算控制。
+
 启用 `AY_ENABLE_AVATAR=ON` 时，**Tools → Avatar Creator…** 和资源浏览器的 `.avb/.avp`
 文档接入参数化角色编辑。角色视口复用编辑器右键观察、WASD/QE 移动、Shift 加速、滚轮和 F 聚焦，
 保存只写参数预设与编辑器素体关联，不改写 bundle。

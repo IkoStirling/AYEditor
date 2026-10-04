@@ -44,11 +44,30 @@ std::wstring formatCompileReport(const EditorDslCompileReport& report,
     if (report.generatedBytes != 0) {
         output << " Generated output: " << report.generatedBytes << " bytes.";
     }
+    if (report.language == EditorDslLanguage::Phoskia) {
+        const auto& analysis=report.shaderAnalysis;
+        output << "\nAnalysis: " << analysis.elapsedMs << " ms (frontend " << analysis.frontendMs
+               << ", backend " << analysis.backendMs << "). Modules: " << analysis.modules.size()
+               << "; helpers: " << analysis.helperCount << "; structs: " << analysis.structCount
+               << "; loops: " << analysis.loopCount << " (max nested product " << analysis.maxNestedLoopProduct << ")."
+               << "\nPotential variants: " << (analysis.variantEstimateCapped?">256":std::to_string(analysis.estimatedVariants))
+               << " / budget " << analysis.variantBudget << "; actual variants are explicit build jobs.";
+        for(const auto& parameter:analysis.parameters) {
+            output << "\n" << parameter.kind << " " << parameter.name << " : " << parameter.type;
+            if(parameter.count>1) output << '[' << parameter.count << ']';
+            if(parameter.binding>=0) output << " binding=" << parameter.binding;
+            if(parameter.sizeBytes) output << " offset=" << parameter.offsetBytes << " bytes=" << parameter.sizeBytes;
+            if(parameter.readOnly) output << " readonly";
+            if(!parameter.defaultExpression.empty()) output << " default=" << parameter.defaultExpression;
+            if(!parameter.location.file.empty()) output << " @ " << parameter.location.file << ':' << parameter.location.line;
+        }
+    }
     if (report.diagnostics.empty()) {
         output << "\nNo diagnostics.";
     } else {
         for (const EditorDslDiagnostic& diagnostic : report.diagnostics) {
             output << "\n\n" << severityName(diagnostic.severity);
+            if (!diagnostic.file.empty()) output << " " << diagnostic.file;
             if (diagnostic.line > 0) {
                 output << " L" << diagnostic.line;
                 if (diagnostic.column > 0) output << ':' << diagnostic.column;
@@ -90,7 +109,7 @@ std::vector<ayt::ui::TextArea::SyntaxSpan> highlightDslLine(
         L"uniformblock", L"binding", L"texture2d", L"texturecube",
         L"sampler", L"vertex", L"fragment", L"compute", L"let",
         L"if", L"else", L"for", L"in", L"out", L"return", L"true",
-        L"false", L"variant", L"position", L"normal", L"color",
+        L"false", L"variant", L"include", L"fn", L"struct", L"position", L"normal", L"color",
         L"texcoord", L"boneindices", L"boneweights", L"tangent"};
     static const std::unordered_set<std::wstring> builtinTypes = {
         L"bool", L"int", L"uint", L"float", L"double", L"string",
@@ -98,7 +117,7 @@ std::vector<ayt::ui::TextArea::SyntaxSpan> highlightDslLine(
         L"uvec2", L"uvec3", L"uvec4", L"mat2", L"mat3", L"mat4",
         L"Entity", L"Vector2", L"Vector3", L"Vector4", L"String",
         L"Float", L"Int", L"Bool", L"rwstructuredbuffer",
-        L"structuredbuffer"};
+        L"structuredbuffer", L"rwimage2d"};
     static const std::unordered_set<std::wstring> literalWords = {
         L"true", L"false", L"null"};
 

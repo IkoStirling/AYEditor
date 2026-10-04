@@ -233,6 +233,7 @@ material Unlit {
     CHECK(logiaOk.success);
     CHECK(logiaOk.generatedBytes > 0u);
     CHECK(phoskiaOk.success);
+    CHECK(phoskiaOk.generatedBytes > 0u);
 
     logiaDocument.setSourceUtf8("script Broken { on_start() {");
     phoskiaDocument.setSourceUtf8(
@@ -461,4 +462,29 @@ TEST_CASE(content_browser_double_click_opens_one_dsl_tab_and_shortcuts_work)
     CHECK(session.workspace().documents().size() == 0u);
 }
 
+TEST_CASE(phoskia_document_reports_unsaved_parameters_and_module_error_locations)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("phoskia_analysis")};
+    const auto file=cleanup.root/"Probe.phoskia", module=cleanup.root/"math.phoskia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));
+    CHECK(ayt::io::File::writeAllText(file.string(),"material Saved { vertex { return vec4(0.0); } fragment { return vec4(1.0); } }"));
+    CHECK(ayt::io::File::writeAllText(module.string(),"fn tint(x:vec3):vec3 { return x; }\n"));
+    EditorDslDocument document;
+    CHECK(document.open(file.string(),"Probe.phoskia"));
+    document.setSourceUtf8("include \"math.phoskia\";\nmaterial Unsaved { property color=vec4(0.2,0.4,0.6,1.0); "
+        "vertex { return vec4(0.0); } fragment { return vec4(tint(color.xyz),1.0); } }");
+    const auto valid=document.compile();
+    CHECK(valid.success);CHECK(valid.generatedBytes>0);CHECK(valid.shaderAnalysis.modules.size()==1);
+    bool reflected=false;
+    for(const auto& p:valid.shaderAnalysis.parameters) if(p.name=="color") reflected=!p.defaultExpression.empty() && p.location.line==2;
+    CHECK(reflected);CHECK(document.isDirty());
+    CHECK(ayt::io::File::readAllText(file.string()).find("Saved")!=std::string::npos);
+    CHECK(ayt::io::File::writeAllText(module.string(),"fn tint(x:vec3):vec3 {\n return missing;\n}\n"));
+    const auto invalid=document.compile();
+    CHECK(!invalid.success);CHECK(invalid.shaderAnalysis.parameters.empty());
+    bool located=false;
+    for(const auto& d:invalid.diagnostics) if(d.message.find("Undefined identifier")!=std::string::npos)
+        located=d.file.find("math.phoskia")!=std::string::npos && d.line==2 && d.column>0;
+    CHECK(located);CHECK(valid.success && valid.shaderAnalysis.parameters.size()==1);
+}
 TEST_SUITE_END

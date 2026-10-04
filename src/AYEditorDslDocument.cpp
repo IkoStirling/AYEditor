@@ -311,23 +311,22 @@ EditorDslCompileReport EditorDslDocument::compile() const
             return report;
         }
         if (_language == EditorDslLanguage::Phoskia) {
-            auto compiler =
-                std::make_unique<ayt::shader::phoskia::Compiler>();
-            ayt::shader::phoskia::CompileResult compiled;
-            compiler->compile(_source, compiled);
-            for (const auto& error : compiled.errors) {
+            ayt::shader::phoskia::CompileOptions options;
+            options.sourcePath = _absolutePath;
+            ayt::shader::phoskia::analyzePhoskia(_source,options,"windows",report.shaderAnalysis);
+            for (const auto& diagnostic : report.shaderAnalysis.diagnostics) {
                 report.diagnostics.push_back(EditorDslDiagnostic{
-                    EditorDslDiagnosticSeverity::Error,
-                    error.line, error.column, error.message, {}});
+                    diagnostic.severity == ayt::shader::phoskia::DiagnosticSeverity::Error
+                        ? EditorDslDiagnosticSeverity::Error
+                        : diagnostic.severity == ayt::shader::phoskia::DiagnosticSeverity::Warning
+                            ? EditorDslDiagnosticSeverity::Warning : EditorDslDiagnosticSeverity::Info,
+                    diagnostic.location.line, diagnostic.location.column, diagnostic.message,
+                    diagnostic.hint, diagnostic.location.file});
             }
-            for (const std::string& warning : compiled.warnings) {
-                report.diagnostics.push_back(EditorDslDiagnostic{
-                    EditorDslDiagnosticSeverity::Warning,
-                    0, 0, warning, {}});
-            }
-            report.success = compiled.success && compiled.errors.empty();
+            report.success = report.shaderAnalysis.success;
+            report.generatedBytes = report.shaderAnalysis.generatedBytes;
             report.summary = report.success
-                ? "Phoskia compiled to the BGFX shader-source backend."
+                ? "Phoskia analyzed to BGFX source (Windows); no shaderc/device validation."
                 : "Phoskia compilation failed.";
             return report;
         }
