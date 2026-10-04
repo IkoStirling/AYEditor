@@ -129,10 +129,16 @@ Project Safe Rename 面板：可以选择引用类型、预览文件级改动及
 
 ### Audio authoring and virtual piano
 
-Tools → Audio Editor now provides a shared virtual piano, mouse/key note gates,
-velocity/preview volume, sustain and octave controls, and sample import. Preview
-pause/stop is local; mixer buses/effects remain global. The child scrolls when
-space is insufficient and reads staged EngineAssets, not AssetRepo at runtime.
+Tools → Audio Editor opens the shared workbench: instrument performance,
+audio resources and current engine mixing. Piano exists only on performance;
+its strip pans and wheel-zooms, with signed semitone transpose (-24..+24).
+Mixer rows have a name, slider and editable percent. A fixed right-side L/R
+output meter shows real peaks/overload. Resource audition pause/stop is local;
+engine pause and bus/effect controls are explicitly global. Individual pages
+scroll when needed and read staged EngineAssets, not AssetRepo at runtime.
+Single-resource edits use the same timeline-v2 sidecar as audio documents;
+complex metadata is read-only in the workbench. Missing export, envelope editing,
+preset libraries and independent preview routing are disabled placeholders.
 
 Audio asset documents expose resource metadata, preview begin/end and looping,
 plus editable source offset, duration, gain and fade-in/out on the selected clip.

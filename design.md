@@ -1552,3 +1552,13 @@ clips resolve to the first active sorted clip. Preview ranges, loops, gain and
 fades are authoring data, never destructive PCM edits. Clip/preview changes have
 undo/redo and atomic save; v2 sidecars add `preview`, `fadeIn`, and `fadeOut`,
 with v1 defaults. Future multi-track rendering must use a dedicated scheduler.
+
+Shared AudioEditorSession workbench (2026-10-04): the native child and standalone
+program share three tab pages and a fixed vertical stereo output meter. Only
+instrument performance exposes piano input; key mappings use a signed semitone
+offset and release held notes before mapping changes. Pointer hooks convert
+physical positions into UI logical positions and route pan/glissando movement.
+Focus loss also clears stale modifiers. Mixing writes current Host engine state;
+the UI makes that scope explicit and does not auto-save project mix settings.
+Single-resource sidecars map a selected source interval into one timeline clip
+at zero; unsupported/complex metadata is read-only. No new persisted format.

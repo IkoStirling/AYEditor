@@ -10538,13 +10538,15 @@ void EditorSession::openAudioEditorWindow() {
         if (key>=ayt::device::KeyCode::A && key<=ayt::device::KeyCode::Z) native='A'+static_cast<int>(key)-static_cast<int>(ayt::device::KeyCode::A);
         return native && _audioEditor->handleKey(native,pressed);
     };
-    cfg.beforeMouseButton=[this](ayt::ui::UIManager&,float x,float y,int button,bool pressed) {
-        if (!_audioEditor || !_audioEditor->handleMouseButton(x,y,button,pressed)) return false;
+    cfg.beforeMouseButton=[this](ayt::ui::UIManager& ui,float x,float y,int button,bool pressed) {
+        const auto logical=ui.physicalToLogical({x,y});
+        if (!_audioEditor || !_audioEditor->handleMouseButton(logical.x,logical.y,button,pressed)) return false;
         if (pressed) ::SetCapture(static_cast<HWND>(_audioEditorHandle));
         else if (::GetCapture()==static_cast<HWND>(_audioEditorHandle)) ::ReleaseCapture();
         return true;
     };
-    cfg.onFocusChanged=[this](ayt::ui::UIManager&,bool focused) { if (!focused && _audioEditor) _audioEditor->releaseKeys(); };
+    cfg.beforeMouseMove=[this](ayt::ui::UIManager& ui,float x,float y) {const auto logical=ui.physicalToLogical({x,y});return _audioEditor && _audioEditor->handleMouseMove(logical.x,logical.y);};
+    cfg.onFocusChanged=[this](ayt::ui::UIManager&,bool focused) { if (!focused && _audioEditor) _audioEditor->onFocusLost(); };
     cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
         if (_audioEditor != nullptr) {
             _audioEditor->detach();
