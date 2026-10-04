@@ -1668,3 +1668,12 @@ AudioRecorder device callbacks are independent of background scene rendering;
 the focused audio scheduling path also drains capture and refreshes its waveform.
 UI teardown stops/joins capture and playback before the recording pane is freed.
 Existing Host AudioEngine notes, buses and project schema are unchanged.
+
+# Logia 作者语义扩展（2026-10-05）
+
+EditorDslDocument 的 analyzeLogia 使用 AYScript checked 编译器分析未保存文本。Compile 在 Actor、checked 新语法或显式 checked 上下文中启用严格校验，旧 Component/Tool 文档保持默认兼容；
+以文档路径解析 import，保留模块诊断文件。自动 Actor 上下文展开父类属性；无 Actor 默认 Component，
+run 文档选择 Tool；宿主可明确指定 schema/provider 签名。Complete 菜单根据光标词前缀、文件与行号查询
+LogiaAnalysis，插入是 TextArea 单次 selection edit，保留撤销。Definition 根据声明身份导航当前文档或
+通过 DocumentManager 打开导入文档。navigation handler 将 UTF-8 字节列转换为 wide-code-unit 光标，
+视图转移/销毁清理 handler 与 popup。DSL document 回归覆盖未保存文本、模块错误、属性提示与导航命令。

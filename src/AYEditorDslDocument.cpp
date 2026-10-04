@@ -4,6 +4,7 @@
 #include "AYIO/File.h"
 #include <AYEntity/ActorClassAsset.h>
 #include "AYScript/logia/LogiaPipeline.h"
+#include "AYScript/logia/Parser.h"
 #include "AYShader/Phoskia.h"
 
 #include <algorithm>
@@ -13,6 +14,7 @@
 #include <memory>
 #include <unordered_set>
 #include <utility>
+#include <nlohmann/json.hpp>
 
 namespace ayt::editor {
 
@@ -331,55 +333,14 @@ EditorDslCompileReport EditorDslDocument::compile() const
             return report;
         }
 
-        bool actorHost = false;
-        if (!_absolutePath.empty()) {
-            const auto scriptPath = std::filesystem::weakly_canonical(
-                _absolutePath);
-            const auto root = ayt::entity::assetsRootForScene(_absolutePath);
-            auto classPath = std::filesystem::path(_absolutePath);
-            classPath.replace_extension(".act");
-            ayt::entity::ActorClassAsset actor;
-            std::string ignored;
-            bool loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
-                                                            &ignored);
-            if (!loaded) {
-                classPath.replace_extension(".ayactor");
-                loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
-                                                           &ignored);
-            }
-            if (loaded) {
-                std::string resolvedScript;
-                actorHost = ayt::entity::resolveActorScriptPath(root,
-                    actor.scriptPath, resolvedScript, &ignored)
-                    && resolvedScript == scriptPath.string();
-            }
-            if (!actorHost && !root.empty()) {
-                std::error_code scanError;
-                for (std::filesystem::recursive_directory_iterator it(root, scanError), end;
-                     !scanError && it != end; it.increment(scanError)) {
-                    if (!it->is_regular_file(scanError)
-                        || !ayt::asset_format::matchesPath(it->path().string(), ayt::asset_format::Id::ActorClass)) continue;
-                    if (!ayt::entity::loadActorClassAsset(it->path().string(),
-                                                           actor, &ignored)) continue;
-                    std::string resolvedScript;
-                    actorHost = ayt::entity::resolveActorScriptPath(root,
-                        actor.scriptPath, resolvedScript, &ignored)
-                        && resolvedScript == scriptPath.string();
-                    if (actorHost) break;
-                }
-            }
-        }
-        ayt::script::logia::LogiaToLuaResult compiled = actorHost
-            ? ayt::script::logia::compileLogiaToLua(
-                _source, ayt::script::logia::actorLogiaHostContext())
-            : ayt::script::logia::compileLogiaToLua(_source);
+        auto compiled = ayt::script::logia::compileLogiaToLua(_source, logiaContext());
         for (const auto& diagnostic : compiled.diagnostics) {
             report.diagnostics.push_back(EditorDslDiagnostic{
                 toEditorSeverity(diagnostic.severity),
                 diagnostic.location.line,
                 diagnostic.location.column,
                 diagnostic.message,
-                diagnostic.hint});
+                diagnostic.hint, diagnostic.location.file});
         }
         // Older parser/codegen failures may only populate the legacy error
         // channel. Avoid duplicating the full diagnostic channel when present.
@@ -403,4 +364,108 @@ EditorDslCompileReport EditorDslDocument::compile() const
     return report;
 }
 
+ayt::script::logia::LogiaHostContext EditorDslDocument::logiaContext() const
+{
+    auto context = _logiaContext.value_or(ayt::script::logia::defaultLogiaHostContext());
+    if (!_logiaContext) {
+        bool actorHost = false;
+        ayt::entity::ActorClassAsset actor;
+        std::string selectedClass;
+        if (!_absolutePath.empty()) {
+            const auto scriptPath = std::filesystem::weakly_canonical(
+                _absolutePath);
+            const auto root = ayt::entity::assetsRootForScene(_absolutePath);
+            auto classPath = std::filesystem::path(_absolutePath);
+            classPath.replace_extension(".act");
+
+            std::string ignored;
+            bool loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
+                                                            &ignored);
+            if (!loaded) {
+                classPath.replace_extension(".ayactor");
+                loaded = ayt::entity::loadActorClassAsset(classPath.string(), actor,
+                                                           &ignored);
+            }
+            if (loaded) {
+                selectedClass = classPath.string();
+                std::string resolvedScript;
+                actorHost = ayt::entity::resolveActorScriptPath(root,
+                    actor.scriptPath, resolvedScript, &ignored)
+                    && resolvedScript == scriptPath.string();
+            }
+            if (!actorHost && !root.empty()) {
+                std::error_code scanError;
+                for (std::filesystem::recursive_directory_iterator it(root, scanError), end;
+                     !scanError && it != end; it.increment(scanError)) {
+                    if (!it->is_regular_file(scanError)
+                        || !ayt::asset_format::matchesPath(it->path().string(), ayt::asset_format::Id::ActorClass)) continue;
+                    if (!ayt::entity::loadActorClassAsset(it->path().string(),
+                                                           actor, &ignored)) continue;
+                    std::string resolvedScript;
+                    actorHost = ayt::entity::resolveActorScriptPath(root,
+                        actor.scriptPath, resolvedScript, &ignored)
+                        && resolvedScript == scriptPath.string();
+                    if (actorHost) { selectedClass = it->path().string(); break; }
+                }
+            }
+        }
+        if (actorHost) {
+            context = ayt::script::logia::checkedLogiaHostContext(ayt::script::logia::actorLogiaHostContext());
+            std::string ignored;
+            const auto root = ayt::entity::assetsRootForScene(_absolutePath);
+            (void)ayt::entity::resolveActorClassAsset(root, selectedClass, actor, &ignored);
+            auto properties = nlohmann::json::parse(actor.propertiesJson);
+            for (auto it = properties.begin(); it != properties.end(); ++it)
+                context.actorProperties[it.key()] = it.value().is_boolean() ? "bool" : it.value().is_number() ? "float" : "string";
+        }
+    }
+    // Existing native component templates keep their legacy contract. Actor
+    // documents and explicitly selected contexts already carry their mode;
+    // checked syntax opts a new component/tool document into the new contract.
+    if (!_logiaContext) {
+        std::vector<ayt::script::logia::Token> tokens;
+        ayt::script::logia::tokenize(_source, tokens);
+        using Token = ayt::script::logia::TokenType;
+        for (std::size_t i = 0; i < tokens.size(); ++i) {
+            const auto kind = tokens[i].type;
+            if (kind == Token::State || kind == Token::Await || kind == Token::Import
+                || kind == Token::OnReload
+                || (kind == Token::Identifier && tokens[i].lexeme == "array"
+                    && i + 1 < tokens.size() && tokens[i + 1].type == Token::Less)
+                || (kind == Token::RightParen && i + 1 < tokens.size()
+                    && tokens[i + 1].type == Token::Colon)) {
+                context.strictSemantics = true;
+                break;
+            }
+        }
+    }
+    if (!_logiaContext && context.kind == ayt::script::logia::LogiaHostKind::Component) {
+        std::vector<ayt::script::logia::Token> tokens; ayt::script::logia::tokenize(_source,tokens);
+        ayt::script::logia::Parser parser(tokens); auto ast=parser.parse();
+        if(ast)for(const auto& script:ast->scripts)for(const auto& item:script->members)
+            if(auto* fn=dynamic_cast<ayt::script::logia::LifecycleFuncDecl*>(item.get());fn&&fn->kind==ayt::script::logia::LifecycleKind::Run)
+                { const bool checked = context.strictSemantics;
+                  context = ayt::script::logia::toolLogiaHostContext();
+                  context.strictSemantics = checked; }
+    }
+    context.sourcePath = _absolutePath;
+    if (context.assetRoot.empty()) context.assetRoot = ayt::entity::assetsRootForScene(_absolutePath);
+    return context;
+}
+void EditorDslDocument::setLogiaHostContext(ayt::script::logia::LogiaHostContext context) { _logiaContext = std::move(context); }
+ayt::script::logia::LogiaAnalysis EditorDslDocument::analyzeLogia() const
+{
+    if (_language != EditorDslLanguage::Logia) return {};
+    return ayt::script::logia::analyzeLogia(_source, logiaContext());
+}
+void EditorDslDocument::navigateTo(int line, int column)
+{
+    _navigationLine = (std::max)(1,line); _navigationColumn = (std::max)(1,column);
+    if (_navigationHandler) _navigationHandler(_navigationLine,_navigationColumn);
+}
+void EditorDslDocument::setNavigationHandler(std::function<void(int,int)> handler)
+{
+    _navigationHandler = std::move(handler);
+    if (_navigationHandler && _navigationLine > 0) _navigationHandler(_navigationLine,_navigationColumn);
+}
 } // namespace ayt::editor

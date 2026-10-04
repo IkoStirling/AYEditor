@@ -2,6 +2,9 @@
 
 #include "AYEditor/EditorExtension.h"
 #include "AYShader/ShaderAnalysis.h"
+#include "AYScript/logia/Tooling.h"
+#include <functional>
+#include <optional>
 
 #include <cstddef>
 #include <cstdint>
@@ -75,6 +78,13 @@ public:
                            std::string* error = nullptr) const override;
 
     EditorDslCompileReport compile() const;
+    /// Use explicit host/schema data when embedding the editor. Otherwise infer
+    /// Actor schema from assets that reference this source; use checked semantics.
+    void setLogiaHostContext(ayt::script::logia::LogiaHostContext context);
+    ayt::script::logia::LogiaAnalysis analyzeLogia() const;
+    /// Navigate a source-backed view (one-based UTF-8 source coordinates).
+    void navigateTo(int line, int column);
+    void setNavigationHandler(std::function<void(int,int)> handler);
 
 private:
     enum class LineEnding {
@@ -83,6 +93,7 @@ private:
     };
 
     std::string serializeForDisk() const;
+    ayt::script::logia::LogiaHostContext logiaContext() const;
 
     std::string _absolutePath;
     std::string _displayPath;
@@ -94,6 +105,9 @@ private:
     EditorDslLanguage _language = EditorDslLanguage::Unknown;
     LineEnding _lineEnding = LineEnding::Lf;
     bool _utf8Bom = false;
+    std::optional<ayt::script::logia::LogiaHostContext> _logiaContext;
+    std::function<void(int,int)> _navigationHandler;
+    int _navigationLine = 0, _navigationColumn = 0;
 };
 
 } // namespace ayt::editor

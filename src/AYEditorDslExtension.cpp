@@ -1,6 +1,8 @@
 #include "AYEditor/EditorDslExtension.h"
 
 #include "AYEditor/EditorDslDocument.h"
+#include "AYEditor/EditorWorkspace.h"
+#include "AYUI/Menu.h"
 #include "AYUI/Box.h"
 #include "AYUI/Button.h"
 #include "AYUI/TextArea.h"
@@ -100,7 +102,7 @@ std::vector<ayt::ui::TextArea::SyntaxSpan> highlightDslLine(
 {
     using Span = ayt::ui::TextArea::SyntaxSpan;
     static const std::unordered_set<std::wstring> logiaKeywords = {
-        L"script", L"var", L"on_start", L"on_update", L"on_destroy",
+        L"script", L"var", L"state", L"await", L"import", L"on_start", L"on_update", L"on_destroy", L"on_reload",
         L"run", L"function", L"signal", L"if", L"else", L"while",
         L"for", L"break", L"continue", L"do", L"end", L"return",
         L"true", L"false"};
@@ -112,7 +114,7 @@ std::vector<ayt::ui::TextArea::SyntaxSpan> highlightDslLine(
         L"false", L"variant", L"include", L"fn", L"struct", L"position", L"normal", L"color",
         L"texcoord", L"boneindices", L"boneweights", L"tangent"};
     static const std::unordered_set<std::wstring> builtinTypes = {
-        L"bool", L"int", L"uint", L"float", L"double", L"string",
+        L"bool", L"int", L"uint", L"float", L"double", L"string", L"array", L"quat",
         L"vec2", L"vec3", L"vec4", L"ivec2", L"ivec3", L"ivec4",
         L"uvec2", L"uvec3", L"uvec4", L"mat2", L"mat3", L"mat4",
         L"Entity", L"Vector2", L"Vector3", L"Vector4", L"String",
@@ -201,12 +203,15 @@ public:
 
     ~EditorDslWorkspaceView() override
     {
+        if (_document) _document->setNavigationHandler({});
+        if (_root && _completionMenu) { _completionMenu->detachForHostDestruction(); _root->addChild(_completionMenu); }
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
     }
 
     ayt::ui::Widget* rootWidget() noexcept override { return _root; }
     ayt::ui::Widget* releaseRootWidget() noexcept override
     {
+        if (_root && _completionMenu) { _completionMenu->detachForHostDestruction(); _root->addChild(_completionMenu); _completionMenu=nullptr; }
         ayt::ui::Widget* root = _root;
         _root = nullptr;
         return root;
@@ -217,6 +222,8 @@ public:
     {
         return commandId == "file.save"
             || commandId == kEditorDslCompileCommand
+            || (_document && _document->language() == EditorDslLanguage::Logia
+                && (commandId == kEditorLogiaCompleteCommand || commandId == kEditorLogiaDefinitionCommand))
             || commandId == "edit.undo"
             || commandId == "edit.redo";
     }
@@ -239,6 +246,8 @@ public:
     {
         if (!canExecuteCommand(commandId)) return false;
         if (commandId == "file.save") return save();
+        if (commandId == kEditorLogiaCompleteCommand) { complete(); return true; }
+        if (commandId == kEditorLogiaDefinitionCommand) { goToDefinition(); return true; }
         if (commandId == kEditorDslCompileCommand) {
             compile();
             return true;
@@ -284,6 +293,15 @@ private:
         toolbar->addWidget(language, 68.0f);
         toolbar->addWidget(saveButton, 54.0f);
         toolbar->addWidget(compileButton, 68.0f);
+        if (_document->language() == EditorDslLanguage::Logia) {
+            auto* completion = new ayt::ui::Button(); completion->setText(L"Complete");
+            completion->setAccessibilityLabel(L"Complete Logia symbol at caret");
+            completion->setOnClicked([this] { complete(); }); toolbar->addWidget(completion, 78.0f);
+            auto* definition = new ayt::ui::Button(); definition->setText(L"Definition");
+            definition->setAccessibilityLabel(L"Go to Logia symbol definition");
+            definition->setOnClicked([this] { goToDefinition(); }); toolbar->addWidget(definition, 82.0f);
+            _completionMenu = new ayt::ui::Menu(); _completionMenu->setVisible(false); root->addChild(_completionMenu);
+        }
         toolbar->addWidget(_status, 0.0f);
         root->addWidget(toolbar, 26.0f);
 
@@ -301,6 +319,13 @@ private:
             });
         _source->setText(
             ayt::ui::decodeUtf8Text(_document->sourceUtf8()));
+        _document->setNavigationHandler([this](int line,int column) {
+            const auto text = _document->sourceUtf8(); size_t offset=0;
+            for(int i=1;i<line && offset<text.size();++i){auto next=text.find('\n',offset);offset=next==std::string::npos?text.size():next+1;}
+            auto end=text.find('\n',offset);auto bytes=text.substr(offset,end==std::string::npos?std::string::npos:end-offset);
+            auto col=ayt::ui::decodeUtf8Text(bytes.substr(0,std::min(bytes.size(),static_cast<size_t>(column-1)))).size();
+            _source->setCaret(line-1,static_cast<int>(col)); _host.requestRepaint();
+        });
         root->addWidget(_source, 0.0f);
 
         auto* diagnosticsHeader = new ayt::ui::TextLabel();
@@ -332,6 +357,48 @@ private:
         if (_source == nullptr || _document == nullptr) return;
         _document->setSourceUtf8(encodeUtf8(_source->getText()));
         refreshStatus();
+    }
+
+    void complete()
+    {
+        if (!_completionMenu || !_source) return;
+        syncSourceFromWidget();
+        const auto& text=_source->getText();const auto offset=_source->getCaretTextOffset();size_t begin=offset;
+        while(begin>0 && (isIdentifierContinue(text[begin-1]) || text[begin-1]==L'.')) --begin;
+        const auto prefix=encodeUtf8(text.substr(begin,offset-begin));
+        auto analysis=_document->analyzeLogia();
+        auto candidates=analysis.complete(prefix,_document->absolutePath(),_source->getCaretLine()+1);
+        _completionMenu->close();_completionMenu->clearItems();
+        if(candidates.empty()) { _status->setText(L"No matching symbols");return; }
+        for(const auto& symbol:candidates) {
+            auto* item=_completionMenu->addItem(ayt::ui::decodeUtf8Text(symbol.name+"  "+symbol.type));
+            item->setOnActivate([this,begin,offset,name=symbol.name] {
+                _source->setSelectionByTextOffset(begin,offset);
+                _source->insertText(ayt::ui::decodeUtf8Text(name));syncSourceFromWidget();
+            });
+        }
+        auto bounds=_source->getWorldBounds();_completionMenu->open(_root,{bounds.minX+8.0f,bounds.minY+8.0f});
+        _host.requestRepaint();
+    }
+
+    void goToDefinition()
+    {
+        syncSourceFromWidget();
+        const auto& text=_source->getText();const auto offset=_source->getCaretTextOffset();
+        const auto lineBegin=offset==0?std::wstring::npos:text.rfind(L'\n',offset-1);
+        const auto start=lineBegin==std::wstring::npos?0:lineBegin+1;
+        const auto column=encodeUtf8(text.substr(start,offset-start)).size()+1;
+        auto analysis=_document->analyzeLogia();
+        auto target=analysis.definitionAt({_document->absolutePath(),_source->getCaretLine()+1,static_cast<int>(column)});
+        if(!target){_status->setText(L"No resolved definition at caret");return;}
+        if(target->file==_document->absolutePath())_document->navigateTo(target->line,target->column);
+        else {
+            EditorOpenRequest request;request.resourcePath=target->file;request.displayPath=target->file;
+            auto opened=_host.workspace().documents().open(request);
+            if(auto document=std::dynamic_pointer_cast<EditorDslDocument>(opened.document))document->navigateTo(target->line,target->column);
+            else _status->setText(L"Could not open definition source");
+        }
+        _host.requestRepaint();
     }
 
     void refreshStatus()
@@ -408,6 +475,7 @@ private:
     ayt::ui::TextArea* _source = nullptr;
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::TextLabel* _status = nullptr;
+    ayt::ui::Menu* _completionMenu = nullptr;
 };
 
 } // namespace

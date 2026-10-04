@@ -487,4 +487,30 @@ TEST_CASE(phoskia_document_reports_unsaved_parameters_and_module_error_locations
         located=d.file.find("math.phoskia")!=std::string::npos && d.line==2 && d.column>0;
     CHECK(located);CHECK(valid.success && valid.shaderAnalysis.parameters.size()==1);
 }
+TEST_CASE(logia_document_analyzes_unsaved_modules_and_actor_properties)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("logia_analysis")};
+    auto file=cleanup.root/"Main.logia",helper=cleanup.root/"helper.logia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));
+    CHECK(ayt::io::File::writeAllText(file.string(),"script Main {}"));
+    CHECK(ayt::io::File::writeAllText(helper.string(),"script Helper { function value():int { return 4 } }"));
+    EditorDslDocument document;CHECK(document.open(file.string(),"Main.logia"));
+    auto context=ayt::script::logia::checkedLogiaHostContext(ayt::script::logia::actorLogiaHostContext());context.actorProperties={{"hp","float"}};
+    document.setLogiaHostContext(context);document.setSourceUtf8("script Main { import \"helper.logia\"; on_start() { self.hp=value() } }");
+    CHECK(document.compile().success);auto analysis=document.analyzeLogia();CHECK(analysis.success);CHECK(analysis.dependencies.size()==1);CHECK(analysis.complete("self.hp").size()==1);
+    CHECK(ayt::io::File::readAllText(file.string())=="script Main {}");
+    CHECK(ayt::io::File::writeAllText(helper.string(),"script Helper {\n function value():int { return true }\n}"));
+    auto invalid=document.compile();CHECK(!invalid.success);bool located=false;for(const auto& d:invalid.diagnostics)if(d.file.find("helper.logia")!=std::string::npos&&d.line==2)located=true;CHECK(located);
+}
+TEST_CASE(logia_workspace_definition_navigates_resolved_declaration)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("logia_navigation")};auto file=cleanup.root/"Main.logia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));CHECK(ayt::io::File::writeAllText(file.string(),"script Main {\n function value():int { return 4 }\n on_start() { var n:int=value() }\n}"));
+    EditorWorkspace workspace;CHECK(registerEditorDslExtension(workspace.registry()));EditorOpenRequest request;request.resourcePath=file.string();auto opened=workspace.documents().open(request);CHECK(static_cast<bool>(opened));
+    auto* descriptor=workspace.registry().find(kEditorDslExtensionId);DslTestHostServices host(workspace);auto view=descriptor->createView(opened.document,host);
+    auto areas=dslTextAreas(view->rootWidget());CHECK(areas.size()==2);if(areas.size()!=2)return;
+    ayt::ui::TextArea* source=nullptr;for(auto* area:areas)if(!area->isReadOnly())source=area;CHECK(source!=nullptr);if(!source)return;
+    source->setCaret(2,26);CHECK(view->commandTarget()->executeCommand(kEditorLogiaDefinitionCommand));CHECK(source->getCaretLine()==1);
+    CHECK(view->commandTarget()->handlesCommand(kEditorLogiaCompleteCommand));
+}
 TEST_SUITE_END

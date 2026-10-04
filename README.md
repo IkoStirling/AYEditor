@@ -1,5 +1,10 @@
 # AYEditor
 
+Logia 作者分析使用 checked 编译器，并从引用它的 Actor 类读取有效属性声明。Compile 保留旧 Component/Tool 文档兼容；Actor、checked 新语法或显式 checked 上下文启用严格校验。
+**Complete** 菜单插入属性、helper 与注册接口提示，**Definition** 导航已解析声明及导入模块。
+嵌入宿主可用 `EditorDslDocument::setLogiaHostContext` 指定 schema/provider。
+见[Logia 能力与作者工作流](../../AYDocs/LOGIA-CHECKED-CAPABILITIES.md)。
+
 Phoskia DSL 文档编译按钮现使用 AYShader 共享作者分析核心，分析当前未保存文本，
 以文档路径解析相对模块。在原报告面板展示参数/default提示、UBO布局、模块来源、
 原始诊断行列、CPU耗时/源码字节及 variant 组合预算警告。Windows源码生成不启动
