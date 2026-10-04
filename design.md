@@ -1596,3 +1596,61 @@ Audio shortcut octave correction (2026-10-04): Left Shift/Alt now add/subtract
 12 semitones. The regression compares their clip identity and playback pitch
 with ordinary C5/C3 bindings, and verifies additive cancellation and latched
 release. This supersedes the earlier two-semitone interpretation.
+
+
+## 2026-10-04 Focused audio scheduling
+
+The Audio Editor native HWND shares the editor thread. Blocking bgfx composites
+previously delayed its message delivery even though Miniaudio mixes on its own
+callback thread. EditorApp now polls messages every iteration, then checks
+EditorSession::shouldPrioritizeAudioEditor (Edit + that HWND owns foreground).
+The focused path holds the primary scene/backbuffer and skips background editor
+update, viewport sync and GPU composite. It keeps AYUI and shared audio mutations
+on their owning thread; no second UI thread or duplicate audio engine is created.
+
+EditorAudioFramePacer refreshes on entry and at most every 1/60 s thereafter,
+using finite wall delta clamped to 0..0.1 s without catch-up bursts. Native note
+callbacks run before this pacing decision. MsgWaitForMultipleObjectsEx wakes on
+input with a 4 ms idle timeout. Focus return resets pacing and immediately runs
+the normal full update/composite. Play/Paused and unrelated tools retain the
+existing host path; long synchronous file dialogs/imports are not made async.
+
+EditorChildWindowManager::tickWindow services only the selected HWND, with the
+same ActiveScope/GDI render and deferred close safe points as tickAll. Main UI,
+other tool refresh, asset result polling and presentation ticks resume when
+audio focus ends; owned workers and the device audio callback remain alive.
+Audio Editor resource saves still run directly from their authoring callbacks.
+The focused session tick has its own ActiveScope, and close hooks detach the
+session before its child UI/backend are destroyed. Focus loss releases notes.
+
+Focus enter/leave emits EditorAudioScheduling diagnostics: previous host-frame
+interval, focused polling mean/max, child presentation count and zero primary
+composites. These describe message-pump intervals, not acoustic device latency.
+Tests use real child HWNDs to verify only the selected tree ticks, restore the
+primary active manager, and drain a close requested from a widget tick safely.
+
+
+### Shutdown integration and verification
+
+Native exit with Audio Editor open reproduced an access violation in
+EditorSession::onWindowFocusChanged -> onMouseLeave -> UIManager::findById.
+DeviceManager::shutdown destroyed the HWND after the EditorSession scope ended,
+but the window's focus callback still captured that session. EditorApp now
+disconnects DeviceInputBridge (including its UI text-focus hook) and clears
+window focus/resize/close/message callbacks before onPreShutdown and all UI
+teardown. GPU UI resources still release before the renderer is shut down.
+
+Final AYEditorStage/AYEditor_UnitTests build passed. Audio/child/project suites:
+51 cases, 1009 assertions, no failures/skips. Native checks covered Play entry,
+opening Audio Editor in Play, return to Edit, C4 input, mixer 100->76->100,
+focus return, exit with the child open, and restart. The final exit did not
+replace the previous crash.dmp (2026-10-04 22:40:37). The restarted instance
+was subsequently used interactively and is left running.
+
+Observed focused polling means were 1.66-4.54 ms across sampled segments;
+maximums were 45.25-84.02 ms. The final exit-fixed run sampled 2.26 ms mean,
+49.67 ms max, versus its entry-adjacent previous host frame of 55.93 ms.
+These are scheduling diagnostics, not acoustic latency or a standalone parity
+benchmark; GDI/OS stalls remain possible. Play's existing scheduling is retained.
+SDK doctor passed: 72 capabilities, 53 modules, 162 entry symbols, no errors or
+warnings. Shared audio acquisition/lifecycle contracts remain accurate.

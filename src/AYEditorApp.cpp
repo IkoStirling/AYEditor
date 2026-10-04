@@ -1,4 +1,5 @@
 #include "AYEditor/EditorApp.h"
+#include "AYEditor/EditorAudioFramePacer.h"
 #include <AYAssetFormat/AssetFormat.h>
 #include "AYEditor/EditorChildWindowManager.h"
 
@@ -1174,6 +1175,10 @@ void EditorApp::run()
                      "[EditorApp] TEMP pass capture sequence armed: %s_*\n",
                      passCaptureBase.c_str());
     }
+    EditorAudioFramePacer audioPacer;
+    bool audioWasPrioritized = false;
+    uint64_t audioPollCount = 0, audioRefreshCount = 0;
+    double audioPollTotalMs = 0, audioPollMaxMs = 0;
     uint64_t frameIndex = 0;
     double compositeMs = 0.0;
     // uiPassMs measures the host-side lambda that drives
@@ -1188,9 +1193,10 @@ void EditorApp::run()
         // process, producing misleading uiPass=20000ms diagnostics.
         uiPassMs = 0.0;
         const auto hostFrameNow = Clock::now();
-        float editorDeltaSeconds = std::chrono::duration<float>(
+        const float rawHostDeltaSeconds = std::chrono::duration<float>(
             hostFrameNow - previousHostFrame).count();
         previousHostFrame = hostFrameNow;
+        float editorDeltaSeconds = rawHostDeltaSeconds;
         // Do not inject an arbitrarily large UI/freecam movement after a
         // debugger break or a dragged modal dialog. Simulation has its own
         // FrameManager and independently samples the monotonic clock.
@@ -1209,7 +1215,38 @@ void EditorApp::run()
         // DeviceManager::pollEvents() completed immediately above; this
         // identifies the stable device state observed by Play subsystems.
         hostFrame.inputFrameIndex = hostFrame.hostFrameIndex;
-        session.update(hostFrame);
+        // The Win32 HWNDs and AYUI active scope stay on their owning thread.
+        // While authoring audio in Edit, service that window independently of
+        // the expensive scene/bgfx composite. Play retains full simulation.
+        const bool prioritizeAudio = session.shouldPrioritizeAudioEditor();
+        const auto audioRefresh = audioPacer.advance(prioritizeAudio, editorDeltaSeconds);
+        if (prioritizeAudio) {
+            if (!audioWasPrioritized) {
+                std::fprintf(stderr, "[EditorAudioScheduling] enter previous_frame_ms=%.2f background_scene=held\n",
+                             rawHostDeltaSeconds * 1000.0f);
+                audioPollCount = audioRefreshCount = 0;
+                audioPollTotalMs = audioPollMaxMs = 0;
+            } else {
+                const double gapMs = rawHostDeltaSeconds * 1000.0;
+                ++audioPollCount;
+                audioPollTotalMs += gapMs;
+                audioPollMaxMs = std::max(audioPollMaxMs, gapMs);
+            }
+            if (audioRefresh.due) {
+                session.updateFocusedAudioEditor(audioRefresh.deltaSeconds);
+                ++audioRefreshCount;
+            }
+        } else {
+            if (audioWasPrioritized) {
+                std::fprintf(stderr, "[EditorAudioScheduling] leave polls=%llu ui_frames=%llu poll_avg_ms=%.2f poll_max_ms=%.2f main_composites=0\n",
+                    static_cast<unsigned long long>(audioPollCount),
+                    static_cast<unsigned long long>(audioRefreshCount),
+                    audioPollCount ? audioPollTotalMs / audioPollCount : 0.0, audioPollMaxMs);
+                std::fflush(stderr);
+            }
+            session.update(hostFrame);
+        }
+        audioWasPrioritized = prioritizeAudio;
         if (windowPreferencesDirty) {
             windowPreferencesSaveCountdown -= editorDeltaSeconds;
             if (windowPreferencesSaveCountdown <= 0.0f) {
@@ -1218,10 +1255,11 @@ void EditorApp::run()
             }
         }
         const auto t2 = frameTiming ? Clock::now() : Clock::time_point{};
-        session.syncViewportIfChanged();
+        if (!prioritizeAudio) session.syncViewportIfChanged();
         const auto t3 = frameTiming ? Clock::now() : Clock::time_point{};
 
-        if (rendererSub != nullptr) {
+        compositeMs = 0.0;
+        if (rendererSub != nullptr && !prioritizeAudio) {
             // The RenderDoc request is queued at the end of the preceding
             // frame. Override the host camera only for the captured frame so
             // TAAPass sees a genuine discontinuity without mutating persisted
@@ -1532,7 +1570,13 @@ void EditorApp::run()
             loggedFirstFrameHeap = true;
         }
 
-        Sleep(1);
+        if (prioritizeAudio) {
+            // Wake immediately for a key/mouse message instead of waiting for
+            // a scene frame or an unconditional Sleep's timer quantum.
+            ::MsgWaitForMultipleObjectsEx(0, nullptr, 4, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        } else {
+            Sleep(1);
+        }
         ++frameIndex;
 
         if (frameTiming && (frameIndex % 60) == 0) {
@@ -1573,6 +1617,15 @@ void EditorApp::run()
     }
 
     persistEditorPreferences(session.currentPreferences());
+    // DestroyWindow emits focus/resize notifications synchronously, including
+    // during DeviceManager teardown after EditorSession has been destroyed.
+    // Remove every host callback borrowing this session before any UI teardown;
+    // the input bridge also owns the UI text-focus hook.
+    inputBridge.disconnect();
+    window.setWindowFocusCallback({});
+    window.setWindowResizeCallback({});
+    window.setWindowCloseCallback({});
+    window.setWindowMessageCallback({});
     onPreShutdown();
 
     // UI GPU resources (font atlas, UiGpuContext) must be released while bgfx is

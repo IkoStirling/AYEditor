@@ -1,3 +1,4 @@
+#include <AYEditor/EditorAudioFramePacer.h>
 #include "../../AYAudio/demo/audio_editor/AudioEditorSession.h"
 #include <AYAudio.h>
 #include <AYEditor/EditorBuiltInExtensions.h>
@@ -20,6 +21,58 @@
 using namespace ayt::audio;
 using namespace ayt::editor;
 TEST_SUITE(EditorAudioTests)
+TEST_CASE(FocusedAudioPacingLeavesInputLiveBetweenUiFrames)
+{
+    EditorAudioFramePacer pacer;
+    CHECK_FALSE(pacer.advance(false, 0.08f).due);
+    CHECK(pacer.advance(true, 0.08f).due); // immediate first focused frame
+    AudioSubSystem audio;
+    CHECK(audio.initialize());
+    ayt::ui::MockRenderer backend;
+    ayt::ui::UIManager ui;
+    ui.initialize(&backend);
+    ui.setClientSize(960, 900);
+    ayt::ui::ThemeManager::get().ensureDefaultThemes();
+    ayt::ui::ThemeManager::get().setActiveTheme("dark");
+    const auto root = std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    CHECK(ui.loadLayout((root / "EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    AudioEditorSession session;
+    session.setAudio(&audio);
+    session.setDriveAudioUpdate(false);
+    session.setAssetRoot((root / "EngineAssets/AYAudio").string());
+    CHECK(session.attach(ui));
+    int refreshes = 0;
+    float refreshedTime = 0;
+    for (int i = 0; i < 50; ++i) {
+        const auto refresh = pacer.advance(true, 0.004f);
+        if (refresh.due) {
+            ++refreshes;
+            refreshedTime += refresh.deltaSeconds;
+            session.tick(refresh.deltaSeconds);
+        } else {
+            // Production beforeKey calls noteOn directly during pollEvents,
+            // even when telemetry/painting is not due on this iteration.
+            CHECK(session.handleKey('A', true));
+            CHECK(audio.engine()->activeVoiceCount() == 1);
+            CHECK(session.handleKey('A', false));
+            session.releaseKeys();
+        }
+    }
+    CHECK(refreshes == 10);
+    CHECK(std::abs(refreshedTime - 0.2f) < 0.0001f);
+    CHECK_FALSE(pacer.advance(false, 0.0f).due);
+    CHECK(pacer.advance(true, 0.0f).due); // reopen/focus return never waits
+    const auto resumed = pacer.advance(true, 10.0f);
+    CHECK(resumed.due);
+    CHECK(resumed.deltaSeconds <= 0.1f); // no unbounded catch-up burst
+    CHECK_FALSE(pacer.advance(true, 0.0f).due);
+    CHECK_FALSE(pacer.advance(true, -1.0f).due);
+    CHECK_FALSE(pacer.advance(true, std::nanf("")).due);
+    session.detach();
+    ui.shutdown();
+    audio.shutdown();
+}
+
 TEST_CASE(SessionClosePreservesForeignVoicesAndMixerState)
 {
     AudioSubSystem audio;

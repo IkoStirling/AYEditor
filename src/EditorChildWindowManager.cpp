@@ -940,39 +940,50 @@ void EditorChildWindowManager::drainCloseRequests() {
     ayt::ui::UIManager::makeActive(&_primary);
 }
 
+void EditorChildWindowManager::tickEntry(Entry& e, float dt) {
+    if (!e.ui) return;
+    // D5 — pushActive swaps g_activeUIManager for the duration of
+    // this iteration; on scope exit the previous active (typically
+    // the editor's primary) is restored.
+    ayt::ui::UIManager::ActiveScope guard(e.ui.get());
+    e.ui->update(dt);
+#if defined(_WIN32)
+    // PR-Dock-TearOff: per-window GDI draw. Grab the window DC for
+    // this frame, point the backend at it, render. GetDC/ReleaseDC
+    // round-trip per frame keeps the DC lifetime tight (no stale
+    // handle across resize/destroy).
+    if (e.backend && e.handle != nullptr) {
+        if (HWND childHwnd = static_cast<HWND>(e.handle)) {
+            if (HDC hdc = ::GetDC(childHwnd)) {
+                const int w = static_cast<int>(e.ui->getClientSize().x);
+                const int h = static_cast<int>(e.ui->getClientSize().y);
+                auto* gdi = static_cast<GdiRenderBackend*>(e.backend.get());
+                gdi->setDrawTarget(hdc, w, h);
+                e.ui->render();
+                ::ReleaseDC(childHwnd, hdc);
+            }
+        }
+    }
+#else
+    e.ui->render();  // nullptr backend → populateFrame/flushFrame guard
+#endif
+}
+
+bool EditorChildWindowManager::tickWindow(Handle h, float dt) {
+    drainCloseRequests();
+    Entry* entry = findEntryByHandle(h);
+    if (entry == nullptr) return false;
+    tickEntry(*entry, dt);
+    drainCloseRequests();
+    return true;
+}
+
 void EditorChildWindowManager::tickAll(float dt) {
     // Close requests originate in WindowManager/UIManager callbacks. Drain
     // only after their dispatch stack has unwound, before iterating entries.
     drainCloseRequests();
     updateRedockHover();
-    for (auto& e : _entries) {
-        if (!e.ui) continue;
-        // D5 — pushActive swaps g_activeUIManager for the duration of
-        // this iteration; on scope exit the previous active (typically
-        // the editor's primary) is restored.
-        ayt::ui::UIManager::ActiveScope guard(e.ui.get());
-        e.ui->update(dt);
-#if defined(_WIN32)
-        // PR-Dock-TearOff: per-window GDI draw. Grab the window DC for
-        // this frame, point the backend at it, render. GetDC/ReleaseDC
-        // round-trip per frame keeps the DC lifetime tight (no stale
-        // handle across resize/destroy).
-        if (e.backend && e.handle != nullptr) {
-            if (HWND childHwnd = static_cast<HWND>(e.handle)) {
-                if (HDC hdc = ::GetDC(childHwnd)) {
-                    const int w = static_cast<int>(e.ui->getClientSize().x);
-                    const int h = static_cast<int>(e.ui->getClientSize().y);
-                    auto* gdi = static_cast<GdiRenderBackend*>(e.backend.get());
-                    gdi->setDrawTarget(hdc, w, h);
-                    e.ui->render();
-                    ::ReleaseDC(childHwnd, hdc);
-                }
-            }
-        }
-#else
-        e.ui->render();  // nullptr backend → populateFrame/flushFrame guard
-#endif
-    }
+    for (auto& e : _entries) tickEntry(e, dt);
     // Also cover a future widget/update callback that requests close while
     // this tick is running; erasure remains outside the range-for loop.
     drainCloseRequests();

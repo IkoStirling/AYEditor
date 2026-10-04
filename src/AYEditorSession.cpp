@@ -2701,6 +2701,31 @@ void EditorSession::setClientSize(float width, float height) {
     syncViewport();
 }
 
+bool EditorSession::shouldPrioritizeAudioEditor() const {
+#if defined(_WIN32)
+    if (_gameView.mode() != EditorMode::Edit || !_audioEditor ||
+        !_audioEditorHandle || !_childWindows) return false;
+    const HWND foreground = ::GetForegroundWindow();
+    return foreground != nullptr &&
+        ::GetAncestor(foreground, GA_ROOT) == static_cast<HWND>(_audioEditorHandle);
+#else
+    return false;
+#endif
+}
+
+void EditorSession::updateFocusedAudioEditor(float dt) {
+    syncAudioEditorLifetime();
+    auto* childUi = _childWindows ? _childWindows->uiForHandle(_audioEditorHandle) : nullptr;
+    ayt::ui::UIManager::ActiveScope scope(childUi);
+    if (_audioEditor != nullptr) {
+        _audioEditor->setDriveAudioUpdate(true);
+        _audioEditor->tick(dt);
+    }
+    if (_childWindows != nullptr)
+        _childWindows->tickWindow(_audioEditorHandle, dt);
+    syncAudioEditorLifetime();
+}
+
 void EditorSession::update(float dt) {
     ayt::game::HostedFrameContext hostFrame;
     hostFrame.realWallDeltaTime = dt;

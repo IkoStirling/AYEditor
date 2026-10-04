@@ -165,3 +165,21 @@ and focus-loss recovery, as well as compact header meter bounds.
 
 Left Shift temporarily raises new performance notes by one octave (C4 -> C5);
 Left Alt lowers one octave (C4 -> C3). Both held together cancel.
+
+
+### Focused audio responsiveness
+
+In Edit mode, focusing the native Audio Editor keeps the background scene's
+last composite and services native input independently of the scene render.
+Message-aware waiting wakes immediately for input; audio telemetry and the
+focused child UI refresh at up to 60 Hz. Returning to the main window resumes
+the full editor update/composite path immediately. Shared engine/bus controls
+and note ownership remain unchanged. Play keeps its existing simulation/render
+path; this optimization does not change Play's scheduling.
+`EditorAudioTests.FocusedAudioPacingLeavesInputLiveBetweenUiFrames` and the
+focused child tick/close regression cover cadence, direct input between paints,
+background isolation, invalid elapsed time and deferred teardown.
+
+The host disconnects its input bridge and clears focus/resize/close/message
+callbacks before session/UI shutdown. Native window destruction can emit focus
+events after the session's scope ends; no callback may retain that borrow.

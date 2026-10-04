@@ -176,6 +176,10 @@ public:
     void update(const ayt::game::HostedFrameContext& hostFrame);
     // Compatibility adapter for callers that only have a delta time.
     void update(float dt);
+    // Edit-only interactive audio path. The host still polls native messages
+    // every iteration; background scene presentation resumes on focus return.
+    bool shouldPrioritizeAudioEditor() const;
+    void updateFocusedAudioEditor(float wallDeltaSeconds);
     void syncViewportIfChanged();
     void render();
     void render(bool skipViewportPanel);

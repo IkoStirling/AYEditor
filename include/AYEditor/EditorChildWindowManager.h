@@ -136,6 +136,9 @@ public:
     // Tick every open child: pushActive scope → update → GDI render
     // into the per-window backend (Win32; GetDC per frame).
     void tickAll(float dt);
+    // Service one focused tool without redrawing every background child.
+    // Both paths drain deferred closes at the same safe points.
+    bool tickWindow(Handle h, float dt);
 
     // Route a device key event to the matching child's UIManager.
     // Returns false if no entry with `h` exists. Caller must already
@@ -179,6 +182,7 @@ private:
     void closeChildWindowNow(Handle h, bool returnPromotedCard);
     void teardownEntry(Entry& entry, bool returnPromotedCard);
     void drainCloseRequests();
+    void tickEntry(Entry& entry, float dt);
 
     Entry* findEntryByHandle(Handle h);
     Entry* findEntryByUi(const ayt::ui::UIManager* ui);

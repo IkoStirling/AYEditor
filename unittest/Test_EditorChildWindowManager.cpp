@@ -138,6 +138,62 @@ TEST_SUITE(AYEditor_ChildWindowManager)
 //    only ships the Win32 backend for createTopLevelWindow.
 // -------------------------------------------------------------------------
 #if defined(_WIN32)
+TEST_CASE(test_focused_tick_skips_background_and_drains_close_safely) {
+    WindowManager wm;
+    WindowCreateInfo info{};
+    info.title = "Focused tool regression";
+    info.hidden = true;
+    CHECK(wm.createWindow(info));
+    MockRenderer renderer;
+    UIManager primary;
+    primary.initialize(&renderer);
+    EditorChildWindowManager manager(wm, primary);
+    struct TickProbe : Widget {
+        explicit TickProbe(int& calls) : calls(calls) {}
+        int& calls;
+        std::function<void()> action;
+        void tick(float dt) override {
+            Widget::tick(dt);
+            ++calls;
+            if (action) action();
+        }
+    };
+    ChildWindowConfig config;
+    config.width = 320;
+    config.height = 240;
+    config.showOnOpen = false;
+    EditorChildWindowManager::Handle audio = nullptr, background = nullptr;
+    bool closedWithLiveUi = false;
+    config.beforeClose = [&](UIManager& ui) { closedWithLiveUi = ui.root() != nullptr; };
+    CHECK(manager.openChildWindow(config, audio));
+    config.beforeClose = {};
+    CHECK(manager.openChildWindow(config, background));
+    int audioTicks = 0, backgroundTicks = 0;
+    auto* audioProbe = new TickProbe(audioTicks);
+    manager.uiForHandle(audio)->root()->addChild(audioProbe);
+    manager.uiForHandle(background)->root()->addChild(new TickProbe(backgroundTicks));
+    UIManager::makeActive(&primary);
+    CHECK(manager.tickWindow(audio, 0.016f));
+    CHECK(audioTicks == 1);
+    CHECK(backgroundTicks == 0);
+    CHECK(UIManager::tryGet() == &primary);
+    manager.tickAll(0.016f);
+    CHECK(audioTicks == 2);
+    CHECK(backgroundTicks == 1);
+    audioProbe->action = [&] { ::SendMessageW(static_cast<HWND>(audio), WM_CLOSE, 0, 0); };
+    CHECK(manager.tickWindow(audio, 0.016f));
+    CHECK(closedWithLiveUi);
+    CHECK(manager.count() == 1);
+    CHECK(manager.uiForHandle(audio) == nullptr);
+    CHECK(backgroundTicks == 1);
+    CHECK_FALSE(manager.tickWindow(audio, 0.016f));
+    CHECK(UIManager::tryGet() == &primary);
+    CHECK(::IsWindow(static_cast<HWND>(wm.getWindowHandle())));
+    manager.closeChildWindow(background);
+    primary.shutdown();
+    wm.destroyWindow();
+}
+
 TEST_CASE(test_open_close_lifecycle) {
     WindowManager wm;
     WindowCreateInfo info{};
