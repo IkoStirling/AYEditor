@@ -512,3 +512,7 @@ enable_testing()
 add_subdirectory(unittest)
 
 message(STATUS "AYEditor v${PROJECT_VERSION} (Play/runtime + net-client + D5.5 Card promotion + Importer mapping) — see ${CMAKE_CURRENT_SOURCE_DIR}/design.md")
+
+# The shared workbench is textually included; track it even without compiler dep scanning.
+set_property(SOURCE ../AYAudio/demo/audio_editor/AudioEditorSession.cpp APPEND PROPERTY OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl")

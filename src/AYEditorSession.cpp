@@ -10535,6 +10535,9 @@ void EditorSession::openAudioEditorWindow() {
     cfg.beforeKey=[this](ayt::ui::UIManager&,ayt::device::KeyCode key,bool pressed) {
         if (!_audioEditor) return false;
         int native=key==ayt::device::KeyCode::Space ? 32 : 0;
+        if (key==ayt::device::KeyCode::LeftShift) native=0xA0;
+        if (key==ayt::device::KeyCode::LeftAlt) native=0xA4;
+        if (key==ayt::device::KeyCode::Comma) native=188;
         if (key>=ayt::device::KeyCode::A && key<=ayt::device::KeyCode::Z) native='A'+static_cast<int>(key)-static_cast<int>(ayt::device::KeyCode::A);
         return native && _audioEditor->handleKey(native,pressed);
     };

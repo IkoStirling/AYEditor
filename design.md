@@ -1569,3 +1569,14 @@ UIManager and invalidates/recalculates geometry after mounting, and tab changes
 recalculate immediately. The regression preserves this production order and
 renders without adding a host-side layout call or resize; it also covers
 reattachment, another active UIManager, all tab pages and standalone resize.
+
+Audio performance shortcut integration (2026-10-04): the audio child beforeKey
+bridge explicitly forwards Left Shift, Left Alt and Comma, preserving sides
+before general AYUI translation merges modifiers. The shared session latches
+physical key pitches and combines aliases so modifier key-up or releasing one
+of two C4 bindings cannot strand/stop the wrong note. EditorAudioTests exercises
+these interactions and the compact meter in the shared header.
+
+The host CMake directories explicitly list AudioWorkbench.inl as an
+OBJECT_DEPENDS of AudioEditorSession.cpp so included UI changes trigger a
+recompile even when compiler include-dependency scanning is unavailable.

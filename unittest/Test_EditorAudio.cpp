@@ -303,8 +303,9 @@ TEST_CASE(WorkbenchTransposeZoomMixerAndResourceSidecar)
     auto *meter = ui.findById("audio_output_meter");
     CHECK(meter);
     const auto mb = meter->getWorldBounds();
-    CHECK(mb.minX > pb.maxX);
-    CHECK(mb.maxY - mb.minY > mb.maxX - mb.minX);
+    CHECK(mb.maxY < pb.minY);
+    CHECK(mb.maxY - mb.minY <= 80);
+    CHECK(mb.maxX - mb.minX <= 150);
     tabs->setSelectedIndex(2);
     ui.layout();
     renderTrace("mixer");
@@ -432,7 +433,7 @@ TEST_CASE(WorkbenchAttachesAfterNativeHostLayoutWithoutResize) {
         if(piano&&meter){
             const auto p=piano->getWorldBounds(),m=meter->getWorldBounds();
             CHECK(p.maxX-p.minX>600);CHECK(p.maxY-p.minY>=150);
-            CHECK(m.minX>p.maxX);CHECK(m.maxY-m.minY>600);
+            CHECK(m.maxY<p.minY);CHECK(m.maxY-m.minY<=80);
             CHECK(m.maxX<=960);CHECK(m.maxY<=900);
         }
         auto* tabs=dynamic_cast<ayt::ui::TabControl*>(child.findById("audio_tabs"));
@@ -452,9 +453,60 @@ TEST_CASE(WorkbenchAttachesAfterNativeHostLayoutWithoutResize) {
     CHECK(child.loadLayout((root/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
     child.setClientSize(1100,820);child.layout();CHECK(session.attach(child));
     auto* meter=child.findById("audio_output_meter");const auto initial=meter->getWorldBounds();
-    CHECK(initial.minX>900);CHECK(initial.maxY-initial.minY>600);
+    CHECK(initial.minX>900);CHECK(initial.maxY-initial.minY<=80);
     child.setClientSize(900,700);child.layout();const auto resized=meter->getWorldBounds();
     CHECK(resized.minX<initial.minX);CHECK(resized.maxX<=900);CHECK(resized.maxY<=700);
     session.detach();
+}
+
+TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
+    AudioSubSystem audio;CHECK(audio.initialize());auto* engine=audio.engine();
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;ui.initialize(&renderer);ui.setClientSize(960,900);
+    const auto root=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
+    CHECK(ui.loadLayout((root/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));
+    AudioEditorSession session;session.setAudio(&audio);session.setDriveAudioUpdate(false);CHECK(session.attach(ui));
+    auto* status=dynamic_cast<ayt::ui::TextLabel*>(ui.findById("note_status"));CHECK(status);
+    const auto low=session.pianoKeyBounds(48),strip=ui.findById("piano_keyboard")->getWorldBounds();
+    CHECK(low.minX>=strip.minX);CHECK(low.maxX<=strip.maxX);
+    auto* source=dynamic_cast<ayt::ui::Button*>(ui.findById("btn_instrument"));CHECK(source);const auto sourceBounds=source->getWorldBounds();ayt::ui::UIMouseEvent click({(sourceBounds.minX+sourceBounds.maxX)/2,(sourceBounds.minY+sourceBounds.maxY)/2},0);source->onMouseMove(click);source->onMouseButtonDown(click);source->onMouseButtonUp(click);
+    auto firstVoice=[&] { VoiceRuntime voice{};bool found=false;for(uint32_t i=0;i<64;++i) if(engine->voiceStateAt(i,voice)){found=true;break;}CHECK(found);return voice; };
+    auto drain=[&] {std::vector<float> pcm(engine->outputSampleRate()/2);engine->render(pcm.data(),engine->outputSampleRate()/4);};
+    CHECK(session.handleKey('A',true));const auto upper=firstVoice();session.releaseKeys();
+    constexpr int lowerKeys[]={'Z','X','C','V','B','N','M',188};
+    constexpr int pitches[]={48,50,52,53,55,57,59,60};
+    constexpr const wchar_t* names[]={L"C3",L"D3",L"E3",L"F3",L"G3",L"A3",L"B3",L"C4"};
+    for(int i=0;i<8;++i){
+        CHECK(session.handleKey(lowerKeys[i],true));auto v=firstVoice();
+        const int regionRoot=((pitches[i]+5)/12)*12;
+        CHECK(std::abs(v.pitch-std::exp2((pitches[i]-regionRoot)/12.f))<1e-5f);
+        CHECK(status->getText()==std::wstring(L"实际音高：")+names[i]);
+        if(i==0)CHECK(v.clip!=upper.clip);if(i==7)CHECK(v.clip==upper.clip);
+        CHECK(session.handleKey(lowerKeys[i],false));drain();CHECK(engine->activeVoiceCount()==0);
+    }
+    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey('A',true));
+    CHECK(std::abs(firstVoice().pitch-std::exp2(2.f/12))<1e-5f);
+    const auto count=engine->activeVoiceCount();CHECK(session.handleKey('A',true));CHECK(engine->activeVoiceCount()==count);
+    CHECK(session.handleKey(0xA0,false));CHECK(session.handleKey('A',false));
+    CHECK(status->getText()==L"实际音高：D4");drain();CHECK(engine->activeVoiceCount()==0);
+    CHECK(session.handleKey(0xA4,true));ui.onKeyDown(18);CHECK(session.handleKey('A',true));
+    CHECK(std::abs(firstVoice().pitch-std::exp2(-2.f/12))<1e-5f);
+    CHECK(session.handleKey(0xA4,false));ui.onKeyUp(18);CHECK(session.handleKey('A',false));drain();CHECK(engine->activeVoiceCount()==0);
+    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('A',true));CHECK(firstVoice().pitch==1);
+    session.onFocusLost();CHECK(engine->activeVoiceCount()==0);
+    CHECK(!session.handleKey(0xA1,true));CHECK(session.handleKey('A',true));CHECK(firstVoice().pitch==1);session.releaseKeys();
+    // Upper A and lower comma share C4: releasing either physical key must preserve the other.
+    CHECK(session.handleKey('A',true));CHECK(session.handleKey(188,true));CHECK(engine->activeVoiceCount()==1);
+    CHECK(session.handleKey('A',false));drain();CHECK(engine->activeVoiceCount()==1);
+    CHECK(session.handleKey(188,false));drain();CHECK(engine->activeVoiceCount()==0);
+    auto* input=dynamic_cast<ayt::ui::TextInput*>(ui.findById("transpose_value"));CHECK(input);ui.setFocus(input);
+    CHECK(!session.handleKey(0xA0,true));CHECK(!session.handleKey('Z',true));ui.setFocus(nullptr);
+    // Releases still work after focus enters a numeric field.
+    CHECK(session.handleKey('X',true));ui.setFocus(input);CHECK(session.handleKey('X',false));drain();CHECK(engine->activeVoiceCount()==0);ui.setFocus(nullptr);
+    ui.onKeyDown(17);CHECK(!session.handleKey('Z',true));ui.onKeyUp(17);
+    CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('Z',true));session.onFocusLost();
+    CHECK(session.handleKey('Z',true));CHECK(status->getText()==L"实际音高：C3");session.releaseKeys();
+    renderer.clear();session.tick(1);ui.render();bool silenceReadout=false;
+    for(const auto& call:renderer.getDrawCalls())if(call.text==L"-inf dBFS")silenceReadout=true;
+    CHECK(silenceReadout);session.detach();audio.shutdown();
 }
 TEST_SUITE_END

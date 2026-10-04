@@ -132,7 +132,7 @@ Project Safe Rename 面板：可以选择引用类型、预览文件级改动及
 Tools → Audio Editor opens the shared workbench: instrument performance,
 audio resources and current engine mixing. Piano exists only on performance;
 its strip pans and wheel-zooms, with signed semitone transpose (-24..+24).
-Mixer rows have a name, slider and editable percent. A fixed right-side L/R
+Mixer rows have a name, slider and editable percent. A compact upper-right vertical L/R
 output meter shows real peaks/overload. Resource audition pause/stop is local;
 engine pause and bus/effect controls are explicitly global. Individual pages
 scroll when needed and read staged EngineAssets, not AssetRepo at runtime.
@@ -152,3 +152,8 @@ Timeline remains the waveform and clip-arrangement surface.
 viewport/load/layout before session attachment, reopening, immediate tab
 switching and standalone resize. This prevents the native child from rendering
 the dynamic workbench at default sizes in the top-left corner.
+
+Audio child input preserves Left Shift/Left Alt and comma through the native
+key bridge. EditorAudioTests verifies temporary transpose, the lower-octave
+white-key row, latched releases/duplicate mappings, text-focus suppression
+and focus-loss recovery, as well as compact header meter bounds.
