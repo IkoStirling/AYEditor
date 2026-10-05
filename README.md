@@ -213,3 +213,9 @@ and music voice; focused audio-child pacing remains unchanged. EditorAudioChartT
 covers the shared five-tab session and preview input/lifetime integration.
 The model and timing restrictions are documented in AYAudio/design.md; this demo
 preview does not expose a new recommended engine gameplay API.
+
+## Logia 引擎函数提示
+
+默认 Logia 文档使用共享 engineLogiaHostContext，提供 audio/animation/physics/ui 的 26 个基础函数提示；
+检测到这些调用时编译开启 checked 参数校验。显式 setLogiaHostContext 保留嵌入宿主自己的契约。
+Editor Play Script 装配安装相同签名的实际 provider，UI 仍只操作游戏 Screen。验证见 AYEditor_DslDocument。

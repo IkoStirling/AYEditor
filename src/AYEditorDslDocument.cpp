@@ -5,6 +5,7 @@
 #include <AYEntity/ActorClassAsset.h>
 #include "AYScript/logia/LogiaPipeline.h"
 #include "AYScript/logia/Parser.h"
+#include "AYScript/logia/EngineFunctions.h"
 #include "AYShader/Phoskia.h"
 
 #include <algorithm>
@@ -449,6 +450,15 @@ ayt::script::logia::LogiaHostContext EditorDslDocument::logiaContext() const
                   context.strictSemantics = checked; }
     }
     context.sourcePath = _absolutePath;
+    if (!_logiaContext) {
+        context = ayt::script::logia::engineLogiaHostContext(std::move(context));
+        std::vector<ayt::script::logia::Token> tokens;
+        ayt::script::logia::tokenize(_source,tokens);
+        for(std::size_t i=0;i+2<tokens.size();++i)
+            if(tokens[i+1].type==ayt::script::logia::TokenType::Dot
+                && context.hostFunctions.contains(tokens[i].lexeme+"."+tokens[i+2].lexeme))
+                context.strictSemantics = true;
+    }
     if (context.assetRoot.empty()) context.assetRoot = ayt::entity::assetsRootForScene(_absolutePath);
     return context;
 }

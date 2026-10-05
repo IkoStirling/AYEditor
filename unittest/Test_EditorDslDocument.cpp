@@ -513,4 +513,14 @@ TEST_CASE(logia_workspace_definition_navigates_resolved_declaration)
     source->setCaret(2,26);CHECK(view->commandTarget()->executeCommand(kEditorLogiaDefinitionCommand));CHECK(source->getCaretLine()==1);
     CHECK(view->commandTarget()->handlesCommand(kEditorLogiaCompleteCommand));
 }
+TEST_CASE(logia_default_document_exposes_engine_signatures_and_rejects_bad_arguments)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("logia_engine")};auto file=cleanup.root/"Main.logia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));CHECK(ayt::io::File::writeAllText(file.string(),"script Main {}"));
+    EditorDslDocument document;CHECK(document.open(file.string(),"Main.logia"));
+    document.setSourceUtf8("script Main { on_start() { audio.play(\"click.ayaudio\",1.0,false) ui.set_text(\"hud/hp\",\"42\") } }");
+    CHECK(document.compile().success);auto analysis=document.analyzeLogia();CHECK(analysis.success);CHECK(analysis.complete("audio.play").size()==2);
+    CHECK(analysis.complete("physics.hit_point").size()==1);
+    document.setSourceUtf8("script Main { on_start() { audio.play(true,1.0,false) } }");CHECK(!document.compile().success);
+}
 TEST_SUITE_END

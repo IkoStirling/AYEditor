@@ -1694,3 +1694,10 @@ and music voice; focused audio-child pacing remains unchanged. EditorAudioChartT
 covers the shared five-tab session and preview input/lifetime integration.
 The model and timing restrictions are documented in AYAudio/design.md; this demo
 preview does not expose a new recommended engine gameplay API.
+
+## Logia 默认引擎作者契约（2026-10-06）
+
+无显式 context 的文档把 AYScript 的 engineLogiaFunctions 合并为作者声明；出现已声明的 dotted call
+时启用 strictSemantics。Actor schema 路径继续 checked；显式宿主覆盖不隐式扩大其授权声明。
+默认 Editor 的 legacy 与 module Script 装配调用 AYApplication 的 provider 安装函数，在首次加载前完成。
+声明与 provider 共用签名，补全不依赖运行服务已经初始化，也不授予文档执行权限。

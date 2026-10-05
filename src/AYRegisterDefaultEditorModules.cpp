@@ -25,6 +25,7 @@
 #include <AYNetwork/NetworkModule.h>
 #include <AYNetwork/NetworkRuntimeModule.h>
 #include <AYApplication/RegisterDefaultModules.h>
+#include <AYApplication/LogiaHostFunctions.h>
 #include <AYPhysics/PhysicsRuntimeModule.h>
 #include <AYRenderer/RendererRuntimeModule.h>
 #include <AYScript/ScriptRuntimeModule.h>
@@ -46,8 +47,9 @@ void registerDefaultEditorModules(const EditorModuleOptions& options)
     ayt::app::registerPhysicsModule();
     ayt::net::registerNetworkSubSystem();
 
-    ayt::game::GameLoop::instance().registerSubSystem(
-        new ayt::script::ScriptSubSystem());
+    auto* script = new ayt::script::ScriptSubSystem();
+    ayt::app::installDefaultLogiaHostFunctions(script->bridge(), (ayt::app::currentEngineHost()?*ayt::app::currentEngineHost():ayt::app::defaultEngineHost()));
+    ayt::game::GameLoop::instance().registerSubSystem(script);
 
     if (!options.enableAudio) {
         return;
@@ -109,7 +111,12 @@ ayt::module::ModuleResult configureDefaultEditorModules(
         return result;
     }
     if (auto result = runtime.modules().emplace<
-            ayt::script::ScriptRuntimeModule>(); !result) {
+            ayt::script::ScriptRuntimeModule>([&host=runtime.context().host()](ayt::module::IModuleContext&,ayt::game::ISubSystem& system) {
+                auto* script=dynamic_cast<ayt::script::ScriptSubSystem*>(&system);
+                if(!script || !ayt::app::installDefaultLogiaHostFunctions(script->bridge(),host))
+                    return ayt::module::ModuleResult::failure(ayt::module::ModuleErrorCode::InstallationFailed,"Could not install editor Logia host functions");
+                return ayt::module::ModuleResult::success();
+            }); !result) {
         return result;
     }
     if (auto result = runtime.modules().emplace<
