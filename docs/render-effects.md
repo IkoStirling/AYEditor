@@ -1,5 +1,9 @@
 # 新增场景渲染控制
 
+体积光／雾默认关闭，提供密度与 Final / Transmit / Scatter 诊断，Edit/Play 注册时同步。
+默认选第一个场景灯，全局介质；局部盒、散射颜色和各向异性由高级 Host settings 设置。
+这些新旋钮仍为 live preview，不额外更改偏好/场景文件格式。
+
 Render 面板的 SSR 默认关闭，提供强度与 0 Final / 1 Hits / 2 Radiance。
 绑定由 EditorSession 在 Edit/Play 的 Renderer 注册后应用，面板启动前回调安全无操作。
 首版需要 Deferred + 活动 IBL v2 + 粗糙度低于0.6的不透明 PBR 表面；

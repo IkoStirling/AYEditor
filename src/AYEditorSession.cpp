@@ -7194,6 +7194,18 @@ void EditorSession::bindRenderSettingsPanel()
     if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_ssr"))) w->setOnToggled([applySsr](bool) { applySsr(); });
     bindSlider("sld_ssr_strength", [applySsr](float) { applySsr(); });
     bindSlider("sld_ssr_debug", [applySsr](float) { applySsr(); });
+    auto applyVolume = [this, rendererOrNull]() {
+        if (auto* r = rendererOrNull()) {
+            auto s = r->volumetricSettings();
+            if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_volumetric"))) s.enabled = w->isChecked();
+            if (auto* w = dynamic_cast<ayt::ui::Slider*>(_ui.findById("sld_volume_density"))) s.density = w->getValue();
+            if (auto* w = dynamic_cast<ayt::ui::Slider*>(_ui.findById("sld_volume_debug"))) s.debugView = static_cast<uint8_t>(std::lround(w->getValue()));
+            r->setVolumetricSettings(s);
+        }
+    };
+    if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_volumetric"))) w->setOnToggled([applyVolume](bool) { applyVolume(); });
+    bindSlider("sld_volume_density", [applyVolume](float) { applyVolume(); });
+    bindSlider("sld_volume_debug", [applyVolume](float) { applyVolume(); });
 
     // §S4d — Depth Haze (default slightly on in UI JSON).
     auto applyHazeParams = [rendererOrNull](bool enabled, float strength, float density) {
@@ -7631,6 +7643,11 @@ void EditorSession::applyRenderSettingsFromPanel()
         s.strength = sliderValue("sld_ssr_strength", 1.0f);
         s.debugView = static_cast<uint8_t>(std::lround(sliderValue("sld_ssr_debug", 0.0f)));
         r.setSsrSettings(s);
+        auto volume = r.volumetricSettings();
+        if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_volumetric"))) volume.enabled = w->isChecked();
+        volume.density = sliderValue("sld_volume_density", 0.025f);
+        volume.debugView = static_cast<uint8_t>(std::lround(sliderValue("sld_volume_debug", 0.0f)));
+        r.setVolumetricSettings(volume);
     }
 
     // §S4d — Depth Haze defaults: on, density 0.04, fog (0.7,0.75,0.8).
