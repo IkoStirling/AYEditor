@@ -7206,6 +7206,27 @@ void EditorSession::bindRenderSettingsPanel()
     if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_volumetric"))) w->setOnToggled([applyVolume](bool) { applyVolume(); });
     bindSlider("sld_volume_density", [applyVolume](float) { applyVolume(); });
     bindSlider("sld_volume_debug", [applyVolume](float) { applyVolume(); });
+    auto applyDecalPreview = [this, rendererOrNull]() {
+        if (auto* r = rendererOrNull()) {
+            bool enabled = false;
+            if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_decal_preview"))) enabled = w->isChecked();
+            r->setDeferredDecalsEnabled(enabled);
+            // Validation-only projector, not an authored Entity/scene asset.
+            // +Z faces +Y; local XY covers a 4x4 patch on the demo ground y=0.
+            if (enabled) {
+                ayt::render::DeferredDecal d;
+                d.localToWorld.row[0] = ayt::math::FVector4(2,0,0,0);
+                d.localToWorld.row[1] = ayt::math::FVector4(0,0,.25f,0);
+                d.localToWorld.row[2] = ayt::math::FVector4(0,-2,0,0);
+                d.color = ayt::math::FVector3(.05f,.5f,.9f);
+                if (auto* w = dynamic_cast<ayt::ui::Slider*>(_ui.findById("sld_decal_opacity"))) d.opacity = w->getValue();
+                d.roughness = .2f; d.materialStrength = 1;
+                r->setDeferredDecals({d});
+            }
+        }
+    };
+    if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_decal_preview"))) w->setOnToggled([applyDecalPreview](bool) { applyDecalPreview(); });
+    bindSlider("sld_decal_opacity", [applyDecalPreview](float) { applyDecalPreview(); });
 
     // §S4d — Depth Haze (default slightly on in UI JSON).
     auto applyHazeParams = [rendererOrNull](bool enabled, float strength, float density) {
@@ -7648,6 +7669,20 @@ void EditorSession::applyRenderSettingsFromPanel()
         volume.density = sliderValue("sld_volume_density", 0.025f);
         volume.debugView = static_cast<uint8_t>(std::lround(sliderValue("sld_volume_debug", 0.0f)));
         r.setVolumetricSettings(volume);
+        bool decalPreview = false;
+        if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_decal_preview"))) decalPreview = w->isChecked();
+        r.setDeferredDecalsEnabled(decalPreview);
+        if (decalPreview) {
+            // Same validation-only ground projector as the live callback.
+            ayt::render::DeferredDecal d;
+            d.localToWorld.row[0] = ayt::math::FVector4(2,0,0,0);
+            d.localToWorld.row[1] = ayt::math::FVector4(0,0,.25f,0);
+            d.localToWorld.row[2] = ayt::math::FVector4(0,-2,0,0);
+            d.color = ayt::math::FVector3(.05f,.5f,.9f);
+            d.opacity = sliderValue("sld_decal_opacity", .8f);
+            d.roughness = .2f; d.materialStrength = 1;
+            r.setDeferredDecals({d});
+        }
     }
 
     // §S4d — Depth Haze defaults: on, density 0.04, fog (0.7,0.75,0.8).

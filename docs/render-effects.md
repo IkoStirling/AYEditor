@@ -1,5 +1,10 @@
 # 新增场景渲染控制
 
+Decal preview (test projector) 默认关闭；启用后给Renderer设置一个蓝色4x4地面盒投影，
+位于y=0，+Z对齐+Y；opacity实时控制。该控件是验证fixture，会替换Host decal列表，
+不是场景Entity/资产，不写Scene文件；正常产品创作用Renderer高级Host descriptor接口。
+正式Decal支持颜色/alpha、tangent normal、roughness/metallic；原depth/AO/model/coverage保留。
+
 体积光／雾默认关闭，提供密度与 Final / Transmit / Scatter 诊断，Edit/Play 注册时同步。
 默认选第一个场景灯，全局介质；局部盒、散射颜色和各向异性由高级 Host settings 设置。
 这些新旋钮仍为 live preview，不额外更改偏好/场景文件格式。
