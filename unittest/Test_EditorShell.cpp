@@ -318,6 +318,9 @@ TEST_CASE(test_editor_session_loads_shell_json) {
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_auto_exposure")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_depth_haze")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssao")) != nullptr);
+    CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_ssr")) != nullptr);
+    CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_ssr_strength")) != nullptr);
+    CHECK(dynamic_cast<Slider*>(session.ui().findById("sld_ssr_debug")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_fxaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_smaa")) != nullptr);
     CHECK(dynamic_cast<CheckBox*>(session.ui().findById("chk_taa")) != nullptr);

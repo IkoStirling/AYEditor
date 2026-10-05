@@ -7182,6 +7182,19 @@ void EditorSession::bindRenderSettingsPanel()
         }
     }
 
+    auto applySsr = [this, rendererOrNull]() {
+        if (auto* r = rendererOrNull()) {
+            auto s = r->ssrSettings();
+            if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_ssr"))) s.enabled = w->isChecked();
+            if (auto* w = dynamic_cast<ayt::ui::Slider*>(_ui.findById("sld_ssr_strength"))) s.strength = w->getValue();
+            if (auto* w = dynamic_cast<ayt::ui::Slider*>(_ui.findById("sld_ssr_debug"))) s.debugView = static_cast<uint8_t>(std::lround(w->getValue()));
+            r->setSsrSettings(s);
+        }
+    };
+    if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_ssr"))) w->setOnToggled([applySsr](bool) { applySsr(); });
+    bindSlider("sld_ssr_strength", [applySsr](float) { applySsr(); });
+    bindSlider("sld_ssr_debug", [applySsr](float) { applySsr(); });
+
     // §S4d — Depth Haze (default slightly on in UI JSON).
     auto applyHazeParams = [rendererOrNull](bool enabled, float strength, float density) {
         if (ayt::render::Renderer* r = rendererOrNull()) {
@@ -7612,6 +7625,13 @@ void EditorSession::applyRenderSettingsFromPanel()
         bloomOn ? sliderValue("sld_bloom", 0.3f) : 0.0f);
     r.setAmbientStrength(sliderValue("sld_ambient", 0.85f));
     r.setShadowBias(sliderValue("sld_shadow_bias", 0.003f));
+    {
+        auto s = r.ssrSettings();
+        if (auto* w = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("chk_ssr"))) s.enabled = w->isChecked();
+        s.strength = sliderValue("sld_ssr_strength", 1.0f);
+        s.debugView = static_cast<uint8_t>(std::lround(sliderValue("sld_ssr_debug", 0.0f)));
+        r.setSsrSettings(s);
+    }
 
     // §S4d — Depth Haze defaults: on, density 0.04, fog (0.7,0.75,0.8).
     {
