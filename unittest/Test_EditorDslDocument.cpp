@@ -523,4 +523,37 @@ TEST_CASE(logia_default_document_exposes_engine_signatures_and_rejects_bad_argum
     CHECK(analysis.complete("physics.hit_point").size()==1);
     document.setSourceUtf8("script Main { on_start() { audio.play(true,1.0,false) } }");CHECK(!document.compile().success);
 }
+TEST_CASE(logia_unsaved_async_document_checks_payload_bindings_and_navigation)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("logia_async")};
+    const auto file = cleanup.root / "Main.logia";
+    CHECK(ayt::io::File::createParentDirectories(file.string()));
+    CHECK(ayt::io::File::writeAllText(file.string(), "script Main {}"));
+    EditorDslDocument document;
+    CHECK(document.open(file.string(), "Main.logia"));
+    document.setSourceUtf8(R"logia(script Main {
+    function work(base:int) {
+        await wait_event("task_complete") into (id:int,ok:bool)
+        if ok { log.info("completed") }
+    }
+    on_start() { tasks.start(work,7) }
+})logia");
+    CHECK(document.compile().success);
+    auto analysis = document.analyzeLogia();
+    CHECK(analysis.success);
+    const auto symbols = analysis.complete("ok", file.generic_string(), 4);
+    CHECK(symbols.size() == 1);
+    if (!symbols.empty()) {
+        CHECK(symbols.front().kind == "event-payload");
+        CHECK(symbols.front().type == "bool");
+    }
+    const auto definition = analysis.definitionAt({file.generic_string(), 4, 12});
+    CHECK(definition.has_value());
+    if (definition) CHECK(definition->line == 3);
+    CHECK(ayt::io::File::readAllText(file.string()) == "script Main {}");
+    document.setSourceUtf8("script Main { function f() { await wait_event(\"task_complete\") into (id:int,ok:int) } }");
+    CHECK(!document.compile().success);
+    document.setSourceUtf8("script Main { function f(n:int) { await delay(0) } on_start() { tasks.start(f,true) } }");
+    CHECK(!document.compile().success);
+}
 TEST_SUITE_END

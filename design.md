@@ -1746,3 +1746,10 @@ and offers only ≤25ms optional snapping. Yellow attack ticks and a half-beat g
 generation basis. Low/high-frequency evidence chooses lane pairs; this is a coarse editable draft.
 Irregular attacks, long rests, density suppression and retained song timing have focused regressions.
 The standalone preview dismisses on close before normal worker/audio/GPU cleanup; see AYAudio/design.md.
+
+### Logia typed async authoring (2026-10-07)
+
+Unsaved DSL documents consume shared checked task-argument validation and lexical payload bindings:
+`await wait_event("alias") into (name:type, ...)`. Completion and Definition use each binding's declaration
+identity and original source location. No editor-only parser is added. AYEditor_DslDocument covers typed
+payload navigation and rejected task/payload arguments while preserving the saved source.

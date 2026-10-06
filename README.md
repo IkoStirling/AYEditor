@@ -220,6 +220,9 @@ preview does not expose a new recommended engine gameplay API.
 检测到这些调用时编译开启 checked 参数校验。显式 setLogiaHostContext 保留嵌入宿主自己的契约。
 Editor Play Script 装配安装相同签名的实际 provider，UI 仍只操作游戏 Screen。验证见 AYEditor_DslDocument。
 
+Logia 异步作者链路支持 `tasks.start(helper, args...)` 与 `await wait_event("alias") into (name:type, ...)`。
+未保存文档检查参数/payload 类型，Complete/Definition 提供 payload 局部声明与导航；见 AYEditor_DslDocument。
+
 The shared 演奏与编排 tab now supports piano performance clips, real-time head quantization,
 fixed-duration step chords, editable piano roll, direct track selection and clip arrangement.
 Ruler/blank-timeline dragging pans independently of wheel zoom. Piano keys remain pinned below
