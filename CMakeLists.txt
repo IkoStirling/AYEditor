@@ -534,6 +534,7 @@ set_property(SOURCE ../AYAudio/demo/audio_editor/AudioEditorSession.cpp APPEND P
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartWorkbench.inl"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartDocument.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioRhythmAnalysis.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceDocument.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceRenderer.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceCanvas.inl"

@@ -1726,3 +1726,16 @@ negative character/em height instead of positive cell height, and grayscale anti
 uses the same face/size, avoiding zero-width fallback metrics. This changes all GDI child tools consistently;
 it does not replace GDI with the GPU renderer or alter process DPI awareness. Focused native pixel/metric
 and child-window lifecycle regressions cover the shared backend.
+
+### Rhythm-assisted audio chart editing (2026-10-06)
+
+The shared chart tab now performs background BPM/beat-phase estimation, reversible calibration,
+shared waveform/chart beat rulers and playback seeking/follow, and editable generated rhythmic taps.
+Saved chart timing is preserved; automatic estimates cannot overwrite manual edits during import.
+Independent preview is horizontal DFJK with per-note timing accuracy/errors, reduced selectable
+countdown and reusable decoded PCM cache. Decode/analysis/preparation jobs remain off the UI thread;
+registration and widget/engine mutations stay on the owner thread. Shutdown cancels/joins owned jobs.
+AudioChartTests and EditorAudioChartTests cover synthetic tempo/phase, quiet/steady input, cancellation,
+draft validity/density/history, large-note ordered judgement, waveform/chart cursor alignment,
+asynchronous import/manual-setting priority, snapshot isolation and horizontal tap/hold feedback.
+See AYAudio/design.md and AUDIO-AUTHORING §11 for metrics, fixed-tempo limits and Temp cache lifetime.
