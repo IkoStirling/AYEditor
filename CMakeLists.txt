@@ -533,4 +533,8 @@ message(STATUS "AYEditor v${PROJECT_VERSION} (Play/runtime + net-client + D5.5 C
 set_property(SOURCE ../AYAudio/demo/audio_editor/AudioEditorSession.cpp APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartWorkbench.inl"
-    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartDocument.h")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartDocument.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceDocument.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceRenderer.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceCanvas.inl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/PerformanceWorkbench.inl")

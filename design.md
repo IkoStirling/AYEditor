@@ -1701,3 +1701,15 @@ preview does not expose a new recommended engine gameplay API.
 时启用 strictSemantics。Actor schema 路径继续 checked；显式宿主覆盖不隐式扩大其授权声明。
 默认 Editor 的 legacy 与 module Script 装配调用 AYApplication 的 provider 安装函数，在首次加载前完成。
 声明与 provider 共用签名，补全不依赖运行服务已经初始化，也不授予文档执行权限。
+
+### Performance clip authoring (2026-10-06)
+
+The same AudioEditorSession hosts internal PerformanceDesk in both processes. The first tab has
+a flexible ScrollView authoring area and fixed-height piano pane, avoiding off-screen piano keys.
+Track headers select directly; ruler/blank timeline pan and wheel zoom use separate gestures.
+Session note/pedal callbacks feed the recorder at the input boundary; the monotonic clock is
+injectable for deterministic tests. Physical-key repeat/temporary transpose gates are reused.
+Playback/export rendering runs on an immutable worker copy, avoiding UI-frame-dependent note scheduling.
+Session lifecycle stops only owned performance voice/clip; cancellation/join precedes widget teardown.
+Existing project asset-root/saved callbacks integrate versioned documents and generated WAV.
+Focused regressions: EditorAudioPerformanceTests, EditorAudioTests, ChildWindowManager/ProjectWorkflow.

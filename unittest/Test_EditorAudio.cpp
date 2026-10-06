@@ -10,6 +10,8 @@
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYTest.h>
 #include <AYUI/Button.h>
+#include <AYUI/ComboBox.h>
+#include "../../AYAudio/demo/audio_editor/PerformanceDocument.h"
 #include <AYUI/MockRenderer.h>
 #include <AYUI/Slider.h>
 #include <AYUI/TabControl.h>
@@ -673,5 +675,63 @@ TEST_CASE(IndependentChartPreviewJudgesInputAndFocusPausePreservesEngine) {
     audio.engine()->render(pcm.data(),audio.engine()->outputSampleRate()*4/10);CHECK(session.handleKey('F',false));session.tick(.01f);CHECK(status->getText().find(L"Perfect 2")!=std::wstring::npos);
     session.onFocusLost();session.tick(.01f);CHECK_FALSE(audio.engine()->isPaused());CHECK(status->getText().find(L"已暂停")!=std::wstring::npos);CHECK(session.handleKey(27,true));
     session.detach();CHECK(audio.engine()->activeVoiceCount()==0);ui.shutdown();audio.shutdown();
+}
+TEST_SUITE_END
+
+TEST_SUITE(EditorAudioPerformanceTests)
+namespace {
+void performanceClick(ayt::ui::UIManager& ui,const char* id) {
+    auto* button=dynamic_cast<ayt::ui::Button*>(ui.findById(id));CHECK(button);if(!button)return;
+    const auto b=button->getWorldBounds();ayt::ui::UIMouseEvent e({(b.minX+b.maxX)/2,(b.minY+b.maxY)/2},0);
+    button->onMouseMove(e);button->onMouseButtonDown(e);button->onMouseButtonUp(e);
+}
+void performanceSet(ayt::ui::UIManager& ui,const char* id,const wchar_t* value) {auto* input=dynamic_cast<ayt::ui::TextInput*>(ui.findById(id));CHECK(input);if(input)input->setText(value);}
+struct PerformanceHost {
+    ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;AudioSubSystem audio;AudioEditorSession session;
+    std::filesystem::path assets;double clock=100;
+    PerformanceHost(const char* name){assets=ayt::test::testTmpDir()/name;std::filesystem::create_directories(assets);CHECK(audio.initialize());ui.initialize(&renderer);ui.setClientSize(1200,1100);ayt::ui::ThemeManager::get().ensureDefaultThemes();ayt::ui::ThemeManager::get().setActiveTheme("dark");
+        const auto root=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();CHECK(ui.loadLayout((root/"EngineAssets/AYAudio/ui/audio_editor.ui.json").string()));session.setAudio(&audio);session.setDriveAudioUpdate(false);session.setPerformanceClock([this]{return clock;});session.setAssetRoot((root/"EngineAssets/AYAudio").string());session.setRecordingRootProvider([this]{return ayt::audio::chart::utf8(assets);});CHECK(session.attach(ui));ui.layout();}
+    ~PerformanceHost(){session.detach();ui.shutdown();audio.shutdown();}
+    void select(const char* id,int index){auto* c=dynamic_cast<ayt::ui::ComboBox*>(ui.findById(id));CHECK(c);if(c)c->setSelectedIndexAndNotify(index);}
+    bool waitFor(const std::function<bool()>& condition){for(int n=0;n<400;++n){session.tick(0);if(condition())return true;std::this_thread::sleep_for(std::chrono::milliseconds(5));}return false;}
+};
+}
+TEST_CASE(StepChordSavesReopensAndUndoRestoresCursor){
+    PerformanceHost host("performance_step_assets");auto& session=host.session;auto& ui=host.ui;host.select("performance_mode",1);host.select("performance_length",1);
+    CHECK(session.handleKey('A',true));CHECK(session.handleKey('D',true));CHECK(session.handleKey('A',true));CHECK(session.handleKey('A',false));CHECK(session.performanceState()->cursor==0);CHECK(session.handleKey('D',false));
+    auto* state=session.performanceState();CHECK(state);CHECK(state->cursor==ayt::audio::performance::PPQ/2);CHECK(state->document.clip(state->clip)->notes.size()==2);
+    const auto clipId=state->clip;CHECK(state->document.clip(clipId)->notes[0].duration==ayt::audio::performance::PPQ/2);
+    performanceClick(ui,"performance_undo");CHECK(state->cursor==0);CHECK(state->document.tracks[0].clips.empty());performanceClick(ui,"performance_redo");CHECK(state->cursor==ayt::audio::performance::PPQ/2);CHECK(state->document.tracks[0].clips.size()==1);
+    performanceSet(ui,"performance_path",L"audio/performances/测试.performance.json");performanceClick(ui,"performance_save");const auto file=host.assets/std::filesystem::u8path("audio/performances/测试.performance.json");CHECK(std::filesystem::is_regular_file(file));
+    const auto saved=ayt::audio::chart::read(file);performanceClick(ui,"performance_clip_copy");CHECK(state->document.tracks[0].clips.size()==2);CHECK(session.openPerformance(ayt::audio::chart::utf8(file)));CHECK(state->document.tracks[0].clips.size()==1);CHECK(ayt::audio::chart::read(file)==saved);
+    std::ofstream external(file,std::ios::binary|std::ios::app);external<<" ";external.close();performanceClick(ui,"performance_save");CHECK(ayt::audio::chart::read(file)==saved+" ");
+}
+TEST_CASE(RealTimeRecordingKeepsDurationAndTemporaryOctaveWhileCreatingSeparateTakes){
+    PerformanceHost host("performance_record_assets");auto& session=host.session;auto& ui=host.ui;host.select("performance_preroll",0);host.select("performance_grid",2);
+    performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return session.performanceRecording();}));
+    host.clock+=.14;CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey('A',true));CHECK(session.handleKey(0xA0,false));host.clock+=.19;CHECK(session.handleKey('A',false));performanceClick(ui,"performance_stop");
+    auto* state=session.performanceState();CHECK_FALSE(session.performanceRecording());CHECK(state->document.tracks[0].clips.size()==1);const auto& note=state->document.tracks[0].clips[0].notes[0];CHECK(note.pitch==72);CHECK(note.start==ayt::audio::performance::PPQ/4);CHECK(std::abs(ayt::audio::performance::beats(note.duration)-.38)<.00002);
+    performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return session.performanceRecording();}));host.clock+=.1;CHECK(session.handleKey('S',true));host.clock+=.2;session.onFocusLost();CHECK_FALSE(session.performanceRecording());CHECK(state->document.tracks[0].clips.size()==2);CHECK(state->document.tracks[0].clips[1].notes[0].duration>0);
+    performanceClick(ui,"performance_undo");CHECK(state->document.tracks[0].clips.size()==1);performanceClick(ui,"performance_redo");CHECK(state->document.tracks[0].clips.size()==2);
+}
+TEST_CASE(ArrangementPreviewAndWavExportPreserveEditingAndForeignAudio){
+    PerformanceHost host("performance_export_assets");auto& session=host.session;auto& ui=host.ui;host.select("performance_mode",1);CHECK(session.handleKey('A',true));CHECK(session.handleKey('A',false));auto* state=session.performanceState();const auto original=*state;
+    auto* e=host.audio.engine();float pcm[128]{};AudioClipDesc desc;desc.channels=1;desc.frameCount=128;desc.pcmData=pcm;const auto foreignClip=e->registerClip(desc);const auto foreign=e->play(foreignClip,AudioBus::Music,{},.2f,true);e->setMasterGain(.6f);e->setBusGain(AudioBus::Music,.4f);
+    performanceClick(ui,"performance_audition");CHECK(host.waitFor([&]{return e->activeVoiceCount()>=2;}));performanceClick(ui,"performance_stop");CHECK(*state==original);CHECK(e->voiceForHandle(foreign)!=nullptr);CHECK(e->masterGain()==.6f);CHECK(e->busGain(AudioBus::Music)==.4f);
+    performanceSet(ui,"performance_path",L"audio/performances/导出.performance.json");performanceClick(ui,"performance_export");CHECK(host.waitFor([&]{if(std::filesystem::is_directory(host.assets/"audio/performances"))for(const auto& entry:std::filesystem::directory_iterator(host.assets/"audio/performances"))if(entry.path().extension()==".wav")return true;return false;}));
+    bool decoded=false;for(const auto& entry:std::filesystem::directory_iterator(host.assets/"audio/performances"))if(entry.path().extension()==".wav"){ayt::resource::AudioLoader loader;auto result=std::dynamic_pointer_cast<ayt::resource::Audio>(loader.load(entry.path().string()));CHECK(result);if(result){CHECK(result->getSampleRate()==48000);CHECK(result->getChannels()==2);CHECK(result->getDuration()>1);decoded=true;}}
+    CHECK(decoded);CHECK(*state==original);session.detach();CHECK(e->voiceForHandle(foreign)!=nullptr);e->stop(foreign);e->releaseClip(foreignClip);
+}
+TEST_CASE(DirectTrackSelectionAndLeftDragPanDoNotChangeMusicalContent){
+    PerformanceHost host("performance_navigation_assets");auto& ui=host.ui;auto* state=host.session.performanceState();
+    CHECK(ui.findById("performance_track")==nullptr);
+    performanceClick(ui,"performance_add_track");CHECK(state->document.tracks.size()==2);
+    auto* canvas=ui.findById("performance_timeline");CHECK(canvas);const auto b=canvas->getWorldBounds();
+    canvas->onMouseButtonDown({{b.minX+15,b.minY+35},0});canvas->onMouseButtonUp({{b.minX+15,b.minY+35},0});CHECK(state->track==state->document.tracks[0].id);
+    canvas->onMouseButtonDown({{b.minX+15,b.minY+75},0});canvas->onMouseButtonUp({{b.minX+15,b.minY+75},0});CHECK(state->track==state->document.tracks[1].id);
+    const auto before=state->document;const auto cursor=state->cursor;
+    canvas->onMouseButtonDown({{b.minX+400,b.minY+10},0});canvas->onMouseMove({{b.minX+200,b.minY+10},0});canvas->onMouseButtonUp({{b.minX+200,b.minY+10},0});CHECK(state->document==before);CHECK(state->cursor==cursor);
+    canvas->onMouseButtonDown({{b.minX+63,b.minY+10},0});canvas->onMouseButtonUp({{b.minX+63,b.minY+10},0});CHECK(state->cursor>0);CHECK(state->document==before);
+    performanceClick(ui,"performance_pan_cursor");
 }
 TEST_SUITE_END
