@@ -730,6 +730,39 @@ TEST_CASE(ArrangementPreviewAndWavExportPreserveEditingAndForeignAudio){
     bool decoded=false;for(const auto& entry:std::filesystem::directory_iterator(host.assets/"audio/performances"))if(entry.path().extension()==".wav"){ayt::resource::AudioLoader loader;auto result=std::dynamic_pointer_cast<ayt::resource::Audio>(loader.load(entry.path().string()));CHECK(result);if(result){CHECK(result->getSampleRate()==48000);CHECK(result->getChannels()==2);CHECK(result->getDuration()>1);decoded=true;}}
     CHECK(decoded);CHECK(*state==original);session.detach();CHECK(e->voiceForHandle(foreign)!=nullptr);e->stop(foreign);e->releaseClip(foreignClip);
 }
+TEST_CASE(PerformancePlaybackSurvivesFocusLossDuringPreparationAndPlayback){
+    PerformanceHost host("performance_background_assets");
+    auto& session=host.session;auto& ui=host.ui;
+    host.select("performance_mode",1);
+    CHECK(session.handleKey('A',true));CHECK(session.handleKey('A',false));
+    auto* state=session.performanceState();state->cursor=0;const auto original=*state;
+    auto* engine=host.audio.engine();float silence[128]{};
+    AudioClipDesc desc;desc.channels=1;desc.frameCount=128;desc.pcmData=silence;
+    const auto foreignClip=engine->registerClip(desc);
+    const auto foreign=engine->play(foreignClip,AudioBus::Music,{},.2f,true);
+    const char* buttons[]={"performance_play","performance_audition","performance_range_play"};
+    for(int action=0;action<3;++action){
+        performanceClick(ui,buttons[action]);
+        // Lose focus before the session consumes the worker result.
+        session.onFocusLost();
+        CHECK(host.waitFor([&]{return engine->activeVoiceCount()==2;}));
+        auto ownedVoice=[&]{VoiceRuntime out{};bool found=false;
+            for(uint32_t i=0;i<64;++i){VoiceRuntime voice{};
+                if(engine->voiceStateAt(i,voice)&&voice.bus==AudioBus::Master){out=voice;found=true;break;}}
+            CHECK(found);return out;};
+        std::vector<float> pcm(4800*engine->outputChannels());
+        engine->render(pcm.data(),128);const auto before=ownedVoice();
+        session.onFocusLost();
+        engine->render(pcm.data(),4800);session.tick(0);const auto after=ownedVoice();
+        CHECK(after.voiceId==before.voiceId);CHECK(after.playing);CHECK_FALSE(after.paused);
+        CHECK(after.positionFrames>before.positionFrames);CHECK(*state==original);
+        CHECK(engine->voiceForHandle(foreign)!=nullptr);
+        if(action<2)performanceClick(ui,"performance_stop");else session.detach();
+        CHECK(engine->activeVoiceCount()==1);CHECK(engine->voiceForHandle(foreign)!=nullptr);
+        if(action<2)CHECK(*state==original);
+    }
+    engine->stop(foreign);engine->releaseClip(foreignClip);
+}
 TEST_CASE(DirectTrackSelectionAndLeftDragPanDoNotChangeMusicalContent){
     PerformanceHost host("performance_navigation_assets");auto& ui=host.ui;auto* state=host.session.performanceState();
     CHECK(ui.findById("performance_track")==nullptr);

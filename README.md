@@ -226,7 +226,8 @@ Ruler/blank-timeline dragging pans independently of wheel zoom. Piano keys remai
 the scrolling authoring area. Document gains/mute/solo are separate from global audio buses.
 Save/open versioned *.performance.json under project Assets and export whole/range PCM16 WAV.
 EditorAudioPerformanceTests covers recording/transpose, step history/cursor, UTF-8 virtual paths,
-preview/export ownership and direct-track/pan interactions. See AUDIO-AUTHORING §8.
+preview/export ownership, background audition continuation and direct-track/pan interactions.
+Arrangement/clip/range playback continues across focus loss; live keys are released and recording is finalized. See AUDIO-AUTHORING §8.
 
 Audio input polish: Alt raises one semitone; Q..I play upper-octave white keys. Record end snapping
 defaults on, and record-backing monitoring is switchable. Continuous upper-page scrolling no longer

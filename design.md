@@ -1711,6 +1711,9 @@ Session note/pedal callbacks feed the recorder at the input boundary; the monoto
 injectable for deterministic tests. Physical-key repeat/temporary transpose gates are reused.
 Playback/export rendering runs on an immutable worker copy, avoiding UI-frame-dependent note scheduling.
 Session lifecycle stops only owned performance voice/clip; cancellation/join precedes widget teardown.
+Native focus callbacks release live keys and finalize recording, but keep ordinary auditions/preparation
+running. Shared-session regression covers all three playback actions, advancing audio after focus loss,
+unchanged editing state and explicit Stop/detach cleanup without touching foreign voices.
 Existing project asset-root/saved callbacks integrate versioned documents and generated WAV.
 Focused regressions: EditorAudioPerformanceTests, EditorAudioTests, ChildWindowManager/ProjectWorkflow.
 
