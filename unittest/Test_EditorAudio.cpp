@@ -692,6 +692,9 @@ TEST_CASE(AutomaticRhythmDraftAndSharedTimelineRemainEditable){
     auto read=[&]{chartClick(ui,"chart_save");return ayt::audio::chart::Document::fromJson(nlohmann::json::parse(ayt::audio::chart::read(assets/"audio/charts/auto.chart.json")));};
     const auto original=read();CHECK(original.notes.size()==1);
     chartClick(ui,"chart_generate");auto generated=read();CHECK(generated.notes.size()>20);generated.validate(16);
+    auto* report=dynamic_cast<ayt::ui::TextLabel*>(ui.findById("chart_rhythm_report"));CHECK(report);CHECK(report->getText().find(L"起音候选")!=std::wstring::npos);
+    auto* draftSnap=dynamic_cast<ayt::ui::CheckBox*>(ui.findById("chart_draft_snap"));CHECK(draftSnap);CHECK_FALSE(draftSnap->isChecked());
+    for(const auto& n:generated.notes){const double beat=std::round((n.time-.137)/(60/137.));CHECK(std::abs(n.time-(.137+beat*60/137.))<.04);}
     chartClick(ui,"chart_undo");CHECK(read().notes==original.notes);chartClick(ui,"chart_redo");CHECK(read().notes==generated.notes);
     const auto before=std::stod(offset->getText());chartClick(ui,"chart_offset_plus");CHECK(std::abs(std::stod(offset->getText())-before-1)<.02);
     chartClick(ui,"chart_undo");CHECK(std::abs(std::stod(offset->getText())-before)<.02);

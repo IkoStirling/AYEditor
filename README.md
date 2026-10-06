@@ -246,3 +246,10 @@ AudioChartTests and EditorAudioChartTests cover synthetic tempo/phase, quiet/ste
 draft validity/density/history, large-note ordered judgement, waveform/chart cursor alignment,
 asynchronous import/manual-setting priority, snapshot isolation and horizontal tap/hold feedback.
 See AYAudio/design.md and AUDIO-AUTHORING §11 for metrics, fixed-tempo limits and Temp cache lifetime.
+
+Rhythm draft correction (2026-10-06): the shared tab now uses frequency-band attack flux, preserves
+actual attack timestamps by default, selects stronger nearby events instead of filling every beat,
+and offers only ≤25ms optional snapping. Yellow attack ticks and a half-beat grid fit explain the
+generation basis. Low/high-frequency evidence chooses lane pairs; this is a coarse editable draft.
+Irregular attacks, long rests, density suppression and retained song timing have focused regressions.
+The standalone preview dismisses on close before normal worker/audio/GPU cleanup; see AYAudio/design.md.
