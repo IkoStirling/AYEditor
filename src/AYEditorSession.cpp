@@ -10646,6 +10646,10 @@ void EditorSession::openAudioEditorWindow() {
         return true;
     };
     cfg.beforeMouseMove=[this](ayt::ui::UIManager& ui,float x,float y) {const auto logical=ui.physicalToLogical({x,y});return _audioEditor && _audioEditor->handleMouseMove(logical.x,logical.y);};
+    cfg.beforeMouseWheel=[this](ayt::ui::UIManager& ui,float x,float y,float delta) {
+        const auto logical=ui.physicalToLogical({x,y});
+        return _audioEditor && _audioEditor->handleMouseWheel(logical.x,logical.y,delta);
+    };
     cfg.onFocusChanged=[this](ayt::ui::UIManager&,bool focused) { if (!focused && _audioEditor) _audioEditor->onFocusLost(); };
     cfg.beforeClose = [this](ayt::ui::UIManager& /*ui*/) {
         if (_audioEditor != nullptr) {

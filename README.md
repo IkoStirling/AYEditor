@@ -227,3 +227,8 @@ the scrolling authoring area. Document gains/mute/solo are separate from global 
 Save/open versioned *.performance.json under project Assets and export whole/range PCM16 WAV.
 EditorAudioPerformanceTests covers recording/transpose, step history/cursor, UTF-8 virtual paths,
 preview/export ownership and direct-track/pan interactions. See AUDIO-AUTHORING §8.
+
+Audio input polish: Alt raises one semitone; Q..I play upper-octave white keys. Record end snapping
+defaults on, and record-backing monitoring is switchable. Continuous upper-page scrolling no longer
+turns into piano-roll zoom when the pointer crosses it. GDI tool-window text uses the same CJK family
+and character-size convention as the standalone renderer, with real text measurement and antialiasing.

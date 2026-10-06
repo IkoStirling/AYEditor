@@ -872,4 +872,21 @@ TEST_CASE(test_client_to_screen_coords_contract) {
 #endif
 }
 
+
+#if defined(_WIN32)
+TEST_CASE(test_child_text_uses_readable_cjk_metrics_and_antialiased_pixels){
+    HDC dc=CreateCompatibleDC(nullptr);CHECK(dc);if(!dc)return;
+    BITMAPINFO info{};info.bmiHeader.biSize=sizeof(BITMAPINFOHEADER);info.bmiHeader.biWidth=240;info.bmiHeader.biHeight=-60;info.bmiHeader.biPlanes=1;info.bmiHeader.biBitCount=32;info.bmiHeader.biCompression=BI_RGB;
+    void* pixels=nullptr;HBITMAP bitmap=CreateDIBSection(dc,&info,DIB_RGB_COLORS,&pixels,nullptr,0);CHECK(bitmap);if(!bitmap){DeleteDC(dc);return;}HGDIOBJ previous=SelectObject(dc,bitmap);
+    {
+        GdiRenderBackend renderer(nullptr);renderer.setDrawTarget(dc,240,60);renderer.beginFrame();renderer.drawRect({0,0,240,60},{0,0,0,1});
+        const auto small=renderer.measureText(L"演奏与编排",13),large=renderer.measureText(L"演奏与编排",20);
+        CHECK(small.width>=55);CHECK(small.height>=13);CHECK(small.ascent>0);CHECK(small.descent>0);CHECK(large.width>small.width);CHECK(large.height>small.height);
+        renderer.drawText({2,2,238,58},L"演奏与编排 C#4",13,{1,1,1,1});renderer.endFrame();GdiFlush();
+        int ink=0,coverage=0;const auto* bytes=static_cast<const unsigned char*>(pixels);for(int i=0;i<240*60;++i){const int v=bytes[i*4];if(v>0)++ink;if(v>0&&v<255)++coverage;}
+        CHECK(ink>100);CHECK(coverage>20);
+    }
+    SelectObject(dc,previous);DeleteObject(bitmap);DeleteDC(dc);
+}
+#endif
 TEST_SUITE_END

@@ -40,6 +40,8 @@ public:
                   const math::FRectangle& uv) override;
     void drawText(const math::FRectangle& bounds, const std::wstring& text, int fontSize,
                   const math::FVector4& color) override;
+    // Measure the same CJK face/character height used by drawText.
+    TextMetrics measureText(const std::wstring& text,int fontSize,float maxWidth=0) const override;
     void drawWithAlpha(const math::FRectangle& bounds, void* textureHandle, float alpha) override;
 
     // IRenderBackend clips are part of the widget-container contract.  GDI
@@ -77,7 +79,7 @@ private:
     RECT toRect(const math::FRectangle& bounds) const;
     void ensureBackbuffer(int width, int height);
     void releaseBackbuffer();
-    HFONT fontForSize(int fontSize);
+    HFONT fontForSize(int fontSize) const;
 
     struct PathContour {
         std::vector<POINT> points;
@@ -104,7 +106,7 @@ private:
     HDC _memDc = nullptr;
     HBITMAP _bitmap = nullptr;
     HBITMAP _oldBitmap = nullptr;
-    std::unordered_map<int, HFONT> _fonts;
+    mutable std::unordered_map<int, HFONT> _fonts;
     int _width = 0;
     int _height = 0;
     int _bbWidth = 0;

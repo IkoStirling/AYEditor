@@ -10,6 +10,8 @@
 #include <AYResource/assetsImpl/Audio.h>
 #include <AYTest.h>
 #include <AYUI/Button.h>
+#include <AYUI/CheckBox.h>
+#include <AYUI/ScrollView.h>
 #include <AYUI/ComboBox.h>
 #include "../../AYAudio/demo/audio_editor/PerformanceDocument.h"
 #include <AYUI/MockRenderer.h>
@@ -518,7 +520,7 @@ TEST_CASE(WorkbenchAttachesAfterNativeHostLayoutWithoutResize) {
     session.detach();
 }
 
-TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
+TEST_CASE(TemporarySemitoneThreeRowsAndLatchedKeyRelease) {
     AudioSubSystem audio;CHECK(audio.initialize());auto* engine=audio.engine();
     ayt::ui::MockRenderer renderer;ayt::ui::UIManager ui;ui.initialize(&renderer);ui.setClientSize(960,900);
     const auto root=std::filesystem::path(__FILE__).parent_path().parent_path().parent_path().parent_path();
@@ -551,11 +553,15 @@ TEST_CASE(TemporaryTransposeLowerOctaveAndLatchedKeyRelease) {
     CHECK(session.handleKey(0xA0,false));CHECK(session.handleKey('A',false));
     CHECK(status->getText()==L"实际音高：C5");drain();CHECK(engine->activeVoiceCount()==0);
     CHECK(session.handleKey(0xA4,true));ui.onKeyDown(18);CHECK(session.handleKey('A',true));
-    const auto lowered=firstVoice();CHECK(lowered.clip==octaveDown.clip);CHECK(lowered.pitch==octaveDown.pitch);
-    CHECK(status->getText()==L"实际音高：C3");
+    const auto sharpened=firstVoice();CHECK(sharpened.clip==upper.clip);CHECK(std::abs(sharpened.pitch-std::exp2(1.f/12))<1e-5f);
+    CHECK(status->getText()==L"实际音高：C#4");
     CHECK(session.handleKey(0xA4,false));ui.onKeyUp(18);CHECK(session.handleKey('A',false));drain();CHECK(engine->activeVoiceCount()==0);
-    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('A',true));const auto cancelled=firstVoice();CHECK(cancelled.pitch==upper.pitch);CHECK(cancelled.clip==upper.clip);
+    CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('A',true));const auto combined=firstVoice();CHECK(std::abs(combined.pitch-std::exp2(1.f/12))<1e-5f);CHECK(combined.clip==octaveUp.clip);CHECK(status->getText()==L"实际音高：C#5");
     session.onFocusLost();CHECK(engine->activeVoiceCount()==0);
+    constexpr int upperKeys[]={'Q','W','E','R','T','Y','U','I'};
+    constexpr const wchar_t* upperNames[]={L"C5",L"D5",L"E5",L"F5",L"G5",L"A5",L"B5",L"C6"};
+    for(int i=0;i<8;++i){CHECK(session.handleKey(upperKeys[i],true));CHECK(status->getText()==std::wstring(L"实际音高：")+upperNames[i]);CHECK(session.handleKey(upperKeys[i],false));drain();CHECK(engine->activeVoiceCount()==0);}
+    CHECK(session.handleKey(0xA4,true));CHECK(session.handleKey('D',true));CHECK(status->getText()==L"实际音高：F4");CHECK(session.handleKey(0xA4,false));CHECK(session.handleKey('D',false));drain();CHECK(engine->activeVoiceCount()==0);
     CHECK(!session.handleKey(0xA1,true));CHECK(session.handleKey('A',true));CHECK(firstVoice().pitch==1);session.releaseKeys();
     // Upper A and lower comma share C4: releasing either physical key must preserve the other.
     CHECK(session.handleKey('A',true));CHECK(session.handleKey(188,true));CHECK(engine->activeVoiceCount()==1);
@@ -681,7 +687,7 @@ TEST_SUITE_END
 TEST_SUITE(EditorAudioPerformanceTests)
 namespace {
 void performanceClick(ayt::ui::UIManager& ui,const char* id) {
-    auto* button=dynamic_cast<ayt::ui::Button*>(ui.findById(id));CHECK(button);if(!button)return;
+    auto* button=ui.findById(id);CHECK(button);if(!button)return;
     const auto b=button->getWorldBounds();ayt::ui::UIMouseEvent e({(b.minX+b.maxX)/2,(b.minY+b.maxY)/2},0);
     button->onMouseMove(e);button->onMouseButtonDown(e);button->onMouseButtonUp(e);
 }
@@ -708,6 +714,8 @@ TEST_CASE(StepChordSavesReopensAndUndoRestoresCursor){
 }
 TEST_CASE(RealTimeRecordingKeepsDurationAndTemporaryOctaveWhileCreatingSeparateTakes){
     PerformanceHost host("performance_record_assets");auto& session=host.session;auto& ui=host.ui;host.select("performance_preroll",0);host.select("performance_grid",2);
+    // Free-duration mode remains available explicitly; snapping is now the default.
+    performanceClick(ui,"performance_snap_ends");
     performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return session.performanceRecording();}));
     host.clock+=.14;CHECK(session.handleKey(0xA0,true));CHECK(session.handleKey('A',true));CHECK(session.handleKey(0xA0,false));host.clock+=.19;CHECK(session.handleKey('A',false));performanceClick(ui,"performance_stop");
     auto* state=session.performanceState();CHECK_FALSE(session.performanceRecording());CHECK(state->document.tracks[0].clips.size()==1);const auto& note=state->document.tracks[0].clips[0].notes[0];CHECK(note.pitch==72);CHECK(note.start==ayt::audio::performance::PPQ/4);CHECK(std::abs(ayt::audio::performance::beats(note.duration)-.38)<.00002);
@@ -733,5 +741,51 @@ TEST_CASE(DirectTrackSelectionAndLeftDragPanDoNotChangeMusicalContent){
     canvas->onMouseButtonDown({{b.minX+400,b.minY+10},0});canvas->onMouseMove({{b.minX+200,b.minY+10},0});canvas->onMouseButtonUp({{b.minX+200,b.minY+10},0});CHECK(state->document==before);CHECK(state->cursor==cursor);
     canvas->onMouseButtonDown({{b.minX+63,b.minY+10},0});canvas->onMouseButtonUp({{b.minX+63,b.minY+10},0});CHECK(state->cursor>0);CHECK(state->document==before);
     performanceClick(ui,"performance_pan_cursor");
+}
+
+TEST_CASE(DefaultRecordingRoundsBothEndpointsAndKeepsRawTiming){
+    PerformanceHost host("performance_snapped_assets");auto& s=host.session;auto& ui=host.ui;host.select("performance_preroll",0);
+    auto* ends=dynamic_cast<ayt::ui::CheckBox*>(ui.findById("performance_snap_ends"));CHECK(ends);CHECK(ends->isChecked());
+    performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return s.performanceRecording();}));
+    host.clock+=.14;CHECK(s.handleKey(0xA4,true));CHECK(s.handleKey('D',true));host.clock+=.19;CHECK(s.handleKey('D',false));CHECK(s.handleKey(0xA4,false));performanceClick(ui,"performance_stop");
+    const auto* state=s.performanceState();const auto& note=state->document.tracks[0].clips[0].notes[0];const auto grid=ayt::audio::performance::PPQ/4;
+    CHECK(note.pitch==65);CHECK(note.start==grid);CHECK(note.start+note.duration==grid*3);CHECK(note.duration==grid*2);
+    CHECK(std::abs(note.rawStart-.28)<.00001);CHECK(std::abs(note.rawDuration-.38)<.00001);
+}
+TEST_CASE(WheelBurstKeepsInitialSurfaceWhenCrossingPianoRoll){
+    PerformanceHost host("performance_scroll_assets");auto& ui=host.ui;auto& s=host.session;
+    auto* scroll=dynamic_cast<ayt::ui::ScrollView*>(ui.findById("performance_scroll"));auto* roll=ui.findById("performance_piano_roll");auto* timeline=ui.findById("performance_timeline");CHECK(scroll);CHECK(roll);CHECK(timeline);
+    const auto transport=ui.findById("performance_bpm")->getWorldBounds();
+    CHECK(s.handleMouseWheel(transport.minX+5,transport.minY+5,20));ui.layout();const float first=scroll->getScrollOffset().y;CHECK(first>0);
+    auto b=roll->getWorldBounds();const auto viewport=scroll->getClientRect();float y=std::max(b.minY,viewport.minY)+2;CHECK(y<viewport.maxY);
+    host.clock+=.05;CHECK(s.handleMouseWheel(b.minX+150,y,20));ui.layout();CHECK(scroll->getScrollOffset().y>first);
+    // No hidden roll zoom: clicking halfway across its ruler still means 8 beats.
+    auto checkCursor=[&](ayt::ui::Widget* canvas){const auto box=canvas->getWorldBounds();const float x=box.minX+62+(box.maxX-box.minX-62)/2;canvas->onMouseButtonDown({{x,box.minY+10},0});canvas->onMouseButtonUp({{x,box.minY+10},0});};
+    checkCursor(roll);CHECK(s.performanceState()->cursor==8*ayt::audio::performance::PPQ);
+    host.clock+=.4;b=roll->getWorldBounds();y=std::max(b.minY,scroll->getClientRect().minY)+2;const float before=scroll->getScrollOffset().y;
+    CHECK(s.handleMouseWheel(b.minX+150,y,40));CHECK(scroll->getScrollOffset().y==before);checkCursor(roll);CHECK(s.performanceState()->cursor>8*ayt::audio::performance::PPQ);
+    // A burst starting on the timeline stays there after the pointer leaves.
+    s.onFocusLost();scroll->setScrollOffset({0,0});ui.layout();b=timeline->getWorldBounds();host.clock+=.4;
+    CHECK(s.handleMouseWheel(b.minX+150,b.minY+35,20));const float zero=scroll->getScrollOffset().y;host.clock+=.05;
+    CHECK(s.handleMouseWheel(transport.minX+5,transport.minY+5,20));CHECK(scroll->getScrollOffset().y==zero);
+}
+TEST_CASE(RecordBackingMonitorCanBeDisabledWithoutDeletingOtherTracks){
+    PerformanceHost host("performance_monitor_assets");auto& s=host.session;auto& ui=host.ui;host.select("performance_mode",1);
+    CHECK(s.handleKey('A',true));CHECK(s.handleKey('A',false));const auto first=s.performanceState()->document.tracks[0].clips[0];
+    performanceClick(ui,"performance_add_track");host.select("performance_mode",0);host.select("performance_preroll",0);performanceSet(ui,"performance_cursor",L"0");
+    performanceClick(ui,"performance_metronome");performanceClick(ui,"performance_monitor");
+    auto peak=[&]{std::vector<float> pcm(4800*2);host.audio.engine()->render(pcm.data(),4800);float value=0;for(float sample:pcm)value=std::max(value,std::abs(sample));return value;};
+    performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return s.performanceRecording();}));CHECK(peak()==0);performanceClick(ui,"performance_stop");
+    CHECK(s.performanceState()->document.tracks[0].clips[0]==first);
+    performanceClick(ui,"performance_monitor");performanceClick(ui,"performance_record");CHECK(host.waitFor([&]{return s.performanceRecording();}));CHECK(peak()>.0001f);performanceClick(ui,"performance_stop");
+    CHECK(s.performanceState()->document.tracks[0].clips[0]==first);CHECK(s.performanceState()->document.tracks[1].clips.empty());
+}
+TEST_CASE(TrackRowsHaveVisibleSeparatorsAcrossTheTimeArea){
+    PerformanceHost host("performance_separators_assets");performanceClick(host.ui,"performance_add_track");auto* canvas=host.ui.findById("performance_timeline");const auto b=canvas->getWorldBounds();
+    host.renderer.clear();canvas->render(host.renderer);bool between=false,gutter=false;
+    for(const auto& call:host.renderer.getDrawCalls()){
+        if(std::abs(call.bounds.minY-(b.minY+62))<.1f&&call.bounds.minX<=b.minX&&call.bounds.maxX>=b.maxX&&call.bounds.maxY-call.bounds.minY<=1.1f)between=true;
+        if(std::abs(call.bounds.minX-(b.minX+61))<.1f&&call.bounds.maxY>=b.maxY&&call.bounds.maxX-call.bounds.minX<=1.1f)gutter=true;
+    }CHECK(between);CHECK(gutter);
 }
 TEST_SUITE_END

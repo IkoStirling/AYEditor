@@ -1713,3 +1713,13 @@ Playback/export rendering runs on an immutable worker copy, avoiding UI-frame-de
 Session lifecycle stops only owned performance voice/clip; cancellation/join precedes widget teardown.
 Existing project asset-root/saved callbacks integrate versioned documents and generated WAV.
 Focused regressions: EditorAudioPerformanceTests, EditorAudioTests, ChildWindowManager/ProjectWorkflow.
+
+### Audio interaction and child text correction (2026-10-06)
+
+Audio child windows forward wheel events to the shared session before UIManager bubbling. Continuous
+scroll ownership is retained across canvas boundaries. Alt is +1 semitone; Q..I are upper-octave white keys.
+GDI child text now selects Microsoft YaHei (matching the production renderer default CJK family), uses
+negative character/em height instead of positive cell height, and grayscale antialiasing. Text measurement
+uses the same face/size, avoiding zero-width fallback metrics. This changes all GDI child tools consistently;
+it does not replace GDI with the GPU renderer or alter process DPI awareness. Focused native pixel/metric
+and child-window lifecycle regressions cover the shared backend.
