@@ -1753,3 +1753,13 @@ Unsaved DSL documents consume shared checked task-argument validation and lexica
 `await wait_event("alias") into (name:type, ...)`. Completion and Definition use each binding's declaration
 identity and original source location. No editor-only parser is added. AYEditor_DslDocument covers typed
 payload navigation and rejected task/payload arguments while preserving the saved source.
+
+## Logia preview debugging
+
+EditorDslDocument owns an optional preview with Actor storage before its bridge
+so bridge destruction precedes the borrowed receiver. The view routes
+logia.debug.breakpoint/start/continue/into/over/out/stop through the document;
+source updates and context changes retire the session. Actor host schema is
+resolved using the same authoring context as compilation. Default engine metadata
+is registered with isolated unavailable providers; no play-World service is used.
+Diagnostics display snapshots rather than retaining VM values.

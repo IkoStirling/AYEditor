@@ -1,3 +1,6 @@
+#ifndef NOMINMAX
+#define NOMINMAX 1
+#endif
 #include "AYEditor/EditorDslDocument.h"
 #include <AYAssetFormat/AssetFormat.h>
 
@@ -5,6 +8,8 @@
 #include <AYEntity/ActorClassAsset.h>
 #include "AYScript/logia/LogiaPipeline.h"
 #include "AYScript/logia/Parser.h"
+#include "AYScript/ScriptRuntimeBridge.h"
+#include <AYEntity/components/ActorInstanceComponent.h>
 #include "AYScript/logia/EngineFunctions.h"
 #include "AYShader/Phoskia.h"
 
@@ -18,6 +23,58 @@
 #include <nlohmann/json.hpp>
 
 namespace ayt::editor {
+struct EditorDslDocument::DebugPreview {
+    ayt::entity::ActorScriptComponent actor;
+    ayt::script::LogiaRuntimeBridge bridge;
+    ayt::script::LogiaDebugSnapshot failure;
+};
+bool EditorDslDocument::startLogiaDebug() {
+    stopLogiaDebug(); _debug=std::make_shared<DebugPreview>();
+    auto fail=[this](std::string message) { _debug->failure.status=ayt::script::LogiaDebugStatus::Error;
+        _debug->failure.error=std::move(message); return false; };
+    auto context=logiaContext();
+    if(_language!=EditorDslLanguage::Logia || context.kind!=ayt::script::logia::LogiaHostKind::Actor)
+        return fail("Actor preview requires a referencing .act asset or an explicit Actor schema");
+    for(const auto& [name,type]:context.actorProperties) {
+        if(type=="bool")_debug->actor.properties[name]=false;
+        else if(type=="string")_debug->actor.properties[name]=std::string{};
+        else _debug->actor.properties[name]=0.0;
+    }
+    for(const auto& [name,signature]:ayt::script::logia::engineLogiaFunctions())
+        _debug->bridge.registerHostFunction(name,signature,[type=signature.result](const auto&) -> ayt::script::ScriptHostValue {
+            if(type=="bool")return false; if(type=="int")return std::int64_t{0};
+            if(type=="float")return 0.0; if(type=="string")return std::string{};
+            if(type=="vec3")return ayt::math::FVector3{}; return std::monostate{};
+        });
+    std::vector<ayt::script::logia::Token> tokens; ayt::script::logia::tokenize(_source,tokens);
+    ayt::script::logia::Parser parser(tokens); auto ast=parser.parse();
+    if(!ast || ast->scripts.size()!=1)return fail("Preview requires one script block");
+    const auto name=ast->scripts.front()->name;
+    std::vector<ayt::script::logia::CompilerError> errors;
+    if(!_debug->bridge.loadScript(name,_source,context,errors))
+        return fail(errors.empty()?"Compilation failed":errors.front().message);
+    _debug->bridge.setDebugBreakpoints(_breakpoints);
+    if(!_debug->bridge.startDebugActorLifecycle(name,"on_start",_debug->actor)) {
+        const auto snapshot=_debug->bridge.debugSnapshot();
+        return fail(snapshot.error.empty()?"Preview requires on_start":snapshot.error);
+    }
+    return true;
+}
+bool EditorDslDocument::resumeLogiaDebug(ayt::script::LogiaDebugCommand command) {
+    return _debug && _debug->bridge.resumeDebug(command);
+}
+void EditorDslDocument::stopLogiaDebug() { _debug.reset(); }
+void EditorDslDocument::toggleLogiaBreakpoint(int line) {
+    if(line<1)return;
+    auto found=std::find_if(_breakpoints.begin(),_breakpoints.end(),[line](const auto& point){return point.line==line;});
+    if(found==_breakpoints.end())_breakpoints.push_back({_absolutePath,line}); else _breakpoints.erase(found);
+    if(_debug)_debug->bridge.setDebugBreakpoints(_breakpoints);
+}
+ayt::script::LogiaDebugSnapshot EditorDslDocument::logiaDebugSnapshot() const {
+    if(!_debug)return {};
+    if(_debug->failure.status==ayt::script::LogiaDebugStatus::Error)return _debug->failure;
+    return _debug->bridge.debugSnapshot();
+}
 
 namespace {
 
@@ -152,6 +209,7 @@ bool EditorDslDocument::open(const std::string& absolutePath,
                              const std::string& displayPath,
                              std::string* error)
 {
+    stopLogiaDebug();
     const EditorDslLanguage language =
         editorDslLanguageFromPath(absolutePath);
     if (language == EditorDslLanguage::Unknown) {
@@ -214,6 +272,7 @@ void EditorDslDocument::setSourceUtf8(std::string source)
     bool ignoredCrLf = false;
     std::string normalized = normalizeLineEndings(source, ignoredCrLf);
     if (_source == normalized) return;
+    stopLogiaDebug();
     _source = std::move(normalized);
     ++_revision;
 }
@@ -462,7 +521,7 @@ ayt::script::logia::LogiaHostContext EditorDslDocument::logiaContext() const
     if (context.assetRoot.empty()) context.assetRoot = ayt::entity::assetsRootForScene(_absolutePath);
     return context;
 }
-void EditorDslDocument::setLogiaHostContext(ayt::script::logia::LogiaHostContext context) { _logiaContext = std::move(context); }
+void EditorDslDocument::setLogiaHostContext(ayt::script::logia::LogiaHostContext context) { stopLogiaDebug(); _logiaContext = std::move(context); }
 ayt::script::logia::LogiaAnalysis EditorDslDocument::analyzeLogia() const
 {
     if (_language != EditorDslLanguage::Logia) return {};

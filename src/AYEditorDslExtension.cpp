@@ -223,7 +223,8 @@ public:
         return commandId == "file.save"
             || commandId == kEditorDslCompileCommand
             || (_document && _document->language() == EditorDslLanguage::Logia
-                && (commandId == kEditorLogiaCompleteCommand || commandId == kEditorLogiaDefinitionCommand))
+                && (commandId == kEditorLogiaCompleteCommand || commandId == kEditorLogiaDefinitionCommand
+                    || commandId.starts_with("logia.debug." )))
             || commandId == "edit.undo"
             || commandId == "edit.redo";
     }
@@ -248,6 +249,7 @@ public:
         if (commandId == "file.save") return save();
         if (commandId == kEditorLogiaCompleteCommand) { complete(); return true; }
         if (commandId == kEditorLogiaDefinitionCommand) { goToDefinition(); return true; }
+        if (commandId.starts_with("logia.debug.")) { debugCommand(commandId); return true; }
         if (commandId == kEditorDslCompileCommand) {
             compile();
             return true;
@@ -259,6 +261,35 @@ public:
     }
 
 private:
+    void debugCommand(const std::string& id) {
+        if(!_source || !_document)return;
+        syncSourceFromWidget();
+        using Command=ayt::script::LogiaDebugCommand;
+        if(id=="logia.debug.breakpoint")_document->toggleLogiaBreakpoint(static_cast<int>(_source->getCaretLine()+1));
+        else if(id=="logia.debug.start")_document->startLogiaDebug();
+        else if(id=="logia.debug.stop")_document->stopLogiaDebug();
+        else _document->resumeLogiaDebug(id=="logia.debug.into"?Command::StepInto:
+            id=="logia.debug.over"?Command::StepOver:id=="logia.debug.out"?Command::StepOut:Command::Continue);
+        auto snapshot=_document->logiaDebugSnapshot();
+        std::string text="Actor preview (Host services unavailable)\nBreakpoints:";
+        for(const auto& point:_document->logiaBreakpoints())text+=" "+std::to_string(point.line);
+        const char* status=snapshot.status==ayt::script::LogiaDebugStatus::Paused?"Paused":
+            snapshot.status==ayt::script::LogiaDebugStatus::Completed?"Completed":
+            snapshot.status==ayt::script::LogiaDebugStatus::Error?"Error":"Idle";
+        text+="\nStatus: "+std::string(status)+" "+snapshot.error+"\n";
+        for(const auto& frame:snapshot.frames) {
+            text+=frame.location.file+":"+std::to_string(frame.location.line)+" "+frame.function+"\n";
+            for(const auto& value:frame.locals)text+="  "+value.name+": "+value.type+" = "+value.value+"\n";
+        }
+        for(const auto& value:snapshot.state)text+="state "+value.name+" = "+value.value+"\n";
+        for(const auto& task:snapshot.tasks)text+="task "+std::to_string(task.id)+" "+task.wait+" "+task.event+"\n";
+        if(_diagnostics)_diagnostics->setText(ayt::ui::decodeUtf8Text(text));
+        if(!snapshot.frames.empty()) {
+            const auto& loc=snapshot.frames.front().location;
+            if(loc.file.empty() || loc.file==_document->absolutePath())_document->navigateTo(loc.line,loc.column);
+        }
+        _host.requestRepaint();
+    }
     void buildWidgetTree()
     {
         auto* root = new ayt::ui::VBox();
@@ -304,6 +335,17 @@ private:
         }
         toolbar->addWidget(_status, 0.0f);
         root->addWidget(toolbar, 26.0f);
+        if (_document->language() == EditorDslLanguage::Logia) {
+            auto* debugBar=new ayt::ui::HBox(); debugBar->setSpacing(4.0f);
+            const std::pair<const wchar_t*,const char*> actions[]={{L"Breakpoint","breakpoint"},{L"Debug Actor","start"},
+                {L"Continue","continue"},{L"Into","into"},{L"Over","over"},{L"Out","out"},{L"Stop","stop"}};
+            for(const auto& [label,action]:actions) {
+                auto* button=new ayt::ui::Button(); button->setText(label); button->setAccessibilityLabel(label);
+                button->setOnClicked([this,id=std::string("logia.debug.")+action]{debugCommand(id);});
+                debugBar->addWidget(button,action==std::string("start")?90.0f:80.0f);
+            }
+            root->addWidget(debugBar,26.0f);
+        }
 
         _source = new ayt::ui::TextArea();
         _source->setWordWrap(false);

@@ -3,6 +3,8 @@
 #include "AYEditor/EditorExtension.h"
 #include "AYShader/ShaderAnalysis.h"
 #include "AYScript/logia/Tooling.h"
+#include "AYScript/logia/Debug.h"
+#include <memory>
 #include <functional>
 #include <optional>
 
@@ -82,11 +84,22 @@ public:
     /// Actor schema from assets that reference this source; use checked semantics.
     void setLogiaHostContext(ayt::script::logia::LogiaHostContext context);
     ayt::script::logia::LogiaAnalysis analyzeLogia() const;
+    /// Isolated Actor preview: default Host services return unavailable values;
+    /// it executes on_start with schema defaults, never the running play World.
+    bool startLogiaDebug();
+    bool resumeLogiaDebug(ayt::script::LogiaDebugCommand command);
+    void stopLogiaDebug();
+    void toggleLogiaBreakpoint(int line);
+    ayt::script::LogiaDebugSnapshot logiaDebugSnapshot() const;
+    const std::vector<ayt::script::LogiaDebugBreakpoint>& logiaBreakpoints() const { return _breakpoints; }
     /// Navigate a source-backed view (one-based UTF-8 source coordinates).
     void navigateTo(int line, int column);
     void setNavigationHandler(std::function<void(int,int)> handler);
 
 private:
+    struct DebugPreview;
+    std::shared_ptr<DebugPreview> _debug;
+    std::vector<ayt::script::LogiaDebugBreakpoint> _breakpoints;
     enum class LineEnding {
         Lf,
         CrLf,

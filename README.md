@@ -256,3 +256,13 @@ and offers only ≤25ms optional snapping. Yellow attack ticks and a half-beat g
 generation basis. Low/high-frequency evidence chooses lane pairs; this is a coarse editable draft.
 Irregular attacks, long rests, density suppression and retained song timing have focused regressions.
 The standalone preview dismisses on close before normal worker/audio/GPU cleanup; see AYAudio/design.md.
+
+### Logia Actor preview debugger
+
+The Logia code toolbar adds Breakpoint at caret, Debug Actor, Continue, Into, Over,
+Out and Stop. The diagnostics panel shows original source frames, locals, state
+and waits; current-file pauses move the caret. This isolated on_start preview
+requires an inferred .act or explicit Actor property schema. It seeds zero/empty
+schema defaults and returns unavailable values from default Host providers. Use
+the native AYScript debugger on a quiesced Host to inspect actual play instances.
+Editing/reopening source or changing schema closes the preview session.

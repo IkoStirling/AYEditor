@@ -556,4 +556,27 @@ TEST_CASE(logia_unsaved_async_document_checks_payload_bindings_and_navigation)
     document.setSourceUtf8("script Main { function f(n:int) { await delay(0) } on_start() { tasks.start(f,true) } }");
     CHECK(!document.compile().success);
 }
+
+
+TEST_CASE(logia_actor_preview_breakpoints_and_source_edits_release_the_session)
+{
+    auto root=dslEditorTempRoot("debug"); DslEditorTempCleanup cleanup{root};
+    std::filesystem::create_directories(root);
+    auto path=(root/"preview.logia").string();
+    CHECK(ayt::io::File::writeAllText(path,"script Preview {\n state score:int=1\n on_start(){\n score+=2\n self.hp=score\n }\n}"));
+    EditorDslDocument document; CHECK(document.open(path,path));
+    auto context=ayt::script::logia::checkedLogiaHostContext(ayt::script::logia::actorLogiaHostContext());
+    context.actorProperties={{"hp","float"}}; document.setLogiaHostContext(context);
+    document.toggleLogiaBreakpoint(5);
+    CHECK(document.startLogiaDebug());
+    CHECK(document.resumeLogiaDebug(ayt::script::LogiaDebugCommand::Continue));
+    auto snapshot=document.logiaDebugSnapshot(); CHECK(snapshot.status==ayt::script::LogiaDebugStatus::Paused);
+    CHECK(!snapshot.frames.empty()); if(!snapshot.frames.empty())CHECK(snapshot.frames.front().location.line==5);
+    document.toggleLogiaBreakpoint(5);
+    CHECK(document.resumeLogiaDebug(ayt::script::LogiaDebugCommand::Continue));
+    CHECK(document.logiaDebugSnapshot().status==ayt::script::LogiaDebugStatus::Completed);
+    CHECK(document.startLogiaDebug()); document.setSourceUtf8(document.sourceUtf8()+"\n");
+    CHECK(document.logiaDebugSnapshot().status==ayt::script::LogiaDebugStatus::Idle);
+}
+
 TEST_SUITE_END
