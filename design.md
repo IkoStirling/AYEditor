@@ -1763,3 +1763,6 @@ source updates and context changes retire the session. Actor host schema is
 resolved using the same authoring context as compilation. Default engine metadata
 is registered with isolated unavailable providers; no play-World service is used.
 Diagnostics display snapshots rather than retaining VM values.
+
+### Logia coordination authoring
+Unbound documents containing project_event/persist/asset select checked analysis. The language analyzer exposes project-event signatures and reports payload/timeout/join errors before execution. Task inspection includes join target and deadline.

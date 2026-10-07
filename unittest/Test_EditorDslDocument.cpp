@@ -579,4 +579,14 @@ TEST_CASE(logia_actor_preview_breakpoints_and_source_edits_release_the_session)
     CHECK(document.logiaDebugSnapshot().status==ayt::script::LogiaDebugStatus::Idle);
 }
 
+TEST_CASE(logia_project_event_declarations_are_checked_without_a_bound_actor)
+{
+    DslEditorTempCleanup cleanup{dslEditorTempRoot("project_events")};auto path=cleanup.root/"events.logia";
+    CHECK(ayt::io::File::createParentDirectories(path.string()));
+    CHECK(ayt::io::File::writeAllText(path.string(),"script Main {}"));EditorDslDocument document;CHECK(document.open(path.string(),"events.logia"));
+    document.setSourceUtf8("script Main {project_event progress(value:int) on_start(){event.emit(\"progress\",3)}}");
+    CHECK(document.compile().success);auto analysis=document.analyzeLogia();auto symbols=analysis.complete("progress");
+    CHECK(symbols.size()==1);if(!symbols.empty())CHECK(symbols[0].kind=="project-event");
+    document.setSourceUtf8("script Main {project_event progress(value:int) on_start(){event.emit(\"progress\",true)}}");CHECK(!document.compile().success);
+}
 TEST_SUITE_END

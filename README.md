@@ -266,3 +266,5 @@ requires an inferred .act or explicit Actor property schema. It seeds zero/empty
 schema defaults and returns unavailable values from default Host providers. Use
 the native AYScript debugger on a quiesced Host to inspect actual play instances.
 Editing/reopening source or changing schema closes the preview session.
+
+Logia checked inference recognizes project_event, persist and asset declarations even without a bound Actor schema. Project-event declarations appear as typed symbols in completion.

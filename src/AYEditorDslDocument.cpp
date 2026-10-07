@@ -488,7 +488,7 @@ ayt::script::logia::LogiaHostContext EditorDslDocument::logiaContext() const
         using Token = ayt::script::logia::TokenType;
         for (std::size_t i = 0; i < tokens.size(); ++i) {
             const auto kind = tokens[i].type;
-            if (kind == Token::State || kind == Token::Await || kind == Token::Import
+            if (kind == Token::ProjectEvent || kind == Token::State || kind == Token::Persist || kind == Token::Asset || kind == Token::Await || kind == Token::Import
                 || kind == Token::OnReload
                 || (kind == Token::Identifier && tokens[i].lexeme == "array"
                     && i + 1 < tokens.size() && tokens[i + 1].type == Token::Less)
