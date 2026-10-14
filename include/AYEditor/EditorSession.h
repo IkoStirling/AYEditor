@@ -70,9 +70,11 @@ struct LayoutProjectRefactorResult;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
+namespace ayt::render { class RendererSubSystem; class RenderScene; }
 
 namespace ayt::editor {
 
+class EditorCameraVisualRenderer;
 class EditorWorkspace;
 class EditorDockViewHost;
 class IEditorHostServices;
@@ -289,6 +291,10 @@ public:
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
+    /// Editor presentation preference: normal, contour wireframe, or hidden.
+    /// Never writes camera/mesh components or contributes icons to Play rendering.
+    void setCameraDisplayMode(EditorCameraDisplayMode mode);
+    EditorCameraDisplayMode cameraDisplayMode() const noexcept { return _cameraDisplayMode; }
     // Switch the editor catalog and retranslate the live UI tree in place.
     // "system" resolves against the current operating-system locale.
     bool setLanguage(const std::string& language);
@@ -805,6 +811,10 @@ private:
     float _preferencesSaveCountdown = 0.0f;
     bool _preferencesDirty = false;
     bool _applyingPreferences = false;
+    EditorCameraDisplayMode _cameraDisplayMode = EditorCameraDisplayMode::Solid;
+    ayt::render::RendererSubSystem* _cameraVisualOwner = nullptr;
+    std::unique_ptr<EditorCameraVisualRenderer> _cameraVisualRenderer;
+    void buildCameraVisuals(ayt::render::RenderScene& scene);
 
 };
 

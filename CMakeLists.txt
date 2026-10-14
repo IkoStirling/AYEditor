@@ -83,6 +83,7 @@ set(SRC_FILES
     src/AYEditorSelectionContext.cpp
     src/AYEditorWorkspace.cpp
     src/AYEditorTransformGizmo.cpp
+    src/AYEditorCameraVisualization.cpp
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetImportQueue.cpp
@@ -169,6 +170,7 @@ set(HEAD_FILES
     include/AYEditor/EditorExtensionRegistry.h
     include/AYEditor/EditorSelectionContext.h
     include/AYEditor/EditorTransformGizmo.h
+    include/AYEditor/EditorCameraVisualization.h
     include/AYEditor/EditorVisualStyle.h
     include/AYEditor/EditorAssetDatabase.h
     include/AYEditor/EditorAssetImportQueue.h
@@ -258,7 +260,7 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=32)
+    AYEDITOR_SOURCE_ABI_VERSION=33)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

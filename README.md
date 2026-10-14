@@ -292,3 +292,62 @@ Camera controllers bind persistent Entity identity with a World-scoped runtime h
 Entity.PhysicsIntegration installs the default Jolt sphere-sweep adapter. Host custom queries override it; collisionEnabled explicitly disables per controller. The finite-volume query ignores sensors/self/target bodies, checks generation handles and reports initial penetration at zero center travel. Null/Mock/2D return Unsupported. Orbit distance plus collision radius/padding implement the camera arm and damped recovery. Explicit manager adapters must be detached before manager destruction.
 
 Editor has stable target selection, collision parameters, and undoable main-window hierarchy dragging. CameraRigProject is a portable visual/authoring fixture; its Wall is visual-only, while AYEntity_CameraRigIntegrationTests exercises actual Jolt wall avoidance, lens effects/blending, self-ignore and recovery. See ../../AYDocs/CAMERA-SYSTEM.md and the integration evidence in ../../AYDocs/ENTITY-SPATIAL-HIERARCHY.md. Native Computer Use acceptance is deferred by user request.
+
+## Editor camera icons (2026-10-14)
+
+The 3D Edit viewport automatically submits one icon per PerspectiveCameraComponent,
+including inactive lenses. Each icon uses scale-free world pose plus that lens's
+localOffset/localRotation; spatial parents affect it exactly as they affect the
+runtime lens. No MeshComponent, collider or extra Entity is added to the Scene.
+
+Viewport Options offers Camera Icons: Normal / Wireframe / Hidden. Normal uses
+the compact camera model; Wireframe uses its orange contour model. Preference
+schema6 stores Editor.Viewport.CameraIcons outside scene data; source ABI is33.
+Legacy preferences default to Normal. The global Mesh visibility toggle also
+hides icons and their pick targets. 2D and Play submit no 3D camera icons.
+
+Display height targets48 logical pixels, calculated from editor projection and
+camera-space depth (orthographic zoom instead of depth). Rendering and ray picking
+share the same scale-free iconWorld transform and canonical model bounds. Picking
+selects the owning Entity; multiple lenses on one Entity are individually drawn
+but share Entity selection and transform handles. Hidden camera-only Entities do
+not have a phantom fallback sphere in viewport picking; Hierarchy remains usable.
+
+The runtime-selected lens is bright, other lenses dim, selected Entity lenses
+brighter. Selection adds near/far frustum edges from sanitized lens parameters and
+the current editor viewport aspect. Frustum size is independent of icon scale.
+Multi-view outputs with a different aspect are not previewed at their output aspect.
+
+The session registers an owner-scoped scene builder and detaches it before teardown.
+Uploads are editor-owned, have no shadows, and retain authored contour geometry
+even with global wireframe enabled. Asset/material and projection caches avoid
+reloading or rebuilding unchanged geometry. Renderer destruction before session
+shutdown leaves no borrowed GPU destructor call. Source poses/pointers are borrowed
+only during extraction; render packets contain values/handles, not Entity pointers.
+
+Evidence: Test_EditorCameraVisualization.cpp covers hierarchy/multi-lens poses,
+perspective/orthographic size, hidden/Play/invalid exclusion, picking offsets,
+perspective/orthographic frustum geometry, per-viewport selection, menu preferences,
+and Noop submissions using the real exported assets and distinct highlight states.
+Native Computer Use acceptance remains deferred at the user's request.
+
+### Verification evidence
+
+Editor shell and aggregate test target build successfully (Release/Ninja).
+
+| Suite | Cases | Assertions |
+|---|---:|---:|
+| AYEditor_CameraVisualization | 10/10 | 76 |
+| AYEditor_Hierarchy | 13/13 | 268 |
+| AYEditor_P0Core | 15/15 | 193 |
+| Editor2DToolsTests | 18/18 | 340 |
+| AYEditor_SceneBridge | 8/8 | 66 |
+| AYEditor_TransformGizmo | 11/11 | 73 |
+
+Total: 75 cases, 1016 assertions, no failures/skips. The camera suite
+includes actual frame extraction, mock pointer selection, selected frustum packets,
+mode/pref switching, Play exclusion and callback teardown. Noop frames use the
+real camera assets and live material/mesh handles. SDK doctor:116 capabilities,
+53 modules,82 searches,467 documented entry symbols,0 errors/0 warnings.
+Reports are under out/camera-editor in the source checkout. Native Computer Use
+interaction and visual acceptance remain deferred; no screenshot acceptance is claimed.

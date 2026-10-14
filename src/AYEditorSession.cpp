@@ -1,4 +1,6 @@
 #include "AYEditor/EditorSession.h"
+#include <AYEditor/EditorCameraVisualization.h>
+#include <AYEntity/components/PerspectiveCameraComponent.h>
 #ifdef AYEDITOR_HAS_AVATAR
 #include <AYEditor/EditorAvatarDocument.h>
 #endif
@@ -2510,6 +2512,11 @@ void EditorSession::shutdown() {
         return;
     }
     _shutdown = true;
+    if (auto* renderer = ayt::render::RendererSubSystem::findRegistered(); renderer && renderer == _cameraVisualOwner) {
+        renderer->clearSceneBuildersForOwner(this);
+        if (_cameraVisualRenderer && renderer->isReady()) _cameraVisualRenderer->release(renderer->renderer());
+    }
+    _cameraVisualRenderer.reset(); _cameraVisualOwner = nullptr;
 
     finishTransformGizmoDrag(false);
     rememberCurrentSceneView();
@@ -2958,6 +2965,11 @@ bool EditorSession::freecamActive() const
 void EditorSession::pushSceneCameraToRenderer()
 {
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        if (_cameraVisualOwner != sub) {
+            _cameraVisualRenderer = std::make_unique<EditorCameraVisualRenderer>();
+            _cameraVisualOwner = sub;
+            sub->addSceneBuilderForOwner(this, [this](ayt::render::RenderScene& scene) { buildCameraVisuals(scene); });
+        }
         if (_gameView.mode() != EditorMode::Edit) {
             sub->clearCameraOverride();
             sub->clearOverlayCamera2DOverride();
@@ -3890,6 +3902,15 @@ void EditorSession::bindToolbar() {
         item->setId("menu_view_shading");
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
+    viewportOptions->addSeparator();
+    const char* cameraKeys[] = {"ui.editor.viewport.camera_solid", "ui.editor.viewport.camera_wire", "ui.editor.viewport.camera_hidden"};
+    const char* cameraLabels[] = {"Camera Icons: Normal", "Camera Icons: Wireframe", "Camera Icons: Hidden"};
+    const char* cameraIds[] = {"menu_camera_icons_solid", "menu_camera_icons_wire", "menu_camera_icons_hidden"};
+    for (int i=0;i<3;++i) if (auto* item=viewportOptions->addItem(localizedText(cameraKeys[i],cameraLabels[i]))) {
+        item->setId(cameraIds[i]);
+        item->setOnActivate([this,i]() { setCameraDisplayMode(static_cast<EditorCameraDisplayMode>(i)); });
+    }
+    setCameraDisplayMode(_cameraDisplayMode);
     viewportOptions->addSeparator();
     if (auto* item = viewportOptions->addItem(localizedText(
             "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"))) {
@@ -7884,6 +7905,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _sceneCamera.setThreeDProjection(preferences.orthographicView
         ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
     _wireframeView = preferences.wireframeView;
+    setCameraDisplayMode(preferences.cameraDisplayMode);
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_shading"))) {
         button->setText(_wireframeView
@@ -8018,6 +8040,7 @@ EditorPreferences EditorSession::capturePreferences() const
     out.orthographicView =
         _sceneCamera.threeDProjection() == ProjectionMode::Orthographic;
     out.wireframeView = _wireframeView;
+    out.cameraDisplayMode = _cameraDisplayMode;
 
     auto sliderValue = [this](const char* id, float fallback) {
         if (auto* slider = dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) {
@@ -8394,6 +8417,7 @@ void EditorSession::setSceneVisibility(
 
 void EditorSession::syncSceneVisibilityMenu()
 {
+    setCameraDisplayMode(_cameraDisplayMode);
     const bool editMode = _gameView.mode() == EditorMode::Edit;
     const ayt::math::FVector4 active = editorThemeColor(
         "color.accent", ayt::math::FVector4(0.16f, 0.40f, 0.70f, 1.0f));
@@ -11543,7 +11567,7 @@ void EditorSession::rebuildComponentPropertyEditor()
             labels.push_back(localizedText("ui.editor.camera.target_missing",L"Missing Target"));
         }
         selector->setItems(labels); selector->setSelectedIndex(selected);
-        selector->setSize({240,25}); selector->setEnabled(_gameView.mode()==EditorMode::Edit);
+        selector->setSize({240,25}); selector->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
         selector->setOnSelectionChanged([this,targets,selectedComponentId](int index) {
             if (!_document || _gameView.mode()!=EditorMode::Edit || index<0 || size_t(index)>=targets.size() || targets[size_t(index)]==UINT32_MAX) return;
             auto* camera = _selection.resolve(hierarchyWorldMutable()); if (!camera) return;
@@ -11622,7 +11646,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                     _selection.resolve(world)==owner &&
                     owner->getComponent<ayt::stats::StatsRecipeComponent>()==recipe;
             };
-            create->setEnabled(_gameView.mode()==EditorMode::Edit);
+            create->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             create->setOnClicked([=] {
                 if(!validOwner())return;
                 const auto created=createEditorProjectAsset(
@@ -11702,7 +11726,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                 book->setText(ayt::ui::decodeUtf8Text(inspected->recipeBook.lexically_relative(assetsRoot).generic_string()));
                 status->setText(L"Manifest loaded and validated");
             });
-            save->setEnabled(_gameView.mode()==EditorMode::Edit);
+            save->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
              save->setOnClicked([=] {
                  if(!validOwner())return;
                  const auto path=assetsRoot/ayt::ui::encodeUtf8Text(manifest->getText());
@@ -11728,7 +11752,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                     ayt::ui::decodeUtf8Text(saved->logicalPath));
                 _assetDatabase.requestScan();
             });
-            select->setEnabled(_gameView.mode()==EditorMode::Edit);
+            select->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             select->setOnClicked([=] {
                 if(!validOwner())return;
                 const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
@@ -11859,14 +11883,14 @@ void EditorSession::rebuildComponentPropertyEditor()
         const wchar_t* titles[]={L"Play",L"Pause",L"Restart",L"Stop",L"Step"};
         for(int i=0;i<5;++i) {
             auto* b=new ayt::ui::Button(); b->setText(titles[i]); b->setId("particle_inspector_"+std::to_string(i));
-            b->setEnabled(_gameView.mode()==EditorMode::Edit);
+            b->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             b->setOnClicked([control,i] { control(i); }); row->addWidget(b,45);
         }
         propertyTarget->addWidget(row,28);
         addLabel(L"Preparing particle preview...",24,"particle_inspector_status");
         if(typeName=="ParticleEffectComponent") {
             auto* reload=new ayt::ui::Button(); reload->setText(L"Reload effect");
-            reload->setEnabled(_gameView.mode()==EditorMode::Edit);
+            reload->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             reload->setOnClicked([this,id] {
                 if(_gameView.mode()!=EditorMode::Edit) return;
                 auto* world=hierarchyWorldMutable(); auto* e=world?world->findEntity(id):nullptr;
@@ -12737,11 +12761,21 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
 
     ayt::entity::Entity* bestEntity = nullptr;
     float bestDistance = 1.0e30f;
+    auto cameraVisuals = buildEditorCameraVisuals(*world, _sceneCamera.frame(), viewport.height(),
+        viewport.width()/viewport.height(), selectedEntityId(), _cameraDisplayMode, _gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
+    for (const auto& visual:cameraVisuals) {
+        float distance;
+        if (hitEditorCameraVisual(visual,origin,direction,distance) && distance<bestDistance) {
+            bestDistance=distance; bestEntity=visual.entity;
+        }
+    }
     for (ayt::entity::Entity* entity : world->getAllEntities()) {
         auto* transform = entity != nullptr
             ? entity->getComponent<ayt::entity::Transform>() : nullptr;
         auto* meshComponent = entity != nullptr
             ? entity->getComponent<ayt::entity::MeshComponent>() : nullptr;
+        // Camera-only entities are picked by their displayed lens icon, never by a phantom sphere.
+        if (entity && entity->hasComponent<ayt::entity::PerspectiveCameraComponent>() && meshComponent==nullptr) continue;
         if (transform == nullptr || (meshComponent != nullptr
                                      && !meshComponent->visible)) {
             continue;
@@ -13301,3 +13335,30 @@ void EditorSession::syncViewport() {
 }
 
 } // namespace ayt::editor
+
+namespace ayt::editor {
+void EditorSession::setCameraDisplayMode(EditorCameraDisplayMode mode) {
+    if (static_cast<unsigned>(mode)>2) mode=EditorCameraDisplayMode::Solid;
+    const bool changed=_cameraDisplayMode!=mode;
+    _cameraDisplayMode=mode;
+    const char* ids[]={"menu_camera_icons_solid","menu_camera_icons_wire","menu_camera_icons_hidden"};
+    const char* keys[]={"ui.editor.viewport.camera_solid","ui.editor.viewport.camera_wire","ui.editor.viewport.camera_hidden"};
+    const char* labels[]={"Camera Icons: Normal","Camera Icons: Wireframe","Camera Icons: Hidden"};
+    for(int i=0;i<3;++i) if(auto* item=dynamic_cast<ayt::ui::MenuItem*>(_ui.findById(ids[i]))) {
+        item->setText(localizedText(keys[i],labels[i]));
+        setEditorMenuToggleIcon(item,_engineAssetsRoot,static_cast<int>(mode)==i);
+    }
+    if(changed) { pushSceneCameraToRenderer(); if (_repaintCallback) _repaintCallback(); }
+}
+void EditorSession::buildCameraVisuals(ayt::render::RenderScene& scene) {
+    if (_shutdown || !_cameraVisualOwner || !_cameraVisualOwner->isReady() || !_cameraVisualRenderer) return;
+    const bool visible=_gameView.mode()==EditorMode::Edit && !_sceneCamera.isTwoD() && _sceneVisibility.meshes;
+    auto* world=visible?hierarchyWorldMutable():nullptr;
+    if(!world) return;
+    ayt::math::FRectangle bounds{};
+    if(!getViewportBounds(bounds)||bounds.height()<=0) return;
+    auto visuals=buildEditorCameraVisuals(*world,_sceneCamera.frame(),bounds.height(),bounds.width()/bounds.height(),
+        _selectionWorld==world?selectedEntityId():0,_cameraDisplayMode,true);
+    _cameraVisualRenderer->append(_cameraVisualOwner->renderer(),scene,_engineAssetsRoot,visuals,_cameraDisplayMode);
+}
+}
