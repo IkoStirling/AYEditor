@@ -1,5 +1,19 @@
 # AYEditor
 
+## 空间与数据实体作者流程（2026-10-14）
+
+创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，
+提供可撤销的显式转换；Transform 显示为固定 Spatial Property，不能添加/移除，
+数据实体的组件候选过滤空间依赖。空间父节点与拥有者各有选择器：改父节点显式选择保持世界或局部姿态，
+归属只决定生命周期；均走文档命令与撤销/重做，不直接绕过历史。
+
+Outliner 按真实空间树组织节点，数据实体为非空间根行；折叠子树保留逻辑选择。
+Inspector 编辑局部 TRS，视口选择、Gizmo 使用世界姿态，拖动结果检查后转回局部，
+失败不写近似 TRS。删除/恢复保留 persistentId、owned 后代及外部空间子节点的关系。
+新场景保存为 schema5，旧场景读取由 AYEntity 迁移。Actor 类数据继承不是空间父子关系。
+证据：`Test_EditorP0Core.cpp` 的类型/关系历史和删除恢复，以及 `Test_EditorHierarchy.cpp` 创建入口。
+
+
 Logia 作者分析使用 checked 编译器，并从引用它的 Actor 类读取有效属性声明。Compile 保留旧 Component/Tool 文档兼容；Actor、checked 新语法或显式 checked 上下文启用严格校验。
 **Complete** 菜单插入属性、helper 与注册接口提示，**Definition** 导航已解析声明及导入模块。
 嵌入宿主可用 `EditorDslDocument::setLogiaHostContext` 指定 schema/provider。
@@ -268,3 +282,5 @@ the native AYScript debugger on a quiesced Host to inspect actual play instances
 Editing/reopening source or changing schema closes the preview session.
 
 Logia checked inference recognizes project_event, persist and asset declarations even without a bound Actor schema. Project-event declarations appear as typed symbols in completion.
+
+本次本地验证与限制见 [`空间实体实施记录`](../../AYDocs/ENTITY-SPATIAL-HIERARCHY.md#实际验证windowsmsvc-release2026-10-14)。

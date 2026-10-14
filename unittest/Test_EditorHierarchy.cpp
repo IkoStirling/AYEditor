@@ -375,7 +375,7 @@ TEST_CASE(editor_create_empty_entity_menu_closes_and_refreshes_hierarchy)
         if (menu == nullptr) continue;
         for (size_t itemIndex = 0; itemIndex < menu->getItemCount(); ++itemIndex) {
             MenuItem* item = menu->getItem(static_cast<int>(itemIndex));
-            if (item != nullptr && item->getText() == L"Create Empty Entity") {
+            if (item != nullptr && item->getText() == L"Create Spatial Entity") {
                 editMenu = menu;
                 createItem = item;
                 break;
@@ -490,11 +490,11 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
     CHECK_NOT_NULL(tree);
     if (!button || !menu || !tree) { session.shutdown(); return; }
     CHECK(button->isEnabled());
-    CHECK(menu->getItemCount() == 4u);
+    CHECK(menu->getItemCount() == 5u);
     auto& world = session.document()->scene().world();
     const size_t before = world.getAllEntities().size();
 
-    for (size_t type = 0; type < 4u; ++type) {
+    for (size_t type = 0; type < 5u; ++type) {
         tree->toggleExpand(0); // Creation must reveal a previously collapsed tree.
         const auto bounds = button->getWorldBounds();
         const auto pos = session.ui().logicalToPhysical(
@@ -517,7 +517,8 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
         auto* entity = world.findEntity(session.selectedEntityId());
         CHECK_NOT_NULL(entity);
         if (entity) {
-            CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+            if (type == 4u) { CHECK(entity->kind() == ayt::entity::EntityKind::Data); CHECK(entity->transform() == nullptr); }
+            else { CHECK(entity->isSpatial()); CHECK(entity->transform() != nullptr); }
             if (type == 1u) CHECK(entity->getComponent<ayt::entity::SpriteComponent>() != nullptr);
             if (type == 2u) CHECK(entity->getComponent<ayt::entity::TilemapComponent>() != nullptr);
             if (type == 3u) CHECK(entity->hasComponent<ayt::entity::OrthoCameraComponent>());
@@ -528,13 +529,13 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
     session.onKeyDown(UIKey_Control);
     CHECK(session.onKeyDown(UIKey_Z));
     session.onKeyUp(UIKey_Control);
-    CHECK(world.getAllEntities().size() == before + 3u);
+    CHECK(world.getAllEntities().size() == before + 4u);
     session.onKeyDown(UIKey_Control);
     session.onKeyDown(UIKey_Shift);
     CHECK(session.onKeyDown(UIKey_Z));
     session.onKeyUp(UIKey_Shift);
     session.onKeyUp(UIKey_Control);
-    CHECK(world.getAllEntities().size() == before + 4u);
+    CHECK(world.getAllEntities().size() == before + 5u);
     session.shutdown();
 }
 

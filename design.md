@@ -1,5 +1,19 @@
 # AYEditor Design
 
+## 空间与数据实体作者流程（2026-10-14）
+
+创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，
+提供可撤销的显式转换；Transform 显示为固定 Spatial Property，不能添加/移除，
+数据实体的组件候选过滤空间依赖。空间父节点与拥有者各有选择器：改父节点显式选择保持世界或局部姿态，
+归属只决定生命周期；均走文档命令与撤销/重做，不直接绕过历史。
+
+Outliner 按真实空间树组织节点，数据实体为非空间根行；折叠子树保留逻辑选择。
+Inspector 编辑局部 TRS，视口选择、Gizmo 使用世界姿态，拖动结果检查后转回局部，
+失败不写近似 TRS。删除/恢复保留 persistentId、owned 后代及外部空间子节点的关系。
+新场景保存为 schema5，旧场景读取由 AYEntity 迁移。Actor 类数据继承不是空间父子关系。
+证据：`Test_EditorP0Core.cpp` 的类型/关系历史和删除恢复，以及 `Test_EditorHierarchy.cpp` 创建入口。
+
+
 ## 2026-10-04 Phoskia 作者分析
 
 EditorDslDocument 为 Phoskia 调用 analyzePhoskia，sourcePath 提供相对模块 origin，

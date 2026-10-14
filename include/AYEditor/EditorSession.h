@@ -379,6 +379,10 @@ private:
     void syncDocumentCommandMenu();
     void afterDocumentReload();
     void createEmptyEntity();
+    void createDataEntity();
+    void convertSelectedEntityKind();
+    void refreshEntityRelations();
+    ayt::ui::Widget* entityInspectorWidget(const char* id);
     bool isOutlinerTreePoint(ayt::ui::UIManager& ui, float physicalX, float physicalY) const;
     void showOutlinerCreateMenu(ayt::ui::UIManager& ui, float logicalX, float logicalY);
     void syncOutlinerCreateControls();
@@ -768,6 +772,10 @@ private:
     std::string _inspectedComponentTypeName;
     std::string _inspectedComponentId;
     bool _updatingComponentPicker = false;
+    bool _updatingEntityRelations = false;
+    std::vector<uint32_t> _spatialParentCandidates, _entityOwnerCandidates;
+    std::unordered_map<uint32_t, bool> _spatialExpanded;
+    EditorTransformState _gizmoLocalBefore;
     bool _updatingEntityName = false;
     bool _updatingComponentPropertyCommit = false;
     bool _controlDown = false;

@@ -4,6 +4,7 @@
 #include "AYEditor/EditorExtension.h"
 #include "AYEditorCommand/EditorCommandHistory.h"
 #include "AYMath/MathTypes.h"
+#include <AYEntity/IEntity.h>
 
 #include <cstdint>
 #include <functional>
@@ -62,7 +63,14 @@ public:
     bool createEntity(
         std::string label,
         const std::function<bool(ayt::entity::Entity&)>& configure,
-        uint32_t* entityId = nullptr);
+        uint32_t* entityId = nullptr,
+        ayt::entity::EntityKind kind = ayt::entity::EntityKind::Spatial);
+    /// Explicit, undoable structural conversion; rejects spatial dependencies/attachments.
+    bool convertEntityKind(uint32_t entityId, ayt::entity::EntityKind kind, std::string* error = nullptr);
+    bool reparentEntity(uint32_t entityId, uint32_t parentId,
+                        ayt::entity::ReparentMode mode = ayt::entity::ReparentMode::KeepWorld,
+                        std::string* error = nullptr);
+    bool setEntityOwner(uint32_t entityId, uint32_t ownerId, std::string* error = nullptr);
     bool deleteEntity(uint32_t entityId, std::string label = "Delete Entity");
     bool addComponent(uint32_t entityId, const std::string& componentType,
                       std::vector<std::string>* added = nullptr,
@@ -111,6 +119,8 @@ private:
     class EntityRenameCommand;
     class EntityCreateCommand;
     class EntityDeleteCommand;
+    class EntityKindCommand;
+    class EntityRelationCommand;
     class AddComponentCommand;
     class RemoveComponentCommand;
     class RestoreComponentCommand;
@@ -119,6 +129,8 @@ private:
     friend class EntityRenameCommand;
     friend class EntityCreateCommand;
     friend class EntityDeleteCommand;
+    friend class EntityKindCommand;
+    friend class EntityRelationCommand;
     friend class AddComponentCommand;
     friend class RemoveComponentCommand;
     friend class RestoreComponentCommand;

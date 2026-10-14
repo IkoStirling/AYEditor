@@ -4298,8 +4298,9 @@ void EditorSession::bindOutlinerPanel()
         [this](int flatIndex) { onOutlinerSelectionChanged(flatIndex); });
     _outliner->setOnExpandToggled(
         [this](int flatIndex, bool expanded) {
-            if (flatIndex != 0) return;
-            _outlinerRootExpanded = expanded;
+            if (flatIndex == 0) _outlinerRootExpanded = expanded;
+            else if (flatIndex > 0 && size_t(flatIndex - 1) < _outlinerEntityIds.size())
+                _spatialExpanded[_outlinerEntityIds[size_t(flatIndex - 1)]] = expanded;
             // TreeView has already rebuilt its stable row pool. Rebuild our
             // entity-id projection on the next EditorSession update so a
             // selected entity hidden by collapse remains selected logically.
@@ -4320,8 +4321,8 @@ void EditorSession::bindOutlinerPanel()
         gEditorMenuTexts[this].push_back(
             {item, nullptr, 0u, key, fallback});
     };
-    addCreate("outliner_create_empty", "ui.editor.menu.edit.create_entity",
-        L"Create Empty Entity", [this]() { createEmptyEntity(); });
+    addCreate("outliner_create_empty", "ui.editor.menu.edit.create_spatial_entity",
+        L"Create Spatial Entity", [this]() { createEmptyEntity(); });
     addCreate("outliner_create_sprite", "ui.editor.menu.edit.create_sprite",
         L"Create Sprite", [this]() {
             (void)createTwoDEntity(Editor2DEntityKind::Sprite);
@@ -4334,6 +4335,8 @@ void EditorSession::bindOutlinerPanel()
         L"Create 2D Camera", [this]() {
             (void)createTwoDEntity(Editor2DEntityKind::Camera);
         });
+    addCreate("outliner_create_data", "ui.editor.menu.edit.create_data_entity",
+        L"Create Data Entity", [this]() { createDataEntity(); });
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_outliner_create"))) {
         menu->detachFromParent();
@@ -4475,22 +4478,24 @@ void EditorSession::refreshOutliner()
         world->getAllEntities();
     nodes.reserve(entities.size() + 1);
     _outlinerEntityIds.reserve(entities.size());
-    for (ayt::entity::Entity* e : entities) {
-        if (e == nullptr) continue;
-        const char* nameC = e->getName();
-        std::string name = (nameC != nullptr && nameC[0] != '\0')
-            ? std::string(nameC)
-            : ("entity#" + std::to_string(
-                  static_cast<unsigned>(e->getId())));
-
-        ayt::ui::TreeNodeData d;
-        d.label = std::wstring(name.begin(), name.end());
-        d.hasChildren = false;
-        d.expanded = false;
-        d.parentIndex = 0;  // 挂在合成 root 下
-        nodes.push_back(d);
-        _outlinerEntityIds.push_back(e->getId());
+    std::unordered_map<uint32_t,std::vector<ayt::entity::Entity*>> children;
+    for (auto* entity : entities) {
+        const auto* parent = entity->spatialParent();
+        children[parent ? parent->getId() : 0].push_back(entity);
     }
+    const auto append = [&](const auto& self, ayt::entity::Entity* entity, int parentIndex, bool visible) -> void {
+        const int sourceIndex = int(nodes.size());
+        ayt::ui::TreeNodeData node;
+        node.label = ayt::ui::decodeUtf8Text(entity->getName()[0] ? entity->getName() : "Unnamed");
+        node.icon = entity->isSpatial() ? L"S" : L"D";
+        node.parentIndex = parentIndex; node.hasChildren = !children[entity->getId()].empty();
+        const auto expansion = _spatialExpanded.find(entity->getId());
+        node.expanded = expansion == _spatialExpanded.end() || expansion->second;
+        nodes.push_back(node);
+        if (visible) _outlinerEntityIds.push_back(entity->getId());
+        for (auto* child : children[entity->getId()]) self(self,child,sourceIndex,visible && node.expanded);
+    };
+    for (auto* entity : children[0]) append(append,entity,0,true);
 
     _updatingOutlinerSelection = true;
     _outliner->setTree(nodes);
@@ -4498,7 +4503,7 @@ void EditorSession::refreshOutliner()
     // Preserve selection by entity id rather than TreeView's recycled flat
     // row. A collapsed root hides the row but must not clear Inspector/entity
     // selection; expanding it restores the visual highlight on the next pass.
-    bool selectedEntityStillExists = _selection.empty();
+    bool selectedEntityStillExists = _selection.empty() || _selection.resolve(hierarchyWorldMutable()) != nullptr;
     int selectedFlat = -1;
     if (!_selection.empty()) {
         for (size_t i = 0; i < _outlinerEntityIds.size(); ++i) {
@@ -8448,7 +8453,8 @@ void EditorSession::fitTwoDViewToSceneCamera()
             continue;
         }
         const ayt::math::Float4x4 matrix =
-            editor2DShapeMatrix(*transform, shape);
+            (entity->spatialParent() ? entity->spatialParent()->worldMatrix() : ayt::math::Float4x4::identity())
+                            * editor2DShapeMatrix(*transform, shape);
         const ayt::math::FVector2 localCorners[4] = {
             {shape.localMin.x, shape.localMin.y},
             {shape.localMax.x, shape.localMin.y},
@@ -8481,9 +8487,10 @@ void EditorSession::fitTwoDViewToSceneCamera()
     if (!selected) return;
     const float viewHeight = selected.camera->effectiveViewSize(
         _sceneCamera.viewportAspect()) / std::fabs(selected.camera->safeZoom());
-    _sceneCamera.setTwoDPose(
-        {selected.transform->position.x, selected.transform->position.y},
-        viewHeight);
+    ayt::math::FVector3 position; ayt::math::FQuaternion rotation;
+    if (!selected.entity->worldPose(position,rotation)) return;
+    const auto center = selected.camera->worldCenter(position,rotation.toEulerAngles().z);
+    _sceneCamera.setTwoDPose(center,viewHeight);
 }
 
 void EditorSession::rememberCurrentSceneView()
@@ -8879,6 +8886,7 @@ void EditorSession::syncDocumentCommandMenu()
 void EditorSession::afterDocumentReload()
 {
     finishTransformGizmoDrag(false);
+    _spatialExpanded.clear();
     clearSelectedEntity(false);
     _playRuntime.forgetEditScenePreview();
     refreshOutliner();
@@ -8887,6 +8895,80 @@ void EditorSession::afterDocumentReload()
     refreshUnsavedIndicator();
     selectInitialSceneViewForDocument();
     if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::createDataEntity() {
+    if (!_document || _gameView.mode() != EditorMode::Edit) return;
+    auto* world = hierarchyWorldMutable(); if (!world) return;
+    const auto name = uniqueEntityName(*world,"Data Entity");
+    uint32_t id = 0;
+    if (!_document->createEntity("Create Data Entity",[&](ayt::entity::Entity& entity) {
+        entity.setName(name.c_str()); return true;
+    },&id,ayt::entity::EntityKind::Data)) return;
+    setSelectedEntity(world,world->findEntity(id)); _outlinerRootExpanded = true;
+    _outlinerRefreshPending = true; refreshInspectorLabels(); refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+void EditorSession::convertSelectedEntityKind() {
+    auto* entity = _selection.resolve(hierarchyWorldMutable());
+    if (!_document || !entity || _gameView.mode() != EditorMode::Edit) return;
+    std::string error;
+    if (!_document->convertEntityKind(entity->getId(),entity->isSpatial()
+        ? ayt::entity::EntityKind::Data : ayt::entity::EntityKind::Spatial,&error)) {
+        if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+        return;
+    }
+    _outlinerRefreshPending = true; refreshInspectorLabels(); refreshTransformInspector();
+    refreshUnsavedIndicator(); syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+ayt::ui::Widget* EditorSession::entityInspectorWidget(const char* id) {
+    if (auto* widget = _ui.findById(id)) return widget;
+    if (_childWindows) for (const auto& entry : _childWindows->entries())
+        if (entry.ui) if (auto* widget = entry.ui->findById(id)) return widget;
+    return nullptr;
+}
+void EditorSession::refreshEntityRelations() {
+    auto* world = hierarchyWorldMutable(); auto* entity = _selection.resolve(world);
+    _updatingEntityRelations = true;
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(entityInspectorWidget("inspector_entity_kind")))
+        label->setText(entity ? localizedText(entity->isSpatial()
+            ? "ui.editor.entity.spatial_definition" : "ui.editor.entity.data_definition",
+            entity->isSpatial() ? L"Spatial: pose and spatial hierarchy" : L"Data: logic/state, no spatial pose") : L"-");
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_convert_entity_kind"))) {
+        button->setEnabled(entity && _gameView.mode() == EditorMode::Edit);
+        button->setText(localizedText(entity && entity->isSpatial()
+            ? "ui.editor.entity.convert_data" : "ui.editor.entity.convert_spatial",
+            entity && entity->isSpatial() ? L"Convert to Data" : L"Convert to Spatial"));
+    }
+    if (auto* mode = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget("cmb_reparent_mode"))) {
+        const int selected = mode->getSelectedIndex() == 1 ? 1 : 0;
+        mode->setItems({localizedText("ui.editor.entity.keep_world",L"Keep World Pose"),
+                        localizedText("ui.editor.entity.keep_local",L"Keep Local Pose")});
+        mode->setSelectedIndex(selected);
+        mode->setEnabled(entity && entity->isSpatial() && _gameView.mode() == EditorMode::Edit);
+    }
+    const auto fill = [&](const char* id, bool spatial, std::vector<uint32_t>& candidates) {
+        auto* combo = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget(id)); if (!combo) return;
+        candidates = {0}; std::vector<std::wstring> labels{localizedText("ui.editor.entity.none",L"None")};
+        const auto* current = entity ? (spatial ? entity->spatialParent() : entity->owner()) : nullptr;
+        int selected = 0;
+        if (world && entity) for (auto* target : world->getAllEntities()) {
+            if (target == entity || (spatial && !target->isSpatial())) continue;
+            bool cycle = false;
+            for (auto* cursor = target; cursor; cursor = spatial ? cursor->spatialParent() : cursor->owner())
+                if (cursor == entity) { cycle = true; break; }
+            if (cycle) continue;
+            if (target == current) selected = int(candidates.size());
+            candidates.push_back(target->getId());
+            labels.push_back(ayt::ui::decodeUtf8Text(std::string(target->getName()) + " (#" + std::to_string(target->getId()) + ")"));
+        }
+        combo->setItems(labels); combo->setSelectedIndex(selected);
+        combo->setEnabled(entity && (!spatial || entity->isSpatial()) && _gameView.mode() == EditorMode::Edit);
+    };
+    fill("cmb_spatial_parent",true,_spatialParentCandidates);
+    fill("cmb_entity_owner",false,_entityOwnerCandidates);
+    _updatingEntityRelations = false;
 }
 
 void EditorSession::createEmptyEntity()
@@ -9221,8 +9303,11 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { showAssetHistoryDialog(); });
         }
         editMenu->addSeparator();
-        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_entity", L"Create Empty Entity")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_spatial_entity", L"Create Spatial Entity")) {
             item->setOnActivate([this]() { createEmptyEntity(); });
+        }
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_data_entity", L"Create Data Entity")) {
+            item->setOnActivate([this]() { createDataEntity(); });
         }
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_sprite", L"Create Sprite")) {
             item->setOnActivate([this]() {
@@ -10843,9 +10928,18 @@ void EditorSession::importCharacterFromDialog()
     }
 }
 
+namespace {
+EditorTransformState spatialWorldState(const ayt::entity::Entity& entity) {
+    EditorTransformState result;
+    entity.worldMatrix().decompose(result.position,result.rotation,result.scale);
+    return result;
+}
+}
+
 void EditorSession::refreshInspectorLabels()
 {
     refreshComponentBrowser();
+    refreshEntityRelations();
     if (_selectedAssetId != 0) {
         setInspectorAssetMode(true);
         refreshAssetInspector();
@@ -10920,6 +11014,33 @@ void EditorSession::bindComponentBrowser()
             _ui.findById("btn_remove_component"))) {
         button->setOnClicked([this]() { removeSelectedComponent(); });
     }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_convert_entity_kind")))
+        button->setOnClicked([this]() { convertSelectedEntityKind(); });
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_entity_relations")))
+        button->setOnClicked([this]() {
+            if (auto* body = entityInspectorWidget("inspector_entity_relations")) body->setVisible(!body->isVisible());
+            _ui.layout(); if (_repaintCallback) _repaintCallback();
+        });
+    const auto bindRelation = [this](const char* id, bool spatial) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget(id)))
+            combo->setOnSelectionChanged([this,spatial](int index) {
+                if (_updatingEntityRelations || !_document || _gameView.mode() != EditorMode::Edit) return;
+                auto* entity = _selection.resolve(hierarchyWorldMutable());
+                const auto& candidates = spatial ? _spatialParentCandidates : _entityOwnerCandidates;
+                if (!entity || index < 0 || size_t(index) >= candidates.size()) return;
+                std::string error;
+                const auto* selector = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget("cmb_reparent_mode"));
+                const auto mode = selector && selector->getSelectedIndex() == 1
+                    ? ayt::entity::ReparentMode::KeepLocal : ayt::entity::ReparentMode::KeepWorld;
+                const bool changed = spatial
+                    ? _document->reparentEntity(entity->getId(),candidates[index],mode,&error)
+                    : _document->setEntityOwner(entity->getId(),candidates[index],&error);
+                _outlinerRefreshPending = true; refreshEntityRelations(); refreshTransformInspector(); refreshUnsavedIndicator();
+                if (!changed && !error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+                if (_repaintCallback) _repaintCallback();
+            });
+    };
+    bindRelation("cmb_spatial_parent",true); bindRelation("cmb_entity_owner",false);
     refreshComponentBrowser();
 }
 
@@ -10950,7 +11071,8 @@ void EditorSession::refreshComponentBrowser()
          ayt::entity::ComponentRegistry::instance().descriptors()) {
         const bool present = entity != nullptr && descriptor.has != nullptr
             && descriptor.has(*entity);
-        if (canAdd && descriptor.editorAddable && descriptor.sceneSerializable
+        if (canAdd && (!descriptor.requiresSpatial || entity->isSpatial())
+            && descriptor.editorAddable && descriptor.sceneSerializable
             && descriptor.add != nullptr
             && (!present || descriptor.multiplicity
                 == ayt::entity::ComponentMultiplicity::Multiple)) {
@@ -10977,7 +11099,8 @@ void EditorSession::refreshComponentBrowser()
             _ui.findById("inspector_components"))) {
         const std::string text = entity == nullptr
             ? "Components"
-            : "Components (" + std::to_string(attached.size()) + ")";
+            : "Components (" + std::to_string(std::count_if(attached.begin(),attached.end(),
+                [](const auto& item) { return !item.descriptor->intrinsic; })) + ")";
         label->setText(ayt::ui::decodeUtf8Text(text));
     }
 
@@ -11045,7 +11168,7 @@ void EditorSession::refreshComponentBrowser()
                 const auto* descriptor = item.descriptor;
                 ayt::ui::TreeNodeData node;
                 node.label = ayt::ui::decodeUtf8Text(
-                    descriptor->category + " / "
+                    (descriptor->intrinsic ? "Spatial Property / " : descriptor->category + " / ")
                     + (item.instance->displayName.empty()
                         ? descriptor->displayName : item.instance->displayName));
                 node.parentIndex = 0;
@@ -12553,8 +12676,7 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
             if (mesh != nullptr && mesh->hasBounds()) {
                 hasMeshBounds = true;
                 const ayt::math::Float4x4 worldMatrix =
-                    ayt::math::Transform::getMatrix(
-                        transform->position, transform->rotation, transform->scale);
+                    entity->worldMatrix();
                 const ayt::math::Float4x4 inverseWorld = worldMatrix.inverse_fast();
                 const ayt::math::FVector3 localOrigin =
                     inverseWorld.transformPoint(origin);
@@ -12585,8 +12707,9 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
             const float radius = 0.75f * std::max({
                 std::fabs(transform->scale.x), std::fabs(transform->scale.y),
                 std::fabs(transform->scale.z), 0.1f});
-            hit = intersectRaySphere(origin, direction, transform->position,
-                                     radius, distance);
+            const auto worldState = spatialWorldState(*entity);
+            hit = intersectRaySphere(origin, direction, worldState.position,
+                                     radius * std::max({std::fabs(worldState.scale.x),std::fabs(worldState.scale.y),std::fabs(worldState.scale.z),1.f}), distance);
         }
         if (hit && distance < bestDistance) {
             bestDistance = distance;
@@ -12624,8 +12747,7 @@ EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
     if (!viewportRay(x, y, origin, direction)) {
         return EditorGizmoHandle::None;
     }
-    const EditorTransformState state{
-        transform->position, transform->rotation, transform->scale};
+    const EditorTransformState state = spatialWorldState(*entity);
     const float worldScaleOverride = _sceneCamera.isTwoD()
         ? _sceneCamera.twoDViewHeight()
             / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
@@ -12659,8 +12781,7 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
     ayt::math::FVector3 direction{};
     if (!viewportRay(x, y, origin, direction)) return false;
 
-    const EditorTransformState state{
-        transform->position, transform->rotation, transform->scale};
+    const EditorTransformState state = spatialWorldState(*entity);
     const float worldScaleOverride = _sceneCamera.isTwoD()
         ? _sceneCamera.twoDViewHeight()
             / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
@@ -12674,6 +12795,7 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
     }
     _gizmoDragWorld = world;
     _gizmoDragEntityId = entity->getId();
+    _gizmoLocalBefore = {transform->position,transform->rotation,transform->scale};
     _gizmoHoverHandle = handle;
     syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
@@ -12700,6 +12822,9 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
     EditorTransformState updated;
     if (_transformGizmo.update(
             origin, direction, x, y, updated)) {
+        if (entity->spatialParent()) {
+            if (!entity->setWorldMatrix(ayt::math::Transform::getMatrix(updated.position,updated.rotation,updated.scale))) return true;
+        } else {
         transform->setPosition(updated.position.x,
                                updated.position.y,
                                updated.position.z);
@@ -12710,6 +12835,7 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
         transform->setScale(updated.scale.x,
                             updated.scale.y,
                             updated.scale.z);
+        }
         refreshTransformInspector();
         syncTransformGizmoToRenderer();
         if (_repaintCallback) _repaintCallback();
@@ -12723,7 +12849,7 @@ void EditorSession::finishTransformGizmoDrag(bool commit)
 
     ayt::entity::World* world = _gizmoDragWorld;
     const uint32_t entityId = _gizmoDragEntityId;
-    const EditorTransformState before = _transformGizmo.before();
+    const EditorTransformState before = _gizmoLocalBefore;
     ayt::entity::Entity* entity = world != nullptr
         ? world->findEntity(entityId) : nullptr;
     auto* transform = entity != nullptr
@@ -12779,8 +12905,7 @@ void EditorSession::syncTransformGizmoToRenderer()
             ? entity->getComponent<ayt::entity::Transform>() : nullptr;
         if (world != nullptr && world == _selectionWorld
             && transform != nullptr) {
-            const EditorTransformState transformState{
-                transform->position, transform->rotation, transform->scale};
+            const EditorTransformState transformState = spatialWorldState(*entity);
             if (_sceneCamera.isTwoD()) {
                 _gizmoDisabledHandleMask = kTwoDGizmoDisabledHandleMask;
                 state.worldScaleOverride = _sceneCamera.twoDViewHeight()
@@ -12795,8 +12920,8 @@ void EditorSession::syncTransformGizmoToRenderer()
                         _gizmoDisabledHandleMask);
             }
             state.visible = true;
-            state.position = transform->position;
-            state.rotation = transform->rotation;
+            state.position = transformState.position;
+            state.rotation = transformState.rotation;
             state.localSpace = _localTransformSpace;
             state.activeHandle = static_cast<uint8_t>(
                 _transformGizmo.active()
@@ -12820,7 +12945,8 @@ void EditorSession::syncTransformGizmoToRenderer()
                 if (editor2DSelectionShape(*entity, _assetDatabase,
                                            aspect, shape)) {
                     const ayt::math::Float4x4 matrix =
-                        editor2DShapeMatrix(*transform, shape);
+                        (entity->spatialParent() ? entity->spatialParent()->worldMatrix() : ayt::math::Float4x4::identity())
+                            * editor2DShapeMatrix(*transform, shape);
                     const ayt::math::FVector2 localCorners[4] = {
                         {shape.localMin.x, shape.localMin.y},
                         {shape.localMax.x, shape.localMin.y},
