@@ -16,6 +16,7 @@ add_executable(${MODULE_NAME} main.cpp)
 
 # Direct executable sources retain registrars without textual inclusion or unity builds.
 set(AY_EDITOR_EMBEDDED_TEST_SOURCES
+    Test_EditorPhysicsDebug.cpp
     Test_EditorShell.cpp
     Test_EditorImporter.cpp
     Test_EditorPlayRuntime.cpp

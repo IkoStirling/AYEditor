@@ -268,3 +268,25 @@ the native AYScript debugger on a quiesced Host to inspect actual play instances
 Editing/reopening source or changing schema closes the preview session.
 
 Logia checked inference recognizes project_event, persist and asset declarations even without a bound Actor schema. Project-event declarations appear as typed symbols in completion.
+
+## Physics debug view (2026-10-14)
+
+Use the Scene viewport options menu:
+- Collision Shapes: live ECS Box/Sphere/Capsule wires, including local offsets
+  and body rotation, without applying Transform scale (matches physics bridge).
+- Query Debug Drawing: automatically capture synchronous native physics queries.
+- Query Drawing: Real-time, Timed... (0.001 to 86400 seconds), or Keep Until Cleared.
+- Clear Query Drawings: discard retained query history.
+
+Query miss/hit/error colors are green/red/yellow, with ray hit-point and normal
+markers. Collider wires are orange; triggers cyan. Timed drawings expire in
+real time even when gameplay is paused. World replacement clears history;
+pause preserves it. Settings are editor-session only, do not dirty or serialize
+the Scene, and are disabled on shutdown. Advanced collider shapes, non-ECS
+native bodies and deterministic collision proxies are not yet enumerated.
+
+Local verification: editor full inventory 397/397 passed, no skipped/problem/
+unreported cases, at `out/physics-debug-20261014/editor-final/51ab27df9b7e4fdd94fd300a095dcbe6/cases.json`.
+The three directed PhysicsDebug cases passed as well. EditorShell_Demo was rebuilt.
+Real D3D11 overlay pixels were separately verified in AYRenderer; the editor
+menu has not been manually exercised in an interactive window in this task.

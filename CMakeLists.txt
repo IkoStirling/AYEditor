@@ -67,6 +67,7 @@ if(WIN32)
 endif()
 
 set(SRC_FILES
+    src/AYEditorPhysicsDebugGeometry.cpp
     src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
     src/AYEditorGameView.cpp

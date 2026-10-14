@@ -1766,3 +1766,25 @@ Diagnostics display snapshots rather than retaining VM values.
 
 ### Logia coordination authoring
 Unbound documents containing project_event/persist/asset select checked analysis. The language analyzer exposes project-event signatures and reports payload/timeout/join errors before execution. Task inspection includes join target and deadline.
+
+## Physics query and collider diagnostics (2026-10-14)
+
+EditorSession owns session-only display/lifetime settings. Viewport menu
+commands enable shape/query channels separately, select one-frame/timed/retained
+query history, open a validated duration dialog and clear history. Settings
+configure the registered PhysicsSubSystem manager, with no extra query or
+physics step. At update completion the editor consumes diagnostic values,
+adds read-only collider wire geometry from hierarchyWorld (Edit or Play) and
+copies the bounded batch to Renderer. No document mutation/history entry.
+
+Collider enumeration reuses PhysicsDebugDraw::colliderLines for Box/Sphere/
+Capsule descriptor semantics; the Entity physics bridge ignores Transform
+scale, so the overlay does too. Hull/Mesh/Heightfield and standalone native
+bodies are omitted. Current ECS pose is used; this is not backend geometry
+introspection or a promise to visualize unaccepted backend shapes.
+
+Query history is cleared on World replacement and shutdown; pause retains it.
+Real-time geometry lives for one consumption, timed geometry follows the
+monotonic wall clock, persistent geometry requires explicit clear or disable.
+The main viewport camera is used, with no scene-depth occlusion. Unit tests
+cover pose/offset/rotation/XY, read-only authoring, invalid settings and clear.

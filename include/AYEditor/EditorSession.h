@@ -286,6 +286,12 @@ public:
     }
     void setSceneVisibility(const EditorSceneVisibility& visibility,
                             bool persist = true);
+    /// Editor-only diagnostics; no Scene serialization or simulation mutation.
+    /// lifetime: 0=one viewport frame, 1=durationSeconds real time, 2=until cleared.
+    /// Invalid duration/mode leaves the previous settings intact.
+    bool setPhysicsDebugDraw(bool colliders, bool queries, uint8_t lifetime = 0,
+                             double durationSeconds = 3.0);
+    void clearPhysicsDebugDraw();
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
@@ -449,6 +455,13 @@ private:
     void finishTransformGizmoDrag(bool commit);
     void updateTransformGizmoHover(float x, float y);
     void syncTransformGizmoToRenderer();
+    void syncPhysicsDebugToRenderer();
+    void showPhysicsDebugDurationDialog();
+    bool _physicsDebugColliders = false, _physicsDebugQueries = false;
+    uint8_t _physicsDebugLifetime = 0;
+    double _physicsDebugSeconds = 3;
+    const ayt::entity::World* _physicsDebugWorld = nullptr;
+    std::unique_ptr<ayt::ui::ModalDialog> _physicsDebugDialog;
     void setSelectedEntity(ayt::entity::World* world,
                            ayt::entity::Entity* entity);
     void clearSelectedEntity(bool clearOutline = true,
