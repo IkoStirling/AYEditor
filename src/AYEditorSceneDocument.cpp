@@ -9,6 +9,7 @@
 #include "AYEntity/World.h"
 #include "AYEntity/components/TransformComponent.h"
 #include "AYEntity/components/ActorInstanceComponent.h"
+#include "AYEntity/components/CameraControllerComponent.h"
 #include "AYScene.h"
 #include "AYSerializer/SerializeError.h"
 #include "AYSerializer/SerializerCore.h"
@@ -888,6 +889,14 @@ bool EditorSceneDocument::mutateComponentById(
         std::move(after), std::move(label), std::move(mergeKey)));
 }
 
+bool EditorSceneDocument::setCameraTarget(uint32_t entityId, const std::string& componentId, uint32_t targetId) {
+    auto* target = targetId ? _scene->world().findEntity(targetId) : nullptr;
+    if (targetId && !target) return false;
+    return mutateComponentById(entityId,componentId,"Set Camera Target",{},[target](ayt::entity::IComponent& component) {
+        auto* controller = dynamic_cast<ayt::entity::CameraControllerComponent*>(&component);
+        return controller && controller->setTarget(target);
+    });
+}
 bool EditorSceneDocument::renameComponent(
     uint32_t entityId, const std::string& componentId, std::string displayName)
 {

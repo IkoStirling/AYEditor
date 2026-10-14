@@ -227,6 +227,8 @@ std::string editorConfigPath(
 std::string editorPreferencesPath(
     const ayt::editor::EditorProductPaths& productPaths)
 {
+    const auto overridePath = ayt::io::env::get("AY_EDITOR_PREFERENCES_FILE").value_or("");
+    if (!overridePath.empty()) return overridePath;
     char localAppData[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA(
         "LOCALAPPDATA", localAppData, MAX_PATH);

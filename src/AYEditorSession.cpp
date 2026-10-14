@@ -77,6 +77,7 @@
 #include "AYUI/Image.h"
 #include "AYUI/Theme.h"
 #include "AYUI/Tooltip.h"
+#include <AYEntity/components/CameraControllerComponent.h>
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYUI/ListView.h"
 #include "AYUI/TileView.h"
@@ -3281,11 +3282,27 @@ bool EditorSession::viewportAcceptsGameInput() const {
     return !isChromePoint(_lastMouseX, _lastMouseY);
 }
 
+int EditorSession::outlinerRowAt(float x, float y) {
+    if (!_outliner || !isOutlinerTreePoint(_ui,x,y)) return -1;
+    const auto point = _ui.physicalToLogical({x,y}); const auto rect = _outliner->getClientRect();
+    if (!rect.contains(point)) return -1;
+    const int row = int(std::floor((point.y - rect.minY + _outliner->getScrollOffset().y) / _outliner->getItemHeight()));
+    return row >= 0 && size_t(row) < _outliner->getNodeCount() ? row : -1;
+}
 bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseX = x;
     _lastMouseY = y;
     _hasLastMouse = true;
 
+    if (!_outlinerDragIdentity.empty()) {
+        if (_gameView.mode()!=EditorMode::Edit || hierarchyWorldMutable()!=_outlinerDragWorld) {
+            _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+        } else if (_outlinerDragActive || (math::FVector2{x,y}-_outlinerDragStart).lengthSq() > 36) {
+            _outlinerDragActive=true;
+            setInspectorHint(localizedText("ui.editor.entity.drag_parent",L"Drop on a Spatial entity to attach; drop on the scene root to detach. World pose is kept."));
+            return true;
+        }
+    }
     // Cross-panel drags are owned by AYUI even while the cursor is over the
     // 3D surface. Without this gate EditorSession's freecam routing starves
     // UIManager::updateDrag, so the viewport never becomes a drop target.
@@ -3376,6 +3393,15 @@ bool EditorSession::onMouseMove(float x, float y) {
 }
 
 bool EditorSession::onMouseButtonDown(float x, float y, int button) {
+    _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+    if (button==0 && _gameView.mode()==EditorMode::Edit && !_ui.isDragging()) {
+        const int row=outlinerRowAt(x,y); auto* world=hierarchyWorldMutable();
+        if (world && row>0 && size_t(row-1)<_outlinerEntityIds.size()) {
+            if (auto* source=world->findEntity(_outlinerEntityIds[size_t(row-1)]); source && source->isSpatial()) {
+                _outlinerDragIdentity=source->persistentId(); _outlinerDragWorld=world; _outlinerDragStart={x,y};
+            }
+        }
+    }
     if (_ui.isDragging()) {
         return _ui.onMouseButtonDown(x, y, button);
     }
@@ -3503,6 +3529,26 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
+    if (button==0 && !_outlinerDragIdentity.empty()) {
+        const auto identity=_outlinerDragIdentity; const bool dragged=_outlinerDragActive;
+        _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+        if (dragged) {
+            const int row=outlinerRowAt(x,y); uint32_t parentId=0;
+            if (row>0 && size_t(row-1)<_outlinerEntityIds.size()) parentId=_outlinerEntityIds[size_t(row-1)];
+            auto* world=hierarchyWorldMutable();
+            auto* source=world && world==_outlinerDragWorld ? world->findEntityByPersistentId(identity) : nullptr;
+            // Release AYUI capture before refreshing/removing any tree rows.
+            (void)_ui.onMouseButtonUp(x,y,button);
+            if (source && _document && row>=0 && _gameView.mode()==EditorMode::Edit) {
+                std::string error;
+                if (_document->reparentEntity(source->getId(),parentId,ayt::entity::ReparentMode::KeepWorld,&error)) {
+                    setSelectedEntity(world,source); _outlinerRefreshPending=true; _inspectorRefreshPending=true;
+                    refreshUnsavedIndicator(); if (_repaintCallback) _repaintCallback();
+                } else if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+            }
+            return true;
+        }
+    }
     if (_ui.isDragging()) {
         return _ui.onMouseButtonUp(x, y, button);
     }
@@ -3625,6 +3671,9 @@ void EditorSession::onMouseLeave() {
 
 bool EditorSession::onKeyDown(int keyCode)
 {
+    if (keyCode==27 && _outlinerDragActive) {
+        _outlinerDragIdentity.clear(); _outlinerDragActive=false; setInspectorHint(L"Hierarchy drag cancelled"); return true;
+    }
     if (keyCode == ayt::ui::UIKey_Control) {
         _controlDown = true;
     }
@@ -8885,6 +8934,7 @@ void EditorSession::syncDocumentCommandMenu()
 
 void EditorSession::afterDocumentReload()
 {
+    _outlinerDragIdentity.clear(); _outlinerDragActive=false; _outlinerDragWorld=nullptr;
     finishTransformGizmoDrag(false);
     _spatialExpanded.clear();
     clearSelectedEntity(false);
@@ -11477,6 +11527,34 @@ void EditorSession::rebuildComponentPropertyEditor()
     componentNameInput->setOnFocusLostNotify(commitName);
     propertyTarget->addWidget(componentNameInput, 25.0f);
 
+    if (_inspectedComponentTypeName == "CameraControllerComponent") {
+        auto* controller = dynamic_cast<ayt::entity::CameraControllerComponent*>(component);
+        addLabel(localizedText("ui.editor.camera.target",L"Follow Target"),20.0f);
+        auto* selector = new ayt::ui::ComboBox(); selector->setId("cmb_camera_target");
+        std::vector<uint32_t> targets{0}; std::vector<std::wstring> labels{localizedText("ui.editor.entity.none",L"None")};
+        auto* current = controller ? controller->resolveTarget() : nullptr; int selected = 0;
+        for (auto* target : entity->getWorld()->getAllEntities()) {
+            if (!target->isSpatial() || target == entity) continue;
+            if (target == current) selected = int(targets.size());
+            targets.push_back(target->getId()); labels.push_back(ayt::ui::decodeUtf8Text(target->getName()));
+        }
+        if (controller && !controller->targetPersistentId.empty() && !current) {
+            selected = int(targets.size()); targets.push_back(UINT32_MAX);
+            labels.push_back(localizedText("ui.editor.camera.target_missing",L"Missing Target"));
+        }
+        selector->setItems(labels); selector->setSelectedIndex(selected);
+        selector->setSize({240,25}); selector->setEnabled(_gameView.mode()==EditorMode::Edit);
+        selector->setOnSelectionChanged([this,targets,selectedComponentId](int index) {
+            if (!_document || _gameView.mode()!=EditorMode::Edit || index<0 || size_t(index)>=targets.size() || targets[size_t(index)]==UINT32_MAX) return;
+            auto* camera = _selection.resolve(hierarchyWorldMutable()); if (!camera) return;
+            if (_document->setCameraTarget(camera->getId(),selectedComponentId,targets[size_t(index)])) {
+                _inspectorRefreshPending=true; refreshUnsavedIndicator();
+                if (_repaintCallback) _repaintCallback();
+            }
+        });
+        propertyTarget->addWidget(selector,25);
+        addLabel(localizedText("ui.editor.camera.spring_arm",L"Orbit distance sets arm length; collision radius/padding control wall avoidance."),40);
+    }
     if (_inspectedComponentTypeName == "ActorInstanceComponent") {
         auto* restore = new ayt::ui::Button();
         restore->setId("inspector_actor_restore_defaults");
@@ -11819,6 +11897,8 @@ void EditorSession::rebuildComponentPropertyEditor()
             || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)) {
             continue;
         }
+        if (componentTypeName == "CameraControllerComponent" && std::string(field->getName()) == "targetName")
+            continue; // Legacy name-only wire compatibility; author targets with the stable selector.
         void* fieldValue = field->get(component);
         ayt::reflect::ITypeInfo* fieldType = field->getType();
         if (fieldValue == nullptr || fieldType == nullptr) continue;

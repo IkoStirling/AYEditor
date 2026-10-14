@@ -1,3 +1,4 @@
+#include <AYEntity/components/CameraControllerComponent.h>
 #include "AYTest.h"
 
 #include "AYEditor/EditorSceneDocument.h"
@@ -452,4 +453,24 @@ TEST_CASE(spatial_relationships_survive_another_world_destroying_equal_numeric_i
     }
     CHECK(child->spatialParent() == parent); CHECK(child->owner() == parent);
 }
+
+TEST_CASE(camera_target_binding_undo_delete_restore_and_play_clone_keep_stable_identity) {
+    EditorSceneDocument document; auto& world=document.scene().world();
+    auto* player=world.createSpatialEntity(); player->setName("Player");
+    auto* camera=world.createSpatialEntity(); camera->setName("Camera");
+    CHECK(document.addComponent(camera->getId(),"CameraControllerComponent"));
+    auto* control=camera->getComponent<ayt::entity::CameraControllerComponent>(); CHECK(control!=nullptr);
+    const auto componentId=camera->componentInstance(control)->id, playerId=player->persistentId();
+    CHECK(document.setCameraTarget(camera->getId(),componentId,player->getId())); CHECK(control->resolveTarget()==player);
+    CHECK(document.undo()); CHECK(control->targetPersistentId.empty()); CHECK(document.redo());
+    CHECK(document.deleteEntity(player->getId())); CHECK(control->resolveTarget()==nullptr);
+    CHECK(document.undo()); player=world.findEntityByPersistentId(playerId); CHECK(player!=nullptr); CHECK(control->resolveTarget()==player);
+    CHECK(document.renameEntity(player->getId(),"Renamed Player")); CHECK(control->resolveTarget()==player);
+    const char* path="camera_editor_target.scn"; CHECK(document.saveAs(path));
+    ayt::scene::Scene play(ayt::scene::SceneMode::Play); CHECK(play.load(path));
+    auto* playCamera=play.world().findEntity("Camera"); CHECK(playCamera!=nullptr);
+    CHECK(playCamera->getComponent<ayt::entity::CameraControllerComponent>()->resolveTarget()==play.world().findEntityByPersistentId(playerId));
+    CHECK(control->resolveTarget()==player); std::remove(path);
+}
+
 TEST_SUITE_END

@@ -701,6 +701,11 @@ private:
     bool                  _inspectorRefreshPending = false;
     bool                  _outlinerRootExpanded = true;
     bool                  _updatingOutlinerSelection = false;
+    std::string _outlinerDragIdentity;
+    ayt::entity::World* _outlinerDragWorld = nullptr;
+    math::FVector2 _outlinerDragStart{};
+    bool _outlinerDragActive = false;
+    int outlinerRowAt(float x, float y);
 
     EditorAssetDatabase _assetDatabase;
     EditorAssetTilePresenter _assetTilePresenter;

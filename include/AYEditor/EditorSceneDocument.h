@@ -71,6 +71,8 @@ public:
                         ayt::entity::ReparentMode mode = ayt::entity::ReparentMode::KeepWorld,
                         std::string* error = nullptr);
     bool setEntityOwner(uint32_t entityId, uint32_t ownerId, std::string* error = nullptr);
+    /// Undoable stable camera target binding; zero explicitly clears it.
+    bool setCameraTarget(uint32_t entityId, const std::string& componentId, uint32_t targetId);
     bool deleteEntity(uint32_t entityId, std::string label = "Delete Entity");
     bool addComponent(uint32_t entityId, const std::string& componentType,
                       std::vector<std::string>* added = nullptr,
