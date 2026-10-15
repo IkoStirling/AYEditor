@@ -1767,24 +1767,31 @@ Diagnostics display snapshots rather than retaining VM values.
 ### Logia coordination authoring
 Unbound documents containing project_event/persist/asset select checked analysis. The language analyzer exposes project-event signatures and reports payload/timeout/join errors before execution. Task inspection includes join target and deadline.
 
-## Physics query and collider diagnostics (2026-10-14)
+## Unified debug visualization (2026-10-15)
 
-EditorSession owns session-only display/lifetime settings. Viewport menu
-commands enable shape/query channels separately, select one-frame/timed/retained
-query history, open a validated duration dialog and clear history. Settings
-configure the registered PhysicsSubSystem manager, with no extra query or
-physics step. At update completion the editor consumes diagnostic values,
-adds read-only collider wire geometry from hierarchyWorld (Edit or Play) and
-copies the bounded batch to Renderer. No document mutation/history entry.
+Scene viewport options -> Debug Visualization... opens the nonmodal debug
+card; Enable All Debug Displays enables all nine categories. Individual
+channels cover colliders, queries, contacts, character controllers, velocity
+and trails, joints, cameras, skeletons and abilities. The card offers physical
+layer-mask and selected-entity filters, x-ray/depth-tested drawing, freeze,
+next-simulation-frame capture, lifetime selection and per-category clear.
+It displays the current frame, bounded record/line counts and dropped records.
+Click a displayed line to inspect its record and select an associated Entity.
+Queries preserve dimension/request/filter, hit point/normal, distance and status.
 
-Collider enumeration reuses PhysicsDebugDraw::colliderLines for Box/Sphere/
-Capsule descriptor semantics; the Entity physics bridge ignores Transform
-scale, so the overlay does too. Hull/Mesh/Heightfield and standalone native
-bodies are omitted. Current ECS pose is used; this is not backend geometry
-introspection or a promise to visualize unaccepted backend shapes.
+Live physics shapes come from an opt-in owned native snapshot; Edit-mode or
+unbound component primitives use authored pose/offset/no-scale geometry. Camera
+frusta use the actual component projection including near/far clipping; bone
+links and axes use the evaluated skeleton pose, falling back to bind pose.
+Ability adapters publish tested regions and actual affected/denied targets.
+The optional Combat integration inspects owned area sweeps without evaluating
+providers or taking over gameplay callbacks. Last-requested velocity arrows
+and measured displacement/trails are separate; trail history is bounded to
+256 bodies and 2..600 frames (default 120).
 
-Query history is cleared on World replacement and shutdown; pause retains it.
-Real-time geometry lives for one consumption, timed geometry follows the
-monotonic wall clock, persistent geometry requires explicit clear or disable.
-The main viewport camera is used, with no scene-depth occlusion. Unit tests
-cover pose/offset/rotation/XY, read-only authoring, invalid settings and clear.
+These settings and observations are session-only and do not dirty scene
+assets. World replacement and shutdown clear history; pause retains it.
+Freeze applies to diagnostic collection, not simulation. Jolt solved contact
+impulse is reported unavailable; Box2D supplies its real solved normal impulse.
+Tests: AYEditor_PhysicsDebug, native PhysicsDebugSnapshotTests, ability physics
+integration suites and Renderer diagnostic GPU fixtures.

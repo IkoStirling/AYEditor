@@ -1,5 +1,6 @@
 #include "AYEditor/EditorSession.h"
 #include "EditorPhysicsDebugGeometry.h"
+#include "EditorDebugVisualization.h"
 #include <AYPhysics/PhysicsManager.h>
 #include <AYPhysics/PhysicsSubSystem.h>
 #ifdef AYEDITOR_HAS_AVATAR
@@ -1896,6 +1897,7 @@ std::wstring assetModifiedText(std::int64_t ticks)
 
 EditorSession::EditorSession()
     : _gameView(ayt::game::GameLoop::instance(), _playRuntime) {
+    _debugVisualization=std::make_unique<EditorDebugVisualization>();
     _worldContext.setFallbackWorld(&ayt::entity::World::instance());
     _playRuntime.setWorldContext(&_worldContext);
     _workspace = std::make_unique<EditorWorkspace>();
@@ -2670,6 +2672,8 @@ void EditorSession::shutdown() {
 
     clearSceneUiPreview();
     clearEditorTooltips(this);
+    _debugVisualizationPanel=nullptr; _debugVisualizationStats=nullptr;
+    _debugVisualization->clear(); _debugVisualization->options={};
     _ui.shutdown();
     if (_dockViewHost != nullptr) {
         _dockViewHost->releaseAfterUiShutdown();
@@ -3861,6 +3865,8 @@ void EditorSession::bindToolbar() {
     auto addPhysicsItem = [viewportOptions](const wchar_t* label, const char* id, std::function<void()> action) {
         if(auto* item=viewportOptions->addItem(label)) { item->setId(id); item->setOnActivate(std::move(action)); }
     };
+    addPhysicsItem(L"Debug Visualization...", "menu_debug_visualization", [this]() { showDebugVisualizationPanel(); });
+    addPhysicsItem(L"Enable All Debug Displays", "menu_debug_all", [this]() { auto o=debugVisualizationOptions();o.categories=0x1ff;(void)setDebugVisualization(o);showDebugVisualizationPanel(); });
     addPhysicsItem(L"Collision Shapes", "menu_physics_shapes", [this]() {
         (void)setPhysicsDebugDraw(!_physicsDebugColliders,_physicsDebugQueries,_physicsDebugLifetime,_physicsDebugSeconds);
     });
@@ -12506,6 +12512,17 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         return nullptr;
     }
 
+    if(_debugVisualization && _debugVisualization->options.categories) {
+        ayt::entity::CameraFrame camera; const auto frame=_sceneCamera.frame(); camera.view=frame.view;camera.projection=frame.projection;
+        const int index=_debugVisualization->pick(camera,{viewport.minX,viewport.minY,viewport.width(),viewport.height()},{x,y},_selection.entityId());
+        if(index>=0) {
+            const auto& r=_debugVisualization->records[size_t(index)];
+            const std::string text=r.label+"\nEntity="+std::to_string(r.entityId)+" body="+std::to_string(r.body)+" query="+std::to_string(r.queryId)+"\nDistance="+std::to_string(r.distance)+" mask="+std::to_string(r.layerMask)+"\nHit="+std::to_string(r.hit)+" status="+ayt::physics::toString(r.status)+"\nPoint=("+std::to_string(r.hitPoint.x)+","+std::to_string(r.hitPoint.y)+","+std::to_string(r.hitPoint.z)+")\nNormal=("+std::to_string(r.normal.x)+","+std::to_string(r.normal.y)+","+std::to_string(r.normal.z)+")\nImpulse="+(r.impulseAvailable?std::to_string(r.impulse):"unavailable");
+            _debugVisualizationDetail=ayt::ui::decodeUtf8Text(text);
+            setInspectorHint(_debugVisualizationDetail);
+            if(r.entityId) return world->findEntity(r.entityId);
+        }
+    }
     if (_sceneCamera.isTwoD()) {
         if (std::fabs(direction.z) <= 1.0e-7f) return nullptr;
         const float planeDistance = -origin.z / direction.z;
@@ -12793,12 +12810,13 @@ bool EditorSession::setPhysicsDebugDraw(bool colliders, bool queries, uint8_t li
 {
     if(lifetime>2 || !std::isfinite(seconds) || seconds<0.001 || seconds>86400) return false;
     if(_physicsDebugWorld!=hierarchyWorld()) clearPhysicsDebugDraw();
+    _debugVisualization->options.categories=(_debugVisualization->options.categories&~3u)|(colliders?1u:0u)|(queries?2u:0u);
     _physicsDebugColliders=colliders; _physicsDebugQueries=queries;
     _physicsDebugLifetime=lifetime; _physicsDebugSeconds=seconds;
     if(auto* physics=ayt::physics::PhysicsSubSystem::findRegistered()) {
         if(auto* manager=physics->manager()) {
             ayt::physics::PhysicsDebugDrawOptions options;
-            options.enabled=queries;
+            options.enabled=(_debugVisualization->options.categories&((1u<<1)|(1u<<2)|(1u<<8)))!=0;
             options.lifetime=static_cast<ayt::physics::DebugDrawLifetime>(lifetime);
             options.duration=ayt::time::Duration::fromUs(static_cast<int64_t>(seconds*1000000));
             (void)manager->debugDraw().configure(options);
@@ -12818,8 +12836,10 @@ bool EditorSession::setPhysicsDebugDraw(bool colliders, bool queries, uint8_t li
 void EditorSession::clearPhysicsDebugDraw()
 {
     if(auto* physics=ayt::physics::PhysicsSubSystem::findRegistered())
-        if(auto* manager=physics->manager()) manager->debugDraw().clear();
+        if(auto* manager=physics->manager()) {manager->debugDraw().clear();(void)manager->setDebugSnapshotEnabled(false);}
     if(auto* renderer=ayt::render::RendererSubSystem::findRegistered()) (void)renderer->renderer().setEditorDebugLines({});
+    if(_debugVisualization) _debugVisualization->clear();
+    _debugVisualizationDetail.clear();
     _physicsDebugWorld=hierarchyWorld();
 }
 void EditorSession::showPhysicsDebugDurationDialog()
@@ -12842,31 +12862,6 @@ void EditorSession::showPhysicsDebugDurationDialog()
         } catch(...) { setInspectorHint(L"Invalid debug drawing duration."); }
     });
     _physicsDebugDialog->openModal();
-}
-void EditorSession::syncPhysicsDebugToRenderer()
-{
-    const auto* world=hierarchyWorld();
-    if(_physicsDebugWorld!=world) clearPhysicsDebugDraw();
-    auto* renderer=ayt::render::RendererSubSystem::findRegistered();
-    if(!renderer) return;
-    std::vector<ayt::render::EditorDebugLine> lines;
-    if(auto* physics=ayt::physics::PhysicsSubSystem::findRegistered()) {
-        if(auto* manager=physics->manager()) {
-            auto options=manager->debugDraw().options();
-            options.enabled=_physicsDebugQueries;
-            options.lifetime=static_cast<ayt::physics::DebugDrawLifetime>(_physicsDebugLifetime);
-            options.duration=ayt::time::Duration::fromUs(static_cast<int64_t>(_physicsDebugSeconds*1000000));
-            (void)manager->debugDraw().configure(options);
-            for(const auto& line:manager->debugDraw().consumeLines()) lines.push_back({line.from,line.to,line.color});
-        }
-    }
-    if(_physicsDebugColliders&&world) {
-        for(const auto& line:editorColliderDebugLines(*world)) {
-            if(lines.size()==ayt::render::kMaxEditorDebugLines) break;
-            lines.push_back(line);
-        }
-    }
-    (void)renderer->renderer().setEditorDebugLines(lines);
 }
 void EditorSession::syncTransformGizmoToRenderer()
 {

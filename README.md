@@ -269,24 +269,36 @@ Editing/reopening source or changing schema closes the preview session.
 
 Logia checked inference recognizes project_event, persist and asset declarations even without a bound Actor schema. Project-event declarations appear as typed symbols in completion.
 
-## Physics debug view (2026-10-14)
+## Unified debug visualization (2026-10-15)
 
-Use the Scene viewport options menu:
-- Collision Shapes: live ECS Box/Sphere/Capsule wires, including local offsets
-  and body rotation, without applying Transform scale (matches physics bridge).
-- Query Debug Drawing: automatically capture synchronous native physics queries.
-- Query Drawing: Real-time, Timed... (0.001 to 86400 seconds), or Keep Until Cleared.
-- Clear Query Drawings: discard retained query history.
+Scene viewport options -> Debug Visualization... opens the nonmodal debug
+card; Enable All Debug Displays enables all nine categories. Individual
+channels cover colliders, queries, contacts, character controllers, velocity
+and trails, joints, cameras, skeletons and abilities. The card offers physical
+layer-mask and selected-entity filters, x-ray/depth-tested drawing, freeze,
+next-frame capture, lifetime selection and per-category clear.
+It displays the current frame, bounded record/line counts and dropped records.
+Click a displayed line to inspect its record and select an associated Entity.
+Queries preserve dimension/request/filter, hit point/normal, distance and status.
 
-Query miss/hit/error colors are green/red/yellow, with ray hit-point and normal
-markers. Collider wires are orange; triggers cyan. Timed drawings expire in
-real time even when gameplay is paused. World replacement clears history;
-pause preserves it. Settings are editor-session only, do not dirty or serialize
-the Scene, and are disabled on shutdown. Advanced collider shapes, non-ECS
-native bodies and deterministic collision proxies are not yet enumerated.
+Live physics shapes come from an opt-in owned native snapshot; Edit-mode or
+unbound component primitives use authored pose/offset/no-scale geometry. Camera
+frusta use the actual component projection including near/far clipping; bone
+links and axes use the evaluated skeleton pose, falling back to bind pose.
+Ability adapters publish tested regions and actual affected/denied targets.
+The optional Combat integration inspects owned area sweeps without evaluating
+providers or taking over gameplay callbacks. Last-requested velocity arrows
+and measured displacement/trails are separate; trail history is bounded to
+256 bodies and 2..600 frames (default 120).
 
-Local verification: editor full inventory 397/397 passed, no skipped/problem/
-unreported cases, at `out/physics-debug-20261014/editor-final/51ab27df9b7e4fdd94fd300a095dcbe6/cases.json`.
-The three directed PhysicsDebug cases passed as well. EditorShell_Demo was rebuilt.
-Real D3D11 overlay pixels were separately verified in AYRenderer; the editor
-menu has not been manually exercised in an interactive window in this task.
+These settings and observations are session-only and do not dirty scene
+assets. World replacement and shutdown clear history; pause retains it.
+Freeze applies to diagnostic collection, not simulation. Jolt solved contact
+impulse is reported unavailable; Box2D supplies its real solved normal impulse.
+Tests: AYEditor_PhysicsDebug, native PhysicsDebugSnapshotTests, ability physics
+integration suites and Renderer diagnostic GPU fixtures.
+
+Verification: final audited full inventory 402/402 passed after the scroll-card
+layout and World replacement cleanup changes, including default module assembly.
+AYEditorShell_Demo built successfully. Final report:
+`out/debug-visualization-20261015/editor-final/038752a28cff433d9c6f9efc08ab1f54/cases.json`.

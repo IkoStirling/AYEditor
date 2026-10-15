@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorGameView.h"
+#include "AYEditor/EditorDebugVisualization.h"
 #include "AYEditor/EditorPlayRuntime.h"
 #include "AYEditor/EditorWorldContext.h"
 #include "AYEditor/EditorSceneCamera.h"
@@ -57,6 +58,7 @@ namespace ayt::ui {
 class TreeView;
 class TileView;
 class TextInput;
+class TextLabel;
 class ComboBox;
 class VBox;
 class MenuItem;
@@ -73,6 +75,7 @@ namespace ayt::audio { class AudioSubSystem; }
 
 namespace ayt::editor {
 
+class EditorDebugVisualization;
 class EditorWorkspace;
 class EditorDockViewHost;
 class IEditorHostServices;
@@ -287,8 +290,15 @@ public:
     void setSceneVisibility(const EditorSceneVisibility& visibility,
                             bool persist = true);
     /// Editor-only diagnostics; no Scene serialization or simulation mutation.
-    /// lifetime: 0=one viewport frame, 1=durationSeconds real time, 2=until cleared.
-    /// Invalid duration/mode leaves the previous settings intact.
+    /// Invalid category bits/trail budget leave prior options intact. Freeze stops
+    /// diagnostic collection/expiry; step requests a future simulation observation.
+    bool setDebugVisualization(const EditorDebugVisualizationOptions& options);
+    EditorDebugVisualizationOptions debugVisualizationOptions() const;
+    void showDebugVisualizationPanel();
+    void stepDebugVisualization();
+    void clearDebugVisualization(int category = -1);
+    /// Compatibility controls for collider/query channels. lifetime: 0=Frame,
+    /// 1=Timed, 2=Persistent; seconds must be finite in [0.001,86400].
     bool setPhysicsDebugDraw(bool colliders, bool queries, uint8_t lifetime = 0,
                              double durationSeconds = 3.0);
     void clearPhysicsDebugDraw();
@@ -457,6 +467,10 @@ private:
     void syncTransformGizmoToRenderer();
     void syncPhysicsDebugToRenderer();
     void showPhysicsDebugDurationDialog();
+    std::unique_ptr<EditorDebugVisualization> _debugVisualization;
+    ayt::ui::DockCard* _debugVisualizationPanel = nullptr;
+    ayt::ui::TextLabel* _debugVisualizationStats = nullptr;
+    std::wstring _debugVisualizationDetail;
     bool _physicsDebugColliders = false, _physicsDebugQueries = false;
     uint8_t _physicsDebugLifetime = 0;
     double _physicsDebugSeconds = 3;

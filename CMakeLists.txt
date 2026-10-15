@@ -67,6 +67,8 @@ if(WIN32)
 endif()
 
 set(SRC_FILES
+    src/AYEditorDebugVisualization.cpp
+    src/AYEditorDebugVisualizationPanel.cpp
     src/AYEditorPhysicsDebugGeometry.cpp
     src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
@@ -154,6 +156,7 @@ set(SRC_FILES
 set(HEAD_FILES
     AYEditor.h
     include/AYEditor/EditorWorldContext.h
+    include/AYEditor/EditorDebugVisualization.h
     include/AYEditor/EditorSession.h
     include/AYEditor/EditorGameView.h
     include/AYEditor/EditorPlayRuntime.h
@@ -311,6 +314,11 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
     # bridge; PRIVATE because EditorSession / EditorPlayRuntime don't
     # need it and we don't want AYGameLoop dependency to leak.
     PRIVATE AYDeviceSubSystem)
+
+if(TARGET AYCombat::Entity)
+    target_link_libraries(AYEditor PRIVATE AYCombat::Entity)
+    target_compile_definitions(AYEditor PRIVATE AYEDITOR_HAS_COMBAT=1)
+endif()
 
 # Phase 2a: toolbar Import button uses the Win32 file picker
 # (AYImportDialog::showOpenFileDialog -> GetOpenFileNameW from
