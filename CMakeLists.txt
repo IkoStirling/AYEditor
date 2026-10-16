@@ -227,6 +227,7 @@ add_library(${MODULE_NAME} STATIC ${SRC_FILES} ${HEAD_FILES})
 if(MSVC)
     # The editor session translation unit exceeds COFF's default section count.
     set_source_files_properties(src/AYEditorSession.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
+    set_source_files_properties(../AYAudio/demo/audio_editor/AudioEditorSession.cpp PROPERTIES COMPILE_OPTIONS /bigobj)
 endif()
 if(TARGET AYStatsInspector AND TARGET AYEntityStatsIntegration)
     target_link_libraries(${MODULE_NAME} PUBLIC AYStatsInspector AYEntityStatsIntegration)
@@ -541,6 +542,8 @@ message(STATUS "AYEditor v${PROJECT_VERSION} (Play/runtime + net-client + D5.5 C
 # The shared workbench is textually included; track it even without compiler dep scanning.
 set_property(SOURCE ../AYAudio/demo/audio_editor/AudioEditorSession.cpp APPEND PROPERTY OBJECT_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbench.inl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioWorkbenchExtensions.inl"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioAuthoringSettings.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartWorkbench.inl"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/ChartDocument.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/../AYAudio/demo/audio_editor/AudioRhythmAnalysis.h"

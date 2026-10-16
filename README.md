@@ -302,3 +302,15 @@ Verification: final audited full inventory 402/402 passed after the scroll-card
 layout and World replacement cleanup changes, including default module assembly.
 AYEditorShell_Demo built successfully. Final report:
 `out/debug-visualization-20261015/editor-final/038752a28cff433d9c6f9efc08ab1f54/cases.json`.
+
+## Shared audio processing and preview routing (2026-10-16)
+
+The shared AudioEditorSession now exposes SOFA selection, ordered bus effects,
+Windows MIDI input, input compensation and instrument/mixer preset persistence.
+Instrument/resource auditions and arrangement/chart listen actions default to
+the independent Preview bus; chart gameplay music retains Music routing.
+The shared translation unit uses /bigobj and explicitly tracks its new includes.
+Audio/chart/performance integration passed 19/19 cases (833 checks), shared
+workbench tests passed 4/4, and both hosts built in Windows Debug. See
+AYAudio/README.md and AYDocs/sdk/contracts/audio.md for contracts and limits.
+Physical MIDI and manual UI acceptance remain separate from these automated checks.

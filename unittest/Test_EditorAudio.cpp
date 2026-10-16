@@ -799,7 +799,7 @@ TEST_CASE(PerformancePlaybackSurvivesFocusLossDuringPreparationAndPlayback){
         CHECK(host.waitFor([&]{return engine->activeVoiceCount()==2;}));
         auto ownedVoice=[&]{VoiceRuntime out{};bool found=false;
             for(uint32_t i=0;i<64;++i){VoiceRuntime voice{};
-                if(engine->voiceStateAt(i,voice)&&voice.bus==AudioBus::Master){out=voice;found=true;break;}}
+                if(engine->voiceStateAt(i,voice)&&voice.bus==AudioBus::Preview){out=voice;found=true;break;}}
             CHECK(found);return out;};
         std::vector<float> pcm(4800*engine->outputChannels());
         engine->render(pcm.data(),128);const auto before=ownedVoice();
