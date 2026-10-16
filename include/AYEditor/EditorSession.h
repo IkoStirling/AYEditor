@@ -72,10 +72,13 @@ struct LayoutProjectRefactorResult;
 }
 namespace ayt::audio { class AudioEditorSession; }
 namespace ayt::audio { class AudioSubSystem; }
+namespace ayt::render { class RendererSubSystem; class RenderScene; }
 
 namespace ayt::editor {
 
 class EditorDebugVisualization;
+
+class EditorCameraVisualRenderer;
 class EditorWorkspace;
 class EditorDockViewHost;
 class IEditorHostServices;
@@ -305,6 +308,10 @@ public:
     EditorTool activeTool() const noexcept { return _activeTool; }
     EditorPreferences currentPreferences() const;
     void savePreferencesNow();
+    /// Editor presentation preference: normal, contour wireframe, or hidden.
+    /// Never writes camera/mesh components or contributes icons to Play rendering.
+    void setCameraDisplayMode(EditorCameraDisplayMode mode);
+    EditorCameraDisplayMode cameraDisplayMode() const noexcept { return _cameraDisplayMode; }
     // Switch the editor catalog and retranslate the live UI tree in place.
     // "system" resolves against the current operating-system locale.
     bool setLanguage(const std::string& language);
@@ -395,6 +402,10 @@ private:
     void syncDocumentCommandMenu();
     void afterDocumentReload();
     void createEmptyEntity();
+    void createDataEntity();
+    void convertSelectedEntityKind();
+    void refreshEntityRelations();
+    ayt::ui::Widget* entityInspectorWidget(const char* id);
     bool isOutlinerTreePoint(ayt::ui::UIManager& ui, float physicalX, float physicalY) const;
     void showOutlinerCreateMenu(ayt::ui::UIManager& ui, float logicalX, float logicalY);
     void syncOutlinerCreateControls();
@@ -724,6 +735,11 @@ private:
     bool                  _inspectorRefreshPending = false;
     bool                  _outlinerRootExpanded = true;
     bool                  _updatingOutlinerSelection = false;
+    std::string _outlinerDragIdentity;
+    ayt::entity::World* _outlinerDragWorld = nullptr;
+    math::FVector2 _outlinerDragStart{};
+    bool _outlinerDragActive = false;
+    int outlinerRowAt(float x, float y);
 
     EditorAssetDatabase _assetDatabase;
     EditorAssetTilePresenter _assetTilePresenter;
@@ -795,6 +811,10 @@ private:
     std::string _inspectedComponentTypeName;
     std::string _inspectedComponentId;
     bool _updatingComponentPicker = false;
+    bool _updatingEntityRelations = false;
+    std::vector<uint32_t> _spatialParentCandidates, _entityOwnerCandidates;
+    std::unordered_map<uint32_t, bool> _spatialExpanded;
+    EditorTransformState _gizmoLocalBefore;
     bool _updatingEntityName = false;
     bool _updatingComponentPropertyCommit = false;
     bool _controlDown = false;
@@ -819,6 +839,10 @@ private:
     float _preferencesSaveCountdown = 0.0f;
     bool _preferencesDirty = false;
     bool _applyingPreferences = false;
+    EditorCameraDisplayMode _cameraDisplayMode = EditorCameraDisplayMode::Solid;
+    ayt::render::RendererSubSystem* _cameraVisualOwner = nullptr;
+    std::unique_ptr<EditorCameraVisualRenderer> _cameraVisualRenderer;
+    void buildCameraVisuals(ayt::render::RenderScene& scene);
 
 };
 

@@ -1,3 +1,4 @@
+#include <AYEntity/components/CameraControllerComponent.h>
 #include "AYTest.h"
 
 #include "AYEditor/EditorSceneDocument.h"
@@ -331,7 +332,7 @@ TEST_CASE(editor_scene_component_and_property_commands_share_history)
     EditorComponentPolicyRegistry::instance().installDefaults();
     EditorSceneDocument document;
     ayt::entity::World& world = document.scene().world();
-    ayt::entity::Entity* entity = world.createEntity();
+    ayt::entity::Entity* entity = world.createSpatialEntity();
     CHECK(entity != nullptr);
     entity->setName("Component History");
 
@@ -374,7 +375,7 @@ TEST_CASE(sprite_animation_authoring_adds_and_protects_sprite_requirement)
     EditorComponentPolicyRegistry::instance().installDefaults();
     EditorSceneDocument document;
     ayt::entity::World& world = document.scene().world();
-    ayt::entity::Entity* entity = world.createEntity();
+    ayt::entity::Entity* entity = world.createSpatialEntity();
     CHECK(entity != nullptr);
     if (entity == nullptr) return;
 
@@ -393,6 +394,83 @@ TEST_CASE(sprite_animation_authoring_adds_and_protects_sprite_requirement)
         entity->getId(), "SpriteAnimationComponent", &error));
     CHECK(document.removeComponent(
         entity->getId(), "SpriteComponent", &error));
+}
+
+
+TEST_CASE(spatial_types_conversion_and_relations_have_undo_history) {
+    EditorSceneDocument document;
+    auto& world = document.scene().world();
+    uint32_t dataId = 0, parentId = 0, childId = 0;
+    CHECK(document.createEntity("Data",{},&dataId,ayt::entity::EntityKind::Data));
+    CHECK(document.createEntity("Parent",{},&parentId));
+    CHECK(document.createEntity("Child",{},&childId));
+    auto* data = world.findEntity(dataId); auto* parent = world.findEntity(parentId); auto* child = world.findEntity(childId);
+    CHECK(data && parent && child);
+    CHECK(data->transform() == nullptr); CHECK(parent->transform() != nullptr);
+    std::string error;
+    CHECK_FALSE(document.addComponent(dataId,"PerspectiveCameraComponent",nullptr,&error));
+    CHECK(document.convertEntityKind(dataId,ayt::entity::EntityKind::Spatial,&error));
+    CHECK(data->transform() != nullptr); CHECK(document.undo()); CHECK(data->transform() == nullptr);
+    CHECK(document.redo()); CHECK(data->isSpatial());
+    parent->transform()->position = {5,0,0}; child->transform()->position = {8,0,0};
+    CHECK(document.reparentEntity(childId,parentId,ayt::entity::ReparentMode::KeepWorld,&error));
+    CHECK(child->spatialParent() == parent); CHECK_FLOAT_EQ(child->transform()->position.x,3,1e-5f);
+    CHECK(document.undo()); CHECK(child->spatialParent() == nullptr); CHECK_FLOAT_EQ(child->transform()->position.x,8,1e-5f);
+    CHECK(document.redo()); CHECK(child->spatialParent() == parent);
+    CHECK_FALSE(document.convertEntityKind(parentId,ayt::entity::EntityKind::Data,&error));
+    CHECK(document.setEntityOwner(dataId,parentId,&error)); CHECK(data->owner() == parent);
+    CHECK(document.undo()); CHECK(data->owner() == nullptr); CHECK(document.redo());
+}
+TEST_CASE(owned_delete_undo_restores_identity_and_external_spatial_children) {
+    EditorSceneDocument document;
+    auto& world = document.scene().world();
+    auto* parent = world.createSpatialEntity(); auto* child = world.createSpatialEntity(); auto* state = world.createDataEntity();
+    parent->transform()->position = {6,0,0}; child->transform()->position = {2,0,0};
+    CHECK(child->setSpatialParent(parent)); CHECK(state->setOwner(parent));
+    const auto parentId = parent->persistentId(), stateId = state->persistentId(), childId = child->persistentId();
+    CHECK(document.deleteEntity(parent->getId()));
+    CHECK(world.findEntityByPersistentId(stateId) == nullptr); CHECK(child->spatialParent() == nullptr);
+    CHECK_FLOAT_EQ(child->worldMatrix()(0,3),8,1e-5f);
+    CHECK(document.undo());
+    parent = world.findEntityByPersistentId(parentId); state = world.findEntityByPersistentId(stateId); child = world.findEntityByPersistentId(childId);
+    CHECK(parent && state && child); CHECK(child->spatialParent() == parent); CHECK(state->owner() == parent);
+    CHECK_FLOAT_EQ(child->transform()->position.x,2,1e-5f);
+    CHECK(document.redo()); CHECK(world.findEntityByPersistentId(stateId) == nullptr);
+}
+
+
+TEST_CASE(spatial_relationships_survive_another_world_destroying_equal_numeric_ids) {
+    EditorSceneDocument editDocument;
+    auto& editWorld = editDocument.scene().world();
+    auto* parent = editWorld.createSpatialEntity(); auto* child = editWorld.createSpatialEntity();
+    CHECK(child->setSpatialParent(parent)); CHECK(child->setOwner(parent));
+    {
+        EditorSceneDocument playDocument;
+        auto& playWorld = playDocument.scene().world();
+        auto* other = playWorld.createSpatialEntity();
+        CHECK_FALSE(child->setSpatialParent(other)); CHECK_FALSE(child->setOwner(other));
+        playWorld.destroyEntity(other);
+    }
+    CHECK(child->spatialParent() == parent); CHECK(child->owner() == parent);
+}
+
+TEST_CASE(camera_target_binding_undo_delete_restore_and_play_clone_keep_stable_identity) {
+    EditorSceneDocument document; auto& world=document.scene().world();
+    auto* player=world.createSpatialEntity(); player->setName("Player");
+    auto* camera=world.createSpatialEntity(); camera->setName("Camera");
+    CHECK(document.addComponent(camera->getId(),"CameraControllerComponent"));
+    auto* control=camera->getComponent<ayt::entity::CameraControllerComponent>(); CHECK(control!=nullptr);
+    const auto componentId=camera->componentInstance(control)->id, playerId=player->persistentId();
+    CHECK(document.setCameraTarget(camera->getId(),componentId,player->getId())); CHECK(control->resolveTarget()==player);
+    CHECK(document.undo()); CHECK(control->targetPersistentId.empty()); CHECK(document.redo());
+    CHECK(document.deleteEntity(player->getId())); CHECK(control->resolveTarget()==nullptr);
+    CHECK(document.undo()); player=world.findEntityByPersistentId(playerId); CHECK(player!=nullptr); CHECK(control->resolveTarget()==player);
+    CHECK(document.renameEntity(player->getId(),"Renamed Player")); CHECK(control->resolveTarget()==player);
+    const char* path="camera_editor_target.scn"; CHECK(document.saveAs(path));
+    ayt::scene::Scene play(ayt::scene::SceneMode::Play); CHECK(play.load(path));
+    auto* playCamera=play.world().findEntity("Camera"); CHECK(playCamera!=nullptr);
+    CHECK(playCamera->getComponent<ayt::entity::CameraControllerComponent>()->resolveTarget()==play.world().findEntityByPersistentId(playerId));
+    CHECK(control->resolveTarget()==player); std::remove(path);
 }
 
 TEST_SUITE_END

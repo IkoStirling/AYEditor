@@ -227,6 +227,8 @@ std::string editorConfigPath(
 std::string editorPreferencesPath(
     const ayt::editor::EditorProductPaths& productPaths)
 {
+    const auto overridePath = ayt::io::env::get("AY_EDITOR_PREFERENCES_FILE").value_or("");
+    if (!overridePath.empty()) return overridePath;
     char localAppData[MAX_PATH]{};
     const DWORD length = GetEnvironmentVariableA(
         "LOCALAPPDATA", localAppData, MAX_PATH);
@@ -317,6 +319,8 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         "Editor.Viewport.Orthographic", out.orthographicView);
     out.wireframeView = saved.getBool(
         "Editor.Viewport.Wireframe", out.wireframeView);
+    out.cameraDisplayMode = static_cast<ayt::editor::EditorCameraDisplayMode>(std::clamp(static_cast<int>(saved.getInt(
+        "Editor.Viewport.CameraIcons", static_cast<int>(out.cameraDisplayMode))),0,2));
 
     out.gamma = preferenceFloat(saved, "Editor.Render.Gamma", out.gamma);
     out.exposure = preferenceFloat(
@@ -418,6 +422,7 @@ bool saveEditorPreferences(const std::string& path,
     config.setBool("Editor.Tools.LocalSpace", value.localTransformSpace);
     config.setBool("Editor.Viewport.Orthographic", value.orthographicView);
     config.setBool("Editor.Viewport.Wireframe", value.wireframeView);
+    config.setInt("Editor.Viewport.CameraIcons", static_cast<int>(value.cameraDisplayMode));
     config.setFloat("Editor.Render.Gamma", value.gamma);
     config.setFloat("Editor.Render.Exposure", value.exposure);
     config.setBool("Editor.Render.AutoExposure.Enabled",

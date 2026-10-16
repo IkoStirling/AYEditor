@@ -20,10 +20,12 @@ enum class EditorDensity : uint8_t {
     Comfortable,
 };
 
+enum class EditorCameraDisplayMode : uint8_t { Solid = 0, Wireframe = 1, Hidden = 2 };
+
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 5;
+    static constexpr int kCurrentSchemaVersion = 6;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -88,6 +90,7 @@ struct EditorPreferences {
     std::vector<std::string> recentProjectRoots;
     // Resource browser presentation only; does not affect asset identity.
     bool assetBrowserFlatMode = false;
+    EditorCameraDisplayMode cameraDisplayMode = EditorCameraDisplayMode::Solid;
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -144,7 +147,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.language == b.language
         && a.autoExposureEnabled == b.autoExposureEnabled
         && a.recentProjectRoots == b.recentProjectRoots
-        && a.assetBrowserFlatMode == b.assetBrowserFlatMode;
+        && a.assetBrowserFlatMode == b.assetBrowserFlatMode
+        && a.cameraDisplayMode == b.cameraDisplayMode;
 }
 
 inline bool operator!=(const EditorPreferences& a,

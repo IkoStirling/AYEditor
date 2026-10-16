@@ -38,6 +38,7 @@ void EditorComponentPolicyRegistry::installDefaults()
     add("SpriteAnimationComponent", {"SpriteComponent"});
     add("TilemapComponent", {"Transform"});
     add("OrthoCameraComponent", {"Transform"});
+    add("PerspectiveCameraComponent", {"Transform"});
     add("RigidBodyComponent", {"Transform"});
     add("ColliderComponent", {"Transform"});
     add("AudioEmitterComponent", {"Transform"});
@@ -90,6 +91,17 @@ bool EditorComponentPolicyRegistry::addWithRequirements(
     const auto addOne = [&](const auto& self, const std::string& typeName) -> bool {
         const auto* descriptor =
             ayt::entity::ComponentRegistry::instance().find(typeName);
+        if (descriptor && descriptor->requiresSpatial && !entity.isSpatial()) {
+            if (error) *error = "Data entities cannot use spatial components; convert to Spatial first";
+            return false;
+        }
+        if (descriptor && descriptor->intrinsic) {
+            if (typeName == componentType) {
+                if (error) *error = "Transform is an intrinsic Spatial property";
+                return false;
+            }
+            return entity.isSpatial();
+        }
         if (descriptor == nullptr || descriptor->has == nullptr
             || descriptor->add == nullptr || !descriptor->editorAddable) {
             if (error) *error = "component is unavailable for authoring: " + typeName;

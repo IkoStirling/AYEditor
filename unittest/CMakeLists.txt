@@ -28,6 +28,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorSceneBridge.cpp
     Test_EditorP0Core.cpp
     Test_EditorTransformGizmo.cpp
+    Test_EditorCameraVisualization.cpp
     Test_EditorAssetBrowser.cpp
     Test_EditorAssetTilePresenter.cpp
     Test_EditorSkeletonExtension.cpp

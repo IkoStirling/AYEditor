@@ -9,6 +9,7 @@
 #include "AYEntity/World.h"
 #include "AYEntity/components/TransformComponent.h"
 #include "AYEntity/components/ActorInstanceComponent.h"
+#include "AYEntity/components/CameraControllerComponent.h"
 #include "AYScene.h"
 #include "AYSerializer/SerializeError.h"
 #include "AYSerializer/SerializerCore.h"
@@ -172,8 +173,115 @@ struct EditorSceneDocument::ComponentSnapshot {
 
 struct EditorSceneDocument::EntitySnapshot {
     std::string name;
+    ayt::entity::EntityKind kind = ayt::entity::EntityKind::Data;
+    std::string persistentId, parentId, ownerId;
+    std::vector<EntitySnapshot> owned;
+    struct Attachment { std::string childId; EditorTransformState local; };
+    std::vector<Attachment> attachments;
     std::vector<ComponentSnapshot> components;
 };
+
+class EditorSceneDocument::EntityKindCommand final : public IEditorCommand {
+public:
+    EntityKindCommand(EditorSceneDocument& document, uint32_t id, ayt::entity::EntityKind after)
+        : _document(document), _id(id), _generation(document._contentGeneration), _after(after) {
+        auto* entity = document.findCommandEntity(id); _before = entity->kind();
+        if (entity->transform()) document.snapshotComponent(*entity,*entity->transform(),_beforePose);
+    }
+    const std::string& label() const noexcept override { return _label; }
+    bool isAlive() const noexcept override { return _generation == _document._contentGeneration; }
+    bool execute() override {
+        auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
+        if (!entity || !entity->convertKind(_after)) return false;
+        if (_after == ayt::entity::EntityKind::Spatial) {
+            if (_afterPose.typeName.empty()) return _document.snapshotComponent(*entity,*entity->transform(),_afterPose);
+            return _document.restoreComponent(*entity,_afterPose);
+        }
+        return true;
+    }
+    bool undo() override {
+        auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
+        return entity && entity->convertKind(_before)
+            && (_before == ayt::entity::EntityKind::Data || _document.restoreComponent(*entity,_beforePose));
+    }
+private:
+    EditorSceneDocument& _document; uint32_t _id; uint64_t _generation;
+    ayt::entity::EntityKind _before, _after;
+    ComponentSnapshot _beforePose, _afterPose;
+    std::string _label = "Convert Entity Type";
+};
+
+class EditorSceneDocument::EntityRelationCommand final : public IEditorCommand {
+public:
+    EntityRelationCommand(EditorSceneDocument& document, uint32_t id, bool owner,
+        std::string before, std::string after, EditorTransformState localBefore,
+        EditorTransformState localAfter)
+        : _document(document), _id(id), _generation(document._contentGeneration), _owner(owner),
+          _before(std::move(before)), _after(std::move(after)), _localBefore(localBefore), _localAfter(localAfter) {}
+    const std::string& label() const noexcept override { return _label; }
+    bool isAlive() const noexcept override { return _generation == _document._contentGeneration; }
+    bool execute() override { return apply(_after,_localAfter); }
+    bool undo() override { return apply(_before,_localBefore); }
+private:
+    bool apply(const std::string& id, const EditorTransformState& local) {
+        auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
+        auto* target = id.empty() ? nullptr : _document._scene->world().findEntityByPersistentId(id);
+        if (!entity || (!id.empty() && !target)) return false;
+        if (_owner) return entity->setOwner(target);
+        return entity->setSpatialParent(target,ayt::entity::ReparentMode::KeepLocal)
+            && _document.applyTransform(_generation,_id,local);
+    }
+    EditorSceneDocument& _document; uint32_t _id; uint64_t _generation; bool _owner;
+    std::string _before,_after,_label = "Change Entity Relationship";
+    EditorTransformState _localBefore,_localAfter;
+};
+
+bool EditorSceneDocument::convertEntityKind(uint32_t id, ayt::entity::EntityKind kind, std::string* error) {
+    auto* entity = _scene->world().findEntity(id);
+    if (!entity || entity->kind() == kind) return false;
+    if (kind == ayt::entity::EntityKind::Data) {
+        if (entity->spatialParent() || !entity->spatialChildren().empty()) {
+            setError(error,"Detach spatial relations before converting to Data"); return false;
+        }
+        for (const auto& instance : entity->componentInstances()) {
+            const auto* descriptor = ayt::entity::ComponentRegistry::instance().find(*instance.component);
+            if (descriptor && descriptor->requiresSpatial && !descriptor->intrinsic) {
+                setError(error,"Remove spatial components before converting to Data"); return false;
+            }
+        }
+    }
+    return _history.execute(std::make_unique<EntityKindCommand>(*this,logicalEntityId(id),kind));
+}
+bool EditorSceneDocument::reparentEntity(uint32_t id, uint32_t parentId,
+    ayt::entity::ReparentMode mode, std::string* error) {
+    auto* entity = _scene->world().findEntity(id);
+    auto* parent = parentId ? _scene->world().findEntity(parentId) : nullptr;
+    if (!entity || !entity->transform() || (parentId && !parent)) return false;
+    auto* previous = entity->spatialParent();
+    if (previous == parent) return false;
+    const std::string before = previous ? previous->persistentId() : "";
+    const std::string after = parent ? parent->persistentId() : "";
+    const auto localBefore = readTransform(*entity->transform());
+    if (!entity->setSpatialParent(parent,mode,error)) return false;
+    const auto localAfter = readTransform(*entity->transform());
+    entity->setSpatialParent(previous,ayt::entity::ReparentMode::KeepLocal);
+    applyTransform(_contentGeneration,logicalEntityId(id),localBefore);
+    return _history.execute(std::make_unique<EntityRelationCommand>(*this,logicalEntityId(id),false,
+        before,after,localBefore,localAfter));
+}
+bool EditorSceneDocument::setEntityOwner(uint32_t id, uint32_t ownerId, std::string* error) {
+    auto* entity = _scene->world().findEntity(id);
+    auto* owner = ownerId ? _scene->world().findEntity(ownerId) : nullptr;
+    if (!entity || (ownerId && !owner)) return false;
+    auto* previous = entity->owner();
+    if (previous == owner) return false;
+    const std::string before = previous ? previous->persistentId() : "";
+    const std::string after = owner ? owner->persistentId() : "";
+    if (!entity->setOwner(owner,error)) return false;
+    entity->setOwner(previous);
+    return _history.execute(std::make_unique<EntityRelationCommand>(*this,logicalEntityId(id),true,
+        before,after,EditorTransformState{},EditorTransformState{}));
+}
 
 class EditorSceneDocument::EntityCreateCommand final : public IEditorCommand {
 public:
@@ -606,9 +714,9 @@ bool EditorSceneDocument::renameEntity(uint32_t entityId, std::string name,
 bool EditorSceneDocument::createEntity(
     std::string label,
     const std::function<bool(ayt::entity::Entity&)>& configure,
-    uint32_t* entityId)
+    uint32_t* entityId, ayt::entity::EntityKind kind)
 {
-    ayt::entity::Entity* entity = _scene->world().createEntity();
+    ayt::entity::Entity* entity = _scene->world().createEntity(kind);
     if (entity == nullptr) return false;
     if (configure && !configure(*entity)) {
         _scene->world().destroyEntity(entity);
@@ -640,6 +748,8 @@ bool EditorSceneDocument::deleteEntity(uint32_t entityId, std::string label)
 {
     ayt::entity::Entity* entity = _scene->world().findEntity(entityId);
     if (entity == nullptr) return false;
+    std::string deletionError;
+    if (!_scene->world().canDestroyEntity(entity,&deletionError)) return false;
     EntitySnapshot snapshot;
     if (!snapshotEntity(*entity, snapshot)) return false;
     return _history.execute(std::make_unique<EntityDeleteCommand>(
@@ -779,6 +889,14 @@ bool EditorSceneDocument::mutateComponentById(
         std::move(after), std::move(label), std::move(mergeKey)));
 }
 
+bool EditorSceneDocument::setCameraTarget(uint32_t entityId, const std::string& componentId, uint32_t targetId) {
+    auto* target = targetId ? _scene->world().findEntity(targetId) : nullptr;
+    if (targetId && !target) return false;
+    return mutateComponentById(entityId,componentId,"Set Camera Target",{},[target](ayt::entity::IComponent& component) {
+        auto* controller = dynamic_cast<ayt::entity::CameraControllerComponent*>(&component);
+        return controller && controller->setTarget(target);
+    });
+}
 bool EditorSceneDocument::renameComponent(
     uint32_t entityId, const std::string& componentId, std::string displayName)
 {
@@ -989,9 +1107,12 @@ bool EditorSceneDocument::restoreComponent(
             *component);
         if (!actualType || snapshot.typeName != actualType) return false;
     } else {
-        if (descriptor->multiplicity == ayt::entity::ComponentMultiplicity::Single
-            && descriptor->has && descriptor->has(entity)) return false;
-        component = descriptor->add(entity);
+        if (descriptor->intrinsic) component = entity.transform();
+        else {
+            if (descriptor->multiplicity == ayt::entity::ComponentMultiplicity::Single
+                && descriptor->has && descriptor->has(entity)) return false;
+            component = descriptor->add(entity);
+        }
     }
     if (component == nullptr) return false;
     const std::string createdId = entity.componentInstance(component)->id;
@@ -1026,6 +1147,18 @@ bool EditorSceneDocument::snapshotEntity(
     ayt::entity::Entity& entity, EntitySnapshot& snapshot) const
 {
     snapshot.name = entity.getName() != nullptr ? entity.getName() : "";
+    snapshot.kind = entity.kind(); snapshot.persistentId = entity.persistentId();
+    snapshot.parentId = entity.spatialParent() ? entity.spatialParent()->persistentId() : "";
+    snapshot.ownerId = entity.owner() ? entity.owner()->persistentId() : "";
+    snapshot.attachments.clear();
+    for (auto* child : entity.spatialChildren())
+        if (child->owner() != &entity) snapshot.attachments.push_back({child->persistentId(),readTransform(*child->transform())});
+    snapshot.owned.clear();
+    for (auto* child : entity.ownedEntities()) {
+        EntitySnapshot childSnapshot;
+        if (!snapshotEntity(*child, childSnapshot)) return false;
+        snapshot.owned.push_back(std::move(childSnapshot));
+    }
     snapshot.components.clear();
     for (ayt::entity::IComponent* component : entity.getComponents()) {
         if (component == nullptr) continue;
@@ -1045,16 +1178,43 @@ bool EditorSceneDocument::snapshotEntity(
 ayt::entity::Entity* EditorSceneDocument::restoreEntity(
     const EntitySnapshot& snapshot)
 {
-    ayt::entity::Entity* entity = _scene->world().createEntity();
-    if (entity == nullptr) return nullptr;
-    entity->setName(snapshot.name.c_str());
-    for (const ComponentSnapshot& component : snapshot.components) {
-        if (!restoreComponent(*entity, component)) {
-            _scene->world().destroyEntity(entity);
-            return nullptr;
+    std::vector<const EntitySnapshot*> items;
+    const auto collect = [&](const auto& self, const EntitySnapshot& item) -> void {
+        items.push_back(&item); for (const auto& child : item.owned) self(self,child);
+    };
+    collect(collect,snapshot);
+    std::vector<ayt::entity::Entity*> created;
+    const auto rollback = [&]() -> ayt::entity::Entity* {
+        for (auto* entity : created) _scene->world().destroyEntity(entity);
+        return nullptr;
+    };
+    for (const auto* item : items) {
+        auto* entity = _scene->world().createEntity(item->kind);
+        if (!entity) return rollback();
+        created.push_back(entity);
+        if (!entity->restorePersistentId(item->persistentId)) return rollback();
+        entity->setName(item->name.c_str());
+        for (const auto& component : item->components)
+            if (!restoreComponent(*entity,component)) return rollback();
+    }
+    for (const auto* item : items) {
+        auto* entity = _scene->world().findEntityByPersistentId(item->persistentId);
+        auto* parent = item->parentId.empty() ? nullptr : _scene->world().findEntityByPersistentId(item->parentId);
+        auto* owner = item->ownerId.empty() ? nullptr : _scene->world().findEntityByPersistentId(item->ownerId);
+        if ((!item->parentId.empty() && !parent) || (!item->ownerId.empty() && !owner)
+            || (parent && !entity->setSpatialParent(parent)) || !entity->setOwner(owner)) return rollback();
+    }
+    for (const auto* item : items) {
+        auto* parent = _scene->world().findEntityByPersistentId(item->persistentId);
+        for (const auto& attachment : item->attachments) {
+            auto* child = _scene->world().findEntityByPersistentId(attachment.childId);
+            if (!child || !child->setSpatialParent(parent)) continue;
+            auto* transform = child->transform();
+            transform->position = attachment.local.position; transform->rotation = attachment.local.rotation;
+            transform->scale = attachment.local.scale; transform->hasPreviousSimulationPose = false; ++transform->revision;
         }
     }
-    return entity;
+    return created.front();
 }
 
 uint32_t EditorSceneDocument::logicalEntityId(uint32_t currentId) const noexcept

@@ -27,6 +27,8 @@
 #include "EditorGameViewTestAccess.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/Box.h"
+#include <AYEntity/components/CameraControllerComponent.h>
+#include "AYUI/ComboBox.h"
 #include "AYUI/Button.h"
 #include "AYUI/TextLabel.h"
 #include "AYUI/TreeView.h"
@@ -375,7 +377,7 @@ TEST_CASE(editor_create_empty_entity_menu_closes_and_refreshes_hierarchy)
         if (menu == nullptr) continue;
         for (size_t itemIndex = 0; itemIndex < menu->getItemCount(); ++itemIndex) {
             MenuItem* item = menu->getItem(static_cast<int>(itemIndex));
-            if (item != nullptr && item->getText() == L"Create Empty Entity") {
+            if (item != nullptr && item->getText() == L"Create Spatial Entity") {
                 editMenu = menu;
                 createItem = item;
                 break;
@@ -490,11 +492,11 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
     CHECK_NOT_NULL(tree);
     if (!button || !menu || !tree) { session.shutdown(); return; }
     CHECK(button->isEnabled());
-    CHECK(menu->getItemCount() == 4u);
+    CHECK(menu->getItemCount() == 5u);
     auto& world = session.document()->scene().world();
     const size_t before = world.getAllEntities().size();
 
-    for (size_t type = 0; type < 4u; ++type) {
+    for (size_t type = 0; type < 5u; ++type) {
         tree->toggleExpand(0); // Creation must reveal a previously collapsed tree.
         const auto bounds = button->getWorldBounds();
         const auto pos = session.ui().logicalToPhysical(
@@ -517,7 +519,8 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
         auto* entity = world.findEntity(session.selectedEntityId());
         CHECK_NOT_NULL(entity);
         if (entity) {
-            CHECK(entity->getComponent<ayt::entity::Transform>() != nullptr);
+            if (type == 4u) { CHECK(entity->kind() == ayt::entity::EntityKind::Data); CHECK(entity->transform() == nullptr); }
+            else { CHECK(entity->isSpatial()); CHECK(entity->transform() != nullptr); }
             if (type == 1u) CHECK(entity->getComponent<ayt::entity::SpriteComponent>() != nullptr);
             if (type == 2u) CHECK(entity->getComponent<ayt::entity::TilemapComponent>() != nullptr);
             if (type == 3u) CHECK(entity->hasComponent<ayt::entity::OrthoCameraComponent>());
@@ -528,13 +531,13 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
     session.onKeyDown(UIKey_Control);
     CHECK(session.onKeyDown(UIKey_Z));
     session.onKeyUp(UIKey_Control);
-    CHECK(world.getAllEntities().size() == before + 3u);
+    CHECK(world.getAllEntities().size() == before + 4u);
     session.onKeyDown(UIKey_Control);
     session.onKeyDown(UIKey_Shift);
     CHECK(session.onKeyDown(UIKey_Z));
     session.onKeyUp(UIKey_Shift);
     session.onKeyUp(UIKey_Control);
-    CHECK(world.getAllEntities().size() == before + 4u);
+    CHECK(world.getAllEntities().size() == before + 5u);
     session.shutdown();
 }
 
@@ -695,5 +698,55 @@ TEST_CASE(hierarchy_creation_follows_detached_panel_and_survives_close)
     windowManager.destroyWindow();
 }
 #endif
+
+
+TEST_CASE(hierarchy_pointer_drag_reparents_keep_world_and_undo_restores_root) {
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend; EditorSession session; CHECK(session.initialize(&backend,resolveHierarchyLayoutPath()));
+    auto* document=session.document(); auto& world=document->scene().world();
+    auto* parent=world.createSpatialEntity(); parent->setName("Drag Parent"); parent->transform()->position={10,0,0};
+    auto* child=world.createSpatialEntity(); child->setName("Drag Child"); child->transform()->position={13,0,0};
+    EditorGameViewTestAccess::forceModeAndNotify(session.gameView(),EditorMode::Edit); session.update(.016f);
+    auto* tree=dynamic_cast<TreeView*>(session.ui().findById("tree_outliner")); CHECK(tree!=nullptr);
+    const auto bounds=tree->getClientRect();
+    const auto rowPoint=[&](const wchar_t* name) {
+        int row=-1; for(size_t i=0;i<tree->getNodeCount();++i) if(tree->getNodeData(i).label==name) row=int(i);
+        CHECK(row>0); return session.ui().logicalToPhysical({bounds.minX+70,bounds.minY+(row+.5f)*tree->getItemHeight()});
+    };
+    auto from=rowPoint(L"Drag Child"), to=rowPoint(L"Drag Parent");
+    CHECK(session.onMouseButtonDown(from.x,from.y,0)); session.onMouseMove(to.x,to.y); CHECK(session.onMouseButtonUp(to.x,to.y,0));
+    session.update(.016f); CHECK(child->spatialParent()==parent); CHECK_FLOAT_EQ(child->transform()->position.x,3,1e-5f);
+    CHECK_FLOAT_EQ(child->worldMatrix()(0,3),13,1e-5f); CHECK(document->undo()); CHECK(child->spatialParent()==nullptr);
+    CHECK_FLOAT_EQ(child->transform()->position.x,13,1e-5f); CHECK(document->redo()); CHECK(child->spatialParent()==parent);
+    session.shutdown();
+}
+
+
+TEST_CASE(camera_inspector_target_selector_commits_undo_and_reports_missing_identity) {
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend; EditorSession session; CHECK(session.initialize(&backend,resolveHierarchyLayoutPath()));
+    auto* document=session.document(); auto& world=document->scene().world();
+    auto* target=world.createSpatialEntity(); target->setName("Inspector Target");
+    auto* camera=world.createSpatialEntity(); camera->setName("Inspector Camera");
+    CHECK(document->addComponent(camera->getId(),"CameraControllerComponent"));
+    EditorGameViewTestAccess::forceModeAndNotify(session.gameView(),EditorMode::Edit); session.update(.016f);
+    auto* tree=dynamic_cast<TreeView*>(session.ui().findById("tree_outliner")); int row=-1;
+    for(size_t i=0;i<tree->getNodeCount();++i) if(tree->getNodeData(i).label==L"Inspector Camera") row=int(i);
+    CHECK(row>0); tree->setSelectedIndex(row); session.update(.016f);
+    auto* header=dynamic_cast<Button*>(session.ui().findById("inspector_component_header_CameraControllerComponent")); CHECK(header!=nullptr);
+    const auto bounds=header->getWorldBounds(); UIMouseEvent click({bounds.minX+10,bounds.minY+10},0);
+    CHECK(header->onMouseButtonDown(click)); CHECK(header->onMouseButtonUp(click)); session.update(.016f);
+    auto* selector=dynamic_cast<ComboBox*>(session.ui().findById("cmb_camera_target")); CHECK(selector!=nullptr);
+    auto* controller=camera->getComponent<ayt::entity::CameraControllerComponent>();
+    if (!selector) { session.shutdown(); return; }
+    int targetIndex=-1; for(size_t i=0;i<selector->getItemCount();++i) if(selector->getItem(i)==L"Inspector Target") targetIndex=int(i);
+    CHECK(targetIndex>0); selector->setSelectedIndexAndNotify(targetIndex); CHECK(controller->resolveTarget()==target);
+    CHECK(document->undo()); CHECK(controller->resolveTarget()==nullptr); CHECK(document->redo()); CHECK(controller->resolveTarget()==target);
+    CHECK(document->deleteEntity(target->getId())); CHECK(controller->resolveTarget()==nullptr);
+    session.update(.016f);
+    selector=dynamic_cast<ComboBox*>(session.ui().findById("cmb_camera_target")); CHECK(selector!=nullptr);
+    if (selector) CHECK(selector->getSelectedIndex()>0); // Missing reference stays selected, distinct from explicit None.
+    session.shutdown();
+}
 
 TEST_SUITE_END

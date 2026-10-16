@@ -3,6 +3,9 @@
 #include "EditorDebugVisualization.h"
 #include <AYPhysics/PhysicsManager.h>
 #include <AYPhysics/PhysicsSubSystem.h>
+
+#include <AYEditor/EditorCameraVisualization.h>
+#include <AYEntity/components/PerspectiveCameraComponent.h>
 #ifdef AYEDITOR_HAS_AVATAR
 #include <AYEditor/EditorAvatarDocument.h>
 #endif
@@ -81,6 +84,7 @@
 #include "AYUI/Image.h"
 #include "AYUI/Theme.h"
 #include "AYUI/Tooltip.h"
+#include <AYEntity/components/CameraControllerComponent.h>
 #include "AYUI/TreeView.h"  // v0.3+ PR-5 Hierarchy panel (design §4.3.y)
 #include "AYUI/ListView.h"
 #include "AYUI/TileView.h"
@@ -2517,6 +2521,12 @@ void EditorSession::shutdown() {
     (void)setPhysicsDebugDraw(false, false);
     _physicsDebugDialog.reset();
 
+    if (auto* renderer = ayt::render::RendererSubSystem::findRegistered(); renderer && renderer == _cameraVisualOwner) {
+        renderer->clearSceneBuildersForOwner(this);
+        if (_cameraVisualRenderer && renderer->isReady()) _cameraVisualRenderer->release(renderer->renderer());
+    }
+    _cameraVisualRenderer.reset(); _cameraVisualOwner = nullptr;
+
     finishTransformGizmoDrag(false);
     rememberCurrentSceneView();
     if (_sceneViewWorkspaceDirty) {
@@ -2967,6 +2977,11 @@ bool EditorSession::freecamActive() const
 void EditorSession::pushSceneCameraToRenderer()
 {
     if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+        if (_cameraVisualOwner != sub) {
+            _cameraVisualRenderer = std::make_unique<EditorCameraVisualRenderer>();
+            _cameraVisualOwner = sub;
+            sub->addSceneBuilderForOwner(this, [this](ayt::render::RenderScene& scene) { buildCameraVisuals(scene); });
+        }
         if (_gameView.mode() != EditorMode::Edit) {
             sub->clearCameraOverride();
             sub->clearOverlayCamera2DOverride();
@@ -3291,11 +3306,27 @@ bool EditorSession::viewportAcceptsGameInput() const {
     return !isChromePoint(_lastMouseX, _lastMouseY);
 }
 
+int EditorSession::outlinerRowAt(float x, float y) {
+    if (!_outliner || !isOutlinerTreePoint(_ui,x,y)) return -1;
+    const auto point = _ui.physicalToLogical({x,y}); const auto rect = _outliner->getClientRect();
+    if (!rect.contains(point)) return -1;
+    const int row = int(std::floor((point.y - rect.minY + _outliner->getScrollOffset().y) / _outliner->getItemHeight()));
+    return row >= 0 && size_t(row) < _outliner->getNodeCount() ? row : -1;
+}
 bool EditorSession::onMouseMove(float x, float y) {
     _lastMouseX = x;
     _lastMouseY = y;
     _hasLastMouse = true;
 
+    if (!_outlinerDragIdentity.empty()) {
+        if (_gameView.mode()!=EditorMode::Edit || hierarchyWorldMutable()!=_outlinerDragWorld) {
+            _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+        } else if (_outlinerDragActive || (math::FVector2{x,y}-_outlinerDragStart).lengthSq() > 36) {
+            _outlinerDragActive=true;
+            setInspectorHint(localizedText("ui.editor.entity.drag_parent",L"Drop on a Spatial entity to attach; drop on the scene root to detach. World pose is kept."));
+            return true;
+        }
+    }
     // Cross-panel drags are owned by AYUI even while the cursor is over the
     // 3D surface. Without this gate EditorSession's freecam routing starves
     // UIManager::updateDrag, so the viewport never becomes a drop target.
@@ -3386,6 +3417,15 @@ bool EditorSession::onMouseMove(float x, float y) {
 }
 
 bool EditorSession::onMouseButtonDown(float x, float y, int button) {
+    _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+    if (button==0 && _gameView.mode()==EditorMode::Edit && !_ui.isDragging()) {
+        const int row=outlinerRowAt(x,y); auto* world=hierarchyWorldMutable();
+        if (world && row>0 && size_t(row-1)<_outlinerEntityIds.size()) {
+            if (auto* source=world->findEntity(_outlinerEntityIds[size_t(row-1)]); source && source->isSpatial()) {
+                _outlinerDragIdentity=source->persistentId(); _outlinerDragWorld=world; _outlinerDragStart={x,y};
+            }
+        }
+    }
     if (_ui.isDragging()) {
         return _ui.onMouseButtonDown(x, y, button);
     }
@@ -3513,6 +3553,26 @@ bool EditorSession::onMouseButtonDown(float x, float y, int button) {
 }
 
 bool EditorSession::onMouseButtonUp(float x, float y, int button) {
+    if (button==0 && !_outlinerDragIdentity.empty()) {
+        const auto identity=_outlinerDragIdentity; const bool dragged=_outlinerDragActive;
+        _outlinerDragIdentity.clear(); _outlinerDragActive=false;
+        if (dragged) {
+            const int row=outlinerRowAt(x,y); uint32_t parentId=0;
+            if (row>0 && size_t(row-1)<_outlinerEntityIds.size()) parentId=_outlinerEntityIds[size_t(row-1)];
+            auto* world=hierarchyWorldMutable();
+            auto* source=world && world==_outlinerDragWorld ? world->findEntityByPersistentId(identity) : nullptr;
+            // Release AYUI capture before refreshing/removing any tree rows.
+            (void)_ui.onMouseButtonUp(x,y,button);
+            if (source && _document && row>=0 && _gameView.mode()==EditorMode::Edit) {
+                std::string error;
+                if (_document->reparentEntity(source->getId(),parentId,ayt::entity::ReparentMode::KeepWorld,&error)) {
+                    setSelectedEntity(world,source); _outlinerRefreshPending=true; _inspectorRefreshPending=true;
+                    refreshUnsavedIndicator(); if (_repaintCallback) _repaintCallback();
+                } else if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+            }
+            return true;
+        }
+    }
     if (_ui.isDragging()) {
         return _ui.onMouseButtonUp(x, y, button);
     }
@@ -3635,6 +3695,9 @@ void EditorSession::onMouseLeave() {
 
 bool EditorSession::onKeyDown(int keyCode)
 {
+    if (keyCode==27 && _outlinerDragActive) {
+        _outlinerDragIdentity.clear(); _outlinerDragActive=false; setInspectorHint(L"Hierarchy drag cancelled"); return true;
+    }
     if (keyCode == ayt::ui::UIKey_Control) {
         _controlDown = true;
     }
@@ -3851,6 +3914,15 @@ void EditorSession::bindToolbar() {
         item->setId("menu_view_shading");
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
+    viewportOptions->addSeparator();
+    const char* cameraKeys[] = {"ui.editor.viewport.camera_solid", "ui.editor.viewport.camera_wire", "ui.editor.viewport.camera_hidden"};
+    const char* cameraLabels[] = {"Camera Icons: Normal", "Camera Icons: Wireframe", "Camera Icons: Hidden"};
+    const char* cameraIds[] = {"menu_camera_icons_solid", "menu_camera_icons_wire", "menu_camera_icons_hidden"};
+    for (int i=0;i<3;++i) if (auto* item=viewportOptions->addItem(localizedText(cameraKeys[i],cameraLabels[i]))) {
+        item->setId(cameraIds[i]);
+        item->setOnActivate([this,i]() { setCameraDisplayMode(static_cast<EditorCameraDisplayMode>(i)); });
+    }
+    setCameraDisplayMode(_cameraDisplayMode);
     viewportOptions->addSeparator();
     if (auto* item = viewportOptions->addItem(localizedText(
             "ui.editor.viewport.menu_orientation_axis", "Orientation Axis"))) {
@@ -4328,8 +4400,9 @@ void EditorSession::bindOutlinerPanel()
         [this](int flatIndex) { onOutlinerSelectionChanged(flatIndex); });
     _outliner->setOnExpandToggled(
         [this](int flatIndex, bool expanded) {
-            if (flatIndex != 0) return;
-            _outlinerRootExpanded = expanded;
+            if (flatIndex == 0) _outlinerRootExpanded = expanded;
+            else if (flatIndex > 0 && size_t(flatIndex - 1) < _outlinerEntityIds.size())
+                _spatialExpanded[_outlinerEntityIds[size_t(flatIndex - 1)]] = expanded;
             // TreeView has already rebuilt its stable row pool. Rebuild our
             // entity-id projection on the next EditorSession update so a
             // selected entity hidden by collapse remains selected logically.
@@ -4350,8 +4423,8 @@ void EditorSession::bindOutlinerPanel()
         gEditorMenuTexts[this].push_back(
             {item, nullptr, 0u, key, fallback});
     };
-    addCreate("outliner_create_empty", "ui.editor.menu.edit.create_entity",
-        L"Create Empty Entity", [this]() { createEmptyEntity(); });
+    addCreate("outliner_create_empty", "ui.editor.menu.edit.create_spatial_entity",
+        L"Create Spatial Entity", [this]() { createEmptyEntity(); });
     addCreate("outliner_create_sprite", "ui.editor.menu.edit.create_sprite",
         L"Create Sprite", [this]() {
             (void)createTwoDEntity(Editor2DEntityKind::Sprite);
@@ -4364,6 +4437,8 @@ void EditorSession::bindOutlinerPanel()
         L"Create 2D Camera", [this]() {
             (void)createTwoDEntity(Editor2DEntityKind::Camera);
         });
+    addCreate("outliner_create_data", "ui.editor.menu.edit.create_data_entity",
+        L"Create Data Entity", [this]() { createDataEntity(); });
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_outliner_create"))) {
         menu->detachFromParent();
@@ -4505,22 +4580,24 @@ void EditorSession::refreshOutliner()
         world->getAllEntities();
     nodes.reserve(entities.size() + 1);
     _outlinerEntityIds.reserve(entities.size());
-    for (ayt::entity::Entity* e : entities) {
-        if (e == nullptr) continue;
-        const char* nameC = e->getName();
-        std::string name = (nameC != nullptr && nameC[0] != '\0')
-            ? std::string(nameC)
-            : ("entity#" + std::to_string(
-                  static_cast<unsigned>(e->getId())));
-
-        ayt::ui::TreeNodeData d;
-        d.label = std::wstring(name.begin(), name.end());
-        d.hasChildren = false;
-        d.expanded = false;
-        d.parentIndex = 0;  // 挂在合成 root 下
-        nodes.push_back(d);
-        _outlinerEntityIds.push_back(e->getId());
+    std::unordered_map<uint32_t,std::vector<ayt::entity::Entity*>> children;
+    for (auto* entity : entities) {
+        const auto* parent = entity->spatialParent();
+        children[parent ? parent->getId() : 0].push_back(entity);
     }
+    const auto append = [&](const auto& self, ayt::entity::Entity* entity, int parentIndex, bool visible) -> void {
+        const int sourceIndex = int(nodes.size());
+        ayt::ui::TreeNodeData node;
+        node.label = ayt::ui::decodeUtf8Text(entity->getName()[0] ? entity->getName() : "Unnamed");
+        node.icon = entity->isSpatial() ? L"S" : L"D";
+        node.parentIndex = parentIndex; node.hasChildren = !children[entity->getId()].empty();
+        const auto expansion = _spatialExpanded.find(entity->getId());
+        node.expanded = expansion == _spatialExpanded.end() || expansion->second;
+        nodes.push_back(node);
+        if (visible) _outlinerEntityIds.push_back(entity->getId());
+        for (auto* child : children[entity->getId()]) self(self,child,sourceIndex,visible && node.expanded);
+    };
+    for (auto* entity : children[0]) append(append,entity,0,true);
 
     _updatingOutlinerSelection = true;
     _outliner->setTree(nodes);
@@ -4528,7 +4605,7 @@ void EditorSession::refreshOutliner()
     // Preserve selection by entity id rather than TreeView's recycled flat
     // row. A collapsed root hides the row but must not clear Inspector/entity
     // selection; expanding it restores the visual highlight on the next pass.
-    bool selectedEntityStillExists = _selection.empty();
+    bool selectedEntityStillExists = _selection.empty() || _selection.resolve(hierarchyWorldMutable()) != nullptr;
     int selectedFlat = -1;
     if (!_selection.empty()) {
         for (size_t i = 0; i < _outlinerEntityIds.size(); ++i) {
@@ -7860,6 +7937,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     _sceneCamera.setThreeDProjection(preferences.orthographicView
         ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
     _wireframeView = preferences.wireframeView;
+    setCameraDisplayMode(preferences.cameraDisplayMode);
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_view_shading"))) {
         button->setText(_wireframeView
@@ -7994,6 +8072,7 @@ EditorPreferences EditorSession::capturePreferences() const
     out.orthographicView =
         _sceneCamera.threeDProjection() == ProjectionMode::Orthographic;
     out.wireframeView = _wireframeView;
+    out.cameraDisplayMode = _cameraDisplayMode;
 
     auto sliderValue = [this](const char* id, float fallback) {
         if (auto* slider = dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) {
@@ -8370,6 +8449,7 @@ void EditorSession::setSceneVisibility(
 
 void EditorSession::syncSceneVisibilityMenu()
 {
+    setCameraDisplayMode(_cameraDisplayMode);
     const bool editMode = _gameView.mode() == EditorMode::Edit;
     const ayt::math::FVector4 active = editorThemeColor(
         "color.accent", ayt::math::FVector4(0.16f, 0.40f, 0.70f, 1.0f));
@@ -8478,7 +8558,8 @@ void EditorSession::fitTwoDViewToSceneCamera()
             continue;
         }
         const ayt::math::Float4x4 matrix =
-            editor2DShapeMatrix(*transform, shape);
+            (entity->spatialParent() ? entity->spatialParent()->worldMatrix() : ayt::math::Float4x4::identity())
+                            * editor2DShapeMatrix(*transform, shape);
         const ayt::math::FVector2 localCorners[4] = {
             {shape.localMin.x, shape.localMin.y},
             {shape.localMax.x, shape.localMin.y},
@@ -8511,9 +8592,10 @@ void EditorSession::fitTwoDViewToSceneCamera()
     if (!selected) return;
     const float viewHeight = selected.camera->effectiveViewSize(
         _sceneCamera.viewportAspect()) / std::fabs(selected.camera->safeZoom());
-    _sceneCamera.setTwoDPose(
-        {selected.transform->position.x, selected.transform->position.y},
-        viewHeight);
+    ayt::math::FVector3 position; ayt::math::FQuaternion rotation;
+    if (!selected.entity->worldPose(position,rotation)) return;
+    const auto center = selected.camera->worldCenter(position,rotation.toEulerAngles().z);
+    _sceneCamera.setTwoDPose(center,viewHeight);
 }
 
 void EditorSession::rememberCurrentSceneView()
@@ -8908,7 +8990,9 @@ void EditorSession::syncDocumentCommandMenu()
 
 void EditorSession::afterDocumentReload()
 {
+    _outlinerDragIdentity.clear(); _outlinerDragActive=false; _outlinerDragWorld=nullptr;
     finishTransformGizmoDrag(false);
+    _spatialExpanded.clear();
     clearSelectedEntity(false);
     _playRuntime.forgetEditScenePreview();
     refreshOutliner();
@@ -8917,6 +9001,80 @@ void EditorSession::afterDocumentReload()
     refreshUnsavedIndicator();
     selectInitialSceneViewForDocument();
     if (_repaintCallback) _repaintCallback();
+}
+
+void EditorSession::createDataEntity() {
+    if (!_document || _gameView.mode() != EditorMode::Edit) return;
+    auto* world = hierarchyWorldMutable(); if (!world) return;
+    const auto name = uniqueEntityName(*world,"Data Entity");
+    uint32_t id = 0;
+    if (!_document->createEntity("Create Data Entity",[&](ayt::entity::Entity& entity) {
+        entity.setName(name.c_str()); return true;
+    },&id,ayt::entity::EntityKind::Data)) return;
+    setSelectedEntity(world,world->findEntity(id)); _outlinerRootExpanded = true;
+    _outlinerRefreshPending = true; refreshInspectorLabels(); refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();
+}
+void EditorSession::convertSelectedEntityKind() {
+    auto* entity = _selection.resolve(hierarchyWorldMutable());
+    if (!_document || !entity || _gameView.mode() != EditorMode::Edit) return;
+    std::string error;
+    if (!_document->convertEntityKind(entity->getId(),entity->isSpatial()
+        ? ayt::entity::EntityKind::Data : ayt::entity::EntityKind::Spatial,&error)) {
+        if (!error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+        return;
+    }
+    _outlinerRefreshPending = true; refreshInspectorLabels(); refreshTransformInspector();
+    refreshUnsavedIndicator(); syncTransformGizmoToRenderer();
+    if (_repaintCallback) _repaintCallback();
+}
+ayt::ui::Widget* EditorSession::entityInspectorWidget(const char* id) {
+    if (auto* widget = _ui.findById(id)) return widget;
+    if (_childWindows) for (const auto& entry : _childWindows->entries())
+        if (entry.ui) if (auto* widget = entry.ui->findById(id)) return widget;
+    return nullptr;
+}
+void EditorSession::refreshEntityRelations() {
+    auto* world = hierarchyWorldMutable(); auto* entity = _selection.resolve(world);
+    _updatingEntityRelations = true;
+    if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(entityInspectorWidget("inspector_entity_kind")))
+        label->setText(entity ? localizedText(entity->isSpatial()
+            ? "ui.editor.entity.spatial_definition" : "ui.editor.entity.data_definition",
+            entity->isSpatial() ? L"Spatial: pose and spatial hierarchy" : L"Data: logic/state, no spatial pose") : L"-");
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_convert_entity_kind"))) {
+        button->setEnabled(entity && _gameView.mode() == EditorMode::Edit);
+        button->setText(localizedText(entity && entity->isSpatial()
+            ? "ui.editor.entity.convert_data" : "ui.editor.entity.convert_spatial",
+            entity && entity->isSpatial() ? L"Convert to Data" : L"Convert to Spatial"));
+    }
+    if (auto* mode = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget("cmb_reparent_mode"))) {
+        const int selected = mode->getSelectedIndex() == 1 ? 1 : 0;
+        mode->setItems({localizedText("ui.editor.entity.keep_world",L"Keep World Pose"),
+                        localizedText("ui.editor.entity.keep_local",L"Keep Local Pose")});
+        mode->setSelectedIndex(selected);
+        mode->setEnabled(entity && entity->isSpatial() && _gameView.mode() == EditorMode::Edit);
+    }
+    const auto fill = [&](const char* id, bool spatial, std::vector<uint32_t>& candidates) {
+        auto* combo = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget(id)); if (!combo) return;
+        candidates = {0}; std::vector<std::wstring> labels{localizedText("ui.editor.entity.none",L"None")};
+        const auto* current = entity ? (spatial ? entity->spatialParent() : entity->owner()) : nullptr;
+        int selected = 0;
+        if (world && entity) for (auto* target : world->getAllEntities()) {
+            if (target == entity || (spatial && !target->isSpatial())) continue;
+            bool cycle = false;
+            for (auto* cursor = target; cursor; cursor = spatial ? cursor->spatialParent() : cursor->owner())
+                if (cursor == entity) { cycle = true; break; }
+            if (cycle) continue;
+            if (target == current) selected = int(candidates.size());
+            candidates.push_back(target->getId());
+            labels.push_back(ayt::ui::decodeUtf8Text(std::string(target->getName()) + " (#" + std::to_string(target->getId()) + ")"));
+        }
+        combo->setItems(labels); combo->setSelectedIndex(selected);
+        combo->setEnabled(entity && (!spatial || entity->isSpatial()) && _gameView.mode() == EditorMode::Edit);
+    };
+    fill("cmb_spatial_parent",true,_spatialParentCandidates);
+    fill("cmb_entity_owner",false,_entityOwnerCandidates);
+    _updatingEntityRelations = false;
 }
 
 void EditorSession::createEmptyEntity()
@@ -9251,8 +9409,11 @@ void EditorSession::bindMenuBar() {
             item->setOnActivate([this]() { showAssetHistoryDialog(); });
         }
         editMenu->addSeparator();
-        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_entity", L"Create Empty Entity")) {
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_spatial_entity", L"Create Spatial Entity")) {
             item->setOnActivate([this]() { createEmptyEntity(); });
+        }
+        if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_data_entity", L"Create Data Entity")) {
+            item->setOnActivate([this]() { createDataEntity(); });
         }
         if (auto* item = addLocalizedItem(editMenu, "ui.editor.menu.edit.create_sprite", L"Create Sprite")) {
             item->setOnActivate([this]() {
@@ -10873,9 +11034,18 @@ void EditorSession::importCharacterFromDialog()
     }
 }
 
+namespace {
+EditorTransformState spatialWorldState(const ayt::entity::Entity& entity) {
+    EditorTransformState result;
+    entity.worldMatrix().decompose(result.position,result.rotation,result.scale);
+    return result;
+}
+}
+
 void EditorSession::refreshInspectorLabels()
 {
     refreshComponentBrowser();
+    refreshEntityRelations();
     if (_selectedAssetId != 0) {
         setInspectorAssetMode(true);
         refreshAssetInspector();
@@ -10950,6 +11120,33 @@ void EditorSession::bindComponentBrowser()
             _ui.findById("btn_remove_component"))) {
         button->setOnClicked([this]() { removeSelectedComponent(); });
     }
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_convert_entity_kind")))
+        button->setOnClicked([this]() { convertSelectedEntityKind(); });
+    if (auto* button = dynamic_cast<ayt::ui::Button*>(entityInspectorWidget("btn_entity_relations")))
+        button->setOnClicked([this]() {
+            if (auto* body = entityInspectorWidget("inspector_entity_relations")) body->setVisible(!body->isVisible());
+            _ui.layout(); if (_repaintCallback) _repaintCallback();
+        });
+    const auto bindRelation = [this](const char* id, bool spatial) {
+        if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget(id)))
+            combo->setOnSelectionChanged([this,spatial](int index) {
+                if (_updatingEntityRelations || !_document || _gameView.mode() != EditorMode::Edit) return;
+                auto* entity = _selection.resolve(hierarchyWorldMutable());
+                const auto& candidates = spatial ? _spatialParentCandidates : _entityOwnerCandidates;
+                if (!entity || index < 0 || size_t(index) >= candidates.size()) return;
+                std::string error;
+                const auto* selector = dynamic_cast<ayt::ui::ComboBox*>(entityInspectorWidget("cmb_reparent_mode"));
+                const auto mode = selector && selector->getSelectedIndex() == 1
+                    ? ayt::entity::ReparentMode::KeepLocal : ayt::entity::ReparentMode::KeepWorld;
+                const bool changed = spatial
+                    ? _document->reparentEntity(entity->getId(),candidates[index],mode,&error)
+                    : _document->setEntityOwner(entity->getId(),candidates[index],&error);
+                _outlinerRefreshPending = true; refreshEntityRelations(); refreshTransformInspector(); refreshUnsavedIndicator();
+                if (!changed && !error.empty()) setInspectorHint(ayt::ui::decodeUtf8Text(error));
+                if (_repaintCallback) _repaintCallback();
+            });
+    };
+    bindRelation("cmb_spatial_parent",true); bindRelation("cmb_entity_owner",false);
     refreshComponentBrowser();
 }
 
@@ -10980,7 +11177,8 @@ void EditorSession::refreshComponentBrowser()
          ayt::entity::ComponentRegistry::instance().descriptors()) {
         const bool present = entity != nullptr && descriptor.has != nullptr
             && descriptor.has(*entity);
-        if (canAdd && descriptor.editorAddable && descriptor.sceneSerializable
+        if (canAdd && (!descriptor.requiresSpatial || entity->isSpatial())
+            && descriptor.editorAddable && descriptor.sceneSerializable
             && descriptor.add != nullptr
             && (!present || descriptor.multiplicity
                 == ayt::entity::ComponentMultiplicity::Multiple)) {
@@ -11007,7 +11205,8 @@ void EditorSession::refreshComponentBrowser()
             _ui.findById("inspector_components"))) {
         const std::string text = entity == nullptr
             ? "Components"
-            : "Components (" + std::to_string(attached.size()) + ")";
+            : "Components (" + std::to_string(std::count_if(attached.begin(),attached.end(),
+                [](const auto& item) { return !item.descriptor->intrinsic; })) + ")";
         label->setText(ayt::ui::decodeUtf8Text(text));
     }
 
@@ -11075,7 +11274,7 @@ void EditorSession::refreshComponentBrowser()
                 const auto* descriptor = item.descriptor;
                 ayt::ui::TreeNodeData node;
                 node.label = ayt::ui::decodeUtf8Text(
-                    descriptor->category + " / "
+                    (descriptor->intrinsic ? "Spatial Property / " : descriptor->category + " / ")
                     + (item.instance->displayName.empty()
                         ? descriptor->displayName : item.instance->displayName));
                 node.parentIndex = 0;
@@ -11384,6 +11583,34 @@ void EditorSession::rebuildComponentPropertyEditor()
     componentNameInput->setOnFocusLostNotify(commitName);
     propertyTarget->addWidget(componentNameInput, 25.0f);
 
+    if (_inspectedComponentTypeName == "CameraControllerComponent") {
+        auto* controller = dynamic_cast<ayt::entity::CameraControllerComponent*>(component);
+        addLabel(localizedText("ui.editor.camera.target",L"Follow Target"),20.0f);
+        auto* selector = new ayt::ui::ComboBox(); selector->setId("cmb_camera_target");
+        std::vector<uint32_t> targets{0}; std::vector<std::wstring> labels{localizedText("ui.editor.entity.none",L"None")};
+        auto* current = controller ? controller->resolveTarget() : nullptr; int selected = 0;
+        for (auto* target : entity->getWorld()->getAllEntities()) {
+            if (!target->isSpatial() || target == entity) continue;
+            if (target == current) selected = int(targets.size());
+            targets.push_back(target->getId()); labels.push_back(ayt::ui::decodeUtf8Text(target->getName()));
+        }
+        if (controller && !controller->targetPersistentId.empty() && !current) {
+            selected = int(targets.size()); targets.push_back(UINT32_MAX);
+            labels.push_back(localizedText("ui.editor.camera.target_missing",L"Missing Target"));
+        }
+        selector->setItems(labels); selector->setSelectedIndex(selected);
+        selector->setSize({240,25}); selector->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
+        selector->setOnSelectionChanged([this,targets,selectedComponentId](int index) {
+            if (!_document || _gameView.mode()!=EditorMode::Edit || index<0 || size_t(index)>=targets.size() || targets[size_t(index)]==UINT32_MAX) return;
+            auto* camera = _selection.resolve(hierarchyWorldMutable()); if (!camera) return;
+            if (_document->setCameraTarget(camera->getId(),selectedComponentId,targets[size_t(index)])) {
+                _inspectorRefreshPending=true; refreshUnsavedIndicator();
+                if (_repaintCallback) _repaintCallback();
+            }
+        });
+        propertyTarget->addWidget(selector,25);
+        addLabel(localizedText("ui.editor.camera.spring_arm",L"Orbit distance sets arm length; collision radius/padding control wall avoidance."),40);
+    }
     if (_inspectedComponentTypeName == "ActorInstanceComponent") {
         auto* restore = new ayt::ui::Button();
         restore->setId("inspector_actor_restore_defaults");
@@ -11451,7 +11678,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                     _selection.resolve(world)==owner &&
                     owner->getComponent<ayt::stats::StatsRecipeComponent>()==recipe;
             };
-            create->setEnabled(_gameView.mode()==EditorMode::Edit);
+            create->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             create->setOnClicked([=] {
                 if(!validOwner())return;
                 const auto created=createEditorProjectAsset(
@@ -11531,7 +11758,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                 book->setText(ayt::ui::decodeUtf8Text(inspected->recipeBook.lexically_relative(assetsRoot).generic_string()));
                 status->setText(L"Manifest loaded and validated");
             });
-            save->setEnabled(_gameView.mode()==EditorMode::Edit);
+            save->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
              save->setOnClicked([=] {
                  if(!validOwner())return;
                  const auto path=assetsRoot/ayt::ui::encodeUtf8Text(manifest->getText());
@@ -11557,7 +11784,7 @@ void EditorSession::rebuildComponentPropertyEditor()
                     ayt::ui::decodeUtf8Text(saved->logicalPath));
                 _assetDatabase.requestScan();
             });
-            select->setEnabled(_gameView.mode()==EditorMode::Edit);
+            select->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             select->setOnClicked([=] {
                 if(!validOwner())return;
                 const auto selected=showAssetReferenceDialog(static_cast<HWND>(_hostWindow),_assetDatabase.projectRoot());
@@ -11688,14 +11915,14 @@ void EditorSession::rebuildComponentPropertyEditor()
         const wchar_t* titles[]={L"Play",L"Pause",L"Restart",L"Stop",L"Step"};
         for(int i=0;i<5;++i) {
             auto* b=new ayt::ui::Button(); b->setText(titles[i]); b->setId("particle_inspector_"+std::to_string(i));
-            b->setEnabled(_gameView.mode()==EditorMode::Edit);
+            b->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             b->setOnClicked([control,i] { control(i); }); row->addWidget(b,45);
         }
         propertyTarget->addWidget(row,28);
         addLabel(L"Preparing particle preview...",24,"particle_inspector_status");
         if(typeName=="ParticleEffectComponent") {
             auto* reload=new ayt::ui::Button(); reload->setText(L"Reload effect");
-            reload->setEnabled(_gameView.mode()==EditorMode::Edit);
+            reload->setEnabled(_gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
             reload->setOnClicked([this,id] {
                 if(_gameView.mode()!=EditorMode::Edit) return;
                 auto* world=hierarchyWorldMutable(); auto* e=world?world->findEntity(id):nullptr;
@@ -11726,6 +11953,8 @@ void EditorSession::rebuildComponentPropertyEditor()
             || field->hasAttribute(ayt::reflect::FieldAttribute::Hidden)) {
             continue;
         }
+        if (componentTypeName == "CameraControllerComponent" && std::string(field->getName()) == "targetName")
+            continue; // Legacy name-only wire compatibility; author targets with the stable selector.
         void* fieldValue = field->get(component);
         ayt::reflect::ITypeInfo* fieldType = field->getType();
         if (fieldValue == nullptr || fieldType == nullptr) continue;
@@ -12576,11 +12805,21 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
 
     ayt::entity::Entity* bestEntity = nullptr;
     float bestDistance = 1.0e30f;
+    auto cameraVisuals = buildEditorCameraVisuals(*world, _sceneCamera.frame(), viewport.height(),
+        viewport.width()/viewport.height(), selectedEntityId(), _cameraDisplayMode, _gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
+    for (const auto& visual:cameraVisuals) {
+        float distance;
+        if (hitEditorCameraVisual(visual,origin,direction,distance) && distance<bestDistance) {
+            bestDistance=distance; bestEntity=visual.entity;
+        }
+    }
     for (ayt::entity::Entity* entity : world->getAllEntities()) {
         auto* transform = entity != nullptr
             ? entity->getComponent<ayt::entity::Transform>() : nullptr;
         auto* meshComponent = entity != nullptr
             ? entity->getComponent<ayt::entity::MeshComponent>() : nullptr;
+        // Camera-only entities are picked by their displayed lens icon, never by a phantom sphere.
+        if (entity && entity->hasComponent<ayt::entity::PerspectiveCameraComponent>() && meshComponent==nullptr) continue;
         if (transform == nullptr || (meshComponent != nullptr
                                      && !meshComponent->visible)) {
             continue;
@@ -12595,8 +12834,7 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
             if (mesh != nullptr && mesh->hasBounds()) {
                 hasMeshBounds = true;
                 const ayt::math::Float4x4 worldMatrix =
-                    ayt::math::Transform::getMatrix(
-                        transform->position, transform->rotation, transform->scale);
+                    entity->worldMatrix();
                 const ayt::math::Float4x4 inverseWorld = worldMatrix.inverse_fast();
                 const ayt::math::FVector3 localOrigin =
                     inverseWorld.transformPoint(origin);
@@ -12627,8 +12865,9 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
             const float radius = 0.75f * std::max({
                 std::fabs(transform->scale.x), std::fabs(transform->scale.y),
                 std::fabs(transform->scale.z), 0.1f});
-            hit = intersectRaySphere(origin, direction, transform->position,
-                                     radius, distance);
+            const auto worldState = spatialWorldState(*entity);
+            hit = intersectRaySphere(origin, direction, worldState.position,
+                                     radius * std::max({std::fabs(worldState.scale.x),std::fabs(worldState.scale.y),std::fabs(worldState.scale.z),1.f}), distance);
         }
         if (hit && distance < bestDistance) {
             bestDistance = distance;
@@ -12666,8 +12905,7 @@ EditorGizmoHandle EditorSession::hitTestTransformGizmo(float x, float y)
     if (!viewportRay(x, y, origin, direction)) {
         return EditorGizmoHandle::None;
     }
-    const EditorTransformState state{
-        transform->position, transform->rotation, transform->scale};
+    const EditorTransformState state = spatialWorldState(*entity);
     const float worldScaleOverride = _sceneCamera.isTwoD()
         ? _sceneCamera.twoDViewHeight()
             / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
@@ -12701,8 +12939,7 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
     ayt::math::FVector3 direction{};
     if (!viewportRay(x, y, origin, direction)) return false;
 
-    const EditorTransformState state{
-        transform->position, transform->rotation, transform->scale};
+    const EditorTransformState state = spatialWorldState(*entity);
     const float worldScaleOverride = _sceneCamera.isTwoD()
         ? _sceneCamera.twoDViewHeight()
             / static_cast<float>(std::max(1u, _sceneCamera.viewportHeight()))
@@ -12716,6 +12953,7 @@ bool EditorSession::beginTransformGizmoDrag(EditorGizmoHandle handle,
     }
     _gizmoDragWorld = world;
     _gizmoDragEntityId = entity->getId();
+    _gizmoLocalBefore = {transform->position,transform->rotation,transform->scale};
     _gizmoHoverHandle = handle;
     syncTransformGizmoToRenderer();
     if (_repaintCallback) _repaintCallback();
@@ -12742,6 +12980,9 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
     EditorTransformState updated;
     if (_transformGizmo.update(
             origin, direction, x, y, updated)) {
+        if (entity->spatialParent()) {
+            if (!entity->setWorldMatrix(ayt::math::Transform::getMatrix(updated.position,updated.rotation,updated.scale))) return true;
+        } else {
         transform->setPosition(updated.position.x,
                                updated.position.y,
                                updated.position.z);
@@ -12752,6 +12993,7 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
         transform->setScale(updated.scale.x,
                             updated.scale.y,
                             updated.scale.z);
+        }
         refreshTransformInspector();
         syncTransformGizmoToRenderer();
         if (_repaintCallback) _repaintCallback();
@@ -12765,7 +13007,7 @@ void EditorSession::finishTransformGizmoDrag(bool commit)
 
     ayt::entity::World* world = _gizmoDragWorld;
     const uint32_t entityId = _gizmoDragEntityId;
-    const EditorTransformState before = _transformGizmo.before();
+    const EditorTransformState before = _gizmoLocalBefore;
     ayt::entity::Entity* entity = world != nullptr
         ? world->findEntity(entityId) : nullptr;
     auto* transform = entity != nullptr
@@ -12883,8 +13125,7 @@ void EditorSession::syncTransformGizmoToRenderer()
             ? entity->getComponent<ayt::entity::Transform>() : nullptr;
         if (world != nullptr && world == _selectionWorld
             && transform != nullptr) {
-            const EditorTransformState transformState{
-                transform->position, transform->rotation, transform->scale};
+            const EditorTransformState transformState = spatialWorldState(*entity);
             if (_sceneCamera.isTwoD()) {
                 _gizmoDisabledHandleMask = kTwoDGizmoDisabledHandleMask;
                 state.worldScaleOverride = _sceneCamera.twoDViewHeight()
@@ -12899,8 +13140,8 @@ void EditorSession::syncTransformGizmoToRenderer()
                         _gizmoDisabledHandleMask);
             }
             state.visible = true;
-            state.position = transform->position;
-            state.rotation = transform->rotation;
+            state.position = transformState.position;
+            state.rotation = transformState.rotation;
             state.localSpace = _localTransformSpace;
             state.activeHandle = static_cast<uint8_t>(
                 _transformGizmo.active()
@@ -12924,7 +13165,8 @@ void EditorSession::syncTransformGizmoToRenderer()
                 if (editor2DSelectionShape(*entity, _assetDatabase,
                                            aspect, shape)) {
                     const ayt::math::Float4x4 matrix =
-                        editor2DShapeMatrix(*transform, shape);
+                        (entity->spatialParent() ? entity->spatialParent()->worldMatrix() : ayt::math::Float4x4::identity())
+                            * editor2DShapeMatrix(*transform, shape);
                     const ayt::math::FVector2 localCorners[4] = {
                         {shape.localMin.x, shape.localMin.y},
                         {shape.localMax.x, shape.localMin.y},
@@ -13201,3 +13443,30 @@ void EditorSession::syncViewport() {
 }
 
 } // namespace ayt::editor
+
+namespace ayt::editor {
+void EditorSession::setCameraDisplayMode(EditorCameraDisplayMode mode) {
+    if (static_cast<unsigned>(mode)>2) mode=EditorCameraDisplayMode::Solid;
+    const bool changed=_cameraDisplayMode!=mode;
+    _cameraDisplayMode=mode;
+    const char* ids[]={"menu_camera_icons_solid","menu_camera_icons_wire","menu_camera_icons_hidden"};
+    const char* keys[]={"ui.editor.viewport.camera_solid","ui.editor.viewport.camera_wire","ui.editor.viewport.camera_hidden"};
+    const char* labels[]={"Camera Icons: Normal","Camera Icons: Wireframe","Camera Icons: Hidden"};
+    for(int i=0;i<3;++i) if(auto* item=dynamic_cast<ayt::ui::MenuItem*>(_ui.findById(ids[i]))) {
+        item->setText(localizedText(keys[i],labels[i]));
+        setEditorMenuToggleIcon(item,_engineAssetsRoot,static_cast<int>(mode)==i);
+    }
+    if(changed) { pushSceneCameraToRenderer(); if (_repaintCallback) _repaintCallback(); }
+}
+void EditorSession::buildCameraVisuals(ayt::render::RenderScene& scene) {
+    if (_shutdown || !_cameraVisualOwner || !_cameraVisualOwner->isReady() || !_cameraVisualRenderer) return;
+    const bool visible=_gameView.mode()==EditorMode::Edit && !_sceneCamera.isTwoD() && _sceneVisibility.meshes;
+    auto* world=visible?hierarchyWorldMutable():nullptr;
+    if(!world) return;
+    ayt::math::FRectangle bounds{};
+    if(!getViewportBounds(bounds)||bounds.height()<=0) return;
+    auto visuals=buildEditorCameraVisuals(*world,_sceneCamera.frame(),bounds.height(),bounds.width()/bounds.height(),
+        _selectionWorld==world?selectedEntityId():0,_cameraDisplayMode,true);
+    _cameraVisualRenderer->append(_cameraVisualOwner->renderer(),scene,_engineAssetsRoot,visuals,_cameraDisplayMode);
+}
+}
