@@ -3,7 +3,7 @@
 ## 2026-10-16 灯光演出文档接入
 
 当 `AYEDITOR_HAS_SEQUENCE` 启用时，`.lshow` 在 AssetDatabase 中有独立类型，归入
-Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema3 文件。
+Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema4 文件。
 双击资产走 `EditorDslExtension` 文本页，打开容量沿用 DSL 文档的 8 MiB 限制。
 保存前以 `decodeLightShow` 校验当前编辑缓冲区，失败时保留磁盘原件和脏状态；
 Compile 对未保存内容做格式检查，并以 0.5 世界单位阈值执行有界编队间距诊断。

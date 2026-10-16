@@ -236,6 +236,9 @@ TEST_CASE(light_show_asset_opens_in_editor_and_rejects_invalid_save) {
     CHECK(document!=nullptr);CHECK(document->language()==EditorDslLanguage::LightShowJson);
     CHECK(document->compile().success);
     const auto before=ayt::io::File::readAllText(first.absolutePath);
+    CHECK(before.find("\"version\": 4")!=std::string::npos);
+    CHECK(before.find("\"goboTexturePath\"")!=std::string::npos);
+    CHECK(before.find("\"shadowSoftness\"")!=std::string::npos);
     document->setSourceUtf8("{}");CHECK(!document->compile().success);
     CHECK(!document->save(&error));CHECK(!error.empty());
     CHECK(ayt::io::File::readAllText(first.absolutePath)==before);
