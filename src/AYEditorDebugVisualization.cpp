@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <set>
+#include <array>
 #if defined(AYEDITOR_HAS_COMBAT)
 #include <AYCombat/EntityIntegration.h>
 #endif
@@ -18,9 +19,31 @@ using namespace ayt::physics;
 using V=ayt::math::FVector3;
 namespace {
 uint64_t identity(const PhysicsDebugRecord& r) {return (uint64_t(r.dimension)<<32)|r.body;}
+std::vector<PhysicsDebugRecord> balance(std::vector<PhysicsDebugRecord> input) {
+    std::array<std::vector<PhysicsDebugRecord>,kPhysicsDebugCategoryCount> groups;
+    for(auto& row:input)if(size_t(row.category)<groups.size())groups[size_t(row.category)].push_back(std::move(row));
+    std::vector<PhysicsDebugRecord> output;output.reserve(input.size());
+    for(size_t index=0;;++index){bool any=false;for(auto& group:groups)if(index<group.size()){output.push_back(std::move(group[index]));any=true;}if(!any)break;}
+    return output;
+}
 bool finite(V v) {return std::isfinite(v.x)&&std::isfinite(v.y)&&std::isfinite(v.z);}
 }
+std::string EditorDebugVisualization::recordKey(const Record& r) {
+    return std::to_string(int(r.category))+":"+std::to_string(r.entityId)+":"+std::to_string(r.otherEntityId)+":"+std::to_string(int(r.dimension))+":"+std::to_string(r.body)+":"+std::to_string(r.collider)+":"+std::to_string(r.queryId)+":"+r.label;
+}
+const char* EditorDebugVisualization::categoryName(PhysicsDebugCategory category) {
+    static const char* names[]={"Collider","Query","Contact","Character","Motion","Joint","Camera","Skeleton","Ability region","Animation","Combat / stages","Lighting / render","Audio","Particle","2D decision","Deterministic physics","Paths / interactions","Checkpoints / respawn","Stats / calculations","Camera behavior","UI layout / routing","Input","Network","Sequence","Resources"};
+    const auto index=size_t(category);return index<std::size(names)?names[index]:"Unknown";
+}
+std::string EditorDebugVisualization::describe(const Record& r) {
+    std::string text=std::string(categoryName(r.category))+" | "+r.label+"\nEntity="+std::to_string(r.entityId);
+    if(uint32_t(r.category)<6 || r.category==PhysicsDebugCategory::Ability) {
+        text+=" body="+std::to_string(r.body)+" query="+std::to_string(r.queryId)+"\nDistance="+std::to_string(r.distance)+" mask="+std::to_string(r.layerMask)+"\nHit="+std::to_string(r.hit)+" status="+toString(r.status)+"\nPoint=("+std::to_string(r.hitPoint.x)+","+std::to_string(r.hitPoint.y)+","+std::to_string(r.hitPoint.z)+")\nNormal=("+std::to_string(r.normal.x)+","+std::to_string(r.normal.y)+","+std::to_string(r.normal.z)+")\nImpulse="+(r.impulseAvailable?std::to_string(r.impulse):"unavailable");
+    }
+    if(!r.details.empty())text+="\n"+r.details;return text;
+}
 bool EditorDebugVisualization::visible(const Record& r,uint32_t selection) const {
+    if(uint32_t(r.category)>=kPhysicsDebugCategoryCount)return false;
     const bool query=r.category==PhysicsDebugCategory::Query || r.category==PhysicsDebugCategory::Ability;
     const bool physical=uint32_t(r.category)<6;
     const bool layer=query?(options.layerMask&r.layerMask)!=0:!physical||(r.layer<32 && (options.layerMask&(1u<<r.layer)));
@@ -28,13 +51,19 @@ bool EditorDebugVisualization::visible(const Record& r,uint32_t selection) const
         (!options.selectedOnly || (selection && (r.entityId==selection || r.otherEntityId==selection || std::find(r.relatedEntities.begin(),r.relatedEntities.end(),selection)!=r.relatedEntities.end())));
 }
 void EditorDebugVisualization::update(std::vector<Record> incoming,uint64_t frame,float seconds) {
-    if(options.frozen && !stepRequested) return;
+    if(options.frozen && !stepRequested) {
+        _capturedCombatEvents.clear();
+        for(const auto& r:incoming)if((r.transientEvent || (r.category==PhysicsDebugCategory::Combat && r.completedAtUs)))_capturedCombatEvents.insert(recordKey(r));
+        return;
+    }
     if(options.frozen && frame==frameIndex) return;
+    incoming=balance(std::move(incoming));
     stepRequested=false;
     const bool next=frame!=frameIndex; frameIndex=frame;
     std::set<uint64_t> live;
-    for(auto& r:incoming) if(r.category==PhysicsDebugCategory::Motion && r.body) {
-        const auto key=identity(r);live.insert(key);
+    for(auto& r:incoming) if((r.category==PhysicsDebugCategory::Motion && r.body) ||
+        (r.category==PhysicsDebugCategory::Animation && r.entityId && r.queryId==0 && r.label.starts_with("Animation playback"))) {
+        const auto key=r.category==PhysicsDebugCategory::Motion?identity(r):(uint64_t(1)<<63)|r.entityId;live.insert(key);
         if(!_trails.contains(key) && _trails.size()>=256) {++droppedRecords;continue;}
         auto& trail=_trails[key];
         if(next && finite(r.anchor)) trail.push_back(r.anchor);
@@ -43,22 +72,36 @@ void EditorDebugVisualization::update(std::vector<Record> incoming,uint64_t fram
         if(trail.size()>1 && std::isfinite(seconds) && seconds>0) {
             const auto old=trail[trail.size()-2];
             r.lines.push_back({old,r.anchor,0xff00ff00});
-            r.lines.push_back({old,old+r.desiredVelocity*seconds,0xffff0000});
+            if(r.category==PhysicsDebugCategory::Motion)r.lines.push_back({old,old+r.desiredVelocity*seconds,0xffff0000});
         }
     }
     for(auto i=_trails.begin();i!=_trails.end();) if(!live.contains(i->first)) i=_trails.erase(i);else ++i;
+    std::set<std::string> events;
+    for(auto& r:incoming) if(uint32_t(r.category)>=9) {
+        if((r.transientEvent || (r.category==PhysicsDebugCategory::Combat && r.completedAtUs))) {
+            const auto key=recordKey(r);events.insert(key);
+            if(_capturedCombatEvents.contains(key))continue;
+        }
+        (void)contentHistory.recordGeometry(std::move(r));
+    }
+    _capturedCombatEvents=std::move(events);
+    std::erase_if(incoming,[](const auto& r){return uint32_t(r.category)>=9;});
+    for(auto& r:contentHistory.consumeRecords()) if(options.categories&(1u<<uint32_t(r.category))) incoming.push_back(std::move(r));
+    incoming=balance(std::move(incoming));
     records.clear();visibleLines=0;
     for(auto& r:incoming) {
-        if(records.size()>=PhysicsDebugDraw::kMaxRecords || r.lines.size()>PhysicsDebugDraw::kMaxLines-visibleLines) {++droppedRecords;continue;}
-        if(std::any_of(r.lines.begin(),r.lines.end(),[](auto& l){return !finite(l.from)||!finite(l.to);})) {++droppedRecords;continue;}
-        visibleLines+=r.lines.size();records.push_back(std::move(r));
+        if(records.size()>=PhysicsDebugDraw::kMaxRecords || r.lines.size()+r.screenLines.size()>PhysicsDebugDraw::kMaxLines-visibleLines) {++droppedRecords;continue;}
+        if(std::any_of(r.lines.begin(),r.lines.end(),[](auto& l){return !finite(l.from)||!finite(l.to);}) || std::any_of(r.screenLines.begin(),r.screenLines.end(),[](auto& l){return !finite(l.from)||!finite(l.to);})) {++droppedRecords;continue;}
+        visibleLines+=r.lines.size()+r.screenLines.size();records.push_back(std::move(r));
     }
 }
 void EditorDebugVisualization::clear(int category) {
-    if(category<0) {records.clear();_trails.clear();droppedRecords=0;visibleLines=0;return;}
+    if(category<0) {contentHistory.clear();_capturedCombatEvents.clear();inspectedKey.clear();records.clear();_trails.clear();droppedRecords=0;visibleLines=0;return;}
+    const auto prefix=std::to_string(category)+":";std::erase_if(_capturedCombatEvents,[&](const auto& key){return key.starts_with(prefix);});
+    contentHistory.clearCategory(static_cast<PhysicsDebugCategory>(category));
     std::erase_if(records,[category](const auto& r){return int(r.category)==category;});
-    if(category==int(PhysicsDebugCategory::Motion)) _trails.clear();
-    visibleLines=0;for(const auto& r:records) visibleLines+=r.lines.size();
+    if(category==int(PhysicsDebugCategory::Motion) || category==int(PhysicsDebugCategory::Animation)) _trails.clear();
+    visibleLines=0;for(const auto& r:records) visibleLines+=r.lines.size()+r.screenLines.size();
 }
 int EditorDebugVisualization::pick(const ayt::entity::CameraFrame& camera,const ayt::entity::CameraViewport& viewport,
     ayt::math::FVector2 pixel,uint32_t selection) const {

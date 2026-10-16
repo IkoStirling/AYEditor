@@ -88,7 +88,8 @@ TEST_CASE(debug_options_validate_without_requiring_renderer_or_native_world) {
     ayt::editor::EditorSession editor;ayt::editor::EditorDebugVisualizationOptions options;options.categories=0x1ff;
     CHECK(editor.setDebugVisualization(options));CHECK(editor.debugVisualizationOptions().categories==0x1ff);
     options.trailFrames=601;CHECK(!editor.setDebugVisualization(options));CHECK(editor.debugVisualizationOptions().trailFrames==120);
-    options.trailFrames=120;options.categories=1u<<12;CHECK(!editor.setDebugVisualization(options));
+    options.trailFrames=120;options.categories=ayt::physics::kPhysicsDebugAllCategories;CHECK(editor.setDebugVisualization(options));
+    options.categories=1u<<25;CHECK(!editor.setDebugVisualization(options));
     editor.clearDebugVisualization();
 }
 TEST_CASE(debug_card_is_nonmodal_and_can_reopen_without_duplicate_controls) {
@@ -97,8 +98,46 @@ TEST_CASE(debug_card_is_nonmodal_and_can_reopen_without_duplicate_controls) {
     auto options=editor.debugVisualizationOptions();options.categories=0x1ff;CHECK(editor.setDebugVisualization(options));
     editor.showDebugVisualizationPanel();
     auto* panel=editor.ui().findById("debug_visualization_panel");CHECK(panel!=nullptr);
-    CHECK(editor.ui().findById("debug_category_8")!=nullptr);CHECK(editor.ui().findById("debug_visualization_statistics")!=nullptr);
+    CHECK(editor.ui().findById("debug_category_8")!=nullptr);CHECK(editor.ui().findById("debug_category_14")!=nullptr);CHECK(editor.ui().findById("debug_category_24")!=nullptr);
+    CHECK(editor.ui().findById("debug_record_browser")!=nullptr);CHECK(editor.ui().findById("debug_visualization_statistics")!=nullptr);
     editor.showDebugVisualizationPanel();CHECK(editor.ui().findById("debug_visualization_panel")==panel);
     editor.shutdown();
+}
+TEST_CASE(animation_root_trails_are_bounded_and_category_clear_does_not_clear_physics) {
+    using namespace ayt::physics;
+    ayt::editor::EditorDebugVisualization model;model.options.categories=(1u<<9)|1;model.options.trailFrames=3;
+    PhysicsDebugDrawOptions options;options.enabled=true;CHECK(model.contentHistory.configure(options)==PhysResult::Ok);
+    PhysicsDebugRecord root;root.category=PhysicsDebugCategory::Animation;root.entityId=42;root.label="Animation playback | actor";
+    PhysicsDebugRecord collider;collider.category=PhysicsDebugCategory::Collider;collider.entityId=42;
+    for(uint64_t frame=1;frame<=5;++frame){root.anchor={float(frame),0,0};model.update({root,collider},frame,.1f);}
+    CHECK(model.records.size()==2);CHECK(model.records.back().lines.size()==3);
+    CHECK(model.records.back().lines[0].from.x==3);CHECK(model.records.back().lines[1].to.x==5);
+    model.clear(9);CHECK(model.records.size()==1);CHECK(model.records[0].category==PhysicsDebugCategory::Collider);
+}
+TEST_CASE(combat_history_does_not_duplicate_or_restart_timed_event_expiry) {
+    using namespace ayt::physics;static uint64_t now=100;
+    ayt::editor::EditorDebugVisualization model;model.options.categories=1u<<10;
+    model.contentHistory=PhysicsDebugDraw(+[](){return now;});
+    PhysicsDebugDrawOptions options;options.enabled=true;options.lifetime=DebugDrawLifetime::Timed;options.duration=ayt::time::Duration::fromUs(100);
+    CHECK(model.contentHistory.configure(options)==PhysResult::Ok);
+    PhysicsDebugRecord event;event.category=PhysicsDebugCategory::Combat;event.queryId=1;event.completedAtUs=100;
+    model.update({event},1,.1f);CHECK(model.records.size()==1);
+    now=150;model.update({event},2,.1f);CHECK(model.records.size()==1);
+    now=201;model.update({event},3,.1f);CHECK(model.records.empty());
+}
+TEST_CASE(new_state_categories_are_balanced_and_screen_geometry_is_owned) {
+    ayt::editor::EditorDebugVisualization model;model.options.categories=ayt::physics::kPhysicsDebugAllCategories;
+    ayt::physics::PhysicsDebugDrawOptions history;history.enabled=true;CHECK(model.contentHistory.configure(history)==ayt::physics::PhysResult::Ok);
+    ayt::physics::PhysicsDebugRecord native;native.category=ayt::physics::PhysicsDebugCategory::Collider;
+    std::vector<ayt::physics::PhysicsDebugRecord> rows(1024,native);ayt::physics::PhysicsDebugRecord ui;ui.category=ayt::physics::PhysicsDebugCategory::UI;ui.label="button";ui.screenLines.push_back({{1,2,0},{4,2,0},1});rows.push_back(ui);
+    model.update(std::move(rows),1,0);bool found=false;for(const auto& record:model.records)if(record.category==ui.category){found=true;CHECK(record.screenLines.size()==1);}
+    CHECK(found);CHECK(model.visibleLines==1);model.clear(int(ui.category));CHECK(model.visibleLines==0);
+}
+TEST_CASE(resource_events_do_not_repeat_or_extend_timed_history) {
+    using namespace ayt::physics;static uint64_t now=1;ayt::editor::EditorDebugVisualization model;model.options.categories=1u<<24;
+    model.contentHistory=PhysicsDebugDraw(+[](){return now;});PhysicsDebugDrawOptions options;options.enabled=true;options.lifetime=DebugDrawLifetime::Timed;options.duration=ayt::time::Duration::fromUs(10);CHECK(model.contentHistory.configure(options)==PhysResult::Ok);
+    PhysicsDebugRecord event;event.category=PhysicsDebugCategory::Resource;event.queryId=1;event.transientEvent=true;event.label="reload same path";
+    model.update({event},1,0);CHECK(model.records.size()==1);now=8;model.update({event},2,0);CHECK(model.records.size()==1);now=11;model.update({event},3,0);CHECK(model.records.empty());
+    event.queryId=2;model.update({event},4,0);CHECK(model.records.size()==1);
 }
 TEST_SUITE_END

@@ -3866,7 +3866,7 @@ void EditorSession::bindToolbar() {
         if(auto* item=viewportOptions->addItem(label)) { item->setId(id); item->setOnActivate(std::move(action)); }
     };
     addPhysicsItem(L"Debug Visualization...", "menu_debug_visualization", [this]() { showDebugVisualizationPanel(); });
-    addPhysicsItem(L"Enable All Debug Displays", "menu_debug_all", [this]() { auto o=debugVisualizationOptions();o.categories=0x1ff;(void)setDebugVisualization(o);showDebugVisualizationPanel(); });
+    addPhysicsItem(L"Enable All Debug Displays", "menu_debug_all", [this]() { auto o=debugVisualizationOptions();o.categories=ayt::physics::kPhysicsDebugAllCategories;(void)setDebugVisualization(o);showDebugVisualizationPanel(); });
     addPhysicsItem(L"Collision Shapes", "menu_physics_shapes", [this]() {
         (void)setPhysicsDebugDraw(!_physicsDebugColliders,_physicsDebugQueries,_physicsDebugLifetime,_physicsDebugSeconds);
     });
@@ -12517,7 +12517,8 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         const int index=_debugVisualization->pick(camera,{viewport.minX,viewport.minY,viewport.width(),viewport.height()},{x,y},_selection.entityId());
         if(index>=0) {
             const auto& r=_debugVisualization->records[size_t(index)];
-            const std::string text=r.label+"\nEntity="+std::to_string(r.entityId)+" body="+std::to_string(r.body)+" query="+std::to_string(r.queryId)+"\nDistance="+std::to_string(r.distance)+" mask="+std::to_string(r.layerMask)+"\nHit="+std::to_string(r.hit)+" status="+ayt::physics::toString(r.status)+"\nPoint=("+std::to_string(r.hitPoint.x)+","+std::to_string(r.hitPoint.y)+","+std::to_string(r.hitPoint.z)+")\nNormal=("+std::to_string(r.normal.x)+","+std::to_string(r.normal.y)+","+std::to_string(r.normal.z)+")\nImpulse="+(r.impulseAvailable?std::to_string(r.impulse):"unavailable");
+            const std::string text=EditorDebugVisualization::describe(r);
+            _debugVisualization->inspectedKey=EditorDebugVisualization::recordKey(r);
             _debugVisualizationDetail=ayt::ui::decodeUtf8Text(text);
             setInspectorHint(_debugVisualizationDetail);
             if(r.entityId) return world->findEntity(r.entityId);
@@ -12837,7 +12838,12 @@ void EditorSession::clearPhysicsDebugDraw()
 {
     if(auto* physics=ayt::physics::PhysicsSubSystem::findRegistered())
         if(auto* manager=physics->manager()) {manager->debugDraw().clear();(void)manager->setDebugSnapshotEnabled(false);}
-    if(auto* renderer=ayt::render::RendererSubSystem::findRegistered()) (void)renderer->renderer().setEditorDebugLines({});
+    if(auto* renderer=ayt::render::RendererSubSystem::findRegistered()) {
+        (void)renderer->renderer().setEditorDebugLines({});renderer->renderer().setDebugCaptureEnabled(false);
+    }
+    _ui.setDebugCaptureEnabled(false);
+    if(auto* root=_ui.getOverlayRoot())for(auto* child:root->getChildren())if(child && child->getId()=="debug_screen_overlay")child->setVisible(false);
+    clearServiceDebugHistory(hierarchyWorldMutable());
     if(_debugVisualization) _debugVisualization->clear();
     _debugVisualizationDetail.clear();
     _physicsDebugWorld=hierarchyWorld();

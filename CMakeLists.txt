@@ -67,6 +67,9 @@ if(WIN32)
 endif()
 
 set(SRC_FILES
+    src/AYEditorServicesDebug.cpp
+    src/AYEditorSimulationDebug.cpp
+    src/AYEditorRuntimeDebug.cpp
     src/AYEditorDebugVisualization.cpp
     src/AYEditorDebugVisualizationPanel.cpp
     src/AYEditorPhysicsDebugGeometry.cpp
@@ -316,6 +319,14 @@ target_link_libraries(${MODULE_NAME} PUBLIC AYEditor::CommandCore
     # need it and we don't want AYGameLoop dependency to leak.
     PRIVATE AYDeviceSubSystem)
 
+if(TARGET AYAbility::Entity)
+    target_link_libraries(AYEditor PRIVATE AYAbility::Entity)
+    target_compile_definitions(AYEditor PRIVATE AYEDITOR_HAS_ABILITY=1)
+endif()
+if(TARGET AYEntity::DeterminismHost)
+    target_link_libraries(AYEditor PRIVATE AYEntity::DeterminismHost)
+    target_compile_definitions(AYEditor PRIVATE AYEDITOR_HAS_DETERMINISTIC_DEBUG=1)
+endif()
 if(TARGET AYCombat::Entity)
     target_link_libraries(AYEditor PRIVATE AYCombat::Entity)
     target_compile_definitions(AYEditor PRIVATE AYEDITOR_HAS_COMBAT=1)

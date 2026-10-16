@@ -272,7 +272,7 @@ Logia checked inference recognizes project_event, persist and asset declarations
 ## Unified debug visualization (2026-10-15)
 
 Scene viewport options -> Debug Visualization... opens the nonmodal debug
-card; Enable All Debug Displays enables all nine categories. Individual
+card; Enable All Debug Displays enables all25 categories. Individual
 channels cover colliders, queries, contacts, character controllers, velocity
 and trails, joints, cameras, skeletons and abilities. The card offers physical
 layer-mask and selected-entity filters, x-ray/depth-tested drawing, freeze,
@@ -302,6 +302,18 @@ Verification: final audited full inventory 402/402 passed after the scroll-card
 layout and World replacement cleanup changes, including default module assembly.
 AYEditorShell_Demo built successfully. Final report:
 `out/debug-visualization-20261015/editor-final/038752a28cff433d9c6f9efc08ab1f54/cases.json`.
+
+## Debug content extension (2026-10-15)
+
+The first content extension added categories9..14 (the current25-category mask is0x1ffffff), covering animation, combat/stages, lighting/render, audio, particles and registered2D decisions. A record browser exposes geometry-free state and follows live details; geometry picking keeps physics details. New content shares bounded realtime/timed/persistent history, category clear, selected-only filter, freeze and root-bone trails. Combat events are deduplicated by source sequence and retain original completion times. Optional integrations are linked only when present. GPU particle readback and LOD selection remain unavailable and are explicitly labeled.
+
+Module-local regression sources were updated. Runtime tests and interactive editor acceptance are deferred by the current task request; previous validation reports cover the earlier baseline. These changes remain uncommitted until focused runtime checks are requested and pass.
+
+## Extended diagnostic observations (2026-10-15)
+
+Debug Visualization now exposes25 categories (bits0..24; kPhysicsDebugAllCategories=0x1ffffff). The new deterministic/services adapters read same-Session checkpoints and existing runtime snapshots for paths/interactions, respawn, stats, camera behavior, UI/input, network, sequences and resources. UI/input draw in a non-intercepting logical-screen overlay; world lines retain existing depth/picking behavior. New categories share freeze/history/clear and combined world+screen budgets. Category round-robin prevents early native records monopolizing the batch; service subquotas reserve calculations, input axes and network connections. Sources and deferred acceptance are documented in AYDocs/DEBUG-VISUALIZATION.md.
+
+Regression sources are included. Runtime tests and interactive editor acceptance are deferred for this content task; untested changes remain uncommitted.
 
 ## Shared audio processing and preview routing (2026-10-16)
 

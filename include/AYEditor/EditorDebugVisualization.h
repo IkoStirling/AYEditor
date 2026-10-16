@@ -2,7 +2,8 @@
 #include <cstdint>
 namespace ayt::editor {
 /// Bit order: colliders, queries, contacts, characters, motion, joints, cameras,
-/// skeletons, abilities. Settings belong to this editor session only.
+/// skeletons, abilities, animation, combat, lighting/render, audio, particles, 2D decisions;
+/// deterministic physics, paths/interactions, respawn, stats, camera behavior, UI, input, network, sequence, resources. Settings belong to this editor session only.
 struct EditorDebugVisualizationOptions {
     uint32_t categories = 0;
     uint32_t layerMask = 0xffffffffu;
