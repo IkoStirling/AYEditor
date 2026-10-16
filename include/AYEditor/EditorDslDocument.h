@@ -20,6 +20,7 @@ enum class EditorDslLanguage {
     Phoskia,
     Logia,
     ActorClassJson,
+    LightShowJson,
 };
 
 enum class EditorDslDiagnosticSeverity {

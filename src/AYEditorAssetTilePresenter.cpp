@@ -125,6 +125,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::GameFlow: return L"FLOW";
     case EditorAssetType::SkeletonMapping: return L"RIG";
     case EditorAssetType::Sequence: return L"SEQ";
+    case EditorAssetType::LightShow: return L"SHOW";
     case EditorAssetType::ParticleEffect: return L"VFX";
     case EditorAssetType::StatsRecipe: return L"STAT";
     case EditorAssetType::AvatarBundle: return L"AVATAR";
@@ -152,6 +153,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
     case EditorAssetType::ParticleEffect:
     case EditorAssetType::Animation:
     case EditorAssetType::Sequence:
+    case EditorAssetType::LightShow:
     case EditorAssetType::Skeleton:
     case EditorAssetType::SkeletonMapping:
         return EditorAssetTileCategory::Motion;

@@ -43,6 +43,7 @@ enum class EditorAssetType : std::uint8_t {
     ActorClass,
     AvatarBundle,
     AvatarPreset,
+    LightShow,
 };
 
 enum class EditorAssetOrigin : std::uint8_t {

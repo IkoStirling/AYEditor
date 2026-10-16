@@ -478,7 +478,8 @@ private:
             L"Saved DSL: "
             + ayt::ui::decodeUtf8Text(_document->displayPath()));
         if (_document->language() == EditorDslLanguage::Logia
-            || _document->language() == EditorDslLanguage::ActorClassJson) {
+            || _document->language() == EditorDslLanguage::ActorClassJson
+            || _document->language() == EditorDslLanguage::LightShowJson) {
             // The saved file is what the Play watcher will reload. Show
             // diagnostics immediately, including for invalid saved source.
             compile(true);
@@ -534,6 +535,10 @@ EditorDescriptor makeEditorDslDescriptor()
     descriptor.priority = 100;
     descriptor.extensions = {".phoskia", ".logia", ".act", ".ayactor"};
     descriptor.assetTypes = {"shader", "script", "actor-class"};
+#ifdef AYEDITOR_HAS_SEQUENCE
+    descriptor.extensions.push_back(".lshow");
+    descriptor.assetTypes.push_back("light show");
+#endif
     descriptor.createDocument =
         [](const EditorOpenRequest& request,
            std::string& error) -> std::shared_ptr<IEditorDocument> {

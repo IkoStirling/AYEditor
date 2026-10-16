@@ -12,6 +12,9 @@
 #include <AYEntity/components/ActorInstanceComponent.h>
 #include "AYScript/logia/EngineFunctions.h"
 #include "AYShader/Phoskia.h"
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include <AYSequence/LightShowAssetIO.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -188,6 +191,9 @@ EditorDslLanguage editorDslLanguageFromPath(
         if (extension == ".phoskia") return EditorDslLanguage::Phoskia;
         if (extension == ".logia") return EditorDslLanguage::Logia;
         if (ayt::asset_format::matchesPath(path, ayt::asset_format::Id::ActorClass)) return EditorDslLanguage::ActorClassJson;
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if (ayt::asset_format::matchesPath(path, ayt::asset_format::Id::LightShow)) return EditorDslLanguage::LightShowJson;
+#endif
     } catch (...) {
         // Invalid platform path syntax is simply not an editor DSL.
     }
@@ -200,6 +206,7 @@ const char* editorDslLanguageName(EditorDslLanguage language) noexcept
     case EditorDslLanguage::Phoskia: return "Phoskia";
     case EditorDslLanguage::Logia: return "Logia";
     case EditorDslLanguage::ActorClassJson: return "Actor Class";
+    case EditorDslLanguage::LightShowJson: return "Light Show";
     case EditorDslLanguage::Unknown: break;
     }
     return "DSL";
@@ -214,7 +221,7 @@ bool EditorDslDocument::open(const std::string& absolutePath,
         editorDslLanguageFromPath(absolutePath);
     if (language == EditorDslLanguage::Unknown) {
         if (error != nullptr) {
-            *error = "Only .phoskia, .logia and .act files can be opened in the code editor.";
+            *error = "Only supported shader, script and authoring JSON files can be opened in the code editor.";
         }
         return false;
     }
@@ -303,6 +310,12 @@ bool EditorDslDocument::save(std::string* error)
         if (error != nullptr) *error = "No DSL source is open.";
         return false;
     }
+#ifdef AYEDITOR_HAS_SEQUENCE
+    if (_language == EditorDslLanguage::LightShowJson) {
+        ayt::sequence::LightShow show;
+        if (!ayt::sequence::decodeLightShow(_source,show,error)) return false;
+    }
+#endif
     const std::string serialized = serializeForDisk();
     const bool written = serialized.empty()
         ? ayt::io::File::writeAllText(_absolutePath, serialized)
@@ -353,6 +366,35 @@ EditorDslCompileReport EditorDslDocument::compile() const
     }
 
     try {
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if (_language == EditorDslLanguage::LightShowJson) {
+            ayt::sequence::LightShow show;
+            std::string error;
+            report.success=ayt::sequence::decodeLightShow(_source,show,&error);
+            if (!report.success) {
+                report.diagnostics.push_back(EditorDslDiagnostic{
+                    EditorDslDiagnosticSeverity::Error,0,0,
+                    error.empty()?"Invalid light show":error,{}});
+                report.summary="Light show data is invalid.";
+                return report;
+            }
+            auto compiled=ayt::sequence::CompiledLightShow::compile(std::move(show));
+            ayt::sequence::FormationClearanceReport clearance;
+            if (!compiled->data().formations.empty()
+                && compiled->analyzeFormationClearance(.5f,100000,16,clearance)) {
+                if (!clearance.conflicts.empty())
+                    report.diagnostics.push_back(EditorDslDiagnostic{
+                        EditorDslDiagnosticSeverity::Warning,0,0,
+                        "Formation points approach within 0.5 units; inspect routes before flight.",{}});
+                if (!clearance.complete)
+                    report.diagnostics.push_back(EditorDslDiagnostic{
+                        EditorDslDiagnosticSeverity::Warning,0,0,
+                        "Clearance diagnostic reached its work limit; result is incomplete.",{}});
+            }
+            report.summary="Light show schema and authored values are valid.";
+            return report;
+        }
+#endif
         if (_language == EditorDslLanguage::ActorClassJson) {
             ayt::entity::ActorClassAsset actor;
             std::string error;

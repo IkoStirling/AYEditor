@@ -1,5 +1,14 @@
 # AYEditor
 
+## 灯光演出资源（2026-10-16）
+
+启用 `AY_ENABLE_SEQUENCE` 后，项目创建菜单提供 **New Light Show**，生成可直接打开的
+`shows/NewLightShow.lshow`。资源浏览器将 `.lshow` 归为 Light Show；双击进入主编辑器的
+文本页面。页面保存前按 AYSequence 的严格 schema 校验整个 JSON，错误内容不会覆盖磁盘文件；
+Compile 可显示数据错误和有界编队间距警告。文本页面沿用 8 MiB 文档上限；资源格式自身
+仍允许 128 MiB。三维预览、播放和灯具滑条仍由独立 `AYLightShow_Studio` 提供。
+证据：`Test_EditorSequence.cpp` 的 `light_show_asset_opens_in_editor_and_rejects_invalid_save`。
+
 ## 空间与数据实体作者流程（2026-10-14）
 
 创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，

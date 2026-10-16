@@ -1,5 +1,14 @@
 # AYEditor Design
 
+## 2026-10-16 灯光演出文档接入
+
+当 `AYEDITOR_HAS_SEQUENCE` 启用时，`.lshow` 在 AssetDatabase 中有独立类型，归入
+Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema3 文件。
+双击资产走 `EditorDslExtension` 文本页，打开容量沿用 DSL 文档的 8 MiB 限制。
+保存前以 `decodeLightShow` 校验当前编辑缓冲区，失败时保留磁盘原件和脏状态；
+Compile 对未保存内容做格式检查，并以 0.5 世界单位阈值执行有界编队间距诊断。
+此处是主编辑器的资源管理与 JSON 编辑入口，独立 Studio 承担三维灯光预览和可视化参数调整。
+
 ## 空间与数据实体作者流程（2026-10-14）
 
 创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，

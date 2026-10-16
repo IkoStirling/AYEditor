@@ -379,6 +379,7 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::ActorClass: return "Actor Class";
     case EditorAssetType::AvatarBundle: return "Avatar Bundle";
     case EditorAssetType::AvatarPreset: return "Avatar Preset";
+    case EditorAssetType::LightShow: return "Light Show";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -415,6 +416,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         case Id::Texture: return EditorAssetType::Texture;
         case Id::Scene: return EditorAssetType::Scene;
         case Id::SceneSequence: return EditorAssetType::Sequence;
+        case Id::LightShow: return EditorAssetType::LightShow;
         case Id::Animation: return EditorAssetType::Animation;
         case Id::Skeleton: return EditorAssetType::Skeleton;
         case Id::RigProfile: return EditorAssetType::SkeletonMapping;

@@ -6383,6 +6383,7 @@ bool EditorSession::openAsset(EditorAssetId assetId)
 #endif
 #ifdef AYEDITOR_HAS_SEQUENCE
     case EditorAssetType::Sequence:
+    case EditorAssetType::LightShow:
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE
     case EditorAssetType::ParticleEffect:
@@ -6399,6 +6400,7 @@ bool EditorSession::openAsset(EditorAssetId assetId)
             : kEditorAudioTimelineExtensionId;
 #ifdef AYEDITOR_HAS_SEQUENCE
         if (record->type == EditorAssetType::Sequence) request.preferredEditorId = kEditorSequenceExtensionId;
+        if (record->type == EditorAssetType::LightShow) request.preferredEditorId = kEditorDslExtensionId;
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE
         if(record->type==EditorAssetType::ParticleEffect) request.preferredEditorId=kEditorParticleExtensionId;
@@ -9292,6 +9294,9 @@ void EditorSession::bindMenuBar() {
 #ifdef AYEDITOR_HAS_SEQUENCE
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_sequence", L"New Scene Sequence")) {
             item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::Sequence); });
+        }
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_light_show", L"New Light Show")) {
+            item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::LightShow); });
         }
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE

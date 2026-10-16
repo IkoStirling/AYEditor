@@ -2,6 +2,8 @@
 #include <AYEditor/EditorAssetDatabase.h>
 #include <AYEditor/EditorProjectAssetFactory.h>
 #include <AYEditor/EditorSequenceDocument.h>
+#include <AYEditor/EditorDslDocument.h>
+#include <AYEditor/EditorDslExtension.h>
 #include <AYEditor/EditorWorkspace.h>
 #include <AYEntity.h>
 #include <AYEntity/EntityModule.h>
@@ -11,6 +13,7 @@
 #include <AYResource/assetsImpl/Animation.h>
 #include <AYScene.h>
 #include <AYSequence/SequenceAssetIO.h>
+#include <AYSequence/LightShowAssetIO.h>
 #include <AYTest.h>
 #include <AYUI/Authoring/DopeSheet.h>
 #include <AYUI/Button.h>
@@ -215,6 +218,32 @@ TEST_CASE(asset_factory_and_double_click_descriptor_route_sequence) {
     CHECK(d->id == kEditorSequenceExtensionId);
     std::string error;
     CHECK(d->createDocument(request, error) != nullptr);
+}
+TEST_CASE(light_show_asset_opens_in_editor_and_rejects_invalid_save) {
+    Fixture f;
+    const auto first=createEditorProjectAsset(f.root.string(),EditorAssetType::LightShow);
+    const auto second=createEditorProjectAsset(f.root.string(),EditorAssetType::LightShow);
+    CHECK(first.success);CHECK(second.success);CHECK(first.absolutePath!=second.absolutePath);
+    CHECK(classifyEditorAssetPath(first.absolutePath)==EditorAssetType::LightShow);
+    LightShow loaded;CHECK(loadLightShow(first.absolutePath,loaded));CHECK(loaded.fixtures.size()==1);
+    EditorExtensionRegistry registry;CHECK(registerEditorDslExtension(registry));
+    EditorOpenRequest request{first.absolutePath};
+    const auto* descriptor=registry.resolve(request);CHECK(descriptor!=nullptr);
+    CHECK(descriptor->id==kEditorDslExtensionId);
+    std::string error;
+    auto opened=descriptor->createDocument(request,error);
+    auto document=std::dynamic_pointer_cast<EditorDslDocument>(opened);
+    CHECK(document!=nullptr);CHECK(document->language()==EditorDslLanguage::LightShowJson);
+    CHECK(document->compile().success);
+    const auto before=ayt::io::File::readAllText(first.absolutePath);
+    document->setSourceUtf8("{}");CHECK(!document->compile().success);
+    CHECK(!document->save(&error));CHECK(!error.empty());
+    CHECK(ayt::io::File::readAllText(first.absolutePath)==before);
+    loaded.name="Edited Light Show";
+    std::string edited;CHECK(encodeLightShow(loaded,edited));
+    document->setSourceUtf8(edited);CHECK(document->save(&error));CHECK(!document->isDirty());
+    LightShow saved;CHECK(loadLightShow(first.absolutePath,saved));
+    CHECK(saved.name=="Edited Light Show");
 }
 TEST_CASE(isolated_scene_preview_never_changes_author_scene_or_active_world) {
     Fixture f(true);
