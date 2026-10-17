@@ -1909,3 +1909,11 @@ real camera assets and live material/mesh handles. SDK doctor:116 capabilities,
 53 modules,82 searches,467 documented entry symbols,0 errors/0 warnings.
 Reports are under out/camera-editor in the source checkout. Native Computer Use
 interaction and visual acceptance remain deferred; no screenshot acceptance is claimed.
+
+## 2026-10-18 灯光关键帧编排栏
+
+启用Sequence的.lshow文本页新增结构化编排栏。目标字段支持all、group:组名、灯具数字ID
+或formation；随后填写源秒数与目标秒数，使用Move/Copy/Delete或Step/Linear/Smooth。
+操作解码当前未保存缓冲区，调用AYSequence::EditorCore的editLightShowKeys，严格编码成功
+且不超过8MiB后，以一次TextArea插入替换整个选区；一次Undo恢复原缓冲区，Redo重放。
+冲突、非法JSON和超限失败不改文本或磁盘，文件仍须显式保存。三维视口仍由独立Studio提供。

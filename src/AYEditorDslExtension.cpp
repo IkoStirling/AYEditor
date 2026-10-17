@@ -6,6 +6,13 @@
 #include "AYUI/Box.h"
 #include "AYUI/Button.h"
 #include "AYUI/TextArea.h"
+#include "AYUI/TextInput.h"
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include <AYSequence/LightShowAuthoring.h>
+#include <AYSequence/LightShowAssetIO.h>
+#endif
+#include <charconv>
+#include <cmath>
 #include "AYUI/TextLabel.h"
 #include "AYUI/UnicodeText.h"
 #include "AYUI/Widget.h"
@@ -225,6 +232,7 @@ public:
             || (_document && _document->language() == EditorDslLanguage::Logia
                 && (commandId == kEditorLogiaCompleteCommand || commandId == kEditorLogiaDefinitionCommand
                     || commandId.starts_with("logia.debug." )))
+            || (_document && _document->language() == EditorDslLanguage::LightShowJson && commandId.starts_with("lightshow.key."))
             || commandId == "edit.undo"
             || commandId == "edit.redo";
     }
@@ -247,6 +255,9 @@ public:
     {
         if (!canExecuteCommand(commandId)) return false;
         if (commandId == "file.save") return save();
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if(commandId.starts_with("lightshow.key."))return lightShowKeyCommand(commandId);
+#endif
         if (commandId == kEditorLogiaCompleteCommand) { complete(); return true; }
         if (commandId == kEditorLogiaDefinitionCommand) { goToDefinition(); return true; }
         if (commandId.starts_with("logia.debug.")) { debugCommand(commandId); return true; }
@@ -261,6 +272,47 @@ public:
     }
 
 private:
+#ifdef AYEDITOR_HAS_SEQUENCE
+    bool lightShowKeyCommand(const std::string& id) {
+        if(!_source||!_showTarget||!_showFrom||!_showTo)return false;
+        syncSourceFromWidget();std::string error;ayt::sequence::LightShow data,edited;
+        const auto reject=[&](const std::string& text){_status->setText(ayt::ui::decodeUtf8Text(text));_host.requestRepaint();return false;};
+        if(!ayt::sequence::decodeLightShow(_document->sourceUtf8(),data,&error))return reject(error);
+        double from=0,to=0;
+        const auto parse=[](const std::wstring& text,double& result){
+            const auto value=encodeUtf8(text);const auto [end,ec]=std::from_chars(value.data(),value.data()+value.size(),result);
+            return ec==std::errc{}&&end==value.data()+value.size()&&std::isfinite(result);
+        };
+        if(!parse(_showFrom->getText(),from))return reject("Enter a source time in seconds");
+        using Op=ayt::sequence::LightShowKeyEdit;using Mode=ayt::sequence::ShowInterpolation;
+        auto operation=Op::Interpolation;auto mode=Mode::Linear;
+        if(id=="lightshow.key.move")operation=Op::Move;
+        else if(id=="lightshow.key.copy")operation=Op::Copy;
+        else if(id=="lightshow.key.delete")operation=Op::Remove;
+        else if(id=="lightshow.key.step")mode=Mode::Step;
+        else if(id=="lightshow.key.smooth")mode=Mode::Smooth;
+        else if(id!="lightshow.key.linear")return false;
+        if(operation==Op::Move||operation==Op::Copy){if(!parse(_showTo->getText(),to))return reject("Enter a destination time in seconds");}
+        else to=from;
+        const auto target=encodeUtf8(_showTarget->getText());std::vector<uint32_t> ids;
+        const bool formations=target=="formation";
+        if(!formations){
+            if(target=="all"){for(const auto& track:data.fixtures)ids.push_back(track.id);}
+            else if(target.starts_with("group:")){for(const auto& track:data.fixtures)if(track.group==target.substr(6))ids.push_back(track.id);}
+            else {
+                uint32_t value=0;const auto [end,ec]=std::from_chars(target.data(),target.data()+target.size(),value);
+                if(ec!=std::errc{}||end!=target.data()+target.size())return reject("Target: all, group:name, fixture ID, or formation");
+                ids.push_back(value);
+            }
+        }
+        if(!ayt::sequence::editLightShowKeys(data,ids,formations,from,to,operation,mode,edited,&error))return reject(error);
+        std::string bytes;if(!ayt::sequence::encodeLightShow(edited,bytes,&error))return reject(error);
+        const auto text=ayt::ui::decodeUtf8Text(bytes);
+        if(bytes.size()>8u*1024u*1024u||text.size()>_source->getMaxLength())return reject("Edited show exceeds the 8 MiB text editor limit");
+        if(_source->getText()!=text){_source->selectAll();_source->insertText(text);syncSourceFromWidget();}
+        _status->setText(L"Key edit applied; Undo restores the previous buffer");_host.requestRepaint();return true;
+    }
+#endif
     void debugCommand(const std::string& id) {
         if(!_source || !_document)return;
         syncSourceFromWidget();
@@ -347,6 +399,24 @@ private:
             root->addWidget(debugBar,26.0f);
         }
 
+#ifdef AYEDITOR_HAS_SEQUENCE
+        if(_document->language()==EditorDslLanguage::LightShowJson){
+            auto* bar=new ayt::ui::HBox();bar->setSpacing(4);
+            const auto field=[&](const wchar_t* label,const wchar_t* value,float width){
+                auto* input=new ayt::ui::TextInput();input->setText(value);input->setAccessibilityLabel(label);bar->addWidget(input,width);return input;
+            };
+            const auto caption=[&](const wchar_t* text,float width){auto* label=new ayt::ui::TextLabel();label->setText(text);bar->addWidget(label,width);};
+            caption(L"Target",44);_showTarget=field(L"Light show target: all, group:name, fixture ID, formation",L"all",160);
+            caption(L"From (s)",62);_showFrom=field(L"Light show source seconds",L"0",75);
+            caption(L"To (s)",48);_showTo=field(L"Light show destination seconds",L"1",75);
+            root->addWidget(bar,26);auto* actions=new ayt::ui::HBox();actions->setSpacing(4);
+            for(const auto& [label,action]:{std::pair{L"Move","move"},{L"Copy","copy"},{L"Delete","delete"},{L"Step","step"},{L"Linear","linear"},{L"Smooth","smooth"}}){
+                auto* button=new ayt::ui::Button();button->setText(label);button->setAccessibilityLabel(std::wstring(L"Light show key ")+label);
+                button->setOnClicked([this,id=std::string("lightshow.key.")+action]{lightShowKeyCommand(id);});actions->addWidget(button,62);
+            }
+            root->addWidget(actions,26);
+        }
+#endif
         _source = new ayt::ui::TextArea();
         _source->setWordWrap(false);
         _source->setLineHeight(17.0f);
@@ -519,6 +589,7 @@ private:
     ayt::ui::TextArea* _diagnostics = nullptr;
     ayt::ui::TextLabel* _status = nullptr;
     ayt::ui::Menu* _completionMenu = nullptr;
+    ayt::ui::TextInput *_showTarget=nullptr,*_showFrom=nullptr,*_showTo=nullptr;
 };
 
 } // namespace
