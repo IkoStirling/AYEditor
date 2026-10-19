@@ -1,5 +1,8 @@
 # AYEditor
 
+Value Bands新增到颜色映射选择，面板说明最大RGB分量分阶；Cel Ink/Cel Paint可直接选为创作起点。
+18项选择和偏好恢复共用Renderer preset count，schema8偏好内嵌look v4；结构布局仍为source ABI37。
+
 ## 从参考图创作色板（2026-10-19）
 
 在Assets选中PNG/JPG/TGA等源图，Render面板设置2..16色并点“从选中图片创建风格”。
@@ -20,11 +23,11 @@ File → New Render Look把当前参数存成`Assets/looks/NewLook.rsl`，重名
 
 Render面板增加独立时间反馈开关、残影/整帧停格/分块刷新模式，历史混合、周期、块大小、
 偏移和种子按适用模式展开；隐藏控件保留值。Reset history只重置艺术历史，不改TAA或曝光。
-偏好仍用schema8、作品look写schema3并读1/2/3；Source ABI37，消费方必须完整重编。
+偏好仍用schema8、作品look写schema4并读1/2/3/4；Source ABI37，消费方必须完整重编。
 
 ## Render Style 创作（2026-10-19）
 
-Render面板提供十六套起点预设、像素/RGB/双色/自定义2..16色板、印刷和轮廓控制。
+Render面板提供十八套起点预设、像素/RGB/双色/自定义2..16色板、印刷和轮廓控制。
 颜色使用#RRGGBB，色板为空格分隔2..16项；非法编辑保留既有配置并显示原因。
 文件路径支持当前项目相对路径或项目内绝对路径，保存/加载UTF-8 `.rsl`，保存可创建项目内父目录；
 拒绝项目外路径及符号链接逃逸。Reset恢复默认关闭配置，加载失败不改变当前look。

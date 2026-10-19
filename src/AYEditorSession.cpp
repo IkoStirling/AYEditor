@@ -8063,7 +8063,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     if (!preferences.colorStylizationLook.empty())
         ayt::render::parseColorStylizationLook(preferences.colorStylizationLook,_renderStyleLook);
     syncColorStylizationPanel();
-    setCombo("cmb_color_stylization_preset", std::clamp(preferences.colorStylizationPreset,0,15));
+    setCombo("cmb_color_stylization_preset", std::clamp(preferences.colorStylizationPreset,0,int(ayt::render::kColorStylizationPresetCount)-1));
     setCheck("chk_color_stylization", preferences.colorStylizationEnabled);
     setCheck("chk_style_pixelation", preferences.pixelationEnabled);
     setCheck("chk_style_posterization", preferences.posterizationEnabled);

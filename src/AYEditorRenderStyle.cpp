@@ -48,6 +48,7 @@ void updateVisibility(ayt::ui::UIManager& ui,const ColorStylizationSettings& s) 
     pair("pixel_size",s.pixelationEnabled);
     const bool palette=s.colorMapping==StylizationColorMapping::FixedPalette;
     const bool duo=s.colorMapping==StylizationColorMapping::Duotone;
+    show("lbl_style_value_hint",s.colorMapping==StylizationColorMapping::ValueBands);
     show("chk_style_posterization",!palette);pair("color_levels",!palette && s.posterizationEnabled);
     pair("dither_strength",palette || s.posterizationEnabled);
     for(const char* name:{"shadow","highlight","palette"}) {
@@ -238,7 +239,7 @@ void EditorSession::bindColorStylizationPanel() {
     if(auto* w=widget<ayt::ui::ComboBox>(_ui,"cmb_color_stylization_preset"))
         w->setOnSelectionChanged([this](int index){
             if(_applyingPreferences || _syncingRenderStyle)return;
-            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,15))));
+            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,int(kColorStylizationPresetCount)-1))));
         });
     for(const char* id:{"sld_style_pixel_size","sld_style_color_levels","sld_style_dither_strength",
         "sld_style_print_spacing","sld_style_print_angle","sld_style_print_strength","sld_style_print_gamma","sld_style_outline_width",

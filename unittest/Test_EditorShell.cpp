@@ -1301,6 +1301,22 @@ TEST_CASE(render_style_unchanged_color_focus_preserves_imported_float_precision)
     session.shutdown();
 }
 
+TEST_CASE(value_band_presets_and_preferences_restore_extended_mapping) {
+    MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+    desc.uiBackend=&backend;desc.layoutPath=resolveEditorShellLayoutPath();CHECK(session.initialize(desc));
+    auto* presets=dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_stylization_preset"));
+    CHECK(presets!=nullptr);if(presets)presets->setSelectedIndexAndNotify(int(ayt::render::ColorStylizationPreset::CelPaint));
+    const auto look=session.renderStyleLook();CHECK(look.colorMapping==ayt::render::StylizationColorMapping::ValueBands);
+    CHECK(look.colorLevels==6);CHECK(look.outlineMode==ayt::render::StylizationOutlineMode::Depth);
+    auto* hint=session.ui().findById("lbl_style_value_hint");CHECK(hint!=nullptr);if(hint)CHECK(hint->isVisible());
+    const auto saved=session.currentPreferences();session.shutdown();
+    MockRenderer secondBackend;EditorSession second;desc.uiBackend=&secondBackend;desc.preferences=saved;
+    CHECK(second.initialize(desc));CHECK(second.renderStyleLook().colorMapping==ayt::render::StylizationColorMapping::ValueBands);
+    presets=dynamic_cast<ComboBox*>(second.ui().findById("cmb_color_stylization_preset"));CHECK(presets!=nullptr);
+    if(presets)CHECK(presets->getSelectedIndex()==int(ayt::render::ColorStylizationPreset::CelPaint));
+    second.shutdown();
+}
+
 TEST_CASE(editor_freecam_wheel_zoom_dollies_along_view_direction) {
     EditorFreecam camera;
     const ayt::math::FVector3 initialEye = camera.eye();
