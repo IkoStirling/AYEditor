@@ -1,10 +1,12 @@
 #include "AYTest.h"
+#include <chrono>
 #include "fixtures/EditorShellLayout.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
 #ifdef AYEDITOR_HAS_AVATAR
 #include "AYEditor/EditorAvatarDocument.h"
 #endif
 #include "AYEditor/EditorSession.h"
+#include "AYRenderer/ColorStylizationLook.h"
 #include "AYEditor/EditorUiLayoutExtension.h"
 #include "AYEditor/EditorUiFlowExtension.h"
 #include "AYEditor/EditorSpriteAnimationExtension.h"
@@ -1175,6 +1177,48 @@ TEST_CASE(editor_color_stylization_presets_custom_values_and_preferences) {
         }
         EditorPreferences changed=restored; changed.ditherStrength=.5f;
         CHECK(changed!=restored);
+        session.shutdown();
+    }
+}
+
+TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
+    namespace fs=std::filesystem;
+    const auto root=fs::temp_directory_path()/("ay_render_look_"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root/"Assets");
+    struct Cleanup{fs::path path;~Cleanup(){std::error_code error;fs::remove_all(path,error);}} cleanup{root};
+    EditorPreferences saved;
+    {
+        MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+        desc.uiBackend=&backend;desc.layoutPath=resolveEditorShellLayoutPath();desc.projectRoot=root.string();
+        CHECK(session.initialize(desc));
+        auto look=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::Blueprint);
+        look.palette[15]={.25f,.5f,.75f};look.outlineWidth=3.5f;
+        session.setRenderStyleLook(look);
+        const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
+        std::string error;
+        CHECK(session.saveRenderStyleLook("Assets/workshop.rsl",&error));CHECK(error.empty());
+        CHECK_FALSE(session.saveRenderStyleLook("../outside.rsl",&error));CHECK_FALSE(error.empty());
+        CHECK_FALSE(session.saveRenderStyleLook("Assets/not-a-look.json",&error));
+        session.setRenderStyleLook({});
+        CHECK_FALSE(session.loadRenderStyleLook("Assets/missing.rsl",&error));
+        CHECK_FALSE(session.renderStyleLook().enabled);
+        CHECK(session.loadRenderStyleLook("Assets/workshop.rsl",&error));
+        CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==expected);
+        auto* pattern=dynamic_cast<ComboBox*>(session.ui().findById("cmb_style_print"));
+        CHECK(pattern!=nullptr);if(pattern)pattern->setSelectedIndexAndNotify(3);
+        CHECK(session.renderStyleLook().printPattern==ayt::render::StylizationPrintPattern::CrossHatch);
+        saved=session.currentPreferences();CHECK_FALSE(saved.colorStylizationLook.empty());
+        session.shutdown();
+    }
+    {
+        MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+        desc.uiBackend=&backend;desc.layoutPath=resolveEditorShellLayoutPath();desc.preferences=saved;
+        CHECK(session.initialize(desc));
+        auto restored=session.renderStyleLook();
+        CHECK(restored.colorMapping==ayt::render::StylizationColorMapping::Duotone);
+        CHECK(restored.printPattern==ayt::render::StylizationPrintPattern::CrossHatch);
+        CHECK_FLOAT_EQ(restored.outlineWidth,3.5f,1e-5f);
+        CHECK_FLOAT_EQ(restored.palette[15].b,.75f,1e-5f);
         session.shutdown();
     }
 }

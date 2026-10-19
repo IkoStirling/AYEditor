@@ -75,6 +75,7 @@ set(SRC_FILES
     src/AYEditorPhysicsDebugGeometry.cpp
     src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
+    src/AYEditorRenderStyle.cpp
     src/AYEditorGameView.cpp
     src/AYEditorPlayRuntime.cpp
     src/AYEditorApp.cpp
@@ -268,7 +269,7 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=34)
+    AYEDITOR_SOURCE_ABI_VERSION=35)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

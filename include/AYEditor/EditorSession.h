@@ -10,6 +10,7 @@
 #include "AYEditor/EditorSelection.h"
 #include "AYEditor/EditorTransformGizmo.h"
 #include "AYEditor/EditorPreferences.h"
+#include "AYRenderer/ColorStylizationSettings.h"
 #include "AYEditor/EditorAssetDatabase.h"
 #include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/ImportedCharacterMapper.h"
@@ -261,6 +262,12 @@ public:
     // Returns false for non-DSL records or when the source cannot be read.
     bool openDslAsset(EditorAssetId assetId);
     bool openAsset(EditorAssetId assetId);
+    /// Owner-thread look authoring. File commands accept project-contained .rsl
+    /// paths only; failures retain the current settings and report a reason.
+    ayt::render::ColorStylizationSettings renderStyleLook() const;
+    void setRenderStyleLook(const ayt::render::ColorStylizationSettings& settings);
+    bool saveRenderStyleLook(const std::string& path, std::string* error = nullptr);
+    bool loadRenderStyleLook(const std::string& path, std::string* error = nullptr);
     std::size_t openDslDocumentCount() const noexcept;
     bool openTilemapEditor(const std::string& path = {});
     bool openUiLayoutEditor(const std::string& path = {});
@@ -412,6 +419,8 @@ private:
     void deleteSelectedEntity();
     void applyRenderSettingsFromPanel();
     void applyColorStylizationFromPanel();
+    void bindColorStylizationPanel();
+    void syncColorStylizationPanel();
     void applyPreferences(const EditorPreferences& preferences);
     EditorPreferences capturePreferences() const;
     void pollPreferences(float dtSeconds);
@@ -844,6 +853,8 @@ private:
     ayt::render::RendererSubSystem* _cameraVisualOwner = nullptr;
     std::unique_ptr<EditorCameraVisualRenderer> _cameraVisualRenderer;
     void buildCameraVisuals(ayt::render::RenderScene& scene);
+    ayt::render::ColorStylizationSettings _renderStyleLook;
+    bool _syncingRenderStyle = false;
 
 };
 

@@ -373,8 +373,9 @@ ayt::editor::EditorPreferences loadEditorPreferences(
     out.colorGradingStrength = preferenceFloat(
         saved, "Editor.Render.ColorGrading.Strength",
         out.colorGradingStrength);
+    out.colorStylizationLook=saved.getString("Editor.Render.ColorStylization.Look",{});
     out.colorStylizationEnabled=saved.getBool("Editor.Render.ColorStylization.Enabled",out.colorStylizationEnabled);
-    out.colorStylizationPreset=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.Preset",out.colorStylizationPreset)),0,3);
+    out.colorStylizationPreset=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.Preset",out.colorStylizationPreset)),0,9);
     out.pixelationEnabled=saved.getBool("Editor.Render.ColorStylization.Pixelation",out.pixelationEnabled);
     out.posterizationEnabled=saved.getBool("Editor.Render.ColorStylization.Posterization",out.posterizationEnabled);
     out.pixelSize=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.PixelSize",out.pixelSize)),1,64);
@@ -455,6 +456,7 @@ bool saveEditorPreferences(const std::string& path,
                   value.colorGradingPreset);
     config.setFloat("Editor.Render.ColorGrading.Strength",
                     value.colorGradingStrength);
+    config.setString("Editor.Render.ColorStylization.Look",value.colorStylizationLook);
     config.setBool("Editor.Render.ColorStylization.Enabled",value.colorStylizationEnabled);
     config.setInt("Editor.Render.ColorStylization.Preset",value.colorStylizationPreset);
     config.setBool("Editor.Render.ColorStylization.Pixelation",value.pixelationEnabled);

@@ -1,5 +1,17 @@
 # AYEditor
 
+## Render Style 创作（2026-10-19）
+
+Render面板提供十套起点预设、像素/RGB/双色/自定义2..16色板、印刷和轮廓控制。
+颜色使用#RRGGBB，色板为空格分隔2..16项；非法编辑保留既有配置并显示原因。
+文件路径支持当前项目相对路径或项目内绝对路径，保存/加载`.rsl`，已有父目录必须存在；
+拒绝项目外路径及符号链接逃逸。Reset恢复默认关闭配置，加载失败不改变当前look。
+这些操作可由`renderStyleLook`、`setRenderStyleLook`、`saveRenderStyleLook`、`loadRenderStyleLook`驱动。
+作品文件独立于Scene和用户偏好；schema8偏好通过Renderer版本化serializer保存全部参数，
+旧schema7标量继续迁移。Source ABI35；完整重编消费方，避免结构偏移不一致。
+颜色与轮廓绑定实现移至`AYEditorRenderStyle.cpp`，不继续向主Session TU堆积参数转换。
+
+
 ## 空间与数据实体作者流程（2026-10-14）
 
 创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，

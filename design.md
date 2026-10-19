@@ -1913,3 +1913,14 @@ EditorPreferences schema7 在尾部追加7个字段，旧文件缺字段时保�
 Editor.Render.ColorStylization.* 通过现有用户配置保存，不改变场景资源格式。
 此处增加结构大小，source ABI 从33升到34，跨 demo/library 的宿主须同步重新编译。单测见 Test_EditorShell.cpp 的
 editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/再初始化覆盖自定义值。
+
+### Render Style authoring boundary (2026-10-19)
+
+EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in
+AYEditorRenderStyle.cpp and synchronize under a local reentrancy guard; loading preferences never
+reapplies a preset. Advanced preferences reuse the renderer's strict look serializer instead of
+introducing parallel conversion keys for every control. Schema8 retains schema7 scalar fields for
+migration; Source ABI35 covers changed public object layouts.
+Project look IO weakly canonicalizes the root and requested path before containment/suffix checks.
+It does not mutate Scene/history. Saving requires an existing parent; failures leave the selected
+look unchanged. The renderer owns GPU behavior; Editor never assembles an independent effect pipeline.

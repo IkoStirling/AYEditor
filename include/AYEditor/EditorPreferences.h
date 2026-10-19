@@ -25,7 +25,7 @@ enum class EditorCameraDisplayMode : uint8_t { Solid = 0, Wireframe = 1, Hidden 
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 7;
+    static constexpr int kCurrentSchemaVersion = 8;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -98,6 +98,9 @@ struct EditorPreferences {
     bool posterizationEnabled = true;
     int colorLevels = 12;
     float ditherStrength = 0.0f;
+    // Complete advanced controls use the renderer's versioned look serializer.
+    // Legacy scalar fields remain for schema7 migration and source compatibility.
+    std::string colorStylizationLook;
 
 };
 
@@ -163,7 +166,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.pixelSize == b.pixelSize
         && a.posterizationEnabled == b.posterizationEnabled
         && a.colorLevels == b.colorLevels
-        && a.ditherStrength == b.ditherStrength;
+        && a.ditherStrength == b.ditherStrength
+        && a.colorStylizationLook == b.colorStylizationLook;
 }
 
 inline bool operator!=(const EditorPreferences& a,
