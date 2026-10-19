@@ -3,6 +3,7 @@
 #include "AYRenderer/StylizationPalette.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
 #include "EditorRasterImage.h"
+#include <AYIO/PathSafety.h>
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYRenderer.h"
 #include "AYUI/CheckBox.h"
@@ -28,6 +29,14 @@ template<class T> T* widget(const ayt::ui::UIManager& ui,const char* id) {
 void status(const ayt::ui::UIManager& ui,const std::string& text) {
     if(auto* label=widget<ayt::ui::TextLabel>(ui,"lbl_style_status"))
         label->setText(ayt::ui::decodeUtf8Text(text));
+}
+std::wstring styleColorText(StylizationColor c) {
+    return ayt::ui::ColorPicker::formatHexCode({c.r,c.g,c.b,1}).substr(0,7);
+}
+std::wstring stylePaletteText(const ColorStylizationSettings& look) {
+    std::wstring text;
+    for(uint8_t i=0;i<look.paletteSize;++i){if(i)text+=L" ";text+=styleColorText(look.palette[i]);}
+    return text;
 }
 void updateVisibility(ayt::ui::UIManager& ui,const ColorStylizationSettings& s) {
     const auto show=[&](const char* id,bool visible){if(auto* w=ui.findById(id))w->setVisible(visible);};
@@ -75,12 +84,9 @@ bool projectLookPath(const std::string& root,const std::string& request,std::str
     if(error)error->clear();
     if(root.empty() || request.empty())return fail("Open a project and choose a look path first");
     try {
-        const auto base=fs::weakly_canonical(fs::u8path(root));
-        auto target=fs::u8path(request);if(target.is_relative())target=base/target;
-        target=fs::weakly_canonical(target);
-        const auto relative=target.lexically_relative(base);
-        if(relative.empty() || relative.is_absolute() || *relative.begin()=="..")
-            return fail("Look path must remain inside the current project");
+        fs::path target;std::string reason;
+        if(!ayt::io::path::resolveWithinRoot(fs::u8path(root),fs::u8path(request),target,reason))
+            return fail(reason.c_str());
         auto ext=target.extension().string();
         for(auto& c:ext)c=static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         if(ext!=".rsl")return fail("Look documents must use the .rsl suffix");
@@ -163,15 +169,12 @@ void EditorSession::syncColorStylizationPanel() {
 #undef SYNC_STYLE_SLIDER
     const auto color=[&](const char* id,StylizationColor value){
         if(auto* w=widget<ayt::ui::TextInput>(_ui,id))
-            w->setText(ayt::ui::ColorPicker::formatHexCode({value.r,value.g,value.b,1}).substr(0,7));
+            w->setText(styleColorText(value));
     };
     color("txt_style_shadow",s.shadowColor);color("txt_style_highlight",s.highlightColor);
     color("txt_style_ink",s.inkColor);color("txt_style_paper",s.paperColor);color("txt_style_outline",s.outlineColor);
     if(auto* w=widget<ayt::ui::TextInput>(_ui,"txt_style_palette")) {
-        std::wstring text;for(uint8_t i=0;i<s.paletteSize;++i) {
-            if(i)text+=L" ";auto c=s.palette[i];
-            text+=ayt::ui::ColorPicker::formatHexCode({c.r,c.g,c.b,1}).substr(0,7);
-        }w->setText(text);
+        w->setText(stylePaletteText(s));
     }
     updateVisibility(_ui,s);_syncingRenderStyle=previous;refreshLocalizedValueLabels();
 }
@@ -251,6 +254,7 @@ void EditorSession::bindColorStylizationPanel() {
         if(auto* w=widget<ayt::ui::TextInput>(_ui,id)) {
             const auto commit=[this,w,member] {
                 if(_syncingRenderStyle || _applyingPreferences)return;
+                if(w->getText()==styleColorText(_renderStyleLook.*member))return;
                 ayt::math::FVector4 c;
                 if(w->getText().size()!=7 || !ayt::ui::ColorPicker::parseHexCode(w->getText(),c)) {status(_ui,"Use #RRGGBB");return;}
                 _renderStyleLook.*member={c.x,c.y,c.z};applyColorStylizationFromPanel();status(_ui,"");
@@ -261,6 +265,7 @@ void EditorSession::bindColorStylizationPanel() {
     if(auto* w=widget<ayt::ui::TextInput>(_ui,"txt_style_palette")) {
         const auto commit=[this,w] {
             if(_syncingRenderStyle || _applyingPreferences)return;
+            if(w->getText()==stylePaletteText(_renderStyleLook))return;
             auto palette=_renderStyleLook.palette;std::wistringstream input(w->getText());
             std::wstring token;uint8_t count=0;
             while(input>>token) {

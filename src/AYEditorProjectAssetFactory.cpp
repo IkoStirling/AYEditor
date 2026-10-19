@@ -8,6 +8,7 @@
 #include <AYAssetFormat/AssetFormat.h>
 #include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
+#include <AYIO/PathSafety.h>
 #include <AYUI/UIFlow.h>
 #include <AYRenderer/ColorStylizationLook.h>
 
@@ -130,14 +131,12 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             return result;
         }
     }
-    const std::filesystem::path folder = assetRoot / assetTemplate.folder;
+    std::filesystem::create_directories(root,ec);
+    if(ec){result.error="Could not create project root: "+ec.message();return result;}
+    std::filesystem::path folder;
     // Resolve existing links before creating folders or files. A template folder
     // routed outside the project must not make a menu action write outside it.
-    const auto resolvedFolder=std::filesystem::weakly_canonical(folder,ec);
-    const auto relativeFolder=resolvedFolder.lexically_relative(root);
-    if(ec || relativeFolder.empty() || relativeFolder.is_absolute() || *relativeFolder.begin()=="..") {
-        result.error="Asset folder must remain inside the project.";return result;
-    }
+    if(!ayt::io::path::resolveWithinRoot(root,assetRoot/assetTemplate.folder,folder,result.error))return result;
     std::filesystem::create_directories(folder, ec);
     if (ec) {
         result.error = "Could not create the project asset folder: "
@@ -242,7 +241,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             + " {\n    on_start() {\n    }\n\n    on_update(dt: float) {\n    }\n}\n";
         if (std::filesystem::exists(script)) {
             error = "Actor companion script already exists.";
-        } else if (!ayt::io::File::atomicWrite(pathUtf8(script), source.data(), source.size())) {
+        } else if (!ayt::io::File::atomicWriteUtf8(pathUtf8(script), source.data(), source.size())) {
             error = "Could not create Actor companion script.";
         } else {
             saved = ayt::entity::saveActorClassAsset(pathUtf8(destination), actor, &error);
@@ -275,7 +274,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         std::vector<ayt::ui::UIFlowDiagnostic> diagnostics;
         saved = ayt::ui::UIFlowSerializer::serialize(
             flow, encoded, &diagnostics, true)
-            && ayt::io::File::atomicWrite(
+            && ayt::io::File::atomicWriteUtf8(
                 pathUtf8(destination), encoded.data(), encoded.size());
         if (!saved) error = diagnostics.empty()
             ? "Atomic UI Flow save failed."
@@ -292,7 +291,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         std::vector<ayt::app::GameFlowDiagnostic> diagnostics;
         saved = ayt::app::GameFlowSerializer::serialize(
             flow, encoded, &diagnostics, true)
-            && ayt::io::File::atomicWrite(
+            && ayt::io::File::atomicWriteUtf8(
                 pathUtf8(destination), encoded.data(), encoded.size());
         if (!saved) error = diagnostics.empty()
             ? "Atomic GameFlow save failed."
@@ -305,7 +304,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             "  \"size\": { \"w\": 1280, \"h\": 720 },\n"
             "  \"children\": []\n"
             "}\n";
-        saved = ayt::io::File::atomicWrite(
+        saved = ayt::io::File::atomicWriteUtf8(
             pathUtf8(destination), kUiLayout, sizeof(kUiLayout) - 1u);
         if (!saved) error = "Atomic UI layout save failed.";
     }

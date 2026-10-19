@@ -1203,6 +1203,13 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
         std::string error;
         CHECK(session.saveRenderStyleLook("Assets/workshop.rsl",&error));CHECK(error.empty());
+        CHECK(session.saveRenderStyleLook("Assets/作品/新风格-🌙.rsl",&error));
+        CHECK(session.loadRenderStyleLook("Assets/作品/新风格-🌙.rsl",&error));
+#ifdef _WIN32
+        auto upper=(root/"Assets/workshop.rsl").string();
+        for(auto& c:upper)c=char(std::toupper(static_cast<unsigned char>(c)));
+        CHECK(session.loadRenderStyleLook(upper,&error));
+#endif
         CHECK_FALSE(session.saveRenderStyleLook("../outside.rsl",&error));CHECK_FALSE(error.empty());
         CHECK_FALSE(session.saveRenderStyleLook("Assets/not-a-look.json",&error));
         session.setRenderStyleLook({});
@@ -1266,6 +1273,31 @@ TEST_CASE(editor_render_look_browser_create_apply_save_and_failure_retains_scene
     CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==current);
     CHECK(session.document()==sceneDocument);
     if(sceneDocument)CHECK(sceneDocument->isDirty()==wasDirty);
+    session.shutdown();
+}
+
+TEST_CASE(render_style_unchanged_color_focus_preserves_imported_float_precision) {
+    MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+    desc.uiBackend=&backend;desc.layoutPath=resolveEditorShellLayoutPath();CHECK(session.initialize(desc));
+    auto look=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::Sunset);
+    look.shadowColor={.123456f,.234567f,.345678f};
+    look.paletteSize=2;look.palette[0]={.112233f,.223344f,.334455f};look.palette[1]={.667788f,.778899f,.889911f};
+    for(bool palette:{false,true}) {
+        look.colorMapping=palette?ayt::render::StylizationColorMapping::FixedPalette:ayt::render::StylizationColorMapping::Duotone;
+        session.setRenderStyleLook(look);
+        const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
+        auto* input=dynamic_cast<TextInput*>(session.ui().findById(palette?"txt_style_palette":"txt_style_shadow"));
+        CHECK(input!=nullptr);if(!input)continue;
+        session.ui().setFocus(input);session.ui().setFocus(nullptr);
+        CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==expected);
+    }
+    auto* palette=dynamic_cast<TextInput*>(session.ui().findById("txt_style_palette"));
+    CHECK(palette!=nullptr);if(palette) {
+        session.ui().setFocus(palette);palette->setText(L"#FF0000 #00FF00");session.ui().setFocus(nullptr);
+        CHECK(session.renderStyleLook().paletteSize==2);
+        CHECK(session.renderStyleLook().palette[0].r==1 && session.renderStyleLook().palette[0].g==0);
+        CHECK(session.renderStyleLook().palette[1].r==0 && session.renderStyleLook().palette[1].g==1);
+    }
     session.shutdown();
 }
 

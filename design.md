@@ -1,5 +1,12 @@
 # AYEditor Design
 
+## 2026-10-19 — 精度与路径审核修正
+
+颜色/色板文本使用同一格式化函数；失焦提交前若显示文本未改动，保留导入的浮点值。
+只有实际改写hex才量化到8位色。交互复现先失败两项，修复后整组Shell49例通过。
+Look与模板工厂改用AYIO PathSafety::resolveWithinRoot，统一大小写、现存链接和缺失目标预检，
+不再各自维护弱化的包含判断。RSL及工厂直接写入入口使用明确UTF-8原子保存。
+
 ## 2026-10-19 — 参考图作者服务
 
 EditorRasterImage集中唯一STB实现，从UTF-8 filesystem路径读bytes，先检查encoded容量/图像尺寸，
