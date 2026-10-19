@@ -6300,17 +6300,22 @@ bool EditorSession::createProjectAsset(EditorAssetType type,
                 +ayt::ui::decodeUtf8Text(error),true);return false;
         }
     }
-    _pendingAssetSelectionPath = created.absolutePath;
-    _assetCurrentFolder = std::filesystem::path(created.logicalPath)
+    (void)revealCreatedProjectAsset(created.absolutePath,created.logicalPath);
+    return true;
+}
+
+bool EditorSession::revealCreatedProjectAsset(const std::string& absolutePath,const std::string& logicalPath) {
+    _pendingAssetSelectionPath = absolutePath;
+    _assetCurrentFolder = std::filesystem::u8path(logicalPath)
         .parent_path().generic_string();
     (void)rescanAssetsNow();
     const EditorAssetRecord* record =
-        _assetDatabase.findByLogicalPath(created.logicalPath);
+        _assetDatabase.findByLogicalPath(logicalPath);
     const bool opened = record != nullptr && openAsset(record->id);
     setAssetBrowserStatus(
         (opened ? L"Created and opened " : L"Created ")
-        + ayt::ui::decodeUtf8Text(created.logicalPath));
-    return true;
+        + ayt::ui::decodeUtf8Text(logicalPath));
+    return opened;
 }
 
 bool EditorSession::openAsset(EditorAssetId assetId)
@@ -7167,6 +7172,7 @@ void EditorSession::refreshLocalizedValueLabels()
         {"sld_style_history_offset_x","lbl_style_history_offset_x","ui.editor.render.style_history_offset_x_value","History X offset  {0} px","%.1f"},
         {"sld_style_history_offset_y","lbl_style_history_offset_y","ui.editor.render.style_history_offset_y_value","History Y offset  {0} px","%.1f"},
         {"sld_style_temporal_seed","lbl_style_temporal_seed","ui.editor.render.style_temporal_seed_value","Tile phase seed  {0}","%.0f"},
+        {"sld_style_extract_colors","lbl_style_extract_colors","ui.editor.render.style_extract_colors_value","Image palette colors  {0}","%.0f"},
         {"sld_style_outline_width","lbl_style_outline_width","ui.editor.render.style_outline_width_value","Outline radius  {0} px","%.1f"},
         {"sld_style_outline_depth","lbl_style_outline_depth","ui.editor.render.style_outline_depth_value","Depth threshold  {0}","%.3f"},
         {"sld_style_outline_normal","lbl_style_outline_normal","ui.editor.render.style_outline_normal_value","Normal threshold  {0}","%.2f"},

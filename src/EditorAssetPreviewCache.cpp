@@ -1,4 +1,5 @@
 #include "EditorAssetPreviewCache.h"
+#include "EditorRasterImage.h"
 
 #include <AYAssetFormat/AssetFormat.h>
 
@@ -6,9 +7,6 @@
 #include <AYResource/assetsImpl/Material.h>
 #include <AYResource/assetsImpl/Mesh.h>
 
-#define STB_IMAGE_STATIC
-#define STB_IMAGE_IMPLEMENTATION
-#include <stb_image.h>
 
 #include <algorithm>
 #include <cctype>
@@ -380,15 +378,10 @@ EditorAssetPreviewCache::DecodedImage EditorAssetPreviewCache::decode(
     const std::string& path)
 {
     DecodedImage result;
-    int sourceWidth = 0;
-    int sourceHeight = 0;
-    int components = 0;
-    stbi_uc* rgba = stbi_load(
-        path.c_str(), &sourceWidth, &sourceHeight, &components, 4);
-    if (rgba == nullptr || sourceWidth <= 0 || sourceHeight <= 0) {
-        if (rgba != nullptr) stbi_image_free(rgba);
-        return result;
-    }
+    const auto raster=loadEditorRasterImage(path);
+    if(!raster)return result;
+    const int sourceWidth=raster.width,sourceHeight=raster.height;
+    const auto* rgba=raster.rgba.data();
 
     constexpr int maxPreviewEdge = 512;
     const float scale = std::min(
@@ -418,7 +411,6 @@ EditorAssetPreviewCache::DecodedImage EditorAssetPreviewCache::decode(
             result.bgra[targetIndex + 3u] = rgba[sourceIndex + 3u];
         }
     }
-    stbi_image_free(rgba);
     return result;
 }
 
@@ -479,7 +471,7 @@ EditorAuthoringImage EditorAssetPreviewCache::loadAuthoringImage(
         if (error != nullptr) *error = "The source image does not exist.";
         return {};
     }
-    const std::string key = source.string();
+    const auto utf8=source.u8string();const std::string key(utf8.begin(),utf8.end());
     const std::uintmax_t fileSize = std::filesystem::file_size(source, fileError);
     if (fileError) {
         if (error != nullptr) *error = "The source image cannot be inspected.";
@@ -498,21 +490,15 @@ EditorAuthoringImage EditorAssetPreviewCache::loadAuthoringImage(
     }
     if (found != _authoringEntries.end()) return found->second.image;
 
-    int width = 0;
-    int height = 0;
-    int components = 0;
-    stbi_uc* rgba = stbi_load(key.c_str(), &width, &height, &components, 4);
-    if (rgba == nullptr || width <= 0 || height <= 0) {
-        if (rgba != nullptr) stbi_image_free(rgba);
-        if (error != nullptr) *error = "The source image could not be decoded.";
-        return {};
-    }
+    auto raster=loadEditorRasterImage(key,error);
+    if(!raster)return {};
+    const int width=raster.width,height=raster.height;
+    const auto* rgba=raster.rgba.data();
     const uint64_t pixelCount = static_cast<uint64_t>(width)
         * static_cast<uint64_t>(height);
     if (pixelCount > 64u * 1024u * 1024u
         || width > (std::numeric_limits<uint16_t>::max)()
         || height > (std::numeric_limits<uint16_t>::max)()) {
-        stbi_image_free(rgba);
         if (error != nullptr) {
             *error = "The source image exceeds the authoring texture budget.";
         }
@@ -526,7 +512,6 @@ EditorAuthoringImage EditorAssetPreviewCache::loadAuthoringImage(
         (*pixels)[pixel * 4u + 2u] = rgba[pixel * 4u + 0u];
         (*pixels)[pixel * 4u + 3u] = rgba[pixel * 4u + 3u];
     }
-    stbi_image_free(rgba);
     void* handle = _createTexture(
         static_cast<uint16_t>(width), static_cast<uint16_t>(height),
         pixels->data());

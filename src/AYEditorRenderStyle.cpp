@@ -1,5 +1,8 @@
 #include "AYEditor/EditorSession.h"
 #include "AYRenderer/ColorStylizationLook.h"
+#include "AYRenderer/StylizationPalette.h"
+#include "AYEditor/EditorProjectAssetFactory.h"
+#include "EditorRasterImage.h"
 #include "AYRenderer/RendererSubSystem.h"
 #include "AYRenderer.h"
 #include "AYUI/CheckBox.h"
@@ -197,7 +200,33 @@ bool EditorSession::loadRenderStyleLook(const std::string& request,std::string* 
     return true;
 }
 
+bool EditorSession::createRenderStyleFromImage(EditorAssetId image,uint8_t colors,std::string* error) {
+    if(error)error->clear();
+    const auto fail=[&](const std::string& message){if(error)*error=message;status(_ui,message);return false;};
+    const auto* source=_assetDatabase.find(image);
+    if(!source || source->type!=EditorAssetType::Texture)return fail("Select a source raster image in Assets first");
+    if(colors<2 || colors>16)return fail("Palette size must be between 2 and 16");
+    std::string reason;const auto raster=loadEditorRasterImage(source->absolutePath,&reason,16u*1024u*1024u);
+    if(!raster)return fail(reason);
+    StylizationPalette palette;
+    if(!extractStylizationPalette(raster.rgba,uint32_t(raster.width),uint32_t(raster.height),colors,palette,&reason))return fail(reason);
+    auto look=renderStyleLook();look.enabled=true;look.colorMapping=StylizationColorMapping::FixedPalette;
+    look.paletteSize=palette.size;look.palette=palette.colors;
+    const auto created=createEditorProjectAsset(_projectRoot,EditorAssetType::RenderStyle);
+    if(!created)return fail(created.error);
+    if(!saveColorStylizationLook(created.absolutePath,look,&reason))return fail("Created default look, but palette save failed: "+reason);
+    if(!revealCreatedProjectAsset(created.absolutePath,created.logicalPath))return fail("Palette look saved, but could not be opened");
+    status(_ui,"Created palette look ("+std::to_string(palette.size)+" colors)");return true;
+}
+
 void EditorSession::bindColorStylizationPanel() {
+    if(auto* count=widget<ayt::ui::Slider>(_ui,"sld_style_extract_colors"))
+        count->setOnValueChanged([this](float){refreshLocalizedValueLabels();});
+    if(auto* button=widget<ayt::ui::Button>(_ui,"btn_style_extract_palette"))button->setOnClicked([this]{
+        const auto* count=widget<ayt::ui::Slider>(_ui,"sld_style_extract_colors");
+        const auto colors=uint8_t(std::lround(count?count->getValue():8.f));
+        std::string error;(void)createRenderStyleFromImage(_selectedAssetId,colors,&error);
+    });
     const auto changed=[this]{if(!_applyingPreferences && !_syncingRenderStyle){applyColorStylizationFromPanel();refreshLocalizedValueLabels();}};
     for(const char* id:{"chk_color_stylization","chk_style_pixelation","chk_style_posterization","chk_style_display","chk_style_temporal"})
         if(auto* w=widget<ayt::ui::CheckBox>(_ui,id))w->setOnToggled([changed](bool){changed();});

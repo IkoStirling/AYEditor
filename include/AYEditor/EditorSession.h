@@ -270,6 +270,10 @@ public:
     void setRenderStyleLook(const ayt::render::ColorStylizationSettings& settings);
     bool saveRenderStyleLook(const std::string& path, std::string* error = nullptr);
     bool loadRenderStyleLook(const std::string& path, std::string* error = nullptr);
+    /// Build a unique look from a browser raster image and apply it. Extraction
+    /// changes the palette/mapping only, retaining other current art settings.
+    /// CPU decoding/extraction needs no GPU. Failures retain the current look.
+    bool createRenderStyleFromImage(EditorAssetId image,uint8_t colors=8,std::string* error=nullptr);
     std::size_t openDslDocumentCount() const noexcept;
     bool openTilemapEditor(const std::string& path = {});
     bool openUiLayoutEditor(const std::string& path = {});
@@ -334,6 +338,7 @@ public:
     EditorChildWindowManager* childWindows() { return _childWindows.get(); }
 
 private:
+    bool revealCreatedProjectAsset(const std::string& absolutePath,const std::string& logicalPath);
     void bindToolbar();
     void bindShellIcons(const std::string& iconRootPath);
     void bindMenuBar();

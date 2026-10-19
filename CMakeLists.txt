@@ -114,6 +114,7 @@ set(SRC_FILES
     src/AYEditorComponentPolicy.cpp
     src/AYEditorShortcutRegistry.cpp
     src/EditorAssetPreviewCache.cpp
+    src/EditorRasterImage.cpp
     src/AYEditorAssetListView.cpp
     src/AYEditorDslDocument.cpp
     src/AYEditorDslExtension.cpp

@@ -25,6 +25,8 @@
 #include "AYUI/TreeView.h"
 #include "AYUI/UIKeyCode.h"
 #include "../src/EditorAssetPreviewCache.h"
+#include "../src/EditorRasterImage.h"
+#include <AYRenderer/ColorStylizationLook.h>
 
 #include <algorithm>
 #include <chrono>
@@ -1172,4 +1174,57 @@ TEST_CASE(editor_asset_browser_decodes_png_preview_once_off_the_ui_thread)
     CHECK(releaseCount == 1);
 }
 
+TEST_CASE(cpu_raster_decoder_reads_utf8_paths_and_checks_pixel_budget_before_decode)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("raster_utf8")};
+    std::filesystem::create_directories(cleanup.root);
+    const auto path=cleanup.root/std::filesystem::u8path("参考图.tga");
+    const uint8_t tga[]={0,0,2,0,0,0,0,0,0,0,0,0,4,0,1,0,32,32,
+        0,0,255,255,0,255,0,128,255,0,0,0,255,255,255,255};
+    {std::ofstream file(path,std::ios::binary);file.write(reinterpret_cast<const char*>(tga),sizeof(tga));}
+    const auto text=path.u8string();const std::string utf8(text.begin(),text.end());
+    std::string error;const auto image=loadEditorRasterImage(utf8,&error,4);
+    CHECK(bool(image));CHECK(error.empty());CHECK(image.width==4 && image.height==1);CHECK(image.rgba.size()==16);
+    const uint8_t expected[]={255,0,0,255,0,255,0,128,0,0,255,0,255,255,255,255};
+    if(image.rgba.size()==16)CHECK(std::equal(image.rgba.begin(),image.rgba.end(),expected));
+    CHECK_FALSE(bool(loadEditorRasterImage(utf8,&error,3)));CHECK(error.find("budget")!=std::string::npos);
+    CHECK_FALSE(bool(loadEditorRasterImage(utf8+".missing",&error)));CHECK_FALSE(error.empty());
+    {std::ofstream file(path,std::ios::binary);file<<"invalid image";}
+    CHECK_FALSE(bool(loadEditorRasterImage(utf8,&error)));CHECK_FALSE(error.empty());
+}
+
+TEST_CASE(selected_raster_creates_palette_look_retains_other_art_settings_and_saves_it)
+{
+    AssetBrowserTempCleanup cleanup{assetBrowserTempRoot("palette_authoring")};
+    const auto path=cleanup.root/"Assets"/std::filesystem::u8path("参考图.tga");
+    std::filesystem::create_directories(path.parent_path());
+    const uint8_t tga[]={0,0,2,0,0,0,0,0,0,0,0,0,4,0,1,0,32,32,
+        0,0,255,255,0,255,0,255,255,0,0,255,255,255,255,0};
+    {std::ofstream file(path,std::ios::binary);file.write(reinterpret_cast<const char*>(tga),sizeof(tga));}
+    ayt::ui::MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+    desc.uiBackend=&backend;desc.layoutPath=resolveAssetBrowserLayout();desc.projectRoot=cleanup.root.string();
+    CHECK(session.initialize(desc));std::string error;CHECK(session.assetDatabase().scanNow(&error));
+    const auto* source=session.assetDatabase().findByLogicalPath("Assets/参考图.tga");
+    CHECK(source!=nullptr);if(!source){session.shutdown();return;}
+    const auto sourceId=source->id;
+    auto initial=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::Blueprint);
+    initial.outlineWidth=3.5f;session.setRenderStyleLook(initial);
+    CHECK(session.createRenderStyleFromImage(sourceId,3,&error));CHECK(error.empty());
+    const auto look=session.renderStyleLook();CHECK(look.enabled);CHECK(look.paletteSize==3);
+    CHECK(look.colorMapping==ayt::render::StylizationColorMapping::FixedPalette);
+    CHECK_FLOAT_EQ(look.outlineWidth,3.5f,1e-6f);CHECK(look.outlineMode==initial.outlineMode);
+    const auto* created=session.assetDatabase().findByLogicalPath("Assets/looks/NewLook.rsl");
+    CHECK(created!=nullptr);
+    if(created) {
+        ayt::render::ColorStylizationSettings loaded;
+        CHECK(ayt::render::loadColorStylizationLook(created->absolutePath,loaded,&error));
+        CHECK(ayt::render::serializeColorStylizationLook(loaded)==ayt::render::serializeColorStylizationLook(look));
+    }
+    const auto preserved=ayt::render::serializeColorStylizationLook(look);
+    CHECK_FALSE(session.createRenderStyleFromImage(0,8,&error));CHECK_FALSE(error.empty());
+    CHECK_FALSE(session.createRenderStyleFromImage(sourceId,1,&error));
+    CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==preserved);
+    CHECK_FALSE(std::filesystem::exists(cleanup.root/"Assets/looks/NewLook 2.rsl"));
+    session.shutdown();
+}
 TEST_SUITE_END

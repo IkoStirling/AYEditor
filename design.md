@@ -1,5 +1,12 @@
 # AYEditor Design
 
+## 2026-10-19 — 参考图作者服务
+
+EditorRasterImage集中唯一STB实现，从UTF-8 filesystem路径读bytes，先检查encoded容量/图像尺寸，
+再解码为CPU拥有的RGBA8。缩略图重采样、BGRA作者缓存和色板生成共用该服务，GPU上传留在缓存层。
+createRenderStyleFromImage读取选定Texture源图、调用Renderer纯CPU取色、保存唯一RSL，成功后
+经共用revealCreatedProjectAsset扫描/应用；不先修改当前look再尝试IO。无Scene或偏好结构字段变化，ABI37不变。
+
 ## 2026-10-19 — Look 作者资产接入
 
 EditorAssetType尾部追加RenderStyle，保留所有旧枚举值/结构布局，source ABI37不变。

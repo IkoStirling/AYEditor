@@ -1,5 +1,12 @@
 # AYEditor
 
+## 从参考图创作色板（2026-10-19）
+
+在Assets选中PNG/JPG/TGA等源图，Render面板设置2..16色并点“从选中图片创建风格”。
+生成唯一LOOK作品并应用，保留当前轮廓、印刷、显示和时间设置，仅替换mapping/色板并启用look。
+透明像素不参与，半透明按alpha加权；源图不会成为look的运行时依赖。解码/提取失败保留当前参数。
+图片解码由共用EditorRasterImage服务提供，不要求GPU上传；同一服务供预览和原图作者数据使用。
+
 ## Look 资产工作流（2026-10-19）
 
 File → New Render Look把当前参数存成`Assets/looks/NewLook.rsl`，重名自动编号。
