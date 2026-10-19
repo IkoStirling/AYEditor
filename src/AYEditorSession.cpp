@@ -7145,6 +7145,12 @@ void EditorSession::refreshLocalizedValueLabels()
         {"sld_style_vignette","lbl_style_vignette","ui.editor.render.style_vignette_value","Vignette  {0}","%.2f"},
         {"sld_style_grain","lbl_style_grain","ui.editor.render.style_grain_value","Grain  {0}","%.2f"},
         {"sld_style_noise_seed","lbl_style_noise_seed","ui.editor.render.style_noise_seed_value","Noise seed  {0}","%.0f"},
+        {"sld_style_history_weight","lbl_style_history_weight","ui.editor.render.style_history_weight_value","History weight  {0}","%.2f"},
+        {"sld_style_hold_frames","lbl_style_hold_frames","ui.editor.render.style_hold_frames_value","Hold frames  {0}","%.0f"},
+        {"sld_style_tile_size","lbl_style_tile_size","ui.editor.render.style_tile_size_value","Tile size  {0} px","%.0f"},
+        {"sld_style_history_offset_x","lbl_style_history_offset_x","ui.editor.render.style_history_offset_x_value","History X offset  {0} px","%.1f"},
+        {"sld_style_history_offset_y","lbl_style_history_offset_y","ui.editor.render.style_history_offset_y_value","History Y offset  {0} px","%.1f"},
+        {"sld_style_temporal_seed","lbl_style_temporal_seed","ui.editor.render.style_temporal_seed_value","Tile phase seed  {0}","%.0f"},
         {"sld_style_outline_width","lbl_style_outline_width","ui.editor.render.style_outline_width_value","Outline radius  {0} px","%.1f"},
         {"sld_style_outline_depth","lbl_style_outline_depth","ui.editor.render.style_outline_depth_value","Depth threshold  {0}","%.3f"},
         {"sld_style_outline_normal","lbl_style_outline_normal","ui.editor.render.style_outline_normal_value","Normal threshold  {0}","%.2f"},
@@ -8035,7 +8041,7 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     if (!preferences.colorStylizationLook.empty())
         ayt::render::parseColorStylizationLook(preferences.colorStylizationLook,_renderStyleLook);
     syncColorStylizationPanel();
-    setCombo("cmb_color_stylization_preset", std::clamp(preferences.colorStylizationPreset,0,11));
+    setCombo("cmb_color_stylization_preset", std::clamp(preferences.colorStylizationPreset,0,15));
     setCheck("chk_color_stylization", preferences.colorStylizationEnabled);
     setCheck("chk_style_pixelation", preferences.pixelationEnabled);
     setCheck("chk_style_posterization", preferences.posterizationEnabled);

@@ -1,5 +1,12 @@
 # AYEditor Design
 
+## 2026-10-19 — 时间风格面板
+
+AYEditorRenderStyle集中绑定TemporalFeedback模式与参数，按模式显示相关controls，不在layout
+回调中重套预设。history reset直接调用Renderer facade，不修改Scene或undo历史。
+schema8偏好字符串内嵌look v3，旧v1/v2通过Renderer唯一codec迁移；ABI37反映值布局扩展。
+Test_EditorShell覆盖TemporalFeedback/seed/offset恢复，ABI门禁同步更新。
+
 ## 空间与数据实体作者流程（2026-10-14）
 
 创建菜单显式提供“创建空间实体”和“创建数据实体”。Inspector 解释当前类型，

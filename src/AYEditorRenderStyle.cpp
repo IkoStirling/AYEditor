@@ -57,6 +57,14 @@ void updateVisibility(ayt::ui::UIManager& ui,const ColorStylizationSettings& s) 
     show("lbl_style_normal_hint",s.outlineMode==StylizationOutlineMode::DepthNormal);
     show("lbl_style_outline",outline);show("txt_style_outline",outline);
     for(const char* name:{"scanline","mask","chroma","curvature","vignette","grain","noise_seed"})pair(name,s.display.enabled);
+    const bool temporal=s.temporal.enabled,afterimage=s.temporal.mode==TemporalFeedbackMode::Afterimage;
+    show("lbl_style_temporal_mode",temporal);show("cmb_style_temporal_mode",temporal);
+    pair("history_weight",temporal && afterimage);
+    pair("history_offset_x",temporal && afterimage);pair("history_offset_y",temporal && afterimage);
+    pair("hold_frames",temporal && !afterimage);
+    pair("tile_size",temporal && s.temporal.mode==TemporalFeedbackMode::TileHold);
+    pair("temporal_seed",temporal && s.temporal.mode==TemporalFeedbackMode::TileHold);
+    show("btn_style_history_reset",temporal);
     ui.invalidateLayout();
 }
 bool projectLookPath(const std::string& root,const std::string& request,std::string& path,std::string* error) {
@@ -97,6 +105,14 @@ ayt::render::ColorStylizationSettings EditorSession::renderStyleLook() const {
     s.display.vignetteStrength=slider("sld_style_vignette",s.display.vignetteStrength);
     s.display.grainStrength=slider("sld_style_grain",s.display.grainStrength);
     s.display.noiseSeed=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_noise_seed",s.display.noiseSeed),0.f,65535.f)));
+    s.temporal.enabled=check("chk_style_temporal",s.temporal.enabled);
+    s.temporal.mode=static_cast<TemporalFeedbackMode>(combo("cmb_style_temporal_mode",int(s.temporal.mode)));
+    s.temporal.historyWeight=slider("sld_style_history_weight",s.temporal.historyWeight);
+    s.temporal.holdFrames=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_hold_frames",s.temporal.holdFrames),1.f,120.f)));
+    s.temporal.tileSize=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_tile_size",s.temporal.tileSize),4.f,128.f)));
+    s.temporal.historyOffsetX=slider("sld_style_history_offset_x",s.temporal.historyOffsetX);
+    s.temporal.historyOffsetY=slider("sld_style_history_offset_y",s.temporal.historyOffsetY);
+    s.temporal.noiseSeed=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_temporal_seed",s.temporal.noiseSeed),0.f,65535.f)));
     s.colorMapping=static_cast<StylizationColorMapping>(combo("cmb_style_mapping",int(s.colorMapping)));
     s.printPattern=static_cast<StylizationPrintPattern>(combo("cmb_style_print",int(s.printPattern)));
     s.outlineMode=static_cast<StylizationOutlineMode>(combo("cmb_style_outline",int(s.outlineMode)));
@@ -127,6 +143,10 @@ void EditorSession::syncColorStylizationPanel() {
     slider("sld_style_chroma",s.display.chromaticOffset);slider("sld_style_curvature",s.display.curvature);
     slider("sld_style_vignette",s.display.vignetteStrength);slider("sld_style_grain",s.display.grainStrength);
     slider("sld_style_noise_seed",s.display.noiseSeed);
+    check("chk_style_temporal",s.temporal.enabled);combo("cmb_style_temporal_mode",int(s.temporal.mode));
+    slider("sld_style_history_weight",s.temporal.historyWeight);slider("sld_style_hold_frames",s.temporal.holdFrames);
+    slider("sld_style_tile_size",s.temporal.tileSize);slider("sld_style_history_offset_x",s.temporal.historyOffsetX);
+    slider("sld_style_history_offset_y",s.temporal.historyOffsetY);slider("sld_style_temporal_seed",s.temporal.noiseSeed);
     combo("cmb_style_mapping",int(s.colorMapping));combo("cmb_style_print",int(s.printPattern));
     combo("cmb_style_outline",int(s.outlineMode));
 #define SYNC_STYLE_SLIDER(field,id) slider(id,s.field)
@@ -175,19 +195,20 @@ bool EditorSession::loadRenderStyleLook(const std::string& request,std::string* 
 
 void EditorSession::bindColorStylizationPanel() {
     const auto changed=[this]{if(!_applyingPreferences && !_syncingRenderStyle){applyColorStylizationFromPanel();refreshLocalizedValueLabels();}};
-    for(const char* id:{"chk_color_stylization","chk_style_pixelation","chk_style_posterization","chk_style_display"})
+    for(const char* id:{"chk_color_stylization","chk_style_pixelation","chk_style_posterization","chk_style_display","chk_style_temporal"})
         if(auto* w=widget<ayt::ui::CheckBox>(_ui,id))w->setOnToggled([changed](bool){changed();});
-    for(const char* id:{"cmb_style_mapping","cmb_style_print","cmb_style_outline"})
+    for(const char* id:{"cmb_style_mapping","cmb_style_print","cmb_style_outline","cmb_style_temporal_mode"})
         if(auto* w=widget<ayt::ui::ComboBox>(_ui,id))w->setOnSelectionChanged([changed](int){changed();});
     if(auto* w=widget<ayt::ui::ComboBox>(_ui,"cmb_color_stylization_preset"))
         w->setOnSelectionChanged([this](int index){
             if(_applyingPreferences || _syncingRenderStyle)return;
-            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,11))));
+            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,15))));
         });
     for(const char* id:{"sld_style_pixel_size","sld_style_color_levels","sld_style_dither_strength",
         "sld_style_print_spacing","sld_style_print_angle","sld_style_print_strength","sld_style_print_gamma","sld_style_outline_width",
         "sld_style_outline_depth","sld_style_outline_normal","sld_style_outline_luminance","sld_style_outline_strength",
-        "sld_style_scanline","sld_style_mask","sld_style_chroma","sld_style_curvature","sld_style_vignette","sld_style_grain","sld_style_noise_seed"})
+        "sld_style_scanline","sld_style_mask","sld_style_chroma","sld_style_curvature","sld_style_vignette","sld_style_grain","sld_style_noise_seed",
+        "sld_style_history_weight","sld_style_hold_frames","sld_style_tile_size","sld_style_history_offset_x","sld_style_history_offset_y","sld_style_temporal_seed"})
         if(auto* w=widget<ayt::ui::Slider>(_ui,id))w->setOnValueChanged([changed](float){changed();});
     using Member=StylizationColor ColorStylizationSettings::*;
     for(const auto& [id,member]:std::initializer_list<std::pair<const char*,Member>>{
@@ -221,6 +242,9 @@ void EditorSession::bindColorStylizationPanel() {
         w->setOnSubmit([commit](const std::wstring&){commit();});w->setOnFocusLostNotify(commit);
     }
     if(auto* w=widget<ayt::ui::Button>(_ui,"btn_style_reset"))w->setOnClicked([this]{setRenderStyleLook({});status(_ui,"Look reset");});
+    if(auto* w=widget<ayt::ui::Button>(_ui,"btn_style_history_reset"))w->setOnClicked([this]{
+        if(auto* sub=RendererSubSystem::findRegistered()){sub->renderer().resetStylizationHistory();status(_ui,"Image history cleared");}
+    });
     for(bool save:{false,true})if(auto* w=widget<ayt::ui::Button>(_ui,save?"btn_style_save":"btn_style_load")) {
         w->setOnClicked([this,save]{
             const auto* input=widget<ayt::ui::TextInput>(_ui,"txt_style_path");if(!input)return;

@@ -1194,6 +1194,8 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         auto look=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::Blueprint);
         look.palette[15]={.25f,.5f,.75f};look.outlineWidth=3.5f;
         look.display.enabled=true;look.display.grainStrength=.12f;look.display.noiseSeed=91;
+        look.temporal.enabled=true;look.temporal.mode=ayt::render::TemporalFeedbackMode::TileHold;
+        look.temporal.holdFrames=7;look.temporal.tileSize=32;look.temporal.historyOffsetX=1.25f;
         session.setRenderStyleLook(look);
         const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
         std::string error;
@@ -1221,6 +1223,9 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         CHECK_FLOAT_EQ(restored.outlineWidth,3.5f,1e-5f);
         CHECK_FLOAT_EQ(restored.palette[15].b,.75f,1e-5f);
         CHECK(restored.display.enabled);CHECK(restored.display.noiseSeed==91);
+        CHECK(restored.temporal.enabled);CHECK(restored.temporal.holdFrames==7);CHECK(restored.temporal.tileSize==32);
+        CHECK(restored.temporal.mode==ayt::render::TemporalFeedbackMode::TileHold);
+        CHECK_FLOAT_EQ(restored.temporal.historyOffsetX,1.25f,1e-5f);
         session.shutdown();
     }
 }

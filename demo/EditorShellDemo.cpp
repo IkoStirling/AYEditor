@@ -375,7 +375,7 @@ ayt::editor::EditorPreferences loadEditorPreferences(
         out.colorGradingStrength);
     out.colorStylizationLook=saved.getString("Editor.Render.ColorStylization.Look",{});
     out.colorStylizationEnabled=saved.getBool("Editor.Render.ColorStylization.Enabled",out.colorStylizationEnabled);
-    out.colorStylizationPreset=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.Preset",out.colorStylizationPreset)),0,11);
+    out.colorStylizationPreset=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.Preset",out.colorStylizationPreset)),0,15);
     out.pixelationEnabled=saved.getBool("Editor.Render.ColorStylization.Pixelation",out.pixelationEnabled);
     out.posterizationEnabled=saved.getBool("Editor.Render.ColorStylization.Posterization",out.posterizationEnabled);
     out.pixelSize=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.PixelSize",out.pixelSize)),1,64);
