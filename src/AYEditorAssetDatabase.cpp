@@ -308,12 +308,15 @@ bool readIndex(const std::filesystem::path& path,
         if (!(input >> record.id >> std::quoted(record.logicalPath)
                     >> type >> origin >> importState
                     >> record.size >> record.lastModified)) break;
-        if (type > static_cast<unsigned>(EditorAssetType::AvatarPreset)
+        if (type > static_cast<unsigned>(EditorAssetType::RenderStyle)
             || origin > static_cast<unsigned>(EditorAssetOrigin::Imported)
             || importState > static_cast<unsigned>(EditorAssetImportState::Failed)) {
             return false;
         }
         record.type = static_cast<EditorAssetType>(type);
+        // Old indexes may have cached .rsl as Unknown before its authoring type existed.
+        if(ayt::asset_format::matchesPath(record.logicalPath,ayt::asset_format::Id::RenderStyleLook))
+            record.type=EditorAssetType::RenderStyle;
         record.origin = static_cast<EditorAssetOrigin>(origin);
         record.importState = static_cast<EditorAssetImportState>(importState);
         std::filesystem::path relative;
@@ -379,6 +382,7 @@ const char* editorAssetTypeName(EditorAssetType type) noexcept
     case EditorAssetType::ActorClass: return "Actor Class";
     case EditorAssetType::AvatarBundle: return "Avatar Bundle";
     case EditorAssetType::AvatarPreset: return "Avatar Preset";
+    case EditorAssetType::RenderStyle: return "Render Look";
     case EditorAssetType::Unknown: break;
     }
     return "File";
@@ -422,6 +426,7 @@ EditorAssetType classifyEditorAssetPath(const std::string& path)
         case Id::ActorClass: return EditorAssetType::ActorClass;
         case Id::AvatarBundle: return EditorAssetType::AvatarBundle;
         case Id::AvatarPreset: return EditorAssetType::AvatarPreset;
+        case Id::RenderStyleLook: return EditorAssetType::RenderStyle;
         case Id::PhoskiaShader: return EditorAssetType::Shader;
         case Id::Audio: return EditorAssetType::Audio;
         default: break;

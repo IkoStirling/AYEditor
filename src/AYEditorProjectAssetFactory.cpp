@@ -2,12 +2,14 @@
 
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorTilemapDocument.h"
+#include "AYEditor/EditorProjectDescriptor.h"
 #include <AYEntity/ActorClassAsset.h>
 
 #include <AYAssetFormat/AssetFormat.h>
 #include <AYApplication/GameFlowDocument.h>
 #include <AYIO/File.h>
 #include <AYUI/UIFlow.h>
+#include <AYRenderer/ColorStylizationLook.h>
 
 #include <filesystem>
 #include <algorithm>
@@ -25,6 +27,10 @@
 namespace ayt::editor {
 namespace {
 
+std::string pathUtf8(const std::filesystem::path& path) {
+    const auto text=path.u8string();return {text.begin(),text.end()};
+}
+
 struct AssetTemplate {
     const char* folder;
     const char* stem;
@@ -36,6 +42,9 @@ bool templateFor(EditorAssetType type, AssetTemplate& value)
     using ayt::asset_format::Id;
     using ayt::asset_format::suffix;
     switch (type) {
+    case EditorAssetType::RenderStyle:
+        value={"looks","NewLook",suffix(Id::RenderStyleLook)};
+        return true;
 #ifdef AYEDITOR_HAS_STATS
     case EditorAssetType::StatsRecipe:
         value = {"stats", "NewStats", suffix(Id::StatsSource)};
@@ -102,24 +111,33 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
     std::error_code ec;
     std::filesystem::path root = projectRoot.empty()
         ? std::filesystem::current_path(ec)
-        : std::filesystem::absolute(projectRoot, ec);
+        : std::filesystem::absolute(std::filesystem::u8path(projectRoot), ec);
     if (ec) {
         result.error = "Invalid project root: " + ec.message();
         return result;
     }
-    root = root.lexically_normal();
+    root = std::filesystem::weakly_canonical(root,ec);
+    if(ec){result.error="Could not resolve project root: "+ec.message();return result;}
+    const auto descriptor=EditorProjectDescriptor::load(pathUtf8(root));
+    const auto assetRoot=root/std::filesystem::u8path(descriptor?descriptor.assetRoot:"Assets");
     if (!parentActorClassPath.empty()) {
         ayt::entity::ActorClassAsset parent;
         if (type != EditorAssetType::ActorClass
             || !ayt::entity::resolveActorClassAsset(
-                (root / "Assets").string(), parentActorClassPath,
+                pathUtf8(assetRoot), parentActorClassPath,
                 parent, &result.error)) {
             if (result.error.empty()) result.error = "Invalid parent Actor class.";
             return result;
         }
     }
-    const std::filesystem::path folder = root / "Assets"
-        / assetTemplate.folder;
+    const std::filesystem::path folder = assetRoot / assetTemplate.folder;
+    // Resolve existing links before creating folders or files. A template folder
+    // routed outside the project must not make a menu action write outside it.
+    const auto resolvedFolder=std::filesystem::weakly_canonical(folder,ec);
+    const auto relativeFolder=resolvedFolder.lexically_relative(root);
+    if(ec || relativeFolder.empty() || relativeFolder.is_absolute() || *relativeFolder.begin()=="..") {
+        result.error="Asset folder must remain inside the project.";return result;
+    }
     std::filesystem::create_directories(folder, ec);
     if (ec) {
         result.error = "Could not create the project asset folder: "
@@ -147,7 +165,10 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
 #endif
     std::string error;
     bool saved = false;
-    if (type == EditorAssetType::StatsRecipe) {
+    if(type==EditorAssetType::RenderStyle) {
+        const auto utf8=destination.u8string();
+        saved=ayt::render::saveColorStylizationLook(std::string(utf8.begin(),utf8.end()),{},&error);
+    } else if (type == EditorAssetType::StatsRecipe) {
 #ifdef AYEDITOR_HAS_STATS
         using namespace ayt::stats;
         const std::string stem = destination.filename().string().substr(
@@ -177,7 +198,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
                         const auto writtenBook = writeTextAtomic(bookPath, *recipes);
                         if (!writtenBook) error = writtenBook.error().message;
                         else {
-                            const auto source = saveRecipeAssetSource(destination, root / "Assets",
+                            const auto source = saveRecipeAssetSource(destination, assetRoot,
                                 (std::filesystem::path("stats") / definitionsPath.filename()).generic_string(),
                                 "", (std::filesystem::path("stats") / bookPath.filename()).generic_string());
                             if (source) saved = true;
@@ -199,12 +220,12 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
 #ifdef AYEDITOR_HAS_SEQUENCE
         ayt::sequence::Sequence sequence; sequence.id = "new-sequence"; sequence.duration = 5;
         ayt::sequence::Diagnostic diagnostic;
-        saved = ayt::sequence::saveSequence(destination.string(), sequence, &diagnostic);
+        saved = ayt::sequence::saveSequence(pathUtf8(destination), sequence, &diagnostic);
         error = diagnostic.message;
 #endif
     } else if (type == EditorAssetType::ParticleEffect) {
 #ifdef AYEDITOR_HAS_PARTICLE
-        saved=particle::saveEffectAsset(destination.string(),particle::combinedExplosion(),&error);
+        saved=particle::saveEffectAsset(pathUtf8(destination),particle::combinedExplosion(),&error);
 #endif
     } else if (type == EditorAssetType::ActorClass) {
         ayt::entity::ActorClassAsset actor;
@@ -221,20 +242,20 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             + " {\n    on_start() {\n    }\n\n    on_update(dt: float) {\n    }\n}\n";
         if (std::filesystem::exists(script)) {
             error = "Actor companion script already exists.";
-        } else if (!ayt::io::File::atomicWrite(script.string(), source.data(), source.size())) {
+        } else if (!ayt::io::File::atomicWrite(pathUtf8(script), source.data(), source.size())) {
             error = "Could not create Actor companion script.";
         } else {
-            saved = ayt::entity::saveActorClassAsset(destination.string(), actor, &error);
+            saved = ayt::entity::saveActorClassAsset(pathUtf8(destination), actor, &error);
             if (!saved) std::filesystem::remove(script, ec);
         }
     } else if (type == EditorAssetType::Scene) {
         EditorSceneDocument document;
         document.newScene();
-        saved = document.saveAs(destination.string(), &error);
+        saved = document.saveAs(pathUtf8(destination), &error);
     } else if (type == EditorAssetType::Tilemap) {
         EditorTilemapDocument document;
         saved = document.create(32u, 18u, 32u, 32u, 0u)
-            && document.save(destination.string(), &error);
+            && document.save(pathUtf8(destination), &error);
     } else if (type == EditorAssetType::UiFlow) {
         ayt::ui::UIFlowDocument flow;
         flow.id = "new-ui-flow";
@@ -255,7 +276,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         saved = ayt::ui::UIFlowSerializer::serialize(
             flow, encoded, &diagnostics, true)
             && ayt::io::File::atomicWrite(
-                destination.string(), encoded.data(), encoded.size());
+                pathUtf8(destination), encoded.data(), encoded.size());
         if (!saved) error = diagnostics.empty()
             ? "Atomic UI Flow save failed."
             : diagnostics.front().message;
@@ -272,7 +293,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         saved = ayt::app::GameFlowSerializer::serialize(
             flow, encoded, &diagnostics, true)
             && ayt::io::File::atomicWrite(
-                destination.string(), encoded.data(), encoded.size());
+                pathUtf8(destination), encoded.data(), encoded.size());
         if (!saved) error = diagnostics.empty()
             ? "Atomic GameFlow save failed."
             : diagnostics.front().message;
@@ -285,7 +306,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             "  \"children\": []\n"
             "}\n";
         saved = ayt::io::File::atomicWrite(
-            destination.string(), kUiLayout, sizeof(kUiLayout) - 1u);
+            pathUtf8(destination), kUiLayout, sizeof(kUiLayout) - 1u);
         if (!saved) error = "Atomic UI layout save failed.";
     }
     if (!saved) {
@@ -293,7 +314,8 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         return result;
     }
     result.success = true;
-    result.absolutePath = destination.lexically_normal().string();
+    const auto utf8Destination=destination.lexically_normal().u8string();
+    result.absolutePath.assign(utf8Destination.begin(),utf8Destination.end());
     result.logicalPath = (std::filesystem::path("Assets")
         / assetTemplate.folder / destination.filename()).generic_string();
     return result;

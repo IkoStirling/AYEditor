@@ -261,6 +261,8 @@ public:
     // Opens or focuses the source-backed Phoskia/Logia DockCard for an asset.
     // Returns false for non-DSL records or when the source cannot be read.
     bool openDslAsset(EditorAssetId assetId);
+    /// Opens a typed browser asset. RenderStyle applies the look, reveals Render
+    /// Settings and selects its save path without editing the Scene document.
     bool openAsset(EditorAssetId assetId);
     /// Owner-thread look authoring. File commands accept project-contained .rsl
     /// paths only; failures retain the current settings and report a reason.
@@ -279,6 +281,7 @@ public:
     bool openNewProject();
     bool openProject(const std::string& selectedPath = {});
     bool openProjectSettings();
+    /// Create a unique project asset; RenderStyle snapshots the current look.
     bool createProjectAsset(EditorAssetType type,
                             const std::string& parentActorClassPath = {});
     bool restoreLastDeletedAssets();

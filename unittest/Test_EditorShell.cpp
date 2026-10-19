@@ -54,6 +54,9 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
+#include "AYEditor/EditorSceneDocument.h"
+#include "AYEditor/EditorProjectDescriptor.h"
 #include <sys/stat.h>
 #include <string>
 #include <string_view>
@@ -1228,6 +1231,42 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         CHECK_FLOAT_EQ(restored.temporal.historyOffsetX,1.25f,1e-5f);
         session.shutdown();
     }
+}
+
+TEST_CASE(editor_render_look_browser_create_apply_save_and_failure_retains_scene) {
+    namespace fs=std::filesystem;
+    const auto root=fs::temp_directory_path()/("ay_look_browser_"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    fs::create_directories(root);
+    struct Cleanup{fs::path path;~Cleanup(){std::error_code e;fs::remove_all(path,e);}} cleanup{root};
+    MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+    EditorProjectDescriptor project;project.schemaVersion=kEditorProjectDescriptorSchemaVersion;
+    project.id="look-browser";project.assetRoot="SourceAssets";
+    CHECK(project.save(root.string()));
+    desc.uiBackend=&backend;desc.layoutPath=resolveEditorShellLayoutPath();desc.projectRoot=root.string();
+    CHECK(session.initialize(desc));
+    const auto* sceneDocument=session.document();CHECK(sceneDocument!=nullptr);
+    const bool wasDirty=sceneDocument?sceneDocument->isDirty():false;
+    auto look=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::TimeEcho);
+    session.setRenderStyleLook(look);
+    const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
+    CHECK(session.createProjectAsset(EditorAssetType::RenderStyle));
+    const auto* record=session.assetDatabase().findByLogicalPath("Assets/looks/NewLook.rsl");
+    CHECK(record!=nullptr);if(!record){session.shutdown();return;}
+    const auto id=record->id;const auto path=record->absolutePath;
+    CHECK(record->type==EditorAssetType::RenderStyle);
+    session.setRenderStyleLook({});CHECK(session.openAsset(id));
+    CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==expected);
+    auto* input=dynamic_cast<TextInput*>(session.ui().findById("txt_style_path"));CHECK(input!=nullptr);
+    if(input)CHECK(input->getText()==L"SourceAssets/looks/NewLook.rsl");
+    auto* filter=dynamic_cast<ComboBox*>(session.ui().findById("cmb_assets_type"));CHECK(filter!=nullptr);
+    if(filter) {filter->setSelectedIndexAndNotify(int(EditorAssetType::RenderStyle));CHECK(filter->getSelectedIndex()==int(EditorAssetType::RenderStyle));}
+    const auto current=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
+    {std::ofstream file(path,std::ios::binary);file<<"{invalid";}
+    CHECK_FALSE(session.openAsset(id));
+    CHECK(ayt::render::serializeColorStylizationLook(session.renderStyleLook())==current);
+    CHECK(session.document()==sceneDocument);
+    if(sceneDocument)CHECK(sceneDocument->isDirty()==wasDirty);
+    session.shutdown();
 }
 
 TEST_CASE(editor_freecam_wheel_zoom_dollies_along_view_direction) {

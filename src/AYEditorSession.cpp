@@ -6293,6 +6293,13 @@ bool EditorSession::createProjectAsset(EditorAssetType type,
             + ayt::ui::decodeUtf8Text(created.error), true);
         return false;
     }
+    if(type==EditorAssetType::RenderStyle) {
+        std::string error;
+        if(!saveRenderStyleLook(created.absolutePath,&error)) {
+            setAssetBrowserStatus(L"Created default look, but copying current style failed: "
+                +ayt::ui::decodeUtf8Text(error),true);return false;
+        }
+    }
     _pendingAssetSelectionPath = created.absolutePath;
     _assetCurrentFolder = std::filesystem::path(created.logicalPath)
         .parent_path().generic_string();
@@ -6311,6 +6318,15 @@ bool EditorSession::openAsset(EditorAssetId assetId)
     const EditorAssetRecord* record = _assetDatabase.find(assetId);
     if (record == nullptr) return false;
     switch (record->type) {
+    case EditorAssetType::RenderStyle: {
+        std::string error;
+        if(!loadRenderStyleLook(record->absolutePath,&error)) {
+            setAssetBrowserStatus(L"Open render look failed: "+ayt::ui::decodeUtf8Text(error),true);return false;
+        }
+        _panelRenderVisible=true;setDockCardVisible("card_render",true);
+        setAssetBrowserStatus(L"Applied render look: "+ayt::ui::decodeUtf8Text(record->logicalPath));
+        if(_repaintCallback)_repaintCallback();return true;
+    }
     case EditorAssetType::Scene: {
         if (_document == nullptr || _gameView.mode() != EditorMode::Edit) {
             return false;
@@ -9360,6 +9376,8 @@ void EditorSession::bindMenuBar() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
             });
         }
+        if(auto* item=addLocalizedItem(fileMenu,"ui.editor.menu.file.new_render_look",L"New Render Look"))
+            item->setOnActivate([this]{(void)createProjectAsset(EditorAssetType::RenderStyle);});
         if (auto* item = fileMenu->addItem(L"New Actor Class")) {
             item->setOnActivate([this]() {
                 (void)createProjectAsset(EditorAssetType::ActorClass);

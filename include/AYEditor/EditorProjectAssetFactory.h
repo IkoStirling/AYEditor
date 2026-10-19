@@ -20,6 +20,10 @@ struct EditorProjectAssetCreateResult {
 /// their browser paths. AYStats creation also writes a starter definition,
 /// recipe book, source manifest, and cooked preview resource as one asset set.
 /// Names are made unique so a menu action never overwrites existing content.
+/// The physical asset root follows project.prj (Assets by default); browser paths
+/// retain their virtual Assets prefix. RenderStyle writes a disabled default .rsl.
+/// Existing folder
+/// links must resolve inside the project; projectRoot and returned paths are UTF-8.
 EditorProjectAssetCreateResult createEditorProjectAsset(
     const std::string& projectRoot, EditorAssetType type,
     const std::string& parentActorClassPath = {});

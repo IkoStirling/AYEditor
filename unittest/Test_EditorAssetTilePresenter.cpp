@@ -103,4 +103,12 @@ TEST_CASE(asset_tile_presenter_abbreviates_every_asset_type)
               EditorAssetType::Unknown)) == L"FILE");
 }
 
+TEST_CASE(render_look_tile_is_native_authoring_surface)
+{
+    EditorAssetRecord record;record.id=91;record.name="Pocket.RSL";record.type=EditorAssetType::RenderStyle;
+    const auto tile=EditorAssetTilePresenter{}.present(record);
+    CHECK(tile.typeAbbreviation==L"LOOK");CHECK(tile.category==EditorAssetTileCategory::Surface);
+    CHECK(tile.showEngineResourceMarker);CHECK(tile.fullFileName==L"Pocket.RSL");
+}
+
 TEST_SUITE_END

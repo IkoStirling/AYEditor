@@ -1,5 +1,16 @@
 # AYEditor Design
 
+## 2026-10-19 — Look 作者资产接入
+
+EditorAssetType尾部追加RenderStyle，保留所有旧枚举值/结构布局，source ABI37不变。
+AYAssetFormat只登记后缀与Authoring生命周期；Renderer继续独占codec。
+Factory负责唯一文件名/默认look，Session创建时复制当前参数，扫描后统一走openAsset应用。
+openAsset成功才更新path/panel；失败保留当前look和Scene。索引读者允许新值并将旧Unknown RSL重新分类。
+模板根/目标目录使用weakly_canonical检查项目包含关系，创建前拒绝外部链接；RSL写入和返回路径使用UTF-8。
+UI类型筛选项与枚举位置对齐，补齐Avatar两项后再追加Render Look，避免选中错误类型。
+工厂现在与AssetDatabase共用project.prj所声明的assetRoot；所有模板的写入路径转为UTF-8。
+双击从记录的绝对物理路径读取，再将作品路径显示为项目相对路径，不把虚拟Assets误当物理目录。
+
 ## 2026-10-19 — 时间风格面板
 
 AYEditorRenderStyle集中绑定TemporalFeedback模式与参数，按模式显示相关controls，不在layout

@@ -190,7 +190,11 @@ bool EditorSession::saveRenderStyleLook(const std::string& request,std::string* 
 bool EditorSession::loadRenderStyleLook(const std::string& request,std::string* error) {
     std::string path;if(!projectLookPath(_projectRoot,request,path,error))return false;
     ColorStylizationSettings loaded;if(!loadColorStylizationLook(path,loaded,error))return false;
-    setRenderStyleLook(loaded);return true;
+    setRenderStyleLook(loaded);
+    const auto relative=fs::u8path(path).lexically_relative(fs::weakly_canonical(fs::u8path(_projectRoot))).generic_u8string();
+    if(auto* input=widget<ayt::ui::TextInput>(_ui,"txt_style_path"))
+        input->setText(ayt::ui::decodeUtf8Text(std::string(relative.begin(),relative.end())));
+    return true;
 }
 
 void EditorSession::bindColorStylizationPanel() {

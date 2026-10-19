@@ -9,6 +9,7 @@
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
+#include <AYRenderer/ColorStylizationLook.h>
 #include "AYEditor/EditorProjectDescriptor.h"
 #include "AYEditor/EditorProjectRunner.h"
 #include "AYEditor/EditorProjectRuntimeValidator.h"
@@ -325,6 +326,46 @@ TEST_CASE(project_asset_factory_creates_valid_assets_in_conventional_folders)
         == EditorAssetType::Tilemap);
     CHECK(classifyEditorAssetPath(flow.absolutePath)
         == EditorAssetType::UiFlow);
+}
+
+TEST_CASE(project_asset_factory_creates_unique_render_looks_with_valid_schema)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("look_factory")};
+    const auto first=createEditorProjectAsset(cleanup.root.string(),EditorAssetType::RenderStyle);
+    const auto second=createEditorProjectAsset(cleanup.root.string(),EditorAssetType::RenderStyle);
+    CHECK(first);CHECK(second);CHECK(first.absolutePath!=second.absolutePath);
+    CHECK(first.logicalPath=="Assets/looks/NewLook.rsl");
+    CHECK(second.logicalPath=="Assets/looks/NewLook 2.rsl");
+    CHECK(classifyEditorAssetPath("Assets/looks/Test.RSL")==EditorAssetType::RenderStyle);
+    ayt::render::ColorStylizationSettings look;std::string error;
+    CHECK(ayt::render::loadColorStylizationLook(first.absolutePath,look,&error));
+    CHECK_FALSE(look.enabled);CHECK(error.empty());
+    CHECK(std::string(editorAssetTypeName(EditorAssetType::RenderStyle))=="Render Look");
+    EditorAssetDatabase db;CHECK(db.open(cleanup.root.string(),&error));
+    CHECK(db.scanNow(&error));
+    CHECK(db.findByLogicalPath(first.logicalPath)!=nullptr);
+    const auto* record=db.findByLogicalPath(first.logicalPath);
+    if(record)CHECK(record->type==EditorAssetType::RenderStyle);
+    db.close();CHECK(db.open(cleanup.root.string(),&error));
+    record=db.findByLogicalPath(first.logicalPath);CHECK(record!=nullptr);
+    if(record)CHECK(record->type==EditorAssetType::RenderStyle);
+}
+
+TEST_CASE(project_asset_factory_respects_configured_asset_root)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("custom_assets")};
+    std::filesystem::create_directories(cleanup.root);
+    EditorProjectDescriptor project;project.schemaVersion=kEditorProjectDescriptorSchemaVersion;
+    project.id="custom-assets";project.assetRoot="SourceAssets";std::string error;
+    CHECK(project.save(cleanup.root.string(),&error));
+    for(auto type:{EditorAssetType::RenderStyle,EditorAssetType::UiLayout}) {
+        const auto created=createEditorProjectAsset(cleanup.root.string(),type);CHECK(created);
+        const auto relative=std::filesystem::path(created.absolutePath).lexically_relative(cleanup.root);
+        CHECK_FALSE(relative.empty());if(!relative.empty())CHECK(relative.begin()->string()=="SourceAssets");
+        EditorAssetDatabase db;CHECK(db.open(cleanup.root.string(),&error));CHECK(db.scanNow(&error));
+        CHECK(db.findByLogicalPath(created.logicalPath)!=nullptr);
+    }
+    CHECK_FALSE(std::filesystem::exists(cleanup.root/"Assets"));
 }
 
 TEST_CASE(project_asset_factory_creates_actor_class_and_editable_script)

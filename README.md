@@ -1,5 +1,14 @@
 # AYEditor
 
+## Look 资产工作流（2026-10-19）
+
+File → New Render Look把当前参数存成`Assets/looks/NewLook.rsl`，重名自动编号。
+资产浏览器以LOOK卡片识别并支持类型过滤；双击应用，显示Render面板并选中作品保存路径。
+创建工厂的独立调用写默认关闭look；Session菜单复制当前look。失败加载保留既有参数，
+操作不修改Scene或撤销历史；缓存可恢复新类型，也会重新识别旧索引中的Unknown `.rsl`。
+模板目录经解析后必须在项目内，拒绝Assets子目录链接逃逸。`.rsl`仍为显式Host消费的Experimental作者文件。
+物理目录跟随project.prj的assetRoot（默认Assets），浏览器继续显示虚拟Assets前缀。
+
 ## 时间风格创作（2026-10-19）
 
 Render面板增加独立时间反馈开关、残影/整帧停格/分块刷新模式，历史混合、周期、块大小、

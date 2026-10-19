@@ -129,6 +129,7 @@ const wchar_t* EditorAssetTilePresenter::typeAbbreviation(
     case EditorAssetType::StatsRecipe: return L"STAT";
     case EditorAssetType::AvatarBundle: return L"AVATAR";
     case EditorAssetType::AvatarPreset: return L"PRESET";
+    case EditorAssetType::RenderStyle: return L"LOOK";
     case EditorAssetType::Unknown: break;
     }
     return L"FILE";
@@ -144,6 +145,7 @@ EditorAssetTileCategory EditorAssetTilePresenter::categoryFor(
     case EditorAssetType::SourceModel:
         return EditorAssetTileCategory::Geometry;
     case EditorAssetType::Material:
+    case EditorAssetType::RenderStyle:
         return EditorAssetTileCategory::Surface;
     case EditorAssetType::Texture:
         return EditorAssetTileCategory::Texture;
