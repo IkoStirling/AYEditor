@@ -25,7 +25,7 @@ enum class EditorCameraDisplayMode : uint8_t { Solid = 0, Wireframe = 1, Hidden 
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 6;
+    static constexpr int kCurrentSchemaVersion = 7;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -91,6 +91,14 @@ struct EditorPreferences {
     // Resource browser presentation only; does not affect asset identity.
     bool assetBrowserFlatMode = false;
     EditorCameraDisplayMode cameraDisplayMode = EditorCameraDisplayMode::Solid;
+    bool colorStylizationEnabled = false;
+    int colorStylizationPreset = 1;
+    bool pixelationEnabled = true;
+    int pixelSize = 6;
+    bool posterizationEnabled = true;
+    int colorLevels = 12;
+    float ditherStrength = 0.0f;
+
 };
 
 inline bool operator==(const EditorPreferences& a,
@@ -148,7 +156,14 @@ inline bool operator==(const EditorPreferences& a,
         && a.autoExposureEnabled == b.autoExposureEnabled
         && a.recentProjectRoots == b.recentProjectRoots
         && a.assetBrowserFlatMode == b.assetBrowserFlatMode
-        && a.cameraDisplayMode == b.cameraDisplayMode;
+        && a.cameraDisplayMode == b.cameraDisplayMode
+        && a.colorStylizationEnabled == b.colorStylizationEnabled
+        && a.colorStylizationPreset == b.colorStylizationPreset
+        && a.pixelationEnabled == b.pixelationEnabled
+        && a.pixelSize == b.pixelSize
+        && a.posterizationEnabled == b.posterizationEnabled
+        && a.colorLevels == b.colorLevels
+        && a.ditherStrength == b.ditherStrength;
 }
 
 inline bool operator!=(const EditorPreferences& a,

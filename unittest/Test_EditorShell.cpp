@@ -1129,6 +1129,56 @@ TEST_CASE(editor_color_grading_enable_promotes_neutral_to_visible_warm_preset) {
     session.shutdown();
 }
 
+TEST_CASE(editor_color_stylization_presets_custom_values_and_preferences) {
+    const auto path=resolveEditorShellLayoutPath();
+    CHECK(!path.empty()); if(path.empty()) return;
+    EditorPreferences saved;
+    {
+        MockRenderer backend; EditorSession session;
+        CHECK(session.initialize(&backend,path));
+        auto* preset=dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_stylization_preset"));
+        auto* pixel=dynamic_cast<Slider*>(session.ui().findById("sld_style_pixel_size"));
+        auto* levels=dynamic_cast<Slider*>(session.ui().findById("sld_style_color_levels"));
+        auto* dither=dynamic_cast<Slider*>(session.ui().findById("sld_style_dither_strength"));
+        CHECK(preset && pixel && levels && dither);
+        if(preset && pixel && levels && dither) {
+            preset->setSelectedIndexAndNotify(3);
+            auto prefs=session.currentPreferences();
+            CHECK(prefs.colorStylizationEnabled);CHECK(prefs.pixelSize==3);
+            CHECK(prefs.colorLevels==4);CHECK(prefs.ditherStrength==1);
+            pixel->setValue(2.5f);
+            CHECK(session.currentPreferences().pixelSize==3);
+            auto* label=dynamic_cast<TextLabel*>(session.ui().findById("lbl_style_pixel_size"));
+            CHECK(label && label->getText().find(L"3")!=std::wstring::npos);
+            pixel->setValue(9);levels->setValue(7);dither->setValue(.35f);
+            saved=session.currentPreferences();
+            CHECK(saved.pixelSize==9);CHECK(saved.colorLevels==7);
+            preset->setSelectedIndexAndNotify(0);
+            CHECK_FALSE(session.currentPreferences().colorStylizationEnabled);
+        }
+        session.shutdown();
+    }
+    {
+        MockRenderer backend; EditorSession session;
+        EditorSessionDesc desc;desc.uiBackend=&backend;desc.layoutPath=path;desc.preferences=saved;
+        CHECK(session.initialize(desc));
+        auto restored=session.currentPreferences();
+        CHECK(restored.colorStylizationEnabled);CHECK(restored.colorStylizationPreset==3);
+        CHECK(restored.pixelSize==9);CHECK(restored.colorLevels==7);
+        CHECK_FLOAT_EQ(restored.ditherStrength,.35f,1e-5f);
+        auto* preset=dynamic_cast<ComboBox*>(session.ui().findById("cmb_color_stylization_preset"));
+        CHECK_NOT_NULL(preset);
+        if(preset) {
+            preset->setSelectedIndexAndNotify(2);
+            CHECK_FALSE(session.currentPreferences().pixelationEnabled);
+            CHECK(session.currentPreferences().colorLevels==4);
+        }
+        EditorPreferences changed=restored; changed.ditherStrength=.5f;
+        CHECK(changed!=restored);
+        session.shutdown();
+    }
+}
+
 TEST_CASE(editor_freecam_wheel_zoom_dollies_along_view_direction) {
     EditorFreecam camera;
     const ayt::math::FVector3 initialEye = camera.eye();

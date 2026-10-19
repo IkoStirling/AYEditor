@@ -1900,3 +1900,16 @@ real camera assets and live material/mesh handles. SDK doctor:116 capabilities,
 53 modules,82 searches,467 documented entry symbols,0 errors/0 warnings.
 Reports are under out/camera-editor in the source checkout. Native Computer Use
 interaction and visual acceptance remain deferred; no screenshot acceptance is claimed.
+
+
+## 复古色彩控制与用户偏好（2026-10-19）
+
+Render 面板追加 Color Stylization 开关、Neutral/Pixel Retro/Low Color/Dither Retro 预设、
+Pixelation、Posterization、pixelSize、每通道色阶和抖动强度。实时通过已注册 RendererSubSystem
+调用 Renderer::setColorStylizationSettings；未注册时仍允许编辑/保存设置。
+切换预设填充全部控件；加载偏好时不重新应用预设，所以手调值可以恢复。整数滑条四舍五入。
+数值标签与开关支持 en-US/zh-CN；预设专名保持一致。UI 在 Present 后，不受此颜色效果影响。
+EditorPreferences schema7 在尾部追加7个字段，旧文件缺字段时保持默认关闭；
+Editor.Render.ColorStylization.* 通过现有用户配置保存，不改变场景资源格式。
+此处增加结构大小，source ABI 从33升到34，跨 demo/library 的宿主须同步重新编译。单测见 Test_EditorShell.cpp 的
+editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/再初始化覆盖自定义值。

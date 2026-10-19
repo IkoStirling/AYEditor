@@ -373,6 +373,13 @@ ayt::editor::EditorPreferences loadEditorPreferences(
     out.colorGradingStrength = preferenceFloat(
         saved, "Editor.Render.ColorGrading.Strength",
         out.colorGradingStrength);
+    out.colorStylizationEnabled=saved.getBool("Editor.Render.ColorStylization.Enabled",out.colorStylizationEnabled);
+    out.colorStylizationPreset=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.Preset",out.colorStylizationPreset)),0,3);
+    out.pixelationEnabled=saved.getBool("Editor.Render.ColorStylization.Pixelation",out.pixelationEnabled);
+    out.posterizationEnabled=saved.getBool("Editor.Render.ColorStylization.Posterization",out.posterizationEnabled);
+    out.pixelSize=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.PixelSize",out.pixelSize)),1,64);
+    out.colorLevels=std::clamp(static_cast<int>(saved.getInt("Editor.Render.ColorStylization.ColorLevels",out.colorLevels)),2,32);
+    out.ditherStrength=std::clamp(preferenceFloat(saved,"Editor.Render.ColorStylization.DitherStrength",out.ditherStrength),0.0f,1.0f);
     out.shadowsEnabled = saved.getBool(
         "Editor.Render.Shadows.Enabled", out.shadowsEnabled);
     out.shadowPcfEnabled = saved.getBool(
@@ -448,6 +455,13 @@ bool saveEditorPreferences(const std::string& path,
                   value.colorGradingPreset);
     config.setFloat("Editor.Render.ColorGrading.Strength",
                     value.colorGradingStrength);
+    config.setBool("Editor.Render.ColorStylization.Enabled",value.colorStylizationEnabled);
+    config.setInt("Editor.Render.ColorStylization.Preset",value.colorStylizationPreset);
+    config.setBool("Editor.Render.ColorStylization.Pixelation",value.pixelationEnabled);
+    config.setBool("Editor.Render.ColorStylization.Posterization",value.posterizationEnabled);
+    config.setInt("Editor.Render.ColorStylization.PixelSize",value.pixelSize);
+    config.setInt("Editor.Render.ColorStylization.ColorLevels",value.colorLevels);
+    config.setFloat("Editor.Render.ColorStylization.DitherStrength",value.ditherStrength);
     config.setBool("Editor.Render.Shadows.Enabled", value.shadowsEnabled);
     config.setBool("Editor.Render.Shadows.PCF", value.shadowPcfEnabled);
     const std::size_t recentProjectCount = std::min<std::size_t>(

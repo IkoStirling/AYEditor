@@ -1,3 +1,4 @@
+#include "AYRenderer/ColorStylizationSettings.h"
 #include "AYEditor/EditorSession.h"
 #include "EditorPhysicsDebugGeometry.h"
 #include "EditorDebugVisualization.h"
@@ -7129,6 +7130,9 @@ void EditorSession::refreshLocalizedValueLabels()
         const char* numberFormat;
     };
     static constexpr SliderLabel labels[] = {
+        {"sld_style_pixel_size","lbl_style_pixel_size","ui.editor.render.style_pixel_size_value","Pixel Size  {0}","%.0f"},
+        {"sld_style_color_levels","lbl_style_color_levels","ui.editor.render.style_color_levels_value","Levels per Channel  {0}","%.0f"},
+        {"sld_style_dither_strength","lbl_style_dither_strength","ui.editor.render.style_dither_strength_value","Dither Strength  {0}","%.2f"},
         {"sld_gamma", "lbl_gamma", "ui.editor.render.gamma_value",
          "Gamma  {0}", "%.2f"},
         {"sld_exposure", "lbl_exposure", "ui.editor.render.exposure_value",
@@ -7158,8 +7162,10 @@ void EditorSession::refreshLocalizedValueLabels()
             _ui.findById(binding.sliderId));
         if (slider == nullptr) continue;
         char value[32]{};
-        std::snprintf(value, sizeof(value), binding.numberFormat,
-                      static_cast<double>(slider->getValue()));
+        const double displayValue = std::strcmp(binding.numberFormat, "%.0f") == 0
+            ? std::round(static_cast<double>(slider->getValue()))
+            : static_cast<double>(slider->getValue());
+        std::snprintf(value, sizeof(value), binding.numberFormat, displayValue);
         setLocalizedValueLabel(binding.labelId, binding.key,
                                binding.fallback, value);
     }
@@ -7726,9 +7732,66 @@ void EditorSession::bindRenderSettingsPanel()
         applyColorGrading();
     });
 
+    // Presets seed editable parameters. Manual edits keep their values until a
+    // different preset is selected; loading preferences never reapplies a preset.
+    for (const char* id : {"chk_color_stylization", "chk_style_pixelation", "chk_style_posterization"}) {
+        if (auto* check = dynamic_cast<ayt::ui::CheckBox*>(_ui.findById(id))) {
+            check->setOnToggled([this](bool) { applyColorStylizationFromPanel(); });
+        }
+    }
+    if (auto* combo = dynamic_cast<ayt::ui::ComboBox*>(_ui.findById("cmb_color_stylization_preset"))) {
+        combo->setOnSelectionChanged([this](int index) {
+            if (_applyingPreferences) return;
+            const auto preset = ayt::render::colorStylizationPreset(
+                static_cast<ayt::render::ColorStylizationPreset>(std::clamp(index,0,3)));
+            auto check = [this](const char* id,bool value) {
+                if (auto* w=dynamic_cast<ayt::ui::CheckBox*>(_ui.findById(id))) w->setChecked(value);
+            };
+            auto slider = [this](const char* id,float value) {
+                if (auto* w=dynamic_cast<ayt::ui::Slider*>(_ui.findById(id))) w->setValue(value);
+            };
+            check("chk_color_stylization",preset.enabled);
+            check("chk_style_pixelation",preset.pixelationEnabled);
+            check("chk_style_posterization",preset.posterizationEnabled);
+            slider("sld_style_pixel_size",float(preset.pixelSize));
+            slider("sld_style_color_levels",float(preset.colorLevels));
+            slider("sld_style_dither_strength",preset.ditherStrength);
+            applyColorStylizationFromPanel();
+            refreshLocalizedValueLabels();
+        });
+    }
+    for (const char* id : {"sld_style_pixel_size", "sld_style_color_levels", "sld_style_dither_strength"}) {
+        bindSlider(id,[this](float) {
+            applyColorStylizationFromPanel();
+            refreshLocalizedValueLabels();
+        });
+    }
+
     // Labels in JSON are decorative until Slider min/max/value load;
     // refresh from the live widget values so thumb ↔ text stay aligned.
     refreshLocalizedValueLabels();
+}
+
+void EditorSession::applyColorStylizationFromPanel()
+{
+    auto* sub = ayt::render::RendererSubSystem::findRegistered();
+    if (!sub) return;
+    ayt::render::ColorStylizationSettings settings;
+    auto check = [this](const char* id,bool fallback) {
+        const auto* w=dynamic_cast<ayt::ui::CheckBox*>(_ui.findById(id));
+        return w ? w->isChecked() : fallback;
+    };
+    auto slider = [this](const char* id,float fallback) {
+        const auto* w=dynamic_cast<ayt::ui::Slider*>(_ui.findById(id));
+        return w ? w->getValue() : fallback;
+    };
+    settings.enabled=check("chk_color_stylization",false);
+    settings.pixelationEnabled=check("chk_style_pixelation",true);
+    settings.posterizationEnabled=check("chk_style_posterization",true);
+    settings.pixelSize=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_pixel_size",6),1.0f,64.0f)));
+    settings.colorLevels=static_cast<uint8_t>(std::lround(std::clamp(slider("sld_style_color_levels",12),2.0f,32.0f)));
+    settings.ditherStrength=slider("sld_style_dither_strength",0);
+    sub->renderer().setColorStylizationSettings(settings);
 }
 
 void EditorSession::applyRenderSettingsFromPanel()
@@ -7896,6 +7959,7 @@ void EditorSession::applyRenderSettingsFromPanel()
             sliderValue("sld_color_grading_strength", 0.75f));
         r.setColorGradingEnabled(enabled);
     }
+    applyColorStylizationFromPanel();
     r.setViewportOrientationAxisEnabled(_viewportOrientationAxisVisible);
 }
 
@@ -8005,6 +8069,13 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     setCheck("chk_color_grading", preferences.colorGradingEnabled);
     setSlider("sld_color_grading_strength",
               preferences.colorGradingStrength);
+    setCombo("cmb_color_stylization_preset", std::clamp(preferences.colorStylizationPreset,0,3));
+    setCheck("chk_color_stylization", preferences.colorStylizationEnabled);
+    setCheck("chk_style_pixelation", preferences.pixelationEnabled);
+    setCheck("chk_style_posterization", preferences.posterizationEnabled);
+    setSlider("sld_style_pixel_size", float(preferences.pixelSize));
+    setSlider("sld_style_color_levels", float(preferences.colorLevels));
+    setSlider("sld_style_dither_strength", preferences.ditherStrength);
     setCheck("chk_shadows", preferences.shadowsEnabled);
     setCheck("chk_shadow_pcf", preferences.shadowPcfEnabled);
 
@@ -8125,6 +8196,13 @@ EditorPreferences EditorSession::capturePreferences() const
         "cmb_color_grading_preset", out.colorGradingPreset);
     out.colorGradingStrength = sliderValue(
         "sld_color_grading_strength", out.colorGradingStrength);
+    out.colorStylizationEnabled=checkValue("chk_color_stylization",out.colorStylizationEnabled);
+    out.colorStylizationPreset=comboValue("cmb_color_stylization_preset",out.colorStylizationPreset);
+    out.pixelationEnabled=checkValue("chk_style_pixelation",out.pixelationEnabled);
+    out.posterizationEnabled=checkValue("chk_style_posterization",out.posterizationEnabled);
+    out.pixelSize=static_cast<int>(std::lround(sliderValue("sld_style_pixel_size",float(out.pixelSize))));
+    out.colorLevels=static_cast<int>(std::lround(sliderValue("sld_style_color_levels",float(out.colorLevels))));
+    out.ditherStrength=sliderValue("sld_style_dither_strength",out.ditherStrength);
     out.shadowsEnabled = checkValue("chk_shadows", out.shadowsEnabled);
     out.shadowPcfEnabled = checkValue(
         "chk_shadow_pcf", out.shadowPcfEnabled);

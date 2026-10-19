@@ -411,6 +411,7 @@ private:
     void syncOutlinerCreateControls();
     void deleteSelectedEntity();
     void applyRenderSettingsFromPanel();
+    void applyColorStylizationFromPanel();
     void applyPreferences(const EditorPreferences& preferences);
     EditorPreferences capturePreferences() const;
     void pollPreferences(float dtSeconds);
