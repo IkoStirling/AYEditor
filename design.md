@@ -1,9 +1,27 @@
 # AYEditor Design
 
+## 2026-10-20 主 Deferred 灯光文档
+
+保留 EditorDslDocument 的身份、恢复、严格保存与 8 MiB 上限；可选 LightShowView
+替换 LightShowJson 的 view 工厂。内容 revision 变化才 decode/compile，逐帧复用求值缓冲区。
+可视编辑编码/校验成功后一次替换 TextArea 选区，因此 JSON 与多轨/组操作共用历史。
+时间轴只画可见行；每个像素桶用 upper_bound 跳过重复键，单帧绘制量受屏幕宽度约束。
+拖动只保留 ghost，松开调用 Core 原子关键帧编辑，捕获取消不发布；属性采样禁用扫动/频闪，
+避免把程序化调制烘焙回键。组属性编辑只应用实际更改字段，保留各灯的独立位置/颜色与轨参数。雾/灯具插入保留原出段插值，编队保持稳定点 ID。
+
+IEditorView::mainPreviewBounds 给出逻辑视口孔；Session 在布局完成后转换物理像素，
+只临时去除活动 DockCard 的背景，Flush 恢复，窗口和 dock 仍参与布局。
+RendererSubSystem 的单 owner 主呈现替代 World/多相机 Forward 提取，只 render 一次。
+首次提交前捕获宿主呈现状态；matching clear/owner替换/shutdown 恢复并失效时域历史。
+页面隐藏的祖先可见性也会解绑，不能因旧 activeDocumentId 继续占用 Scene View。
+视图在 hosted tree 销毁前 prepareForUiShutdown；随后释放自身资产和 Presenter 缓存。
+GPU回读仍由 Renderer 的异步 host-packet 生命周期托管，不在 UI 等待。
+
+
 ## 2026-10-16 灯光演出文档接入
 
 当 `AYEDITOR_HAS_SEQUENCE` 启用时，`.lshow` 在 AssetDatabase 中有独立类型，归入
-Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema4 文件。
+Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema8 文件。
 双击资产走 `EditorDslExtension` 文本页，打开容量沿用 DSL 文档的 8 MiB 限制。
 保存前以 `decodeLightShow` 校验当前编辑缓冲区，失败时保留磁盘原件和脏状态；
 Compile 对未保存内容做格式检查，并以 0.5 世界单位阈值执行有界编队间距诊断。

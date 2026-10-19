@@ -211,7 +211,7 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         ayt::sequence::LightShow show;
         show.name="New Light Show";show.duration=10;
         ayt::sequence::FixtureTrack fixture;fixture.id=1;fixture.group="stage";
-        fixture.keys.push_back({0,ayt::sequence::FixtureState{}});
+        ayt::sequence::FixtureState state;state.position={0,8,0};fixture.keys.push_back({0,state});
         show.fixtures.push_back(std::move(fixture));
         saved=ayt::sequence::saveLightShow(destination.string(),show,&error);
 #endif

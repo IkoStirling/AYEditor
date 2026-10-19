@@ -26,6 +26,9 @@
 #include <utility>
 
 namespace ayt::editor {
+#ifdef AYEDITOR_HAS_LIGHTSHOW_RENDERER
+std::unique_ptr<IEditorView> makeEditorLightShowView(std::shared_ptr<EditorDslDocument>, IEditorHostServices&);
+#endif
 namespace {
 
 
@@ -626,6 +629,10 @@ EditorDescriptor makeEditorDslDescriptor()
            IEditorHostServices& host) -> std::unique_ptr<IEditorView> {
             auto dsl = std::dynamic_pointer_cast<EditorDslDocument>(document);
             if (dsl == nullptr) return nullptr;
+#ifdef AYEDITOR_HAS_LIGHTSHOW_RENDERER
+            if (dsl->language()==EditorDslLanguage::LightShowJson)
+                return makeEditorLightShowView(std::move(dsl),host);
+#endif
             return std::make_unique<EditorDslWorkspaceView>(
                 std::move(dsl), host);
         };

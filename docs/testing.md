@@ -1,5 +1,24 @@
 # Editor 测试运行与报告
 
+## 灯光演出作者与主 Deferred 预览（2026-10-20）
+
+`AYEditor_SequenceTests --suite AYEditor_Sequence` 包括严格保存、组字段保留、灯具CRUD、
+拖动一次撤销/捕获取消/外部revision取消、物理雾/编队和实际EditorSession透明孔布局。
+Mock绘制探针检查预览中心没有不透明背景覆盖，不依赖截图。
+
+真实GPU验收独立运行（默认库存不初始化设备）：
+
+```powershell
+$env:AY_EDITOR_LIGHTSHOW_GPU='d3d11' # 或 d3d12
+AYEditor_SequenceTests --case light_show_main_deferred_native_preview_restores_scene_on_hide_source_and_close
+```
+
+隐藏原生窗口验证主Deferred表面/体积、froxel历史、GPU点阵带序号回读、点/灯预算回退、
+隐藏/JSON切换/关闭后的宿主密度场、相机、灯包和视口恢复，以及宿主场景重新提交。
+清除该环境变量后运行完整Editor门禁。提交线程不等待GPU，数值日志不作通用帧率承诺。
+2026-10-20本阶段验证：完整419/419（7153断言），D3D11/D3D12各50断言通过，产品构建成功。
+
+
 启用 Avatar Engine/UI 后，聚合库存包括 `Test_EditorAvatar.cpp`；专项
 `AYEditor_AvatarTests` 覆盖资源注册、只读 bundle、预设保存/重开/历史、失败保留和
 真实输入桥的视口导航及 pending 数值保存。未启用 Avatar 时该源不注册套件。

@@ -1,13 +1,23 @@
 # AYEditor
 
-## 灯光演出资源（2026-10-16）
+## 灯光演出资源（2026-10-20）
 
-启用 `AY_ENABLE_SEQUENCE` 后，项目创建菜单提供 **New Light Show**，生成可直接打开的
-`shows/NewLightShow.lshow`。资源浏览器将 `.lshow` 归为 Light Show；双击进入主编辑器的
-文本页面。页面保存前按 AYSequence 的严格 schema 校验整个 JSON，错误内容不会覆盖磁盘文件；
-Compile 可显示数据错误和有界编队间距警告。文本页面沿用 8 MiB 文档上限；资源格式自身
-仍允许 128 MiB。三维预览、播放和灯具滑条仍由独立 `AYLightShow_Studio` 提供。
-证据：`Test_EditorSequence.cpp` 的 `light_show_asset_opens_in_editor_and_rejects_invalid_save`。
+启用 Sequence 与 RendererIntegration 后，`.lshow` 使用主 Deferred 三维预览，
+同屏显示灯组、灯具、编队和雾轨。右键拖动环绕、滚轮缩放；点击时间轴定位，
+拖动关键帧在松开时提交一次编辑，取消捕获保留原文。支持灯具新建/克隆/删除、灯组分配/重命名、
+灯具光学与扫动/频闪/IES/Gobo、雾物理参数、圆/球编队与连续间距绕行。
+这些操作与 JSON 切换页共用 TextArea 撤销历史，保存前仍严格校验 8 MiB 文档。
+无 RendererIntegration 时保留文本页；资源格式上限仍为 128 MiB。
+
+预览默认使用64表面/12体积/4阴影预算，可有界调整预算与曝光，HUD显示提交/跳过计数、CPU准备和延迟GPU计时；
+GPU点阵未知可见数显示 source/pending，回读带独立采样序号，不显示伪造的当前可见数。
+Froxel、镜头、快门、聚合光与GPU筛选/回读为会话选项。隐藏标签、切回JSON、
+切页或关闭时解绑 owner 并恢复宿主相机/灯包/雾密度场/曝光/后处理/管线/视口；
+关闭页面显式释放 Presenter 与舞台缓存。独立 Forward 离屏视口不用于灯光预览。
+
+New Light Show 使用当前 schema8 编解码器。Studio 继续提供音乐/波形、密度网格笔刷与节目包导出。
+测试见 `Test_EditorSequence.cpp`：作者事务、拖动取消、真实宿主布局及可选
+`AY_EDITOR_LIGHTSHOW_GPU=d3d11|d3d12` 隐藏原生验收；不连接实体演出设备。
 
 ## 空间与数据实体作者流程（2026-10-14）
 
