@@ -1193,6 +1193,7 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         CHECK(session.initialize(desc));
         auto look=ayt::render::colorStylizationPreset(ayt::render::ColorStylizationPreset::Blueprint);
         look.palette[15]={.25f,.5f,.75f};look.outlineWidth=3.5f;
+        look.display.enabled=true;look.display.grainStrength=.12f;look.display.noiseSeed=91;
         session.setRenderStyleLook(look);
         const auto expected=ayt::render::serializeColorStylizationLook(session.renderStyleLook());
         std::string error;
@@ -1219,6 +1220,7 @@ TEST_CASE(editor_render_look_project_files_and_advanced_preferences) {
         CHECK(restored.printPattern==ayt::render::StylizationPrintPattern::CrossHatch);
         CHECK_FLOAT_EQ(restored.outlineWidth,3.5f,1e-5f);
         CHECK_FLOAT_EQ(restored.palette[15].b,.75f,1e-5f);
+        CHECK(restored.display.enabled);CHECK(restored.display.noiseSeed==91);
         session.shutdown();
     }
 }

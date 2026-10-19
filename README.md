@@ -2,13 +2,13 @@
 
 ## Render Style 创作（2026-10-19）
 
-Render面板提供十套起点预设、像素/RGB/双色/自定义2..16色板、印刷和轮廓控制。
+Render面板提供十二套起点预设、像素/RGB/双色/自定义2..16色板、印刷和轮廓控制。
 颜色使用#RRGGBB，色板为空格分隔2..16项；非法编辑保留既有配置并显示原因。
 文件路径支持当前项目相对路径或项目内绝对路径，保存/加载`.rsl`，已有父目录必须存在；
 拒绝项目外路径及符号链接逃逸。Reset恢复默认关闭配置，加载失败不改变当前look。
 这些操作可由`renderStyleLook`、`setRenderStyleLook`、`saveRenderStyleLook`、`loadRenderStyleLook`驱动。
 作品文件独立于Scene和用户偏好；schema8偏好通过Renderer版本化serializer保存全部参数，
-旧schema7标量继续迁移。Source ABI35；完整重编消费方，避免结构偏移不一致。
+旧schema7标量继续迁移。Source ABI36；完整重编消费方，避免结构偏移不一致。
 颜色与轮廓绑定实现移至`AYEditorRenderStyle.cpp`，不继续向主Session TU堆积参数转换。
 
 
@@ -434,3 +434,6 @@ EditorPreferences schema7 在尾部追加7个字段，旧文件缺字段时保�
 Editor.Render.ColorStylization.* 通过现有用户配置保存，不改变场景资源格式。
 此处增加结构大小，source ABI 从33升到34，跨 demo/library 的宿主须同步重新编译。单测见 Test_EditorShell.cpp 的
 editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/再初始化覆盖自定义值。
+
+显示模拟补充：Arcade/Broadcast与独立display开关/参数，面板按所选效果显示相关控制，隐藏时保留值。
+偏好仍为schema8，内嵌look升为v2并可读v1；Editor source ABI36与完整重编匹配新增值布局。

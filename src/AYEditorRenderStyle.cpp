@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <cctype>
 #include <sstream>
+#include <string_view>
 
 namespace ayt::editor {
 namespace {
@@ -24,6 +25,39 @@ template<class T> T* widget(const ayt::ui::UIManager& ui,const char* id) {
 void status(const ayt::ui::UIManager& ui,const std::string& text) {
     if(auto* label=widget<ayt::ui::TextLabel>(ui,"lbl_style_status"))
         label->setText(ayt::ui::decodeUtf8Text(text));
+}
+void updateVisibility(ayt::ui::UIManager& ui,const ColorStylizationSettings& s) {
+    const auto show=[&](const char* id,bool visible){if(auto* w=ui.findById(id))w->setVisible(visible);};
+    const auto pair=[&](const char* name,bool visible){
+        const std::string label=std::string("lbl_style_")+name;
+        const std::string slider=std::string("sld_style_")+name;
+        show(label.c_str(),visible);show(slider.c_str(),visible);
+    };
+    pair("pixel_size",s.pixelationEnabled);
+    const bool palette=s.colorMapping==StylizationColorMapping::FixedPalette;
+    const bool duo=s.colorMapping==StylizationColorMapping::Duotone;
+    show("chk_style_posterization",!palette);pair("color_levels",!palette && s.posterizationEnabled);
+    pair("dither_strength",palette || s.posterizationEnabled);
+    for(const char* name:{"shadow","highlight","palette"}) {
+        const bool visible=std::string_view(name)=="palette"?palette:duo;
+        const std::string label=std::string("lbl_style_")+name,input=std::string("txt_style_")+name;
+        show(label.c_str(),visible);show(input.c_str(),visible);
+    }
+    const bool print=s.printPattern!=StylizationPrintPattern::None;
+    for(const char* name:{"print_spacing","print_angle","print_strength","print_gamma"})pair(name,print);
+    for(const char* name:{"ink","paper"}) {
+        const std::string label=std::string("lbl_style_")+name,input=std::string("txt_style_")+name;
+        show(label.c_str(),print);show(input.c_str(),print);
+    }
+    const bool outline=s.outlineMode!=StylizationOutlineMode::None;
+    pair("outline_width",outline);pair("outline_strength",outline);
+    pair("outline_luminance",s.outlineMode==StylizationOutlineMode::Luminance);
+    pair("outline_depth",s.outlineMode>=StylizationOutlineMode::Depth);
+    pair("outline_normal",s.outlineMode==StylizationOutlineMode::DepthNormal);
+    show("lbl_style_normal_hint",s.outlineMode==StylizationOutlineMode::DepthNormal);
+    show("lbl_style_outline",outline);show("txt_style_outline",outline);
+    for(const char* name:{"scanline","mask","chroma","curvature","vignette","grain","noise_seed"})pair(name,s.display.enabled);
+    ui.invalidateLayout();
 }
 bool projectLookPath(const std::string& root,const std::string& request,std::string& path,std::string* error) {
     const auto fail=[&](const char* text){if(error)*error=text;return false;};
@@ -55,6 +89,14 @@ ayt::render::ColorStylizationSettings EditorSession::renderStyleLook() const {
     s.pixelSize=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_pixel_size",s.pixelSize),1.f,64.f)));
     s.colorLevels=static_cast<uint8_t>(std::lround(std::clamp(slider("sld_style_color_levels",s.colorLevels),2.f,32.f)));
     s.ditherStrength=slider("sld_style_dither_strength",s.ditherStrength);
+    s.display.enabled=check("chk_style_display",s.display.enabled);
+    s.display.scanlineStrength=slider("sld_style_scanline",s.display.scanlineStrength);
+    s.display.maskStrength=slider("sld_style_mask",s.display.maskStrength);
+    s.display.chromaticOffset=slider("sld_style_chroma",s.display.chromaticOffset);
+    s.display.curvature=slider("sld_style_curvature",s.display.curvature);
+    s.display.vignetteStrength=slider("sld_style_vignette",s.display.vignetteStrength);
+    s.display.grainStrength=slider("sld_style_grain",s.display.grainStrength);
+    s.display.noiseSeed=static_cast<uint16_t>(std::lround(std::clamp(slider("sld_style_noise_seed",s.display.noiseSeed),0.f,65535.f)));
     s.colorMapping=static_cast<StylizationColorMapping>(combo("cmb_style_mapping",int(s.colorMapping)));
     s.printPattern=static_cast<StylizationPrintPattern>(combo("cmb_style_print",int(s.printPattern)));
     s.outlineMode=static_cast<StylizationOutlineMode>(combo("cmb_style_outline",int(s.outlineMode)));
@@ -80,6 +122,11 @@ void EditorSession::syncColorStylizationPanel() {
     check("chk_style_posterization",s.posterizationEnabled);
     slider("sld_style_pixel_size",s.pixelSize);slider("sld_style_color_levels",s.colorLevels);
     slider("sld_style_dither_strength",s.ditherStrength);
+    check("chk_style_display",s.display.enabled);
+    slider("sld_style_scanline",s.display.scanlineStrength);slider("sld_style_mask",s.display.maskStrength);
+    slider("sld_style_chroma",s.display.chromaticOffset);slider("sld_style_curvature",s.display.curvature);
+    slider("sld_style_vignette",s.display.vignetteStrength);slider("sld_style_grain",s.display.grainStrength);
+    slider("sld_style_noise_seed",s.display.noiseSeed);
     combo("cmb_style_mapping",int(s.colorMapping));combo("cmb_style_print",int(s.printPattern));
     combo("cmb_style_outline",int(s.outlineMode));
 #define SYNC_STYLE_SLIDER(field,id) slider(id,s.field)
@@ -103,7 +150,7 @@ void EditorSession::syncColorStylizationPanel() {
             text+=ayt::ui::ColorPicker::formatHexCode({c.r,c.g,c.b,1}).substr(0,7);
         }w->setText(text);
     }
-    _syncingRenderStyle=previous;refreshLocalizedValueLabels();
+    updateVisibility(_ui,s);_syncingRenderStyle=previous;refreshLocalizedValueLabels();
 }
 
 void EditorSession::setRenderStyleLook(const ColorStylizationSettings& settings) {
@@ -113,6 +160,7 @@ void EditorSession::setRenderStyleLook(const ColorStylizationSettings& settings)
 void EditorSession::applyColorStylizationFromPanel() {
     if(_syncingRenderStyle)return;
     _renderStyleLook=renderStyleLook();
+    updateVisibility(_ui,_renderStyleLook);
     if(auto* sub=RendererSubSystem::findRegistered())sub->renderer().setColorStylizationSettings(_renderStyleLook);
 }
 bool EditorSession::saveRenderStyleLook(const std::string& request,std::string* error) {
@@ -127,18 +175,19 @@ bool EditorSession::loadRenderStyleLook(const std::string& request,std::string* 
 
 void EditorSession::bindColorStylizationPanel() {
     const auto changed=[this]{if(!_applyingPreferences && !_syncingRenderStyle){applyColorStylizationFromPanel();refreshLocalizedValueLabels();}};
-    for(const char* id:{"chk_color_stylization","chk_style_pixelation","chk_style_posterization"})
+    for(const char* id:{"chk_color_stylization","chk_style_pixelation","chk_style_posterization","chk_style_display"})
         if(auto* w=widget<ayt::ui::CheckBox>(_ui,id))w->setOnToggled([changed](bool){changed();});
     for(const char* id:{"cmb_style_mapping","cmb_style_print","cmb_style_outline"})
         if(auto* w=widget<ayt::ui::ComboBox>(_ui,id))w->setOnSelectionChanged([changed](int){changed();});
     if(auto* w=widget<ayt::ui::ComboBox>(_ui,"cmb_color_stylization_preset"))
         w->setOnSelectionChanged([this](int index){
             if(_applyingPreferences || _syncingRenderStyle)return;
-            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,9))));
+            setRenderStyleLook(colorStylizationPreset(static_cast<ColorStylizationPreset>(std::clamp(index,0,11))));
         });
     for(const char* id:{"sld_style_pixel_size","sld_style_color_levels","sld_style_dither_strength",
         "sld_style_print_spacing","sld_style_print_angle","sld_style_print_strength","sld_style_print_gamma","sld_style_outline_width",
-        "sld_style_outline_depth","sld_style_outline_normal","sld_style_outline_luminance","sld_style_outline_strength"})
+        "sld_style_outline_depth","sld_style_outline_normal","sld_style_outline_luminance","sld_style_outline_strength",
+        "sld_style_scanline","sld_style_mask","sld_style_chroma","sld_style_curvature","sld_style_vignette","sld_style_grain","sld_style_noise_seed"})
         if(auto* w=widget<ayt::ui::Slider>(_ui,id))w->setOnValueChanged([changed](float){changed();});
     using Member=StylizationColor ColorStylizationSettings::*;
     for(const auto& [id,member]:std::initializer_list<std::pair<const char*,Member>>{
