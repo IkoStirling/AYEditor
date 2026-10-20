@@ -22,6 +22,8 @@ struct EditorProjectAssetCreateResult {
 /// Names are made unique so a menu action never overwrites existing content.
 /// The physical asset root follows project.prj (Assets by default); browser paths
 /// retain their virtual Assets prefix. RenderStyle writes a disabled default .rsl.
+/// Material writes a single native .mat plus a unique standalone PBR shader
+/// companion; no external textures are required for its initial surface.
 /// Existing folder
 /// links must resolve inside the project; projectRoot and returned paths are UTF-8.
 EditorProjectAssetCreateResult createEditorProjectAsset(

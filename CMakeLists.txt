@@ -76,6 +76,8 @@ set(SRC_FILES
     src/AYEditorWorldContext.cpp
     src/AYEditorSession.cpp
     src/AYEditorRenderStyle.cpp
+    src/AYEditorMaterialDocument.cpp
+    src/AYEditorMaterialExtension.cpp
     src/AYEditorGameView.cpp
     src/AYEditorPlayRuntime.cpp
     src/AYEditorApp.cpp
@@ -164,6 +166,7 @@ set(HEAD_FILES
     include/AYEditor/EditorWorldContext.h
     include/AYEditor/EditorDebugVisualization.h
     include/AYEditor/EditorSession.h
+    include/AYEditor/EditorMaterialDocument.h
     include/AYEditor/EditorGameView.h
     include/AYEditor/EditorPlayRuntime.h
     include/AYEditor/EditorApp.h
@@ -351,6 +354,11 @@ add_executable(AYEditorProjectValidator
     tools/AYEditorProjectValidator.cpp)
 target_link_libraries(AYEditorProjectValidator PRIVATE AYEditor)
 target_link_libraries(AYEditorProjectValidator PRIVATE AYEntity)
+
+if(TARGET AYResourceImport)
+    add_executable(AYEditor_MaterialSampleTool demo/MaterialSampleTool.cpp)
+    target_link_libraries(AYEditor_MaterialSampleTool PRIVATE AYEditor AYEntity AYScene AYResourceImport)
+endif()
 
 target_include_directories(${MODULE_NAME} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/demo

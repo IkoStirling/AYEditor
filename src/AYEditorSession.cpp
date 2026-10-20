@@ -43,6 +43,7 @@
 #include "AYEditor/EditorRecoveryStore.h"
 #include "AYEditor/EditorProjectRuntimeValidator.h"
 #include "AYEditor/EditorBuiltInExtensions.h"
+#include "AYEditor/EditorMaterialDocument.h"
 #include "AYEditor/EditorComponentPolicy.h"
 #include "AYEditor/EditorShortcutRegistry.h"
 #include "AYEditor/EditorSceneCamera.h"
@@ -1908,10 +1909,14 @@ EditorSession::EditorSession()
     _playRuntime.setWorldContext(&_worldContext);
     _workspace = std::make_unique<EditorWorkspace>();
     std::string error;
-    if (!registerEditorDslExtension(_workspace->registry(), &error)) {
-        std::fprintf(stderr,
-            "[EditorSession] DSL workspace registration failed: %s\n",
-            error.c_str());
+    if (!registerEditorMaterialExtension(_workspace->registry(), &error))
+    {
+        std::fprintf(stderr, "[EditorSession] material extension registration failed: %s\n", error.c_str());
+    }
+    error.clear();
+    if (!registerEditorDslExtension(_workspace->registry(), &error))
+    {
+        std::fprintf(stderr, "[EditorSession] DSL workspace registration failed: %s\n", error.c_str());
     }
     error.clear();
     if (!registerEditorSkeletonExtension(_workspace->registry(), &error)) {
@@ -6320,13 +6325,39 @@ bool EditorSession::revealCreatedProjectAsset(const std::string& absolutePath,co
 
 bool EditorSession::openAsset(EditorAssetId assetId)
 {
-    const EditorAssetRecord* record = _assetDatabase.find(assetId);
-    if (record == nullptr) return false;
-    switch (record->type) {
+    const EditorAssetRecord *record = _assetDatabase.find(assetId);
+    if (record == nullptr)
+        return false;
+    switch (record->type)
+    {
+    case EditorAssetType::Material: {
+        if (!_dockViewHost)
+            return false;
+        EditorOpenRequest request;
+        request.resourcePath = record->absolutePath;
+        request.resourceKey = record->absolutePath;
+        request.displayPath = record->logicalPath;
+        request.assetType = editorAssetTypeName(record->type);
+        request.preferredEditorId = kEditorMaterialExtensionId;
+        EditorDockViewOptions options;
+        options.cardId = "card_material_" + std::to_string(assetId);
+        const auto opened = _dockViewHost->open(request, options);
+        if (!opened)
+        {
+            setAssetBrowserStatus(L"Material open failed: " + ayt::ui::decodeUtf8Text(opened.error), true);
+            return false;
+        }
+        wirePromoteCallback();
+        _ui.invalidateLayout();
+        setAssetBrowserStatus(L"Opened material: " + ayt::ui::decodeUtf8Text(record->logicalPath));
+        return true;
+    }
     case EditorAssetType::RenderStyle: {
         std::string error;
-        if(!loadRenderStyleLook(record->absolutePath,&error)) {
-            setAssetBrowserStatus(L"Open render look failed: "+ayt::ui::decodeUtf8Text(error),true);return false;
+        if (!loadRenderStyleLook(record->absolutePath, &error))
+        {
+            setAssetBrowserStatus(L"Open render look failed: " + ayt::ui::decodeUtf8Text(error), true);
+            return false;
         }
         _panelRenderVisible=true;setDockCardVisible("card_render",true);
         setAssetBrowserStatus(L"Applied render look: "+ayt::ui::decodeUtf8Text(record->logicalPath));
@@ -9382,12 +9413,14 @@ void EditorSession::bindMenuBar() {
                 (void)createProjectAsset(EditorAssetType::Tilemap);
             });
         }
-        if(auto* item=addLocalizedItem(fileMenu,"ui.editor.menu.file.new_render_look",L"New Render Look"))
-            item->setOnActivate([this]{(void)createProjectAsset(EditorAssetType::RenderStyle);});
-        if (auto* item = fileMenu->addItem(L"New Actor Class")) {
-            item->setOnActivate([this]() {
-                (void)createProjectAsset(EditorAssetType::ActorClass);
-            });
+        if (auto *item =
+                addLocalizedItem(fileMenu, "ui.editor.menu.file.new_render_look", L"New Render Look"))
+            item->setOnActivate([this] { (void)createProjectAsset(EditorAssetType::RenderStyle); });
+        if (auto *item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_material", L"New PBR Material"))
+            item->setOnActivate([this] { (void)createProjectAsset(EditorAssetType::Material); });
+        if (auto *item = fileMenu->addItem(L"New Actor Class"))
+        {
+            item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::ActorClass); });
         }
         if (auto* item = fileMenu->addItem(L"New Child Actor Class")) {
             item->setOnActivate([this]() {

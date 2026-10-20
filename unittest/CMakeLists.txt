@@ -35,6 +35,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorAnimationExtension.cpp
     Test_EditorSequence.cpp
     Test_EditorParticle.cpp
+    Test_EditorMaterial.cpp
     Test_EditorDslDocument.cpp
     Test_Editor2DTools.cpp
     Test_EditorFramework.cpp
@@ -232,3 +233,34 @@ endif()
 
 # Audio authoring/session regression tests consume the public runtime surface.
 target_link_libraries(${MODULE_NAME} PRIVATE AYAudio)
+
+if(WIN32)
+    add_executable(AYEditor_MaterialWorkshopSessionRenderTest EXCLUDE_FROM_ALL MaterialWorkshopSessionRenderTest.cpp)
+    target_link_libraries(AYEditor_MaterialWorkshopSessionRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
+    target_include_directories(AYEditor_MaterialWorkshopSessionRenderTest PRIVATE ../../AYRenderer/src)
+    target_compile_definitions(AYEditor_MaterialWorkshopSessionRenderTest PRIVATE
+        AY_MATERIAL_WORKSHOP_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../AYRenderer/demo/MaterialWorkshop"
+        AY_EDITOR_ENGINE_ASSETS_HINT="${AY_ENGINE_ASSETS_SOURCE_DIR}")
+    ay_stage_production_shaders(AYEditor_MaterialWorkshopSessionRenderTest)
+    if(MSVC)
+        target_link_options(AYEditor_MaterialWorkshopSessionRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+    add_executable(AYEditor_MaterialWorkshopRenderTest EXCLUDE_FROM_ALL MaterialWorkshopRenderTest.cpp)
+    target_link_libraries(AYEditor_MaterialWorkshopRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
+    target_include_directories(AYEditor_MaterialWorkshopRenderTest PRIVATE ../../AYRenderer/src)
+    target_compile_definitions(AYEditor_MaterialWorkshopRenderTest PRIVATE
+        AY_MATERIAL_WORKSHOP_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../AYRenderer/demo/MaterialWorkshop")
+    ay_stage_production_shaders(AYEditor_MaterialWorkshopRenderTest)
+    if(MSVC)
+        target_link_options(AYEditor_MaterialWorkshopRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+    add_executable(AYEditor_MaterialPreviewRenderTest EXCLUDE_FROM_ALL MaterialPreviewRenderTest.cpp)
+    target_link_libraries(AYEditor_MaterialPreviewRenderTest PRIVATE AYEditor AYRenderer)
+    target_include_directories(AYEditor_MaterialPreviewRenderTest PRIVATE ../../AYRenderer/src)
+    target_compile_definitions(AYEditor_MaterialPreviewRenderTest PRIVATE
+        AY_MATERIAL_LIBRARY_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../AYRenderer/demo/MaterialWorkshop/Assets/materials")
+    ay_stage_production_shaders(AYEditor_MaterialPreviewRenderTest)
+    if(MSVC)
+        target_link_options(AYEditor_MaterialPreviewRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
+endif()

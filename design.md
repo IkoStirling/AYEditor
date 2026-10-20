@@ -1,5 +1,36 @@
 # AYEditor Design
 
+## 2026-10-20 — 单材质文档与预览边界
+
+材质通过 Workspace extension registry 与 DocumentManager 接入，Session 只注册和路由，
+不增加旧类成员/vtable。EditorMaterialDocument 使用 pimpl 持有原始基线字节、具体 Material、
+已保存设置和 128 项本地历史；未知参数由原 codec 保留，预览/保存从基线构造快照。
+修改校验后发布单次 revision，Reload 先暂存后发布，磁盘字节冲突时拒绝覆盖。
+保存为逐文件原子替换，不宣称比较与替换之间无竞争窗口。
+
+MaterialView 以 9 个有效数字往返 Float32，先收集并验证全部数值/贴图，再提交一个历史状态。
+UI revision 检查防止陈旧字段覆盖外部修改，Save command 先提交 pending fields；
+关闭先断开 NumericFields、TextInput、ComboBox、Button 回调，再回收目标和 GPU 快照。
+路径包含判断复用 AYIO PathSafety，新增贴图写显式 owner-relative 路径，未改旧引用保留。
+PBR 范围校验复用 Renderer sanitize 的结果，Editor 选择拒绝越界输入，Host setter 仍有限化。
+
+预览 Widget 使用 Immediate 显示策略，防止 retained recording 吞掉真实 GPU backend 调用。
+只借用 Renderer、UI backend 和本次调用灯光；自身拥有目标、mesh 与独立 material，
+更改 revision 才重建 material，不通过路径缓存改变场景。HDR 资源/view 预算由 Renderer 管理。
+独立 GpuMaterial 不意味着编译程序独占：ShaderResourcePool 的 token 会共享，释放最终使用者
+的判断由 Renderer 管理。Editor 只销毁自己拥有的 material handle，不直接释放 shader/program。
+真实 Workshop 夹具组合原生 Scene/document、真实 MaterialView 和 Renderer，验证未保存状态
+隔离、连续编辑/关开预览、禁用 watcher 时保存等待显式重载，以及 Scene 编辑保存重开的实际画面。
+它不是完整 Editor shell 的原生指针操作验收；Session 路由另有模块测试。
+另有 MaterialWorkshopSessionRenderTest 将真实 EditorSession/资产数据库/Dock 与 GPU backend
+组合，验证项目 startup Scene、Enter 字段提交、预览变化、返回 Scene 的缓存隔离和 Ctrl+S
+先提交 pending fields 再保存。该夹具使用显式 Host 提取 Scene，不替代默认 GameLoop 模块组装验收。
+同一夹具另通过实际新建材质 action 验证 companion shader 与无贴图的首次预览、多个文档的
+字段/快捷键保存隔离、重开及返回原 Scene 的像素不变。Workshop 的 --catalog 模式加载全部104个
+真实 Scene，以各自 camera 和运行时资源逐个渲染两路径；深色几何与同显示设置的空场比较。
+工厂创建配套 shader 后发布材质；材质发布失败时清理由本次创建的新 shader，
+不覆盖已有孤立 companion。多文件创建不是整目录事务。
+
 ## 2026-10-19 — 精度与路径审核修正
 
 颜色/色板文本使用同一格式化函数；失焦提交前若显示文本未改动，保留导入的浮点值。

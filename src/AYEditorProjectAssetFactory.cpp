@@ -11,6 +11,9 @@
 #include <AYIO/PathSafety.h>
 #include <AYUI/UIFlow.h>
 #include <AYRenderer/ColorStylizationLook.h>
+#include <AYRenderer/PbrShaderSources.h>
+#include <AYResource/assetsImpl/Material.h>
+#include <AYStorage/Guid.h>
 
 #include <filesystem>
 #include <algorithm>
@@ -38,11 +41,15 @@ struct AssetTemplate {
     std::string_view suffix;
 };
 
-bool templateFor(EditorAssetType type, AssetTemplate& value)
+bool templateFor(EditorAssetType type, AssetTemplate &value)
 {
     using ayt::asset_format::Id;
     using ayt::asset_format::suffix;
-    switch (type) {
+    switch (type)
+    {
+    case EditorAssetType::Material:
+        value = {"materials", "NewMaterial", suffix(Id::Material)};
+        return true;
     case EditorAssetType::RenderStyle:
         value={"looks","NewLook",suffix(Id::RenderStyleLook)};
         return true;
@@ -139,13 +146,29 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
     if(!ayt::io::path::resolveWithinRoot(root,assetRoot/assetTemplate.folder,folder,result.error))return result;
     std::filesystem::create_directories(folder, ec);
     if (ec) {
-        result.error = "Could not create the project asset folder: "
-            + ec.message();
+        result.error = "Could not create the project asset folder: " + ec.message();
         return result;
     }
     std::filesystem::path destination = uniquePath(folder, assetTemplate);
+    if (type == EditorAssetType::Material)
+    {
+        // Reserve the shader companion as well, including orphaned sources
+        // from an interrupted creation; never replace an authored shader.
+        for (unsigned serial = 1;; ++serial)
+        {
+            const auto stem =
+                std::string(assetTemplate.stem) + (serial == 1 ? "" : " " + std::to_string(serial));
+            const auto material = folder / (stem + std::string(assetTemplate.suffix));
+            if (!std::filesystem::exists(material) && !std::filesystem::exists(folder / (stem + ".phoskia")))
+            {
+                destination = material;
+                break;
+            }
+        }
+    }
 #ifdef AYEDITOR_HAS_STATS
-    if (type == EditorAssetType::StatsRecipe) {
+    if (type == EditorAssetType::StatsRecipe)
+    {
         // A Stats source has companion documents. Reserve a stem for the whole
         // set so creating another asset cannot overwrite an orphaned companion.
         for (unsigned serial = 1u;; ++serial) {
@@ -164,10 +187,48 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
 #endif
     std::string error;
     bool saved = false;
-    if(type==EditorAssetType::RenderStyle) {
-        const auto utf8=destination.u8string();
-        saved=ayt::render::saveColorStylizationLook(std::string(utf8.begin(),utf8.end()),{},&error);
-    } else if (type == EditorAssetType::StatsRecipe) {
+    if (type == EditorAssetType::Material)
+    {
+        const auto shaderPath = folder / (destination.stem().string() + ".phoskia");
+        resource::Material material;
+        material.initialise(pathUtf8(destination.stem()), pathUtf8(shaderPath.filename()));
+        const float white[] = {1, 1, 1, 1}, uv[] = {1, 1, 0, 0}, black[] = {0, 0, 0};
+        material.setFloat4("baseColor", white);
+        material.setFloat4("uvTransform", uv);
+        material.setFloat3("emissive", black);
+        for (const char *name : {"ao", "opacity", "normalYSign", "normalStrength"})
+            material.setFloat(name, 1);
+        for (const char *name :
+             {"metallic", "roughnessBias", "opacitySource", "premultipliedAlpha", "castSkinned"})
+            material.setFloat(name, 0);
+        material.setFloat("roughness", .5f);
+        std::vector<UInt8> bytes;
+        if (!material.saveToBinary(bytes))
+            error = "Material template encoding failed";
+        else
+        {
+            material.setGuid(storage::Guid::computeFromData(bytes.data(), bytes.size()));
+            material.saveToBinary(bytes);
+            const std::string shader = render::kPbrPhoskiaSource;
+            if (!io::File::atomicWriteUtf8(pathUtf8(shaderPath), shader.data(), shader.size()))
+                error = "Material shader template write failed";
+            else if (!io::File::atomicWriteUtf8(pathUtf8(destination), bytes.data(), bytes.size()))
+            {
+                error = "Material template write failed";
+                std::error_code cleanup;
+                std::filesystem::remove(shaderPath, cleanup);
+            }
+            else
+                saved = true;
+        }
+    }
+    else if (type == EditorAssetType::RenderStyle)
+    {
+        const auto utf8 = destination.u8string();
+        saved = ayt::render::saveColorStylizationLook(std::string(utf8.begin(), utf8.end()), {}, &error);
+    }
+    else if (type == EditorAssetType::StatsRecipe)
+    {
 #ifdef AYEDITOR_HAS_STATS
         using namespace ayt::stats;
         const std::string stem = destination.filename().string().substr(
@@ -215,18 +276,24 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             std::filesystem::remove(definitionsPath, ignored);
         }
 #endif
-    } else if (type == EditorAssetType::Sequence) {
+    }
+    else if (type == EditorAssetType::Sequence)
+    {
 #ifdef AYEDITOR_HAS_SEQUENCE
         ayt::sequence::Sequence sequence; sequence.id = "new-sequence"; sequence.duration = 5;
         ayt::sequence::Diagnostic diagnostic;
         saved = ayt::sequence::saveSequence(pathUtf8(destination), sequence, &diagnostic);
         error = diagnostic.message;
 #endif
-    } else if (type == EditorAssetType::ParticleEffect) {
+    }
+    else if (type == EditorAssetType::ParticleEffect)
+    {
 #ifdef AYEDITOR_HAS_PARTICLE
         saved=particle::saveEffectAsset(pathUtf8(destination),particle::combinedExplosion(),&error);
 #endif
-    } else if (type == EditorAssetType::ActorClass) {
+    }
+    else if (type == EditorAssetType::ActorClass)
+    {
         ayt::entity::ActorClassAsset actor;
         actor.parentPath = parentActorClassPath;
         actor.id = destination.stem().string();
@@ -247,15 +314,21 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
             saved = ayt::entity::saveActorClassAsset(pathUtf8(destination), actor, &error);
             if (!saved) std::filesystem::remove(script, ec);
         }
-    } else if (type == EditorAssetType::Scene) {
+    }
+    else if (type == EditorAssetType::Scene)
+    {
         EditorSceneDocument document;
         document.newScene();
         saved = document.saveAs(pathUtf8(destination), &error);
-    } else if (type == EditorAssetType::Tilemap) {
+    }
+    else if (type == EditorAssetType::Tilemap)
+    {
         EditorTilemapDocument document;
         saved = document.create(32u, 18u, 32u, 32u, 0u)
             && document.save(pathUtf8(destination), &error);
-    } else if (type == EditorAssetType::UiFlow) {
+    }
+    else if (type == EditorAssetType::UiFlow)
+    {
         ayt::ui::UIFlowDocument flow;
         flow.id = "new-ui-flow";
         flow.defaultEntry = "Boot";
@@ -279,7 +352,9 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         if (!saved) error = diagnostics.empty()
             ? "Atomic UI Flow save failed."
             : diagnostics.front().message;
-    } else if (type == EditorAssetType::GameFlow) {
+    }
+    else if (type == EditorAssetType::GameFlow)
+    {
         ayt::app::GameFlowDocument flow;
         flow.id = "new-game-flow";
         flow.initialState = "boot";
@@ -296,7 +371,9 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         if (!saved) error = diagnostics.empty()
             ? "Atomic GameFlow save failed."
             : diagnostics.front().message;
-    } else {
+    }
+    else
+    {
         static constexpr const char kUiLayout[] =
             "{\n"
             "  \"type\": \"Panel\",\n"

@@ -1,5 +1,22 @@
 # AYEditor
 
+## 原生 PBR 材质创作（2026-10-20）
+
+Assets 双击 `.mat/.aymat` 打开独立材质 Dock，支持颜色、PBR/发光/opacity 因子、
+UV、法线强度、粗糙度偏置、Mask/Blend、opacity 通道、双面与七个贴图槽。
+球体、非均匀缩放球、UV 平面使用独立工作室灯光/HDR 显示，未保存修改不改 Scene 缓存。
+Enter/失焦/Apply 原子提交字段；Save/Ctrl+S 先提交有效字段，再检查磁盘冲突并保存。
+本地 128 项 undo/redo 保留保存前后的历史；Reload 失败保留当前文档。
+源文件最大 4 MiB，保留未知参数与 shader/name/GUID。新贴图选择限项目源资源根，
+导入缓存和外部资产只读；当前不提供导入材质的 Save As/copy。
+
+File → New PBR Material 创建唯一 `.mat` 和独立相邻 shader，跳过孤立 shader 文件。
+`AYEditor_MaterialSampleTool` 为 [Material Workshop](../AYRenderer/demo/MaterialWorkshop/README.md)
+生成规范 `.msh`、104 个 Scene（九组场景和十七种近景，各四状态）与项目描述，复用正式资源与场景接口；初始视角通过既有
+Scene View workspace 写入，保留用户已有视角。Editor ABI37 和 Session 布局保持不变。
+
+## 色彩映射起点（2026-10-19）
+
 Value Bands新增到颜色映射选择，面板说明最大RGB分量分阶；Cel Ink/Cel Paint可直接选为创作起点。
 18项选择和偏好恢复共用Renderer preset count，schema8偏好内嵌look v4；结构布局仍为source ABI37。
 
