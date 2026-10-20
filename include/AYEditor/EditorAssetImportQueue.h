@@ -31,6 +31,7 @@ struct EditorAssetImportJob {
     bool force = false;
     std::string message;
     std::vector<std::string> outputPaths;
+    ayt::resource::ImportOptions options;
 
     bool finished() const noexcept {
         return state == EditorAssetImportJobState::Succeeded
@@ -42,7 +43,8 @@ struct EditorAssetImportJob {
 const char* editorAssetImportJobStateName(
     EditorAssetImportJobState state) noexcept;
 
-// Project-scoped sequential queue. Conversion runs away from the UI thread,
+// Project-scoped sequential queue. All methods belong to the editor thread.
+// Conversion runs away from the UI thread,
 // while poll() commits results on the editor thread. Sequential work avoids
 // several heavy model conversions competing for memory and disk I/O.
 class EditorAssetImportQueue final {
@@ -53,14 +55,25 @@ public:
     EditorAssetImportQueue(const EditorAssetImportQueue&) = delete;
     EditorAssetImportQueue& operator=(const EditorAssetImportQueue&) = delete;
 
+    /// Configure durable authoring settings outside the derived project cache.
+    void configureProject(std::string projectRoot, std::string sourceRoot);
+
     EditorAssetImportJobId enqueue(const std::string& sourcePath,
                                    const std::string& destinationDirectory,
                                    bool force = false);
+    /// Explicit recipe entry; ordinary source/destination enqueue recovers the
+    /// last successful recipe when the source identity matches.
+    EditorAssetImportJobId enqueue(const ayt::resource::ImportOptions& options);
     std::size_t enqueueChangedDependencies(
         const EditorAssetDatabase& database);
     EditorAssetImportJobId retry(EditorAssetImportJobId id,
                                  bool force = true);
     bool poll();
+    /// Every completion delivered by the last poll, in completion order.
+    /// Includes immediate validation failures queued before that poll.
+    const std::vector<EditorAssetImportJobId>& completedJobIds() const noexcept {
+        return _completedJobIds;
+    }
 
     const std::vector<EditorAssetImportJob>& jobs() const noexcept {
         return _jobs;
@@ -75,16 +88,13 @@ private:
     EditorAssetImportJob* findMutable(EditorAssetImportJobId id) noexcept;
 
     std::vector<EditorAssetImportJob> _jobs;
-    // B-1 (ayeditor audit 2026-09-14): previously a std::size_t index into
-    // _jobs. Holding the index was a UAF trap: concurrent enqueue() calls
-    // (driven by the asset DB scan thread) can reallocate _jobs while the
-    // worker future is still in flight, which left _jobs[*_running] pointing
-    // at freed storage. The id is stable across reallocations because it is
-    // stored on every element of _jobs, so the consumer re-resolves it
-    // through findMutable() right before it touches the element.
+    // Stable owner-thread identity; worker inputs are independent copies.
     std::optional<EditorAssetImportJobId> _running;
     ayt::task::BackgroundJob<Importer::Result> _future;
     EditorAssetImportJobId _nextId = 1;
+    std::vector<EditorAssetImportJobId> _pendingCompletionIds;
+    std::vector<EditorAssetImportJobId> _completedJobIds;
+    std::string _projectRoot, _sourceRoot;
 };
 
 } // namespace ayt::editor

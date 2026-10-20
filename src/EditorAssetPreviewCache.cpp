@@ -591,6 +591,15 @@ void EditorAssetPreviewCache::erase(const std::string& absolutePath)
         release(found->second);
         _entries.erase(found);
     }
+    const auto authoring = _authoringEntries.find(absolutePath);
+    if (authoring != _authoringEntries.end()) {
+        release(authoring->second);
+        _authoringEntries.erase(authoring);
+    }
+    if (!_diskCacheRoot.empty()) {
+        std::error_code error;
+        std::filesystem::remove(std::filesystem::u8path(cachePathFor(absolutePath)), error);
+    }
 }
 
 void EditorAssetPreviewCache::clear()

@@ -32,6 +32,7 @@
 #include "AYEditor/EditorAssetTilePresenter.h"
 #include "AYEditor/EditorAssetDeleteAnalysis.h"
 #include "AYEditor/EditorAssetImportQueue.h"
+#include "EditorImportSettingsDialog.h"
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
@@ -2285,6 +2286,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
             L"Asset database unavailable: "
             + ayt::ui::decodeUtf8Text(assetDatabaseError), true);
     } else {
+        if (_assetImportQueue != nullptr) _assetImportQueue->configureProject(
+            _assetDatabase.projectRoot(), _assetDatabase.sourceRoot());
         if (_assetTrash != nullptr) {
             _assetTrash->setProjectRoot(_assetDatabase.projectRoot());
         }
@@ -2615,6 +2618,7 @@ void EditorSession::shutdown() {
     _assetTrashDialog.reset();
     _assetTrashList = nullptr;
     _assetHistoryDialog.reset();
+    _assetImportSettingsDialog.reset();
     // The application logo borrows its uploaded texture from the shared
     // preview cache. Clear the widget before the cache releases that handle
     // so UI teardown never retains a stale backend resource.
@@ -2837,10 +2841,9 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
         refreshAssetInspector();
     }
     if (_assetImportQueue != nullptr && _assetImportQueue->poll()) {
-        const auto& jobs = _assetImportQueue->jobs();
-        const auto completed = std::find_if(jobs.rbegin(), jobs.rend(),
-            [](const EditorAssetImportJob& job) { return job.finished(); });
-        if (completed != jobs.rend()) {
+        for (const auto id : _assetImportQueue->completedJobIds()) {
+            const auto* completed = _assetImportQueue->find(id);
+            if (completed == nullptr) continue;
             using namespace ayt::ui::authoring;
             if (_assetImportPresentation.generation() != completed->id) {
                 _assetImportPresentation.begin(completed->id);
@@ -2854,9 +2857,26 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
             const auto change = _assetImportPresentation.observe(std::move(status));
             if (change.completed) {
                 if (completed->state == EditorAssetImportJobState::Failed) {
+                    (void)_assetDatabase.requestScan();
                     setAssetBrowserStatus(L"Import failed: "
                         + ayt::ui::decodeUtf8Text(completed->message), true);
                 } else {
+                    std::string refreshError;
+                    if (completed->state == EditorAssetImportJobState::Succeeded) {
+                        std::vector<std::string> published;
+                        for (const auto& path : completed->outputPaths) {
+                            const auto absolute = (std::filesystem::u8path(
+                                completed->destinationDirectory) / std::filesystem::u8path(path))
+                                .lexically_normal().generic_u8string();
+                            const std::string text(reinterpret_cast<const char*>(absolute.data()), absolute.size());
+                            published.push_back(text);
+                            if (_assetPreviewCache != nullptr) _assetPreviewCache->erase(text);
+                        }
+                        (void)ayt::resource::ResourceManager::instance()
+                            .refreshPublishedResources(published, &refreshError);
+                        refreshVisibleAssetPreviews();
+                        refreshAssetInspector();
+                    }
                     if (!completed->outputPaths.empty()) {
                         std::filesystem::path output(completed->outputPaths.front());
                         if (output.is_relative()) output =
@@ -2869,6 +2889,9 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                         == EditorAssetImportJobState::CacheHit
                         ? L"Import cache reused; refreshing assets."
                         : L"Import complete; refreshing assets.", true);
+                    if (!refreshError.empty()) setAssetBrowserStatus(
+                        L"Files imported; runtime refresh failed: "
+                            + ayt::ui::decodeUtf8Text(refreshError), true);
                 }
             }
         }
@@ -4875,6 +4898,7 @@ void EditorSession::bindAssetBrowser()
         if (_repaintCallback) _repaintCallback();
     });
     bindButton("btn_asset_reload", [this]() { reloadSelectedAsset(); });
+    bindButton("btn_asset_import_settings", [this]() { (void)editSelectedAssetImportSettings(); });
     refreshAssetDeleteButton();
 
     auto bindViewportAssetDrop = [this](const char* id) {
@@ -5141,6 +5165,7 @@ void EditorSession::refreshAssetList()
     _assetTileView->setSelectedIndices(selectedIndices);
     _updatingAssetSelection = false;
     if (_selectedAssetIds.empty()) setInspectorAssetMode(false);
+    else refreshAssetInspector();
     refreshAssetDeleteButton();
     if (auto* label = dynamic_cast<ayt::ui::TextLabel*>(
             _ui.findById("lbl_asset_path"))) {
@@ -5312,6 +5337,7 @@ void EditorSession::refreshAssetInspector()
                 _ui.findById("btn_asset_reload"))) {
             reload->setEnabled(false);
         }
+        if (auto* settings = dynamic_cast<ayt::ui::Button*>(_ui.findById("btn_asset_import_settings"))) settings->setEnabled(false);
         return;
     }
 
@@ -5323,6 +5349,11 @@ void EditorSession::refreshAssetInspector()
         + ayt::ui::decodeUtf8Text(editorAssetTypeName(record->type)));
     set("inspector_asset_origin", record->origin == EditorAssetOrigin::Source
         ? L"Origin: Assets (source)" : L"Origin: Imported (generated)");
+    if (const auto* info = _assetDatabase.importForAsset(record->id)) {
+        const auto name = std::filesystem::u8path(info->record.options.sourcePath).filename().generic_u8string();
+        set("inspector_asset_origin", L"Imported from: " + ayt::ui::decodeUtf8Text(std::string(
+            reinterpret_cast<const char*>(name.data()), name.size())));
+    }
     set("inspector_asset_size", L"Size: " + assetSizeText(record->size));
     set("inspector_asset_modified", L"Modified: "
         + assetModifiedText(record->lastModified));
@@ -5396,11 +5427,20 @@ void EditorSession::refreshAssetInspector()
         }
     }
     set("inspector_asset_state", stateText);
+    if (auto* settings = dynamic_cast<ayt::ui::Button*>(_ui.findById("btn_asset_import_settings"))) {
+        const auto* source = _assetDatabase.importForAsset(record->id);
+        const auto ext = Importer::extensionOf(source ? source->record.options.sourcePath : record->absolutePath);
+        const bool supported = ext == "fbx" || ext == "gltf" || ext == "glb"
+            || ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp" || ext == "tga" || ext == "dds";
+        settings->setEnabled(supported && (record->origin == EditorAssetOrigin::Source || source != nullptr));
+    }
     if (auto* reload = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_asset_reload"))) {
         reload->setEnabled(true);
         reload->setText(record->type == EditorAssetType::SourceModel
-            ? L"Reimport Source" : L"Reload Asset");
+            || _assetDatabase.importForAsset(record->id) != nullptr
+            ? localizedText("ui.editor.asset.reimport_source", L"Reimport Source")
+            : localizedText("ui.editor.asset.reload", L"Reload Asset"));
     }
 
     const bool showPreview = _assetPreviewCache != nullptr
@@ -5436,7 +5476,7 @@ void EditorSession::refreshVisibleAssetPreviews()
         if (record == nullptr) continue;
         const ayt::ui::ImageTextureHandle preview =
             _assetPreviewCache->request(*record);
-        if (preview.isValid()) cell->setThumbnail(preview);
+        cell->setThumbnail(preview);
     }
     if (_repaintCallback) _repaintCallback();
 }
@@ -5503,6 +5543,44 @@ bool EditorSession::rescanAssetsNow()
     return ok;
 }
 
+bool EditorSession::editSelectedAssetImportSettings()
+{
+    if (_assetImportQueue == nullptr || _selectedAssetIds.size() != 1) return false;
+    const auto* record = _assetDatabase.find(_selectedAssetId);
+    if (!record) return false;
+    ayt::resource::ImportOptions options;
+    if (const auto* source = _assetDatabase.importForAsset(record->id)) options = source->record.options;
+    else {
+        if (record->origin != EditorAssetOrigin::Source) return false;
+        options.sourcePath = record->absolutePath;
+        options.outputDir = _assetDatabase.derivedRoot();
+        options.requireCharacterAssets = false;
+    }
+    const auto ext = Importer::extensionOf(options.sourcePath);
+    if (ext != "fbx" && ext != "gltf" && ext != "glb" && ext != "png" && ext != "jpg"
+        && ext != "jpeg" && ext != "bmp" && ext != "tga" && ext != "dds") return false;
+    _assetImportSettingsDialog = std::make_unique<EditorImportSettingsDialog>(options,
+        [this](const ayt::resource::ImportOptions& edited, std::string& error) {
+            auto options = edited;
+            options.force = true;
+            const auto id = _assetImportQueue->enqueue(options);
+            const auto* job = _assetImportQueue->find(id);
+            if (!job || job->state == EditorAssetImportJobState::Failed) {
+                error = job ? job->message : "Import queue did not accept the source.";
+                return false;
+            }
+            (void)_assetDatabase.requestScan();
+            setAssetBrowserStatus(L"Import settings saved; source import queued.", true);
+            return true;
+        }, [this](const char* key, const wchar_t* fallback) {
+            return localizedText(std::string_view(key), std::wstring_view(fallback));
+        });
+    _assetImportSettingsDialog->fitAndCenterInViewport(_ui.root()->getSize(), 12);
+    _assetImportSettingsDialog->openModal();
+    if (_repaintCallback) _repaintCallback();
+    return true;
+}
+
 void EditorSession::importAssetFromDialog()
 {
     const std::string source = ImportDialog::showOpenAssetFileDialog(static_cast<HWND>(_hostWindow));
@@ -5528,6 +5606,15 @@ void EditorSession::reloadSelectedAsset()
     if (_selectedAssetIds.size() != 1u) return;
     const EditorAssetRecord* record = _assetDatabase.find(_selectedAssetId);
     if (record == nullptr) return;
+    if (const auto* info = _assetDatabase.importForAsset(record->id)) {
+        if (_assetImportQueue == nullptr) return;
+        auto options = info->record.options;
+        options.force = true;
+        (void)_assetImportQueue->enqueue(options);
+        setAssetBrowserStatus(L"Queued reimport: "
+            + ayt::ui::decodeUtf8Text(options.sourcePath), true);
+        return;
+    }
     if (record->type == EditorAssetType::SourceModel) {
         if (_assetImportQueue == nullptr) return;
         (void)_assetImportQueue->enqueue(

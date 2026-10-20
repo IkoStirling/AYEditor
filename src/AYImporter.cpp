@@ -145,6 +145,14 @@ Importer::Result Importer::importAssetFile(
     opts.cookTextures = cookTexturesRequested();
     opts.sourceCoordinates = sourceCoordinates;
 
+    return importAssetFile(opts);
+}
+
+Importer::Result Importer::importAssetFile(const ayt::resource::ImportOptions& options)
+{
+    auto opts = options;
+    opts.force = opts.force || forceImportRequested();
+
     const ayt::resource::ImportResult core = ayt::resource::importAsset(opts);
     Result r;
     r.conversion = core.conversion;

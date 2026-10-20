@@ -96,6 +96,8 @@ set(SRC_FILES
     src/AYEditorVisualStyle.cpp
     src/AYEditorAssetDatabase.cpp
     src/AYEditorAssetImportQueue.cpp
+    src/EditorImportRecipeStore.cpp
+    src/EditorImportSettingsDialog.cpp
     src/AYEditorAssetTilePresenter.cpp
     src/AYEditorAssetDeleteAnalysis.cpp
     src/AYEditorAssetTrash.cpp
@@ -273,7 +275,7 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=37)
+    AYEDITOR_SOURCE_ABI_VERSION=40)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

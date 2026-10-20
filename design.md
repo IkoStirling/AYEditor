@@ -1,5 +1,28 @@
 # AYEditor Design
 
+## 2026-10-21 — 来源导入闭环
+
+Session 拥有来源数据库/队列与实际 Inspector 操作；Queue 的 enqueue/poll/retry 都在同一个
+owner 线程运行，只有完整的 ImportOptions 副本进入转换 worker。去重必须区分强制请求与设置
+变化，不能因同源尚有完成记录而吞掉后续请求。completedJobIds 只返回本次完成项。
+
+来源作者数据独立保存在 .ayeditor/imports/source-*.json；Resource 提供共享读取 codec，
+Editor 存储层负责先保存、分配 sourceId/outputNamespace，再排队。同名外部源隔离；
+已恢复旧来源保留原资源路径。主源物理改名和 DCC 子对象重命名尚无自动引用迁移保证。
+来源配方目录独立监听，监听事件增加扫描 revision；异步扫描只发布匹配的最新 revision。
+数据库在 worker 核对指纹，UI 帧不逐个计算 SHA；完成扫描会重建选中资源的来源 Inspector。
+
+ImportSettingsDialog 复用 PropertyField/ModalDialog，读取尚未提交的输入并整体校验。
+Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc 没有导入副作用。
+Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
+当前 Session/Database/Queue 布局变更使用 Source ABI40，UI 验证接口为 ABI132。
+
+Session 只对成功完成的转换刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
+导入事务与运行时刷新各有失败结果，不能把磁盘转换成功等同于画面已更新。
+AssetReimportRenderTest 使用真实 Session、模态窗口/按钮指针路由、资源桥和 D3D11/D3D12。
+共享 WorkshopSessionGpuFixture 只提取既有测试宿主，Scene 的提交仍为显式 Host；
+不是默认 GameLoop 或 Computer Use 自动验收。测试 fixture 不是引擎随附内容包。
+
 ## 2026-10-20 — 单材质文档与预览边界
 
 材质通过 Workspace extension registry 与 DocumentManager 接入，Session 只注册和路由，

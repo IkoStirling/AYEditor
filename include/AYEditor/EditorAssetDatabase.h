@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYEditor/EditorVersion.h"
+#include <AYResource/ImportJob.h>
 
 #include <cstdint>
 #include <chrono>
@@ -95,6 +96,11 @@ struct EditorAssetEntry {
     EditorAssetOrigin origin = EditorAssetOrigin::Source;
 };
 
+struct EditorAssetImportInfo {
+    ayt::resource::ImportRecord record;
+    EditorAssetImportState state = EditorAssetImportState::NeedsImport;
+};
+
 const char* editorAssetTypeName(EditorAssetType type) noexcept;
 const char* editorAssetImportStateName(EditorAssetImportState state) noexcept;
 EditorAssetType classifyEditorAssetPath(const std::string& path);
@@ -144,6 +150,10 @@ public:
     const EditorAssetRecord* find(EditorAssetId id) const noexcept;
     const EditorAssetRecord* findByLogicalPath(
         const std::string& logicalPath) const noexcept;
+    /// Successful import recipes, inspected as part of a background scan.
+    /// These describe source ownership/settings, not runtime GPU residency.
+    const std::vector<EditorAssetImportInfo>& imports() const noexcept { return _imports; }
+    const EditorAssetImportInfo* importForAsset(EditorAssetId id) const noexcept;
 
     // Return the slash-normalized, asset-root-relative reference written to
     // scene component fields. Editor preview/loading may continue to use the
@@ -169,6 +179,7 @@ private:
     struct Snapshot {
         std::vector<EditorAssetRecord> records;
         std::vector<EditorAssetFolder> folders;
+        std::vector<EditorAssetImportInfo> imports;
         std::string error;
     };
 
@@ -191,6 +202,8 @@ private:
     std::vector<EditorAssetFolder> _folders;
     std::unordered_map<EditorAssetId, std::size_t> _recordById;
     std::unordered_map<std::string, std::size_t> _recordByLogicalPath;
+    std::vector<EditorAssetImportInfo> _imports;
+    std::unordered_map<EditorAssetId, std::size_t> _importByAssetId;
     ayt::task::BackgroundJob<Snapshot> _scanFuture;
     std::future<void> _indexWriteFuture;
     std::chrono::steady_clock::time_point _lastIndexChange{};

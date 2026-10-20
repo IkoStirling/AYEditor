@@ -6,6 +6,7 @@
 // AYResource/ImportJob.h (library core; CLI: AYTool/import_tool).
 
 #include <AYResource/IConverter.h>
+#include <AYResource/ImportJob.h>
 #include <string>
 
 namespace ayt::editor
@@ -67,6 +68,10 @@ public:
         const std::string& destinationDir,
         const ayt::resource::SourceCoordinatePolicy& sourceCoordinates = {},
         bool force = false);
+
+    /// Import an explicit or recovered recipe without resetting persisted
+    /// material, coordinate, texture-cook or asset-role settings.
+    static Result importAssetFile(const ayt::resource::ImportOptions& options);
 
     // Lowercase the extension of `path` (.fbx / .FBX → "fbx"). Returns
     // empty string if no extension found.

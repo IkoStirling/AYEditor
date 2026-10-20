@@ -90,6 +90,7 @@ class EditorUiFlowDocument;
 class EditorUiDesignerWorkflow;
 class EditorAssetPreviewCache;
 class EditorAssetImportQueue;
+class EditorImportSettingsDialog;
 class EditorAssetTrash;
 class EditorAssetOperations;
 class EditorRecoveryStore;
@@ -254,6 +255,8 @@ public:
     }
     // Host/test command surfaces used by the Content Browser actions.
     bool rescanAssetsNow();
+    /// Edit a source or derived asset's persisted import recipe and reimport.
+    bool editSelectedAssetImportSettings();
     bool placeAssetInViewport(EditorAssetId assetId,
                               float physicalX, float physicalY);
     bool newSceneFromTemplate(EditorSceneTemplate sceneTemplate);
@@ -803,6 +806,7 @@ private:
     std::unique_ptr<ayt::ui::ModalDialog> _assetTrashDialog;
     ayt::ui::ListView* _assetTrashList = nullptr;
     std::unique_ptr<ayt::ui::ModalDialog> _assetHistoryDialog;
+    std::unique_ptr<EditorImportSettingsDialog> _assetImportSettingsDialog;
     struct AssetDragData {
         EditorAssetId id = 0;
         EditorAssetType type = EditorAssetType::Unknown;
