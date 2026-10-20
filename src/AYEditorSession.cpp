@@ -131,6 +131,7 @@
 #include <AYEntity/OrthoCameraSelection.h>
 #include <AYMath/MathTransform.h>
 #include <AYResource/ResourceManager.h>
+#include <AYResource/assetsDefs/IMaterial.h>
 #include <AYResource/AssetPath.h>
 #include <AYResource/VirtualAssetPath.h>
 #include <AYResource/assetsDefs/IMesh.h>
@@ -571,6 +572,17 @@ public:
     }
     std::string chooseImageFile() override {
         return ImportDialog::showOpenImageFileDialog(_ownerWindow);
+    }
+    std::vector<EditorTextureAssetChoice> textureAssets() const override {
+        std::vector<EditorTextureAssetChoice> result;
+        for(const auto& record:_session.assetDatabase().records()){
+            if(record.type!=EditorAssetType::Texture)continue;
+            auto extension=Importer::extensionOf(record.absolutePath);
+            if(extension!="png"&&extension!="jpg"&&extension!="jpeg"&&extension!="bmp"&&extension!="tga"
+                &&!ayt::asset_format::matchesPath(record.absolutePath,ayt::asset_format::Id::Texture))continue;
+            result.push_back({record.logicalPath,record.absolutePath});
+        }
+        return result;
     }
     EditorAuthoringImage loadAuthoringImage(
         const std::string& path, std::string* error = nullptr) override {
@@ -4841,6 +4853,7 @@ void EditorSession::bindAssetBrowser()
 #endif
                 if (record == nullptr
                     || (record->type != EditorAssetType::Mesh
+                        && record->type != EditorAssetType::Material
                         && record->type != EditorAssetType::Texture
                         && record->type != EditorAssetType::Tilemap
                         && record->type != EditorAssetType::ActorClass)) {
@@ -4935,6 +4948,7 @@ void EditorSession::bindAssetBrowser()
             const auto* drag = static_cast<const AssetDragData*>(payload.data);
             if (drag != &_assetDragData
                 || (drag->type != EditorAssetType::Mesh
+                    && drag->type != EditorAssetType::Material
                     && drag->type != EditorAssetType::Texture
                     && drag->type != EditorAssetType::Tilemap
                     && drag->type != EditorAssetType::ActorClass)) {
@@ -7029,6 +7043,24 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
     if (record == nullptr || _document == nullptr
         || _gameView.mode() != EditorMode::Edit) {
         return false;
+    }
+    if(record->type==EditorAssetType::Material){
+        auto* world=hierarchyWorldMutable();
+        if(_sceneCamera.isTwoD()||world!=&_document->scene().world())return false;
+        auto* target=pickEntityFromViewport(physicalX,physicalY);
+        auto* mesh=target?target->getComponent<ayt::entity::MeshComponent>():nullptr;
+        const auto* instance=mesh?target->componentInstance(mesh):nullptr;
+        if(!mesh||!instance)return false;
+        const auto path=_assetDatabase.portableAssetPath(*record);
+        if(mesh->materialPath==path)return true;
+        const auto loaded=ayt::resource::ResourceManager::instance().load<ayt::resource::IMaterial>(record->runtimePath);
+        if(!loaded)return false;
+        if(!_document->mutateComponentById(target->getId(),instance->id,"Assign Material",{},
+            [&](ayt::entity::IComponent& component){
+                static_cast<ayt::entity::MeshComponent&>(component).materialPath=path;return true;
+            }))return false;
+        setSelectedEntity(world,target);refreshInspectorLabels();refreshUnsavedIndicator();
+        if(_repaintCallback)_repaintCallback();return true;
     }
     const bool isMesh = record->type == EditorAssetType::Mesh;
     const bool isTexture = record->type == EditorAssetType::Texture;

@@ -184,8 +184,8 @@ class FrameworkInputCommandView final
       public IEditorCommandTarget,
       public IEditorViewInputTarget {
 public:
-    explicit FrameworkInputCommandView(FrameworkInputCommandProbe& probe)
-        : _probe(probe), _root(new ayt::ui::Panel()) {}
+    explicit FrameworkInputCommandView(FrameworkInputCommandProbe& probe, bool canvas = true)
+        : _probe(probe), _root(new ayt::ui::Panel()), _canvas(canvas) {}
 
     ~FrameworkInputCommandView() override {
         if (_root != nullptr) ayt::ui::destroyWidgetTree(_root);
@@ -198,7 +198,7 @@ public:
         return root;
     }
     IEditorCommandTarget* commandTarget() noexcept override { return this; }
-    IEditorViewInputTarget* inputTarget() noexcept override { return this; }
+    IEditorViewInputTarget* inputTarget() noexcept override { return _canvas ? this : nullptr; }
 
     bool handlesCommand(const std::string& commandId) const override {
         return commandId == "edit.undo";
@@ -229,6 +229,7 @@ public:
 private:
     FrameworkInputCommandProbe& _probe;
     ayt::ui::Widget* _root = nullptr;
+    bool _canvas = true;
 };
 
 } // namespace
@@ -407,6 +408,29 @@ TEST_CASE(editor_dock_view_host_preserves_input_command_target_without_widget_fo
 
     host.shutdown();
     ui.shutdown();
+}
+
+TEST_CASE(visible_widget_document_retains_commands_without_focus_but_hidden_and_external_focus_do_not)
+{
+    EditorWorkspace workspace; FrameworkInputCommandProbe probe;
+    auto descriptor=makeFrameworkDescriptor("widget-command-hosted",{".widget-command"});
+    descriptor.createView=[&](const std::shared_ptr<IEditorDocument>&,IEditorHostServices&) -> std::unique_ptr<IEditorView> {
+        return std::make_unique<FrameworkInputCommandView>(probe,false);
+    };
+    CHECK(workspace.registry().registerEditor(std::move(descriptor)));
+    ayt::ui::MockRenderer backend;ayt::ui::UIManager ui;ui.initialize(&backend);
+    ayt::ui::DockArea dock;FrameworkHostServices services(workspace);
+    EditorDockViewHost host(workspace,dock,services,&ui);
+    const auto opened=host.open(EditorOpenRequest{"Assets/Test.widget-command"});CHECK(opened);
+    if(!opened){host.shutdown();ui.shutdown();return;}
+    host.syncCommandTargetFromFocus();CHECK(workspace.commands().execute("edit.undo"));CHECK(probe.undoCount==1);
+    ayt::ui::Panel external;ui.setFocus(&external);host.syncCommandTargetFromFocus();
+    CHECK(workspace.commands().activeTarget()==nullptr);CHECK_FALSE(workspace.commands().execute("edit.undo"));
+    ui.setFocus(nullptr);opened.card->setVisible(false);host.syncCommandTargetFromFocus();
+    CHECK(workspace.commands().activeTarget()==nullptr);
+    opened.card->setVisible(true);host.syncCommandTargetFromFocus();
+    CHECK(workspace.commands().execute("edit.undo"));CHECK(probe.undoCount==2);
+    host.shutdown();ui.shutdown();
 }
 
 TEST_CASE(editor_command_history_merges_transactions_and_save_cursor)

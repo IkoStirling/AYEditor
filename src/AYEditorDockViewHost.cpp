@@ -320,7 +320,7 @@ void EditorDockViewHost::syncCommandTargetFromFocus()
     if (_uiManager == nullptr) return;
     ayt::ui::Widget* focused = _uiManager->getFocusedWidget();
     for (EditorHostedView& hosted : _hosted) {
-        if (focused != nullptr && hosted.card != nullptr
+        if (focused != nullptr && hosted.card != nullptr && hosted.card->isVisible()
             && (focused == hosted.card
                 || ayt::ui::UIManager::isDescendantOf(
                     focused, hosted.card))) {
@@ -341,7 +341,11 @@ void EditorDockViewHost::syncCommandTargetFromFocus()
     // the hosted card must continue to own keyboard command routing.
     if (focused == nullptr) {
         EditorHostedView* hosted = inputFocusedHosted();
-        if (hosted != nullptr) {
+        // Widget-based document views (such as materials) may intentionally
+        // have no focused field after dismissing a picker. The visible active
+        // tab still owns document commands; hidden tabs and external focus do not.
+        if (hosted == nullptr) hosted = find(_activeDocumentId);
+        if (hosted != nullptr && hosted->card != nullptr && hosted->card->isVisible()) {
             if (_workspace.documents().activeDocumentId()
                 != hosted->documentId) {
                 (void)_workspace.documents().activate(hosted->documentId);

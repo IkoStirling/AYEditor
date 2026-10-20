@@ -115,6 +115,12 @@ public:
     std::string chooseImageFile() override {
         return _outerHost.chooseImageFile();
     }
+    std::vector<EditorTextureAssetChoice> textureAssets() const override { return _outerHost.textureAssets(); }
+    bool requestOpenDocument(const EditorOpenRequest& request,std::string* error = nullptr) override {
+        const auto result=open(request);
+        if(error)*error=result.error;
+        return static_cast<bool>(result);
+    }
     EditorAuthoringImage loadAuthoringImage(
         const std::string& path,
         std::string* error = nullptr) override;

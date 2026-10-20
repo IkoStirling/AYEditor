@@ -14,6 +14,9 @@
 #include <AYUI/ScrollView.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/TextInput.h>
+#include <AYUI/ModalDialog.h>
+#include <AYUI/ListView.h>
+#include <AYUI/UIManager.h>
 #include <AYUI/TextArea.h>
 #include <AYUI/UnicodeText.h>
 #include <AYMath/MathUtils.h>
@@ -256,7 +259,10 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         const auto project = EditorProjectDescriptor::load(host.projectRoot());
         const auto root = fs::u8path(host.projectRoot()) / fs::u8path(project ? project.assetRoot : "Assets");
         const auto text = root.u8string();
+        _sourceRoot=root;
         _document->configureSourceRoot(std::string(text.begin(), text.end()));
+        const auto imported=(fs::u8path(host.projectRoot())/".ayeditor_cache/assets").generic_u8string();
+        _document->configureImportedRoot(std::string(reinterpret_cast<const char*>(imported.data()),imported.size()));
         build();
         refresh();
     }
@@ -320,12 +326,24 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         }
         return done;
     }
+    void onLanguageChanged(const std::string&) override
+    {
+        if (_closed) return;
+        _copy->setText(_host.localizedText("ui.editor.material.create_copy", L"Create editable copy..."));
+        _copyHint->setText(_host.localizedText("ui.editor.material.copy_hint", L"Create a new material in project assets from this snapshot."));
+        for (auto* button : _textureBrowse)
+            button->setText(_host.localizedText("ui.editor.material.choose_texture", L"Choose..."));
+        _host.requestRepaint();
+    }
     void prepareForUiShutdown() override
     {
         if (_closed)
             return;
         _closed = true;
         _commands.detach();
+        _copyDialog.reset();_textureDialog.reset();
+        if(_copy)_copy->setOnClicked({});
+        for(auto* button:_textureBrowse)button->setOnClicked({});
         if (_preview)
             _preview->shutdown();
         for (auto *field : _fields)
@@ -406,6 +424,13 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         _reset = new Button();
         _reset->setText(L"Reset Camera");
         toolbar->addWidget(_reset, 115);
+        auto* copyRow=row(*_root,36);
+        _copy=new Button();_copy->setId("material_create_copy");
+        _copy->setText(_host.localizedText("ui.editor.material.create_copy",L"Create editable copy..."));
+        _copy->setOnClicked([this]{showCopyDialog();});copyRow->addWidget(_copy,210);
+        _copyHint=new TextLabel();_copyHint->setWordWrap(true);
+        _copyHint->setText(_host.localizedText("ui.editor.material.copy_hint",L"Create a new material in project assets from this snapshot."));
+        copyRow->addWidget(_copyHint,0);
         auto *body = new HBox();
         _root->addWidget(body, 0);
         _preview = new MaterialPreview(_document);
@@ -470,10 +495,10 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         _apply->setText(L"Apply parameters");
         _apply->setOnClicked([this] { commit(); });
         inspector->addWidget(_apply, 30);
-        label(*inspector, L"Textures: paths relative to project source assets");
+        label(*inspector, L"Textures: source paths or Imported/textures/...");
         for (size_t i = 0; i < kEditorMaterialTextureSlots.size(); ++i)
         {
-            auto *r = row(*inspector);
+            auto *r = row(*inspector,34);
             auto *title = new TextLabel();
             title->setFontSize(11);
             title->setText(decodeUtf8Text(kEditorMaterialTextureSlots[i]));
@@ -485,6 +510,10 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
             input->setOnFocusLostNotify([this] { commit(); });
             r->addWidget(input, 0);
             _textureFields.push_back(input);
+            auto* browse=new Button();browse->setId(std::string("material_browse_")+kEditorMaterialTextureSlots[i]);
+            browse->setText(_host.localizedText("ui.editor.material.choose_texture",L"Choose..."));
+            browse->setOnClicked([this,i]{showTextureDialog(i);});r->addWidget(browse,72);
+            _textureBrowse.push_back(browse);
         }
         label(*inspector, L"Textures and shader (preserved on save)");
         _references = new TextArea();
@@ -494,6 +523,91 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         _status = new TextLabel();
         _status->setId("material_status");
         _root->addWidget(_status, 44);
+    }
+    void showCopyDialog()
+    {
+        namespace fs=std::filesystem;
+        if(_closed||(!_document->readOnly()&&!commit()))return;
+        auto* manager=_host.uiManager();if(!manager){_status->setText(L"This host has no material dialog surface");return;}
+        std::string candidate;
+        try{
+            const auto stem=fs::u8path(_document->path()).stem().generic_u8string();
+            const std::string name(reinterpret_cast<const char*>(stem.data()),stem.size());
+            for(unsigned index=0;index<10000;++index){
+                candidate="materials/"+name+"_Editable"+(index?"_"+std::to_string(index):"")+".mat";
+                if(!fs::exists(_sourceRoot/fs::u8path(candidate))&&!fs::is_symlink(_sourceRoot/fs::u8path(candidate)))break;
+                candidate.clear();
+            }
+            if(candidate.empty()){_status->setText(L"No unused material copy name is available");return;}
+        }catch(const std::exception& error){_status->setText(decodeUtf8Text(error.what()));return;}
+        _copyDialog=std::make_unique<ModalDialog>();auto* dialog=_copyDialog.get();
+        dialog->setId("material_copy_dialog");dialog->setSize({620,225});
+        dialog->setAcceptText(_host.localizedText("ui.editor.material.create_copy",L"Create editable copy..."));
+        dialog->setRejectText(_host.localizedText("ui.editor.import.cancel",L"Cancel"));
+        auto* body=new VBox();body->setSpacing(6);body->setSize({588,153});
+        auto* label=new TextLabel();label->setWordWrap(true);
+        label->setText(_host.localizedText("ui.editor.material.copy_destination",L"Destination relative to project source assets (.mat, new file only)"));
+        body->addWidget(label,34);
+        auto* path=new TextInput();path->setId("material_copy_path");path->setText(decodeUtf8Text(candidate));body->addWidget(path,30);
+        auto* error=new TextLabel();error->setId("material_copy_error");error->setTextColor({1,.4f,.3f,1});error->setWordWrap(true);body->addWidget(error,56);
+        dialog->setBodyContentOwned(body);
+        dialog->setAcceptValidator([this,path,error]{
+            const auto destination=encodeUtf8Text(path->getText());std::string reason;
+            if(!_document->saveEditableCopy(destination,&reason)){error->setText(decodeUtf8Text(reason));return false;}
+            const auto created=std::filesystem::absolute(_sourceRoot/std::filesystem::u8path(destination));
+            const auto text=created.generic_u8string();EditorOpenRequest request;
+            request.resourcePath=std::string(reinterpret_cast<const char*>(text.data()),text.size());request.resourceKey=request.resourcePath;
+            request.assetType="Material";request.preferredEditorId=kEditorMaterialExtensionId;
+            const bool opened=_host.requestOpenDocument(request,&reason);
+            _host.setStatusText(_host.localizedText("ui.editor.material.copy_created",L"Material copy created: ")+decodeUtf8Text(request.resourcePath)
+                +(opened?std::wstring{}:L" — "+decodeUtf8Text(reason)));
+            _host.requestRepaint();return true;
+        });
+        dialog->fitAndCenterInViewport(manager->root()->getSize(),12);dialog->openModal();_host.requestRepaint();
+    }
+    void showTextureDialog(std::size_t slot)
+    {
+        if(_closed||_document->readOnly()||!commit())return;
+        auto* manager=_host.uiManager();if(!manager)return;
+        const auto assets=std::make_shared<std::vector<EditorTextureAssetChoice>>(_host.textureAssets());
+        const auto filtered=std::make_shared<std::vector<std::size_t>>();
+        _textureDialog=std::make_unique<ModalDialog>();auto* dialog=_textureDialog.get();
+        dialog->setId("material_texture_dialog");dialog->setSize({760,530});
+        dialog->setAcceptText(_host.localizedText("ui.editor.material.apply_texture",L"Apply texture"));
+        dialog->setRejectText(_host.localizedText("ui.editor.import.cancel",L"Cancel"));
+        auto* body=new VBox();body->setSpacing(5);body->setSize({728,458});
+        auto* search=new TextInput();search->setId("material_texture_search");
+        search->setPlaceholder(_host.localizedText("ui.editor.material.texture_search",L"Search source and imported textures"));body->addWidget(search,30);
+        auto* list=new ListView();list->setId("material_texture_choices");body->addWidget(list,350);
+        auto* error=new TextLabel();error->setId("material_texture_error");error->setTextColor({1,.4f,.3f,1});error->setWordWrap(true);body->addWidget(error,50);
+        const auto clear=_host.localizedText("ui.editor.material.texture_clear",L"Clear slot (use fallback)");
+        const auto current=_document->textureAssetPath(slot);
+        const auto currentLabel=decodeUtf8Text(current.empty()?std::string{}:
+            (current.rfind("Imported/",0)==0?current:"Assets/"+current));
+        const auto rebuild=[assets,filtered,list,clear,currentLabel](const std::wstring& query){
+            auto folded=query;std::transform(folded.begin(),folded.end(),folded.begin(),
+                [](wchar_t c){return c>=L'A'&&c<=L'Z'?wchar_t(c+L'a'-L'A'):c;});
+            std::vector<std::wstring> labels{clear};filtered->clear();int selected=currentLabel.empty()?0:-1;
+            for(std::size_t i=0;i<assets->size();++i){
+                auto label=decodeUtf8Text((*assets)[i].displayPath),key=label;
+                std::transform(key.begin(),key.end(),key.begin(),[](wchar_t c){return c>=L'A'&&c<=L'Z'?wchar_t(c+L'a'-L'A'):c;});
+                if(!folded.empty()&&key.find(folded)==std::wstring::npos)continue;
+                filtered->push_back(i);if(label==currentLabel)selected=static_cast<int>(labels.size());
+                labels.push_back(std::move(label));
+            }
+            list->setItems(labels);list->setSelectedIndex(selected);
+        };
+        search->setOnTextChanged(rebuild);rebuild({});dialog->setBodyContentOwned(body);
+        dialog->setAcceptValidator([this,slot,list,filtered,assets,error]{
+            const int selected=list->getSelectedIndex();
+            if(selected<0||std::size_t(selected)>filtered->size()){
+                error->setText(_host.localizedText("ui.editor.material.texture_select",L"Select a texture or clear the slot."));return false;
+            }
+            const auto path=selected==0?std::string{}:(*assets)[(*filtered)[std::size_t(selected-1)]].absolutePath;
+            std::string reason;if(!_document->setTextureAsset(slot,path,&reason)){error->setText(decodeUtf8Text(reason));return false;}
+            refresh();_host.requestRepaint();return true;
+        });
+        dialog->fitAndCenterInViewport(manager->root()->getSize(),12);dialog->openModal();_host.requestRepaint();
     }
     bool commit()
     {
@@ -620,6 +734,7 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
         {
             _textureDisplay[i] = _document->textureAssetPath(i);
             _textureFields[i]->setReadOnly(ro);
+            _textureBrowse[i]->setEnabled(!ro);
             _textureFields[i]->setText(decodeUtf8Text(_textureDisplay[i]));
         }
         std::string refs = "Shader: " + _document->shaderReference();
@@ -646,8 +761,11 @@ class MaterialView final : public IEditorView, public IEditorCommandTarget
     std::array<std::string, 7> _textureDisplay;
     ComboBox *_alpha = nullptr, *_shape = nullptr, *_opacitySource = nullptr;
     CheckBox *_doubleSided = nullptr;
-    Button *_apply = nullptr, *_reset = nullptr;
-    TextLabel *_status = nullptr;
+    Button *_apply = nullptr, *_reset = nullptr, *_copy = nullptr;
+    std::vector<Button*> _textureBrowse;
+    std::unique_ptr<ModalDialog> _copyDialog,_textureDialog;
+    std::filesystem::path _sourceRoot;
+    TextLabel *_status = nullptr, *_copyHint = nullptr;
     TextArea *_references = nullptr;
     uint64_t _stamp = UINT64_MAX;
     bool _closed = false, _syncing = false;

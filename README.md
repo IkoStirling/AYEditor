@@ -15,7 +15,7 @@ outputBaseName/sourceId/namespace 固定原输出路径，支持主文件改名�
 完成队列逐项通知 Session，成功刷新驻留资源及缩略图，失败保留旧渲染。
 真实隐藏窗口 D3D11/D3D12 夹具已检查导入网格与其自身材质、按钮重导入、失败保留、
 修复重试及 Scene 编辑保存重开；该夹具使用显式 Scene Host，不等于默认 GameLoop 全面验收。
-当前 Source ABI41，依赖者需重新编译。
+当前 Source ABI42，依赖者需重新编译。
 
 ## 3D 场景搭建效率（2026-10-21）
 
@@ -37,8 +37,16 @@ UV、法线强度、粗糙度偏置、Mask/Blend、opacity 通道、双面与七
 球体、非均匀缩放球、UV 平面使用独立工作室灯光/HDR 显示，未保存修改不改 Scene 缓存。
 Enter/失焦/Apply 原子提交字段；Save/Ctrl+S 先提交有效字段，再检查磁盘冲突并保存。
 本地 128 项 undo/redo 保留保存前后的历史；Reload 失败保留当前文档。
-源文件最大 4 MiB，保留未知参数与 shader/name/GUID。新贴图选择限项目源资源根，
-导入缓存和外部资产只读；当前不提供导入材质的 Save As/copy。
+源文件最大 4 MiB，保留未知参数与 shader/name/GUID。源资源及已导入 textures/ 可通过搜索式
+贴图选择器赋值，原图 DDS 须先导入。源贴图写 owner-relative 引用，已导入贴图保留虚拟路径。
+导入材质保持只读；“创建可编辑副本”把当前状态另存到项目源根的新 .mat 并打开独立 Dock。
+副本保留未知值/纹理维度并重定位相对引用，生成独立 GUID；不覆盖现存文件或修改原文档历史。
+副本先在同卷源根外写完整文件，再排他硬链接发布；文件系统不支持硬链接时明确失败。
+
+Assets 中的材质可拖到 3D Edit 视口的既有 Mesh：一次可撤销赋值，不创建几何；Scene 保存重开保留。
+关闭贴图选择器后，无输入框焦点的可见材质页仍处理 Ctrl+S；隐藏页和外部焦点不抢命令。
+MaterialAuthoringWorkflowRenderTest 用真实 Session/导入/按钮/拖放/GPU 串联此流程，并检查预览
+关闭后 Scene 的共享程序仍有效。它使用显式 Scene Host，不等于默认 GameLoop 或系统鼠标验收。
 
 File → New PBR Material 创建唯一 `.mat` 和独立相邻 shader，跳过孤立 shader 文件。
 `AYEditor_MaterialSampleTool` 为 [Material Workshop](../AYRenderer/demo/MaterialWorkshop/README.md)

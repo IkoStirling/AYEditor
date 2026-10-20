@@ -64,6 +64,7 @@ struct Fixture
     std::shared_ptr<editor::EditorMaterialDocument> material;
     editor::EditorAssetId materialId{};
     bool renderSceneGeometry = true;
+    bool useEditorCamera = false;
     explicit Fixture(fs::path destination, bool d3d12, bool assetPreviews = false) : output(fs::absolute(destination))
     {
         require(!fs::exists(output), "Use a fresh output directory");
@@ -193,11 +194,16 @@ struct Fixture
             const auto w = uint16_t(bounds.maxX - bounds.minX), h = uint16_t(bounds.maxY - bounds.minY);
             require(w > 0 && h > 0, "Scene panel has positive dimensions");
             renderer.setViewportRect(uint16_t(bounds.minX), uint16_t(bounds.minY), w, h);
-            entity::PerspectiveCameraFrame camera;
-            require(entity::evaluatePerspectiveCamera3D(session.document()->scene().world(), float(w) / h, 1,
-                                                        camera),
-                    "Evaluate native camera for actual panel aspect");
-            renderer.setMainCamera(camera.view, camera.projection, camera.position);
+            if(useEditorCamera){
+                const auto camera=session.sceneCamera().frame();
+                renderer.setMainCamera(camera.view,camera.projection,camera.position);
+            }else{
+                entity::PerspectiveCameraFrame camera;
+                require(entity::evaluatePerspectiveCamera3D(session.document()->scene().world(), float(w) / h, 1,
+                                                            camera),
+                        "Evaluate native camera for actual panel aspect");
+                renderer.setMainCamera(camera.view, camera.projection, camera.position);
+            }
             renderer.render(renderSceneGeometry ? extract() : render::RenderScene{});
         }
         session.render(showScene);

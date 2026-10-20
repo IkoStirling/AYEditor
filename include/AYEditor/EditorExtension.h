@@ -157,6 +157,13 @@ public:
     virtual bool redoSpriteAnimationEdit() = 0;
 };
 
+/// Snapshot of the project's existing texture catalog for authoring pickers.
+/// The host owns discovery; the consumer revalidates the selected file on Apply.
+struct EditorTextureAssetChoice {
+    std::string displayPath;
+    std::string absolutePath;
+};
+
 // AYEditor-owned services exposed to a registered editor view. Module editor
 // cores remain independent from this interface; only their AYEditor adapter
 // consumes it.
@@ -167,6 +174,13 @@ public:
     virtual const std::string& projectRoot() const noexcept = 0;
     virtual ayt::ui::UIManager* uiManager() noexcept { return nullptr; }
     virtual std::string chooseImageFile() { return {}; }
+    virtual std::vector<EditorTextureAssetChoice> textureAssets() const { return {}; }
+    /// Open/focus a registered document and its host view. Model-only hosts may
+    /// refuse; callers must retain any already published artifact on refusal.
+    virtual bool requestOpenDocument(const EditorOpenRequest&, std::string* error = nullptr) {
+        if(error)*error="This host cannot open another document view.";
+        return false;
+    }
     virtual EditorAuthoringImage loadAuthoringImage(
         const std::string& /*path*/, std::string* error = nullptr) {
         if (error != nullptr) {

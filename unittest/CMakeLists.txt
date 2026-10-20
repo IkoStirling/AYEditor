@@ -236,6 +236,16 @@ endif()
 target_link_libraries(${MODULE_NAME} PRIVATE AYAudio)
 
 if(WIN32)
+    add_executable(AYEditor_MaterialAuthoringWorkflowRenderTest EXCLUDE_FROM_ALL MaterialAuthoringWorkflowRenderTest.cpp)
+    target_link_libraries(AYEditor_MaterialAuthoringWorkflowRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
+    target_include_directories(AYEditor_MaterialAuthoringWorkflowRenderTest PRIVATE ../../AYRenderer/src)
+    target_compile_definitions(AYEditor_MaterialAuthoringWorkflowRenderTest PRIVATE
+        AY_MATERIAL_WORKSHOP_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../AYRenderer/demo/MaterialWorkshop"
+        AY_EDITOR_ENGINE_ASSETS_HINT="${AY_ENGINE_ASSETS_SOURCE_DIR}")
+    ay_stage_production_shaders(AYEditor_MaterialAuthoringWorkflowRenderTest)
+    if(MSVC)
+        target_link_options(AYEditor_MaterialAuthoringWorkflowRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
     add_executable(AYEditor_AssetReimportRenderTest EXCLUDE_FROM_ALL AssetReimportRenderTest.cpp)
     target_link_libraries(AYEditor_AssetReimportRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
     target_include_directories(AYEditor_AssetReimportRenderTest PRIVATE ../../AYRenderer/src)

@@ -5,6 +5,8 @@
 #include <AYRenderer.h>
 #include <AYIO/File.h>
 #include <AYIO/PathSafety.h>
+#include <AYStorage/Guid.h>
+#include "MaterialCopyPublication.h"
 #include <algorithm>
 #include <cmath>
 #include <cctype>
@@ -51,6 +53,45 @@ bool texturePath(const fs::path &root, const fs::path &candidate, fs::path &reso
         return fail(error, "Invalid source texture path");
     }
 }
+bool approvedTexturePath(const std::string& sourceRoot,const std::string& importedRoot,
+                         const fs::path& candidate,fs::path& resolved,bool& imported,std::string* error)
+{
+    std::string reason;
+    if(texturePath(fs::u8path(sourceRoot),candidate,resolved,&reason)){imported=false;return true;}
+    if(!importedRoot.empty()&&texturePath(fs::u8path(importedRoot),candidate,resolved,&reason)){
+        const auto logical=utf8(fs::relative(resolved,fs::u8path(importedRoot)));
+        if(logical.rfind("textures/",0)!=0 && logical.rfind("textures\\",0)!=0)
+            return fail(error,"Imported texture must use a textures/ virtual path");
+        imported=true;return true;
+    }
+    return fail(error,reason.empty()?"Choose a project source or imported texture":reason);
+}
+fs::path resolveTextureReference(const std::string& sourceRoot,const std::string& importedRoot,
+                                 const std::string& owner,const std::string& reference)
+{
+    if(reference.rfind("textures/",0)==0||reference.rfind("textures\\",0)==0){
+        const auto source=fs::u8path(sourceRoot)/fs::u8path(reference);
+        if(fs::is_regular_file(source))return source;
+        const auto derived=fs::u8path(importedRoot)/fs::u8path(reference);
+        if(!importedRoot.empty()&&fs::is_regular_file(derived))return derived;
+    }
+    auto path=fs::u8path(resource::resolveAssetPath(owner,reference));
+    if(path.is_relative()&&io::path::isPortableRelative(reference)){
+        const auto source=fs::u8path(sourceRoot)/fs::u8path(reference);
+        if(fs::is_regular_file(source))return source;
+        const auto derived=fs::u8path(importedRoot)/fs::u8path(reference);
+        if(!importedRoot.empty()&&fs::is_regular_file(derived))return derived;
+    }
+    return path;
+}
+std::string textureReference(const std::string& importedRoot,const std::string& owner,
+                             const fs::path& resolved,bool imported)
+{
+    auto result=imported?utf8(fs::relative(resolved,fs::u8path(importedRoot)))
+        :"./"+utf8(fs::relative(resolved,fs::u8path(owner).parent_path()));
+    std::replace(result.begin(),result.end(),'\\','/');return result;
+}
+
 bool read(const std::string &path, std::vector<UInt8> &bytes, std::string *error)
 {
     try
@@ -173,7 +214,7 @@ void apply(Material &m, const EditorMaterialSettings &s)
 } // namespace
 struct EditorMaterialDocument::Impl
 {
-    std::string type = "ayeditor.material.document", path, title, root, diagnostic, shader;
+    std::string type = "ayeditor.material.document", path, title, root, importedRoot, diagnostic, shader;
     std::vector<UInt8> bytes;
     std::unique_ptr<Material> source;
     EditorMaterialSettings current, saved;
@@ -264,6 +305,11 @@ void EditorMaterialDocument::configureSourceRoot(std::string root)
         io::path::resolveWithinRoot(fs::u8path(p.root), fs::u8path(p.path), resolved, reason))
         p.readOnly = false;
 }
+void EditorMaterialDocument::configureImportedRoot(std::string root)
+{
+    _impl->importedRoot=std::move(root);
+}
+
 bool EditorMaterialDocument::replaceSettings(const EditorMaterialSettings &s, std::string *error)
 {
     auto &p = *_impl;
@@ -282,12 +328,10 @@ bool EditorMaterialDocument::replaceSettings(const EditorMaterialSettings &s, st
                 continue;
             if (reference.size() > 4096 || reference.find('\0') != std::string::npos)
                 return fail(error, "Invalid texture reference");
-            const auto candidate = fs::u8path(resource::resolveAssetPath(p.path, reference));
-            fs::path resolved;
-            if (!texturePath(fs::u8path(p.root), candidate, resolved, error))
-                return false;
-            reference = "./" + utf8(fs::relative(resolved, fs::u8path(p.path).parent_path()));
-            std::replace(reference.begin(), reference.end(), '\\', '/');
+            const auto candidate = resolveTextureReference(p.root,p.importedRoot,p.path,reference);
+            fs::path resolved;bool imported=false;
+            if (!approvedTexturePath(p.root,p.importedRoot,candidate,resolved,imported,error))return false;
+            reference=textureReference(p.importedRoot,p.path,resolved,imported);
         }
     }
     catch (const std::exception &)
@@ -333,13 +377,26 @@ bool EditorMaterialDocument::textureReferenceForAsset(const std::string &sourceP
     try
     {
         const auto root = fs::u8path(_impl->root);
-        const auto request = fs::u8path(sourcePath);
-        fs::path resolved;
-        if (!texturePath(root, request.is_absolute() ? request : root / request, resolved, error))
-            return false;
-        auto next = "./" + utf8(fs::relative(resolved, fs::u8path(path()).parent_path()));
-        std::replace(next.begin(), next.end(), '\\', '/');
-        reference = std::move(next);
+        auto input=sourcePath;std::replace(input.begin(),input.end(),'\\','/');
+        auto request=fs::u8path(input);fs::path candidate;
+        const auto prefix=input.size()>=9?input.substr(0,9):std::string{};
+        std::string folded=prefix;std::transform(folded.begin(),folded.end(),folded.begin(),
+            [](unsigned char value){return char(std::tolower(value));});
+        if(folded=="imported/"){
+            if(_impl->importedRoot.empty())return fail(error,"No project imported root is configured");
+            const auto relative=input.substr(9);
+            if(!io::path::isPortableRelative(relative))return fail(error,"Invalid imported texture path");
+            candidate=fs::u8path(_impl->importedRoot)/fs::u8path(relative);
+        }else{
+            candidate=request.is_absolute()?request:root/request;
+            if(!request.is_absolute()&&!fs::is_regular_file(candidate)&&!_impl->importedRoot.empty()){
+                const auto derived=fs::u8path(_impl->importedRoot)/request;
+                if(fs::is_regular_file(derived))candidate=derived;
+            }
+        }
+        fs::path resolved;bool imported=false;
+        if(!approvedTexturePath(_impl->root,_impl->importedRoot,candidate,resolved,imported,error))return false;
+        reference=textureReference(_impl->importedRoot,path(),resolved,imported);
         if (error)
             error->clear();
         return true;
@@ -355,7 +412,7 @@ std::string EditorMaterialDocument::textureAssetPath(size_t slot) const
         return {};
     try
     {
-        const auto resolved = fs::u8path(resource::resolveAssetPath(path(), settings().textures[slot]));
+        const auto resolved = resolveTextureReference(_impl->root,_impl->importedRoot,path(),settings().textures[slot]);
         fs::path inside;
         std::string error;
         if (!_impl->root.empty() &&
@@ -364,6 +421,11 @@ std::string EditorMaterialDocument::textureAssetPath(size_t slot) const
             auto relative = utf8(fs::relative(inside, fs::u8path(_impl->root)));
             std::replace(relative.begin(), relative.end(), '\\', '/');
             return relative;
+        }
+        if(!_impl->importedRoot.empty()&&io::path::resolveWithinRoot(fs::u8path(_impl->importedRoot),resolved,inside,error)){
+            auto relative=utf8(fs::relative(inside,fs::u8path(_impl->importedRoot)));
+            std::replace(relative.begin(),relative.end(),'\\','/');
+            return "Imported/"+relative;
         }
     }
     catch (const std::exception &)
@@ -430,7 +492,8 @@ bool EditorMaterialDocument::save(std::string *error)
     if (!p.snapshot(next))
         return fail(error, "Cannot prepare material snapshot");
     std::vector<UInt8> bytes;
-    if (!next.saveToBinary(bytes) || !io::File::atomicWriteUtf8(p.path, bytes.data(), bytes.size()))
+    if (!next.saveToBinary(bytes) || bytes.size() > 4 * 1024 * 1024
+        || !io::File::atomicWriteUtf8(p.path, bytes.data(), bytes.size()))
         return fail(error, "Material save failed");
     p.bytes = std::move(bytes);
     p.saved = p.current;
@@ -442,6 +505,59 @@ bool EditorMaterialDocument::save(std::string *error)
         error->clear();
     return true;
 }
+bool EditorMaterialDocument::saveEditableCopy(const std::string& destination,std::string* error) const
+{
+    const auto& p=*_impl;
+    if(!p.source||p.root.empty())return fail(error,"Open a project material before creating a copy");
+    try{
+        if(destination.empty()||destination.find('\0')!=std::string::npos||destination.size()>4096)
+            return fail(error,"Choose a project .mat destination");
+        auto request=fs::u8path(destination);
+        auto extension=request.extension().string();
+        std::transform(extension.begin(),extension.end(),extension.begin(),[](unsigned char c){return char(std::tolower(c));});
+        if(extension!=".mat")return fail(error,"New material copies use the .mat suffix");
+        if(!request.is_absolute()&&!io::path::isPortableRelative(destination))
+            return fail(error,"Choose a portable path beneath project source assets");
+        const auto root=fs::u8path(p.root);
+        fs::path source,target;std::string reason;
+        const bool sourceOwned=io::path::resolveWithinRoot(root,fs::u8path(p.path),source,reason)
+            || (!p.importedRoot.empty()&&io::path::resolveWithinRoot(fs::u8path(p.importedRoot),fs::u8path(p.path),source,reason));
+        if(!sourceOwned)return fail(error,"Copy requires a project source or imported project material");
+        if(!io::path::resolveWithinRoot(root,request.is_absolute()?request:root/request,target,reason))return fail(error,reason);
+        if(fs::exists(target)||fs::is_symlink(target))return fail(error,"The material destination already exists");
+        Material next;if(!p.snapshot(next))return fail(error,"Cannot prepare material copy snapshot");
+        const auto targetText=utf8(target);
+        const auto rebase=[&](const std::string& reference,bool shader){
+            if(reference.empty())return reference;
+            const auto oldPath=fs::u8path(resource::resolveAssetPath(p.path,reference));
+            const auto newPath=fs::u8path(resource::resolveAssetPath(targetText,reference));
+            if(oldPath.lexically_normal()==newPath.lexically_normal()||fs::u8path(reference).is_absolute())return reference;
+            // A bare shader may be resolved by the renderer's mounted-root
+            // fallback. Rebase only an actual sibling, or an explicit relative path.
+            if(shader&&reference.front()!='.'&&!fs::is_regular_file(oldPath))return reference;
+            auto relative="./"+utf8(fs::relative(oldPath,target.parent_path()));
+            std::replace(relative.begin(),relative.end(),'\\','/');return relative;
+        };
+        std::vector<std::pair<std::string,std::string>> references;
+        next.forEachParameter([&](const char* name,MaterialParamType type){
+            if(type>=MaterialParamType::Texture2D&&type<=MaterialParamType::TextureCube)
+                references.emplace_back(name,next.getTexture(name));
+        });
+        for(const auto& [name,value]:references)
+            if(!next.setTextureReference(name,rebase(value,false)))return fail(error,"Cannot preserve typed texture reference in material copy");
+        next.setShader(rebase(next.getShader(),true));
+        std::vector<UInt8> bytes;
+        if(!next.saveToBinary(bytes))return fail(error,"Cannot encode material copy");
+        auto identity=utf8(target.lexically_relative(fs::weakly_canonical(root)));
+        identity.append(reinterpret_cast<const char*>(bytes.data()),bytes.size());
+        next.setGuid(storage::Guid::computeFromData(identity.data(),identity.size()));
+        if(!next.saveToBinary(bytes))return fail(error,"Cannot encode material copy identity");
+        if(bytes.size()>4*1024*1024)return fail(error,"Material copy exceeds the 4 MiB document limit");
+        detail::publishNewMaterialCopy(root,target,bytes.data(),bytes.size());
+        if(error)error->clear();return true;
+    }catch(const std::exception& exception){return fail(error,exception.what());}
+}
+
 bool EditorMaterialDocument::writeRecoveryCopy(const std::string &path, std::string *error) const
 {
     Material next;

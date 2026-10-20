@@ -16,7 +16,7 @@ Editor 存储层负责先保存、分配 sourceId/outputNamespace，再排队。
 ImportSettingsDialog 复用 PropertyField/ModalDialog，读取尚未提交的输入并整体校验。
 Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc 没有导入副作用。
 Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
-当前 Session/Database/Queue 布局变更使用 Source ABI41，UI 验证接口为 ABI132。
+当前扩展 Host API 使用 Source ABI42，UI 验证接口为 ABI132。
 
 Session 只对成功完成的转换刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
 导入事务与运行时刷新各有失败结果，不能把磁盘转换成功等同于画面已更新。
@@ -41,6 +41,29 @@ frameSelectedEntity 在 3D Edit 收集所选实体的空间子树，变换 Mesh 
 分数 Dock 尺寸又直接传入整数 viewport 的 ray。现用 forward×right 作为 screen-up，并将
 3D 鼠标局部坐标归一至相机整数像素范围。独立透视/正交投影回归在修复前均失败，保留证据；
 修复后同组17例/189断言通过，包括真实拖动/撤销/Ctrl/保存重开，不放宽原位置精度断言。
+
+## 2026-10-21 — 材质副本、贴图目录与赋值
+
+MaterialView 只通过 IEditorHostServices::textureAssets 取得目录快照，持有过滤后的索引；不自行
+扫描文件系统。选择前验证完整 pending form，选择后经过 Document 的路径验证和一次历史状态。
+requestOpenDocument 由 DockViewHost 实现，确保新副本同时拥有文档与可见 View；仅打开文档管理器
+不会创建 Dock。两个新增 Host 虚函数要求 Source ABI42 消费方重编；具体 Material helper 不改 IMaterial ABI。
+
+saveEditableCopy 从含未保存修改的原基线快照构造副本，保留未知参数，显式重定位 shader 与所有
+纹理维度的 owner-relative 引用，virtual textures/ 保持原寻址。生成独立 GUID；不更改原路径、
+revision、保存基线或撤销历史。目标限制在源根且只能创建 .mat。先写源根外的同卷临时文件，再用
+create_hard_link 排他发布，包含预检后目标被其他创建者抢占的情况；不提供无硬链接文件系统的回退覆盖。
+普通保存仍沿用既有逐文件替换语义。未知 Cube 引用保留不意味着当前预览支持立方体贴图。
+
+材质拖放使用真实 Mesh 拾取与 mutateComponentById，保留目标实体并记录单次 undo。只限 Edit3D。
+Dock 命令同步在没有 Widget 焦点时保留可见 active tab；隐藏 tab 或外部 Widget 焦点不可借该回退
+执行命令。测试覆盖普通 Widget View 及 canvas input lease 两条路径。
+保存/复制编码结果也必须不超过文档读取的4MiB上限，拒绝时保留原文件和历史。
+
+验证：材质/框架25例508断言，扩大八套151例通过；当前最终二进制D3D11/D3D12的
+MaterialAuthoringWorkflowRenderTest均通过，实际贴图预览变化67318像素、Scene47068像素，
+含复制、选择、未保存隔离、Ctrl+S、拖放/undo/redo/Scene重开/关闭预览。
+SDK125能力/542符号，零错误零警告。
 
 ## 2026-10-20 — 单材质文档与预览边界
 

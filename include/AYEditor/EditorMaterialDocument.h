@@ -44,6 +44,14 @@ class EditorMaterialDocument final : public IEditorDocument, public IEditorComma
     /// Save/edit is enabled only below this project source root (custom roots
     /// are supported). Imported/generated files remain inspectable read-only.
     void configureSourceRoot(std::string root);
+    /// Project's disposable imported-resource root. Enables selecting its
+    /// textures through stable virtual references, but never editing its files.
+    void configureImportedRoot(std::string root);
+    /// Publish the current snapshot as a new .mat beneath the source root.
+    /// Rebase owner-relative shader/texture paths and give the copy its own
+    /// GUID. Existing destinations are refused, including publication races.
+    /// This document/path/history and all referenced assets remain unchanged.
+    bool saveEditableCopy(const std::string& destination, std::string* error = nullptr) const;
     const std::string &typeId() const noexcept override;
     const std::string &path() const noexcept override;
     const std::string &title() const noexcept override;
@@ -53,7 +61,9 @@ class EditorMaterialDocument final : public IEditorDocument, public IEditorComma
     const EditorMaterialSettings &settings() const noexcept;
     bool replaceSettings(const EditorMaterialSettings &, std::string *error = nullptr);
     /// Choose a source-root-relative texture asset; absolute paths are accepted
-    /// only inside the same root. Saves an explicit owner-relative reference.
+    /// inside the source or configured imported root. Imported/ paths select
+    /// a cache texture and save its textures/ virtual reference; source choices
+    /// save explicit owner-relative references.
     /// Empty clears the slot. Failure retains the document and its history.
     bool setTextureAsset(size_t slot, const std::string &sourcePath, std::string *error = nullptr);
     std::string textureAssetPath(size_t slot) const;
