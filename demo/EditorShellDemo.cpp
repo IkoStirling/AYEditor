@@ -315,6 +315,11 @@ ayt::editor::EditorPreferences loadEditorPreferences(
     out.activeTool = static_cast<EditorTool>(tool);
     out.localTransformSpace = saved.getBool(
         "Editor.Tools.LocalSpace", out.localTransformSpace);
+    out.transformSnap.enabled = saved.getBool("Editor.Tools.Snap.Enabled",out.transformSnap.enabled);
+    out.transformSnap.translation = preferenceFloat(saved,"Editor.Tools.Snap.Translation",out.transformSnap.translation);
+    out.transformSnap.rotationDegrees = preferenceFloat(saved,"Editor.Tools.Snap.RotationDegrees",out.transformSnap.rotationDegrees);
+    out.transformSnap.scale = preferenceFloat(saved,"Editor.Tools.Snap.Scale",out.transformSnap.scale);
+    if(!out.transformSnap.valid())out.transformSnap={};
     out.orthographicView = saved.getBool(
         "Editor.Viewport.Orthographic", out.orthographicView);
     out.wireframeView = saved.getBool(
@@ -428,6 +433,10 @@ bool saveEditorPreferences(const std::string& path,
     config.setFloat("Editor.Viewport.Camera.MoveSpeed", value.cameraMoveSpeed);
     config.setInt("Editor.Tools.Active", static_cast<int>(value.activeTool));
     config.setBool("Editor.Tools.LocalSpace", value.localTransformSpace);
+    config.setBool("Editor.Tools.Snap.Enabled",value.transformSnap.enabled);
+    config.setFloat("Editor.Tools.Snap.Translation",value.transformSnap.translation);
+    config.setFloat("Editor.Tools.Snap.RotationDegrees",value.transformSnap.rotationDegrees);
+    config.setFloat("Editor.Tools.Snap.Scale",value.transformSnap.scale);
     config.setBool("Editor.Viewport.Orthographic", value.orthographicView);
     config.setBool("Editor.Viewport.Wireframe", value.wireframeView);
     config.setInt("Editor.Viewport.CameraIcons", static_cast<int>(value.cameraDisplayMode));

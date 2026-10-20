@@ -616,4 +616,91 @@ TEST_CASE(project_recipe_file_changes_refresh_import_settings_without_listing_au
     if(observed)CHECK(database.imports()[0].state==EditorAssetImportState::NeedsImport);
 }
 
+TEST_CASE(source_relink_dialog_validates_picker_and_defers_import_until_apply)
+{
+    EditorImportFixture fixture;
+    fixture.triangle();
+    const auto moved=fixture.root/"Moved/Renamed.gltf";
+    fixture.write(moved,"source picker fixture");
+    ayt::ui::MockRenderer backend;
+    ayt::ui::UIManager manager;
+    manager.initialize(&backend);manager.setClientSize(1280,900);
+    const auto original=fixture.options();
+    auto chosen=(fixture.root/"Moved/Wrong.png").string();
+    int applications=0;
+    ayt::resource::ImportOptions applied;
+    EditorImportSettingsDialog dialog(original,
+        [&](const auto& options,std::string&){++applications;applied=options;return true;},
+        [](const char*,const wchar_t* fallback){return std::wstring(fallback);},
+        [&]{return chosen;});
+    manager.root()->addChildExternal(&dialog);
+    dialog.fitAndCenterInViewport({1280,900},12);dialog.openModal();manager.layout();
+    const auto find=[](auto&& self,ayt::ui::Widget* widget,const char* id)->ayt::ui::Widget* {
+        if(widget->getId()==id)return widget;
+        for(auto* child:widget->getChildren())if(auto* found=self(self,child,id))return found;
+        return nullptr;
+    };
+    auto* button=dynamic_cast<ayt::ui::Button*>(find(find,dialog.getBodyContent(),"import_settings_relink"));
+    auto* error=dynamic_cast<ayt::ui::TextLabel*>(find(find,dialog.getBodyContent(),"import_settings_error"));
+    CHECK(button && error);
+    if(!button || !error){dialog.closeModal();manager.shutdown();return;}
+    const auto browse=[&]{
+        manager.layout();const auto bounds=button->getWorldBounds();
+        const auto p=manager.logicalToPhysical({(bounds.minX+bounds.maxX)*.5f,(bounds.minY+bounds.maxY)*.5f});
+        manager.onMouseMove(p.x,p.y);manager.onMouseButtonDown(p.x,p.y,0);manager.onMouseButtonUp(p.x,p.y,0);
+    };
+    browse();CHECK_FALSE(error->getText().empty());CHECK(applications==0);
+    chosen=(fixture.root/"Missing.gltf").string();browse();CHECK_FALSE(error->getText().empty());
+    chosen=moved.string();browse();CHECK(error->getText().empty());CHECK(applications==0);
+    dialog.acceptDialog();
+    CHECK(applications==1);CHECK(applied.sourcePath==moved.string());
+    CHECK(applied.outputBaseName=="Triangle");CHECK(original.sourcePath==fixture.source().string());
+    EditorImportSettingsDialog cancelled(original,
+        [&](const auto&,std::string&){++applications;return true;},
+        [](const char*,const wchar_t* fallback){return std::wstring(fallback);},
+        [&]{return chosen;});
+    manager.root()->addChildExternal(&cancelled);
+    cancelled.fitAndCenterInViewport({1280,900},12);cancelled.openModal();
+    button=dynamic_cast<ayt::ui::Button*>(find(find,cancelled.getBodyContent(),"import_settings_relink"));
+    CHECK(button!=nullptr);if(button)browse();
+    cancelled.rejectDialog();CHECK(applications==1);
+    manager.root()->removeChild(&cancelled);manager.root()->removeChild(&dialog);manager.shutdown();
+}
+
+TEST_CASE(project_source_relink_preserves_recipe_outputs_and_rejects_another_owner)
+{
+    EditorImportFixture fixture;fixture.triangle();
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    EditorAssetImportQueue queue;
+    queue.configureProject(fixture.project().string(),(fixture.project()/"Assets").string());
+    const auto firstId=queue.enqueue(fixture.options());CHECK(fixture.finish(queue));
+    const auto* first=queue.find(firstId);CHECK(first && first->state==EditorAssetImportJobState::Succeeded);
+    if(!first || first->state!=EditorAssetImportJobState::Succeeded)return;
+    auto options=first->options;
+    const auto resourcePath=first->outputPaths.front();
+    CHECK(options.outputBaseName=="Triangle");
+    const auto moved=fixture.root/"Moved/Renamed.gltf";
+    std::filesystem::create_directories(moved.parent_path());
+    std::filesystem::copy_file(fixture.source(),moved);
+    std::filesystem::copy_file(fixture.source().parent_path()/"Triangle.bin",moved.parent_path()/"Triangle.bin");
+    std::filesystem::remove(fixture.source());
+    options.sourcePath=moved.string();options.force=true;
+    const auto relinkId=queue.enqueue(options);CHECK(fixture.finish(queue));
+    const auto* relinked=queue.find(relinkId);
+    CHECK(relinked && relinked->state==EditorAssetImportJobState::Succeeded);
+    if(!relinked || relinked->state!=EditorAssetImportJobState::Succeeded)return;
+    CHECK(relinked->outputPaths.front()==resourcePath);
+    auto recipes=detail::loadImportRecipes(fixture.project().string());
+    CHECK(recipes.size()==1u);if(recipes.empty())return;
+    CHECK(recipes[0].options.sourceId==options.sourceId);
+    CHECK(detail::sameImportSource(recipes[0].options.sourcePath,moved.string()));
+    auto conflicting=options;conflicting.sourceId="source-other-owner";
+    std::string error;
+    CHECK_FALSE(detail::saveImportRecipe(fixture.project().string(),conflicting,&error));
+    CHECK(error.find("already belongs")!=std::string::npos);
+    recipes=detail::loadImportRecipes(fixture.project().string());
+    CHECK(recipes.size()==1u);
+    CHECK(recipes[0].options.sourceId==options.sourceId);
+}
+
 TEST_SUITE_END

@@ -303,6 +303,15 @@ public:
     const EditorWorkspace& workspace() const noexcept;
     const EditorFreecam& freecam() const noexcept { return _sceneCamera.threeD(); }
     const EditorSceneCamera& sceneCamera() const noexcept { return _sceneCamera; }
+    /// Editor-only increments; rejects invalid settings without changing them.
+    /// 3D drags use these values; Ctrl temporarily inverts snapping.
+    bool setTransformSnap(const EditorTransformSnap& settings);
+    const EditorTransformSnap& transformSnap() const noexcept { return _preferences.transformSnap; }
+    /// Frame the selected 3D Edit entity and its spatial descendants using
+    /// transformed mesh bounds (unit bounds for entities without a mesh).
+    /// Changes only the editor camera; refuses Play/2D/out-of-range bounds.
+    bool frameSelectedEntity();
+
     SceneViewMode sceneViewMode() const noexcept { return _sceneCamera.mode(); }
     const EditorSceneVisibility& sceneVisibility() const noexcept {
         return _sceneVisibility;
@@ -499,6 +508,8 @@ private:
     void syncTransformGizmoToRenderer();
     void syncPhysicsDebugToRenderer();
     void showPhysicsDebugDurationDialog();
+    void showTransformSnapDialog();
+    std::unique_ptr<ayt::ui::ModalDialog> _transformSnapDialog;
     std::unique_ptr<EditorDebugVisualization> _debugVisualization;
     ayt::ui::DockCard* _debugVisualizationPanel = nullptr;
     ayt::ui::TextLabel* _debugVisualizationStats = nullptr;

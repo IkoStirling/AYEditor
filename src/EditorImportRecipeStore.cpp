@@ -58,8 +58,9 @@ bool saveImportRecipe(const std::string& projectRoot, ayt::resource::ImportOptio
         const auto recipes = loadImportRecipes(projectRoot, error);
         if (error && !error->empty()) return false;
         auto found = std::find_if(recipes.begin(), recipes.end(), [&](const auto& recipe) {
-            return ((!options.sourceId.empty() && recipe.options.sourceId == options.sourceId)
-                || sameImportSource(recipe.options.sourcePath, options.sourcePath))
+            return (options.sourceId.empty()
+                ? sameImportSource(recipe.options.sourcePath, options.sourcePath)
+                : recipe.options.sourceId == options.sourceId)
                 && sameImportSource(recipe.options.outputDir, options.outputDir);
         });
         fs::path target;
@@ -68,6 +69,7 @@ bool saveImportRecipe(const std::string& projectRoot, ayt::resource::ImportOptio
             target = fs::u8path(found->path);
             if (options.sourceId.empty()) options.sourceId = found->options.sourceId;
             if (options.outputNamespace.empty()) options.outputNamespace = found->options.outputNamespace;
+            if (options.outputBaseName.empty()) options.outputBaseName = found->options.outputBaseName;
         }
         else {
             std::random_device random;
@@ -93,6 +95,20 @@ bool saveImportRecipe(const std::string& projectRoot, ayt::resource::ImportOptio
             const bool knownSameSource = ayt::resource::readImportRecord(utf8(legacy), existing)
                 && sameImportSource(existing.options.sourcePath, options.sourcePath);
             if (supported && !knownSameSource) options.outputNamespace = utf8(target.stem());
+        }
+        for (const auto& recipe : recipes) {
+            if (recipe.options.sourceId != options.sourceId
+                && sameImportSource(recipe.options.sourcePath, options.sourcePath)
+                && sameImportSource(recipe.options.outputDir, options.outputDir))
+                throw std::runtime_error("source already belongs to another import recipe in this output root");
+        }
+        const auto extension = ayt::resource::importExtensionOf(options.sourcePath);
+        const bool supportsStableStem = extension == "fbx" || extension == "gltf" || extension == "glb"
+            || extension == "png" || extension == "jpg" || extension == "jpeg"
+            || extension == "bmp" || extension == "tga" || extension == "dds";
+        if (supportsStableStem && options.outputBaseName.empty()) {
+            const auto& original = found == recipes.end() ? options.sourcePath : found->options.sourcePath;
+            options.outputBaseName = utf8(fs::u8path(original).stem());
         }
         auto stored = options;
         stored.sourcePath = portable(project, options.sourcePath);

@@ -637,15 +637,23 @@ bool EditorTransformGizmo::update(
     const ayt::math::FVector3& rayDirection,
     float mouseX,
     float mouseY,
-    EditorTransformState& outTransform) const noexcept
+    EditorTransformState& outTransform,
+    const EditorTransformSnap& snap) const noexcept
 {
-    if (!active()) return false;
+    if (!active() || !std::isfinite(mouseX) || !std::isfinite(mouseY)) return false;
+    const bool snapping = snap.enabled && snap.valid();
+    const auto quantize = [snapping](float value, float step) {
+        return snapping && std::isfinite(value)
+            ? static_cast<float>(std::round(double(value) / double(step)) * double(step)) : value;
+    };
     const ayt::math::FVector3 ray = normalizedRay(rayDirection);
     if (ray.lengthSq() <= kEpsilon) return false;
     outTransform = _before;
 
     if (_handle == EditorGizmoHandle::ScaleUniform) {
-        const float factor = std::exp((_startMouseY - mouseY) * 0.01f);
+        const float rawFactor = std::exp((_startMouseY - mouseY) * 0.01f);
+        if (!std::isfinite(rawFactor)) return false;
+        const float factor = 1.f + quantize(rawFactor - 1.f, snap.scale);
         outTransform.scale.x = safeScaleComponent(_before.scale.x, factor);
         outTransform.scale.y = safeScaleComponent(_before.scale.y, factor);
         outTransform.scale.z = safeScaleComponent(_before.scale.z, factor);
@@ -662,8 +670,8 @@ bool EditorTransformGizmo::update(
     if (planeAxes(_handle, first, second)) {
         const ayt::math::FVector3 delta = hit - _startHit;
         outTransform.position = _before.position
-            + _axes[first] * delta.dot(_axes[first])
-            + _axes[second] * delta.dot(_axes[second]);
+            + _axes[first] * quantize(delta.dot(_axes[first]), snap.translation)
+            + _axes[second] * quantize(delta.dot(_axes[second]), snap.translation);
         return true;
     }
 
@@ -672,7 +680,7 @@ bool EditorTransformGizmo::update(
 
     if (_tool == EditorTool::Move) {
         const float delta = (hit - _startHit).dot(_axes[axis]);
-        outTransform.position = _before.position + _axes[axis] * delta;
+        outTransform.position = _before.position + _axes[axis] * quantize(delta, snap.translation);
         return true;
     }
 
@@ -684,14 +692,16 @@ bool EditorTransformGizmo::update(
             _axes[axis].dot(_startVector.cross(current)),
             std::clamp(_startVector.dot(current), -1.0f, 1.0f));
         const ayt::math::FQuaternion delta =
-            ayt::math::FQuaternion::fromAxisAngle(_axes[axis], angle);
+            ayt::math::FQuaternion::fromAxisAngle(_axes[axis],
+                quantize(angle, snap.rotationDegrees * 0.01745329251994329577f));
         outTransform.rotation = (delta * _before.rotation).normalize();
         return true;
     }
 
     if (_tool == EditorTool::Scale) {
         const float delta = (hit - _startHit).dot(_axes[axis]);
-        const float factor = 1.0f + delta / std::max(_worldScale, 0.001f);
+        const float factor = 1.0f + quantize(delta / std::max(_worldScale, 0.001f), snap.scale);
+        if (!std::isfinite(factor)) return false;
         if (axis == 0) {
             outTransform.scale.x = safeScaleComponent(_before.scale.x, factor);
         } else if (axis == 1) {

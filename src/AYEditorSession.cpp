@@ -2619,6 +2619,7 @@ void EditorSession::shutdown() {
     _assetTrashList = nullptr;
     _assetHistoryDialog.reset();
     _assetImportSettingsDialog.reset();
+    _transformSnapDialog.reset();
     // The application logo borrows its uploaded texture from the shared
     // preview cache. Clear the widget before the cache releases that handle
     // so UI teardown never retains a stale backend resource.
@@ -3313,9 +3314,14 @@ bool EditorSession::viewportRay(
 
     const ayt::math::FVector2 logical =
         _ui.physicalToLogical(ayt::math::FVector2(x, y));
-    return _sceneCamera.ray(
-        {logical.x - viewport.minX, logical.y - viewport.minY},
-        outOrigin, outDirection);
+    ayt::math::FVector2 point{logical.x - viewport.minX, logical.y - viewport.minY};
+    if (!_sceneCamera.isTwoD()) {
+        // Dock layout can have fractional logical extents while the camera's
+        // render viewport is integral. Normalize into that exact pixel extent.
+        point.x *= static_cast<float>(_sceneCamera.viewportWidth()) / viewport.width();
+        point.y *= static_cast<float>(_sceneCamera.viewportHeight()) / viewport.height();
+    }
+    return _sceneCamera.ray(point, outOrigin, outDirection);
 }
 
 bool EditorSession::viewportAcceptsGameInput() const {
@@ -3766,6 +3772,8 @@ bool EditorSession::onKeyDown(int keyCode)
             return executeDocumentCommand(command);
         }
     }
+    if (!textEditing && modifiers == 0u && keyCode == 'F'
+        && commandTarget == _document.get() && frameSelectedEntity()) return true;
     if (!textEditing && (command == "edit.copy" || command == "edit.cut"
         || command == "edit.paste" || command == "edit.duplicate")
         && commandTarget && commandTarget->handlesCommand(command)) {
@@ -3944,6 +3952,22 @@ void EditorSession::bindToolbar() {
         item->setId("menu_view_shading");
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
+    viewportOptions->addSeparator();
+    if (auto* item=viewportOptions->addItem(localizedText("ui.editor.viewport.frame_selection", "Frame Selection (F)"))) {
+        item->setId("menu_frame_selection");
+        item->setLocalizationKey("text","ui.editor.viewport.frame_selection");
+        item->setOnActivate([this] { (void)frameSelectedEntity(); });
+    }
+    if (auto* item=viewportOptions->addItem(L"Transform Snapping")) {
+        item->setId("menu_transform_snap");
+        item->setOnActivate([this] { auto snap=transformSnap();snap.enabled=!snap.enabled;(void)setTransformSnap(snap); });
+    }
+    if (auto* item=viewportOptions->addItem(localizedText("ui.editor.viewport.snap_settings", "Transform Snap Settings..."))) {
+        item->setId("menu_transform_snap_settings");
+        item->setLocalizationKey("text","ui.editor.viewport.snap_settings");
+        item->setOnActivate([this] { showTransformSnapDialog(); });
+    }
+    (void)setTransformSnap(transformSnap());
     viewportOptions->addSeparator();
     const char* cameraKeys[] = {"ui.editor.viewport.camera_solid", "ui.editor.viewport.camera_wire", "ui.editor.viewport.camera_hidden"};
     const char* cameraLabels[] = {"Camera Icons: Normal", "Camera Icons: Wireframe", "Camera Icons: Hidden"};
@@ -5574,7 +5598,7 @@ bool EditorSession::editSelectedAssetImportSettings()
             return true;
         }, [this](const char* key, const wchar_t* fallback) {
             return localizedText(std::string_view(key), std::wstring_view(fallback));
-        });
+        }, [this] { return ImportDialog::showOpenAssetFileDialog(static_cast<HWND>(_hostWindow)); });
     _assetImportSettingsDialog->fitAndCenterInViewport(_ui.root()->getSize(), 12);
     _assetImportSettingsDialog->openModal();
     if (_repaintCallback) _repaintCallback();
@@ -8106,6 +8130,8 @@ void EditorSession::applyPreferences(const EditorPreferences& preferences)
     }
     setActiveTool(preferences.activeTool);
     setLocalTransformSpace(preferences.localTransformSpace);
+    _preferences.transformSnap = preferences.transformSnap.valid() ? preferences.transformSnap : EditorTransformSnap{};
+    (void)setTransformSnap(_preferences.transformSnap);
     _sceneCamera.setThreeDProjection(preferences.orthographicView
         ? ProjectionMode::Orthographic : ProjectionMode::Perspective);
     _wireframeView = preferences.wireframeView;
@@ -13173,8 +13199,10 @@ bool EditorSession::updateTransformGizmoDrag(float x, float y)
     if (!viewportRay(x, y, origin, direction)) return true;
 
     EditorTransformState updated;
+    auto snap=_preferences.transformSnap;
+    snap.enabled=!_sceneCamera.isTwoD() && (snap.enabled != _controlDown);
     if (_transformGizmo.update(
-            origin, direction, x, y, updated)) {
+            origin, direction, x, y, updated, snap)) {
         if (entity->spatialParent()) {
             if (!entity->setWorldMatrix(ayt::math::Transform::getMatrix(updated.position,updated.rotation,updated.scale))) return true;
         } else {

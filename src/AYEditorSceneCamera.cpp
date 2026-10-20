@@ -204,11 +204,15 @@ bool EditorSceneCamera::ray(
     }
 
     const ayt::math::FVector3 forward = _threeD.forward();
+    const auto right = _threeD.right();
+    // Match lookAt's orthonormal view basis. World up is only the lookAt
+    // reference; it is not the screen-up direction of a pitched camera.
+    const auto screenUp = forward.cross(right).normalize();
     if (_threeDProjection == ProjectionMode::Orthographic) {
         const float halfH = _threeDOrthoHeight * 0.5f;
         outOrigin = _threeD.eye()
-            + _threeD.right() * (ndcX * halfH * viewportAspect())
-            + _threeD.up() * (ndcY * halfH);
+            + right * (ndcX * halfH * viewportAspect())
+            + screenUp * (ndcY * halfH);
         outDirection = forward;
         return outDirection.lengthSq() > 1.0e-8f;
     }
@@ -217,8 +221,8 @@ bool EditorSceneCamera::ray(
         _threeD.fovYDegrees() * kDegreesToRadians * 0.5f);
     outOrigin = _threeD.eye();
     outDirection = forward
-        + _threeD.right() * (ndcX * viewportAspect() * tanHalfFov)
-        + _threeD.up() * (ndcY * tanHalfFov);
+        + right * (ndcX * viewportAspect() * tanHalfFov)
+        + screenUp * (ndcY * tanHalfFov);
     if (outDirection.lengthSq() < 1.0e-8f) return false;
     outDirection = outDirection.normalize();
     return true;

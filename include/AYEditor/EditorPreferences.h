@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AYMath/MathTypes.h"
+#include "AYEditor/EditorTransformSnap.h"
 
 #include <cstdint>
 #include <string>
@@ -25,7 +26,7 @@ enum class EditorCameraDisplayMode : uint8_t { Solid = 0, Wireframe = 1, Hidden 
 // User-owned editor state. Scene contents deliberately do not live here:
 // preferences may be replaced/reset without touching an open document.
 struct EditorPreferences {
-    static constexpr int kCurrentSchemaVersion = 8;
+    static constexpr int kCurrentSchemaVersion = 9;
 
     int schemaVersion = kCurrentSchemaVersion;
 
@@ -101,6 +102,7 @@ struct EditorPreferences {
     // Complete advanced controls use the renderer's versioned look serializer.
     // Legacy scalar fields remain for schema7 migration and source compatibility.
     std::string colorStylizationLook;
+    EditorTransformSnap transformSnap;
 
 };
 
@@ -167,7 +169,8 @@ inline bool operator==(const EditorPreferences& a,
         && a.posterizationEnabled == b.posterizationEnabled
         && a.colorLevels == b.colorLevels
         && a.ditherStrength == b.ditherStrength
-        && a.colorStylizationLook == b.colorStylizationLook;
+        && a.colorStylizationLook == b.colorStylizationLook
+        && a.transformSnap == b.transformSnap;
 }
 
 inline bool operator!=(const EditorPreferences& a,

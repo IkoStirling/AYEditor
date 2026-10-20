@@ -317,7 +317,31 @@ int main(int argc, char** argv)
         const auto ddsReopened=fixture.capture("import-dds-scene-reopened.png");
         require(Fixture::difference(ddsVisible,ddsReopened,bounds,1)==0,
             "Saved Scene retains imported DDS material and instance transforms");
-        std::cout << "PASS source import, actual browser reimport, GPU refresh, stable handle, "
+        const auto relocatedDirectory=fixture.output/"Relocated author source";
+        fs::rename(source.parent_path(),relocatedDirectory);
+        const auto renamedSource=relocatedDirectory/"RenamedBox.gltf";
+        fs::rename(relocatedDirectory/source.filename(),renamedSource);
+        auto relinkOptions=ddsOptions;
+        relinkOptions.sourcePath=utf8(renamedSource);
+        require(!relinkOptions.outputBaseName.empty(),"Project recipe pins the initial output file stem");
+        const auto relinkId=queue->enqueue(relinkOptions);
+        const auto relinked=finish(fixture,relinkId);
+        require(relinked.state==editor::EditorAssetImportJobState::Succeeded,relinked.message);
+        require(fixture.session.rescanAssetsNow(),"Rescan relinked source association");
+        const auto* relinkedRecord=fixture.session.assetDatabase().findByLogicalPath("Imported/"+meshPath);
+        require(relinkedRecord && relinkedRecord->id==stableId,"Relink retains the asset browser identity");
+        const auto* relinkedImport=fixture.session.assetDatabase().importForAsset(stableId);
+        require(relinkedImport && relinkedImport->record.options.sourceId==relinkOptions.sourceId,
+            "Relink retains the author's recipe identity");
+        const auto relinkVisible=fixture.capture("import-source-relinked.png");
+        require(Fixture::difference(ddsReopened,relinkVisible,bounds,1)==0,
+            "Moving and renaming the author source preserves every rendered Scene reference");
+        require(fixture.meshes.at(absoluteMesh).id==gpuHandle.id,"Relink preserves existing GPU handle identity");
+        require(fixture.session.document()->open(scenePath,&error),error);
+        const auto relinkReopened=fixture.capture("import-source-relinked-scene-reopened.png");
+        require(Fixture::difference(relinkVisible,relinkReopened,bounds,1)==0,
+            "Saved Scene reopens after the original author source no longer exists");
+        std::cout << "PASS source import, source relocation/relink, actual browser reimport, GPU refresh, stable handle, "
             "failed import retention, retry, Scene save/reopen; changed pixels=" << changedPixels
             << "; preview pixels=" << previewChanges << "; texture pixels=" << texturePixels << "; settings pixels=" << settingsPixels << "; DDS pixels=" << ddsPixels << '\n';
         return 0;

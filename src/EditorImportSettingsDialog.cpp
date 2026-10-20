@@ -2,6 +2,7 @@
 #include <AYUI/Authoring/PropertyField.h>
 #include <AYUI/Authoring/AuthoringPrimitives.h>
 #include <AYUI/Box.h>
+#include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/UnicodeText.h>
@@ -13,15 +14,17 @@ namespace ayt::editor {
 using namespace ayt::ui;
 using namespace ayt::resource;
 
-EditorImportSettingsDialog::EditorImportSettingsDialog(ImportOptions options, Apply apply, Localize localize)
-    : _original(std::move(options)), _apply(std::move(apply)), _localize(std::move(localize))
+EditorImportSettingsDialog::EditorImportSettingsDialog(ImportOptions options, Apply apply, Localize localize,
+                                                     PickSource pickSource)
+    : _original(std::move(options)), _apply(std::move(apply)), _localize(std::move(localize)),
+      _pickSource(std::move(pickSource)), _sourcePath(_original.sourcePath)
 {
     setId("asset_import_settings_dialog");
-    setSize({720, 640});
+    setSize({720, _pickSource ? 672.0f : 640.0f});
     setAcceptText(_localize("ui.editor.import.apply", L"Apply"));
     setRejectText(_localize("ui.editor.import.cancel", L"Cancel"));
     auto* body = new VBox();
-    body->setSize({688, 568});
+    body->setSize({688, _pickSource ? 600.0f : 568.0f});
     body->setSpacing(4);
     auto* title = new TextLabel();
     title->setText(_localize("ui.editor.import.title", L"Import Settings"));
@@ -43,11 +46,15 @@ EditorImportSettingsDialog::EditorImportSettingsDialog(ImportOptions options, Ap
         auto* row = field(id);
         row->setChoiceValue(_localize(key, label), values.at(static_cast<size_t>(selected)), values);
     };
-    const auto sourceName = std::filesystem::u8path(_original.sourcePath).filename().generic_u8string();
-    auto displayName = decodeUtf8Text(std::string(reinterpret_cast<const char*>(sourceName.data()), sourceName.size()));
-    if (displayName.size() > 32) displayName = displayName.substr(0, 29) + L"...";
     auto* sourceField = field("source");
-    sourceField->setTextValue(_localize("ui.editor.import.source", L"Source"), displayName, true);
+    updateSourceDisplay();
+    if (_pickSource) {
+        auto* browse = new Button();
+        browse->setId("import_settings_relink");
+        browse->setText(_localize("ui.editor.import.relink", L"Locate source file..."));
+        browse->setOnClicked([this] { chooseSource(); });
+        body->addWidget(browse, 28);
+    }
     const auto ext = importExtensionOf(_original.sourcePath);
     const bool model = ext == "fbx" || ext == "gltf" || ext == "glb";
     if (model) {
@@ -103,9 +110,50 @@ EditorImportSettingsDialog::~EditorImportSettingsDialog()
     }
 }
 
+void EditorImportSettingsDialog::updateSourceDisplay()
+{
+    const auto name = std::filesystem::u8path(_sourcePath).filename().generic_u8string();
+    auto display = decodeUtf8Text(std::string(reinterpret_cast<const char*>(name.data()), name.size()));
+    if (display.size() > 32) {
+        std::size_t cut=29;
+        if (display[cut-1]>=0xd800 && display[cut-1]<=0xdbff) --cut;
+        display=display.substr(0,cut)+L"...";
+    }
+    _fields.at("source")->setTextValue(_localize("ui.editor.import.source", L"Source"),display,true);
+    if (_sourceTooltip) _sourceTooltip->setText(decodeUtf8Text(_sourcePath));
+}
+
+void EditorImportSettingsDialog::chooseSource()
+{
+    try {
+        const auto selected=_pickSource();
+        if(selected.empty())return;
+        if(importExtensionOf(selected)!=importExtensionOf(_original.sourcePath)) {
+            _error->setText(_localize("ui.editor.import.relink_type",L"Choose a source with the same file extension."));
+            return;
+        }
+        if(!std::filesystem::is_regular_file(std::filesystem::u8path(selected))) {
+            _error->setText(_localize("ui.editor.import.relink_missing",L"The selected source file is missing."));
+            return;
+        }
+        _sourcePath=selected;
+        updateSourceDisplay();
+        _error->setText({});
+    } catch (const std::exception& failure) {
+        _error->setText(decodeUtf8Text(failure.what()));
+    }
+}
+
 bool EditorImportSettingsDialog::applyChanges()
 {
     auto candidate = _original;
+    if (_sourcePath != _original.sourcePath) {
+        candidate.sourcePath = _sourcePath;
+        if (candidate.outputBaseName.empty()) {
+            const auto stem = std::filesystem::u8path(_original.sourcePath).stem().generic_u8string();
+            candidate.outputBaseName.assign(reinterpret_cast<const char*>(stem.data()), stem.size());
+        }
+    }
     candidate.cookTextures = _fields.at("textures")->choice()->getSelectedIndex() == 1;
     if (_fields.contains("content")) {
         candidate.loadOption = static_cast<IConverter::LoadOption>(_fields.at("content")->choice()->getSelectedIndex());

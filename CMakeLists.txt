@@ -146,6 +146,7 @@ set(SRC_FILES
     src/AYEditorProductPaths.cpp
     src/AYEditor2DViewportModel.cpp
     src/AYEditorSceneCamera.cpp
+    src/AYEditorSceneAuthoring.cpp
     src/AYEditorSceneViewWorkspace.cpp
     src/AYEditorTilemapDocument.cpp
     src/AYImporter.cpp
@@ -275,7 +276,7 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=40)
+    AYEDITOR_SOURCE_ABI_VERSION=41)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

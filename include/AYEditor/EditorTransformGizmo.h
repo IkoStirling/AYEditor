@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorSceneDocument.h"
 #include "AYEditor/EditorPreferences.h"
+#include "AYEditor/EditorTransformSnap.h"
 #include "AYMath/MathTypes.h"
 
 #include <cstdint>
@@ -109,7 +110,8 @@ public:
                 const ayt::math::FVector3& rayDirection,
                 float mouseX,
                 float mouseY,
-                EditorTransformState& outTransform) const noexcept;
+                EditorTransformState& outTransform,
+                const EditorTransformSnap& snap = {}) const noexcept;
 
     void reset() noexcept;
     bool active() const noexcept { return _handle != EditorGizmoHandle::None; }

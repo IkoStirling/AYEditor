@@ -3,6 +3,7 @@
 #include "AYEditor/EditorTransformGizmo.h"
 
 #include <cmath>
+#include <limits>
 
 using namespace ayt::editor;
 
@@ -352,6 +353,65 @@ TEST_CASE(gizmo_continuous_drag_remains_finite_and_uses_drag_origin)
     CHECK(nearlyEqual(repeated.position.x, scale * 0.75f));
     CHECK(nearlyEqual(repeated.position.y, 0.0f));
     CHECK(nearlyEqual(repeated.position.z, 0.0f));
+}
+
+TEST_CASE(snapped_translation_uses_handle_axes_and_drag_origin_without_a_grid_jump)
+{
+    EditorTransformSnap snap;snap.enabled=true;
+    EditorTransformGizmo gizmo;
+    EditorTransformState pose;pose.position={.13f,.27f,0};pose.rotation=ayt::math::FQuaternion::identity();
+    const ayt::math::FVector3 eye{0,0,5};
+    const float size=EditorTransformGizmo::worldScale(pose.position,eye);
+    const auto start=pose.position+ayt::math::FVector3{size*.65f,0,0};
+    CHECK(gizmo.begin(EditorTool::Move,EditorGizmoHandle::AxisX,pose,false,eye,rayTo(eye,start),0));
+    EditorTransformState moved;
+    CHECK(gizmo.update(eye,rayTo(eye,start),0,0,moved,snap));
+    CHECK(nearlyEqual(moved.position.x,pose.position.x));
+    CHECK(gizmo.update(eye,rayTo(eye,start+ayt::math::FVector3{.74f,.2f,0}),0,0,moved,snap));
+    CHECK(nearlyEqual(moved.position.x,.63f));CHECK(nearlyEqual(moved.position.y,.27f));
+    CHECK(gizmo.update(eye,rayTo(eye,start+ayt::math::FVector3{-.76f,0,0}),0,0,moved,snap));
+    CHECK(nearlyEqual(moved.position.x,-.87f));
+    snap.enabled=false;
+    CHECK(gizmo.update(eye,rayTo(eye,start+ayt::math::FVector3{.74f,0,0}),0,0,moved,snap));
+    CHECK(nearlyEqual(moved.position.x,.87f));
+    snap.enabled=true;gizmo.reset();
+    pose.rotation=ayt::math::FQuaternion::fromAxisAngle({0,0,1},1.57079632679489661923f);
+    const auto localStart=pose.position+ayt::math::FVector3{0,size*.65f,0};
+    CHECK(gizmo.begin(EditorTool::Move,EditorGizmoHandle::AxisX,pose,true,eye,rayTo(eye,localStart),0));
+    CHECK(gizmo.update(eye,rayTo(eye,localStart+ayt::math::FVector3{.2f,.74f,0}),0,0,moved,snap));
+    CHECK(nearlyEqual(moved.position.x,.13f));CHECK(nearlyEqual(moved.position.y,.77f));
+}
+
+TEST_CASE(snapped_plane_rotation_and_scale_preserve_unselected_components)
+{
+    EditorTransformSnap snap;snap.enabled=true;
+    EditorTransformGizmo gizmo;EditorTransformState pose;pose.rotation=ayt::math::FQuaternion::identity();
+    pose.scale={-2,3,4};
+    const ayt::math::FVector3 eye{0,0,5};
+    const float size=EditorTransformGizmo::worldScale(pose.position,eye);
+    const ayt::math::FVector3 start{size*.3f,size*.3f,0};EditorTransformState result;
+    CHECK(gizmo.begin(EditorTool::Move,EditorGizmoHandle::PlaneXY,pose,false,eye,rayTo(eye,start),0));
+    CHECK(gizmo.update(eye,rayTo(eye,start+ayt::math::FVector3{.74f,-.26f,0}),0,0,result,snap));
+    CHECK(nearlyEqual(result.position.x,.5f));CHECK(nearlyEqual(result.position.y,-.5f));
+    CHECK(nearlyEqual(result.position.z,0));
+    gizmo.reset();
+    const float radius=size*.82f,angle=22.f*.01745329251994329577f;
+    CHECK(gizmo.begin(EditorTool::Rotate,EditorGizmoHandle::RingZ,pose,false,eye,rayTo(eye,{radius,0,0}),0));
+    CHECK(gizmo.update(eye,rayTo(eye,{radius*std::cos(angle),radius*std::sin(angle),0}),0,0,result,snap));
+    const auto x=result.rotation*ayt::math::FVector3{1,0,0};
+    CHECK(nearlyEqual(x.x,std::cos(15.f*.01745329251994329577f)));
+    CHECK(nearlyEqual(x.y,std::sin(15.f*.01745329251994329577f)));
+    CHECK(nearlyEqual(result.scale.x,-2));
+    gizmo.reset();
+    const ayt::math::FVector3 scaleStart{size*.65f,0,0};
+    CHECK(gizmo.begin(EditorTool::Scale,EditorGizmoHandle::ScaleX,pose,false,eye,rayTo(eye,scaleStart),0));
+    CHECK(gizmo.update(eye,rayTo(eye,scaleStart+ayt::math::FVector3{size*.26f,0,0}),0,0,result,snap));
+    CHECK(nearlyEqual(result.scale.x,-2.6f));CHECK(nearlyEqual(result.scale.y,3));CHECK(nearlyEqual(result.scale.z,4));
+    gizmo.reset();
+    CHECK(gizmo.begin(EditorTool::Scale,EditorGizmoHandle::ScaleUniform,pose,false,eye,rayTo(eye,pose.position),100));
+    CHECK(gizmo.update(eye,rayTo(eye,pose.position),0,80,result,snap));
+    CHECK(nearlyEqual(result.scale.x,-2.4f));CHECK(nearlyEqual(result.scale.y,3.6f));CHECK(nearlyEqual(result.scale.z,4.8f));
+    CHECK_FALSE(gizmo.update(eye,rayTo(eye,pose.position),0,std::numeric_limits<float>::infinity(),result,snap));
 }
 
 TEST_SUITE_END
