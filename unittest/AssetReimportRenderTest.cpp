@@ -1,6 +1,9 @@
 #include "WorkshopSessionGpuFixture.h"
 #include <AYEditor/EditorAssetImportQueue.h>
 #include <AYResource/assetsDefs/IMesh.h>
+#include <AYResource/assetsImpl/Texture.h>
+#include <AYResource/assetsImpl/Material.h>
+#include <AYResource/Loader/MaterialLoader.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
 #include <AYUI/TileView.h>
@@ -48,15 +51,21 @@ void writeTexture(const fs::path& source, bool red)
     for(std::size_t i=0;i<hex.size();i+=2)bytes.push_back(char(std::stoi(hex.substr(i,2),nullptr,16)));
     writeFile(source,bytes);
 }
-void writeDds(const fs::path& path)
+void writeDds(const fs::path& path, int channels = 0)
 {
-    std::string bytes(136,'\0');
+    std::string bytes(channels == 2 ? 144 : 136,'\0');
     const auto put=[&](std::size_t offset,std::uint32_t value){
         for(int byte=0;byte<4;++byte)bytes[offset+std::size_t(byte)]=char((value>>(byte*8))&255);
     };
     put(0,0x20534444);put(4,124);put(8,0x81007);put(12,4);put(16,4);
-    put(20,8);put(28,1);put(76,32);put(80,4);put(84,0x31545844);put(108,0x1000);
-    bytes[128]=0;bytes[129]=char(0xf8); // Opaque BC1 red, all pixel indices zero.
+    put(20,channels == 2 ? 16 : 8);put(28,1);put(76,32);put(80,4);
+    put(84,channels == 1 ? 0x55344342 : channels == 2 ? 0x55354342 : 0x31545844);put(108,0x1000);
+    if (channels == 0) {
+        bytes[128]=0;bytes[129]=char(0xf8); // Opaque BC1 red, all pixel indices zero.
+    } else {
+        bytes[128]=96; // BC4 first endpoint, all pixel indices zero.
+        if (channels == 2) bytes[136]=char(200); // Independent BC5 green block.
+    }
     writeFile(path,bytes);
 }
 const editor::EditorAssetImportJob& finish(Fixture& fixture, editor::EditorAssetImportJobId id)
@@ -212,8 +221,9 @@ int main(int argc, char** argv)
             "Failed reimport preserves rendered Scene and GPU resources");
         writeBox(source, 1.25f);
         const auto retryId = queue->retry(failedId);
-        require(finish(fixture, retryId).state == editor::EditorAssetImportJobState::Succeeded,
-            "Retry recovers with the same source settings");
+        const auto retried = finish(fixture, retryId);
+        require(retried.state == editor::EditorAssetImportJobState::Succeeded,
+            "Retry recovers with the same source settings: " + retried.message);
         require(fixture.session.document()->open(scenePath, &error), error);
         const auto reopened = fixture.capture("import-scene-reopened.png");
         require(Fixture::difference(changed, reopened, bounds, 1) == 0,
@@ -313,6 +323,51 @@ int main(int argc, char** argv)
         writeDds(ddsSource);
         const auto ddsRetry=queue->retry(badDdsId);
         require(finish(fixture,ddsRetry).state==editor::EditorAssetImportJobState::Succeeded,"DDS source repair retries successfully");
+        for (const int channels : {1, 2}) {
+            writeDds(ddsSource, channels);
+            const auto channelJob = queue->enqueue(ddsOptions);
+            const auto channelImport = finish(fixture, channelJob);
+            require(channelImport.state == editor::EditorAssetImportJobState::Succeeded,
+                "Import BC4/BC5 source into the actual material: " + channelImport.message);
+            const auto channelPixels = fixture.capture(channels == 1
+                ? "import-dds-bc4-visible.png" : "import-dds-bc5-visible.png");
+            require(Fixture::difference(ddsVisible, channelPixels, bounds, 8) > 500,
+                "BC4/BC5 sampling produces actual changed Scene pixels");
+            // Compare against an independently authored RGBA8 resource, so a
+            // fallback placeholder, channel swizzle or skipped sRGB conversion
+            // cannot satisfy the changed-pixels check.
+            resource::Texture rgbaReference;
+            rgbaReference.createSolidColor(4, 4, 96, channels == 2 ? 200 : 0, 0, 255);
+            std::vector<resource::UInt8> referenceBytes;
+            require(rgbaReference.saveToBinary(referenceBytes), "Encode RGBA8 DDS sampling reference");
+            const auto referencePath = source.parent_path()
+                / (channels == 1 ? "BC4Reference.txr" : "BC5Reference.txr");
+            writeFile(referencePath, std::string(reinterpret_cast<const char*>(referenceBytes.data()),
+                referenceBytes.size()));
+            const auto absoluteMaterial = resource::resolveAssetPath({}, materialPath);
+            resource::MaterialLoader referenceLoader;
+            const auto referenceMaterial = std::dynamic_pointer_cast<resource::Material>(
+                referenceLoader.load(absoluteMaterial));
+            require(referenceMaterial && referenceMaterial->setTextureReference(
+                "baseColorTexture", utf8(referencePath)), "Build independent RGBA8 material reference");
+            std::vector<resource::UInt8> materialBytes;
+            require(referenceMaterial->saveToBinary(materialBytes), "Encode DDS sampling reference material");
+            writeFile(fs::u8path(absoluteMaterial), std::string(
+                reinterpret_cast<const char*>(materialBytes.data()), materialBytes.size()));
+            require(resource::ResourceManager::instance().refreshPublishedResources(
+                {absoluteMaterial}, &error), error);
+            const auto referencePixels = fixture.capture(channels == 1
+                ? "import-dds-bc4-rgba-reference.png" : "import-dds-bc5-rgba-reference.png");
+            require(Fixture::difference(channelPixels, referencePixels, bounds, 2) == 0,
+                "BC4/BC5 color sampling agrees with equivalent RGBA8 sRGB data");
+        }
+        writeDds(ddsSource);
+        const auto restoreBc1 = queue->enqueue(ddsOptions);
+        const auto restoredBc1 = finish(fixture, restoreBc1);
+        require(restoredBc1.state == editor::EditorAssetImportJobState::Succeeded, restoredBc1.message);
+        const auto restoredDdsPixels = fixture.capture("import-dds-bc1-restored.png");
+        require(Fixture::difference(ddsVisible, restoredDdsPixels, bounds, 1) == 0,
+            "DDS format changes return to the original BC1 surface without stale GPU sampling");
         require(fixture.session.document()->open(scenePath,&error),error);
         const auto ddsReopened=fixture.capture("import-dds-scene-reopened.png");
         require(Fixture::difference(ddsVisible,ddsReopened,bounds,1)==0,
@@ -341,9 +396,78 @@ int main(int argc, char** argv)
         const auto relinkReopened=fixture.capture("import-source-relinked-scene-reopened.png");
         require(Fixture::difference(relinkVisible,relinkReopened,bounds,1)==0,
             "Saved Scene reopens after the original author source no longer exists");
+        require(fixture.session.rescanAssetsNow(),"Find imported material for an already-open authoring Dock");
+        const auto* materialRecord=fixture.session.assetDatabase().findByLogicalPath("Imported/"+materialPath);
+        require(materialRecord,"Imported material is visible in the actual asset database");const auto importedMaterialId=materialRecord->id;
+        require(fixture.session.openAsset(importedMaterialId),"Open actual imported material Dock before reimport");
+        auto importedDocument=std::dynamic_pointer_cast<editor::EditorMaterialDocument>(fixture.session.workspace().documents().active()->document);
+        require(importedDocument&&importedDocument->readOnly(),"Imported Dock is a read-only decoded snapshot");
+        const auto materialRevision=importedDocument->revision();
+        const auto materialBefore=fixture.capture("import-open-material-before.png");
+        auto* importedPreviewWidget=fixture.session.ui().findById("material_preview");require(importedPreviewWidget,"Actual material preview Widget exists");const auto previewRect=importedPreviewWidget->getWorldBounds();
+        std::ifstream materialSource(renamedSource,std::ios::binary);std::string authored{std::istreambuf_iterator<char>(materialSource),{}};materialSource.close();
+        const std::string oldFactor="\"roughnessFactor\":0.55";const auto factor=authored.find(oldFactor);require(factor!=std::string::npos,"Fixture exposes an authored material factor");
+        authored.replace(factor,oldFactor.size(),"\"roughnessFactor\":0.12,\"baseColorFactor\":[0.2,1,0.25,1]");writeFile(renamedSource,authored);
+        auto materialOptions=relinkOptions;materialOptions.force=true;const auto materialJob=queue->enqueue(materialOptions);
+        require(finish(fixture,materialJob).state==editor::EditorAssetImportJobState::Succeeded,"Reimport changed material factors with its Dock already open");
+        require(importedDocument->revision()>materialRevision,"Successful reimport refreshes the already-open imported material snapshot");
+        require(std::fabs(importedDocument->settings().roughness-.12f)<1e-5f,"Open imported document adopts the new authored factors");
+        const auto materialAfter=fixture.capture("import-open-material-refreshed.png");
+        const auto openMaterialPixels=Fixture::difference(materialBefore,materialAfter,previewRect,6);require(openMaterialPixels>500,"Already-open GPU material preview changes after reimport");
+        fixture.activateScene();const auto factorScene=fixture.capture("import-material-factor-scene.png");
+        require(Fixture::difference(relinkReopened,factorScene,bounds,6)>500,"Scene and the imported material Dock agree on new factors");
+        require(importedDocument->saveEditableCopy("materials/ReimportProtectedCopy.mat",&error),error);
+        require(fixture.session.rescanAssetsNow(),"Index editable copy for unsaved preservation");const auto* copyRecord=fixture.session.assetDatabase().findByLogicalPath("Assets/materials/ReimportProtectedCopy.mat");
+        require(copyRecord&&fixture.session.openAsset(copyRecord->id),"Open independent editable material copy");
+        auto copyDocument=std::dynamic_pointer_cast<editor::EditorMaterialDocument>(fixture.session.workspace().documents().active()->document);
+        require(copyDocument&&!copyDocument->readOnly(),"The copy belongs to project source assets");auto draft=copyDocument->settings();draft.roughness=.42f;
+        require(copyDocument->replaceSettings(draft,&error),error);const auto copyRevision=copyDocument->revision();
+        const auto newFactor=authored.find("\"roughnessFactor\":0.12");authored.replace(newFactor,std::string("\"roughnessFactor\":0.12").size(),"\"roughnessFactor\":0.85");writeFile(renamedSource,authored);
+        const auto again=queue->enqueue(materialOptions);require(finish(fixture,again).state==editor::EditorAssetImportJobState::Succeeded,"Reimport while an unrelated editable draft is open");
+        require(copyDocument->isDirty()&&copyDocument->revision()==copyRevision&&copyDocument->settings()==draft,"Reimport preserves the editable unsaved document and its history");
+        require(std::fabs(importedDocument->settings().roughness-.85f)<1e-5f,"Inactive imported Dock also refreshes to the new source");
+        fixture.activateScene();const auto factorAgain=fixture.capture("import-material-factor-again.png");
+        const auto beforeExternalRevision = importedDocument->revision();
+        const std::string roughFactor = "\"roughnessFactor\":0.85";
+        const auto roughOffset = authored.find(roughFactor);
+        require(roughOffset != std::string::npos, "Find the latest authored roughness factor");
+        authored.replace(roughOffset, roughFactor.size(), "\"roughnessFactor\":0.32");
+        const std::string greenFactor = "\"baseColorFactor\":[0.2,1,0.25,1]";
+        const auto colorOffset = authored.find(greenFactor);
+        require(colorOffset != std::string::npos, "Find the latest authored color factor");
+        authored.replace(colorOffset, greenFactor.size(), "\"baseColorFactor\":[1,0.1,0.1,1]");
+        writeFile(renamedSource, authored);
+        const auto externalImport = resource::importAsset(materialOptions);
+        require(externalImport.ok, externalImport.error);
+        require(importedDocument->revision() == beforeExternalRevision,
+            "External publication alone does not replace the open document snapshot");
+        // Long sessions may evict all CPU snapshots while the Renderer keeps
+        // stable GPU handles loaded through the project junction spelling.
+        resource::ResourceManager::instance().setCacheConfig(resource::ResourceCache::Config{});
+        require(resource::ResourceManager::instance().getResourceCount() == 0u,
+            "CPU cache eviction leaves no resident resources before explicit synchronization");
+        materialOptions.force = false;
+        const auto cacheHitJob = queue->enqueue(materialOptions);
+        const auto cacheHit = finish(fixture, cacheHitJob);
+        require(cacheHit.state == editor::EditorAssetImportJobState::CacheHit,
+            "Editor reuses current external outputs: " + cacheHit.message);
+        require(importedDocument->revision() > beforeExternalRevision
+            && std::fabs(importedDocument->settings().roughness - .32f) < 1e-5f,
+            "Cache-hit completion synchronizes the inactive imported material document");
+        require(copyDocument->isDirty() && copyDocument->settings() == draft
+            && copyDocument->revision() == copyRevision,
+            "Cache-hit completion also preserves the independent unsaved draft");
+        fixture.activateScene();
+        const auto factorCached = fixture.capture("import-cache-hit-refreshed.png");
+        const auto cacheHitPixels = Fixture::difference(factorAgain, factorCached, bounds, 6);
+        require(cacheHitPixels > 500, "Cache-hit completion synchronizes actual Scene GPU material data");
+        require(fixture.meshes.at(absoluteMesh).id == gpuHandle.id,
+            "CPU eviction and cache-hit synchronization preserve the Scene GPU mesh handle");
+        require(fixture.session.document()->open(scenePath,&error),error);const auto factorReopened=fixture.capture("import-material-factor-reopened.png");
+        require(Fixture::difference(factorCached,factorReopened,bounds,1)==0,"Scene reopen retains material reimport while preserving the independent draft");
         std::cout << "PASS source import, source relocation/relink, actual browser reimport, GPU refresh, stable handle, "
-            "failed import retention, retry, Scene save/reopen; changed pixels=" << changedPixels
-            << "; preview pixels=" << previewChanges << "; texture pixels=" << texturePixels << "; settings pixels=" << settingsPixels << "; DDS pixels=" << ddsPixels << '\n';
+            "failed import retention, retry, open imported material refresh, unsaved draft preservation, Scene save/reopen; changed pixels=" << changedPixels
+            << "; preview pixels=" << previewChanges << "; texture pixels=" << texturePixels << "; settings pixels=" << settingsPixels << "; DDS pixels=" << ddsPixels << "; open material pixels=" << openMaterialPixels << "; cache-hit pixels=" << cacheHitPixels << '\n';
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';

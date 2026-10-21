@@ -638,13 +638,23 @@ void EditorAssetDatabase::rebuildLookupsAndPersist(bool persist)
     _recordByLogicalPath.clear();
     _importByAssetId.clear();
     std::unordered_map<std::string, std::size_t> importByPath;
+    const auto canonical=[](const std::filesystem::path& path){
+        std::error_code error;auto resolved=std::filesystem::weakly_canonical(path,error);
+        return error?path.lexically_normal():resolved;
+    };
+    const auto key=[](const std::filesystem::path& path){
+        return lowerAscii(slashNormalized(pathUtf8(path.lexically_normal())));
+    };
+    // Persisted recipes resolve project junctions. Canonicalize roots once,
+    // preserving browser IDs/paths and avoiding filesystem probes per asset.
+    const auto sourceRoot=canonical(nativePath(_sourceRoot));
+    const auto derivedRoot=canonical(nativePath(_derivedRoot));
     for (std::size_t index = 0; index < _imports.size(); ++index) {
         const auto& record = _imports[index].record;
-        importByPath[lowerAscii(slashNormalized(record.options.sourcePath))] = index;
+        importByPath[key(canonical(nativePath(record.options.sourcePath)))] = index;
+        const auto outputRoot=canonical(nativePath(record.options.outputDir));
         for (const auto& output : record.conversion.resources) {
-            const auto absolute = (nativePath(record.options.outputDir)
-                / nativePath(output.path)).lexically_normal();
-            importByPath[lowerAscii(slashNormalized(pathUtf8(absolute)))] = index;
+            importByPath[key(outputRoot/nativePath(output.path))] = index;
         }
     }
     for (std::size_t i = 0; i < _records.size(); ++i) {
@@ -660,7 +670,8 @@ void EditorAssetDatabase::rebuildLookupsAndPersist(bool persist)
         _recordById.emplace(_records[i].id, i);
         _recordByLogicalPath.emplace(
             lowerAscii(_records[i].logicalPath), i);
-        const auto imported = importByPath.find(lowerAscii(slashNormalized(_records[i].absolutePath)));
+        const auto& root=_records[i].origin==EditorAssetOrigin::Source?sourceRoot:derivedRoot;
+        const auto imported = importByPath.find(key(root/nativePath(stripBrowserRoot(_records[i].logicalPath))));
         if (imported != importByPath.end()) {
             _importByAssetId.emplace(_records[i].id, imported->second);
             _records[i].importState = _imports[imported->second].state;

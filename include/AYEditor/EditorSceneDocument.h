@@ -78,6 +78,8 @@ public:
     /// as one undoable edit, with fresh persistent identities. Internal parent,
     /// owner and explicit CameraController persistent targets follow the copies; external
     /// references and Entity-local component identities remain unchanged.
+    /// Actor copies receive a fresh instance identity; class references,
+    /// baselines and authored overrides are retained across redo.
     /// Unknown string-valued gameplay references are not inferred or rewritten.
     bool duplicateEntityHierarchy(uint32_t entityId, uint32_t* duplicateId = nullptr,
                                   std::string* error = nullptr);

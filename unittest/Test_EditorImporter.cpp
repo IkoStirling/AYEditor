@@ -14,6 +14,8 @@
 #include "AYEditor/EditorAssetImportQueue.h"
 #include "AYEditor/ImportDialog.h"
 #include "AYEditor/EditorSession.h"
+#include "AYEditor/EditorWorkspace.h"
+#include "AYEditor/EditorMaterialDocument.h"
 #include <AYUI/MockRenderer.h>
 #include <AYUI/Button.h>
 #include <AYUI/ComboBox.h>
@@ -26,6 +28,7 @@
 #include <AYIO/Path.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -89,6 +92,73 @@ struct EditorImportFixture {
 } // namespace
 
 TEST_SUITE(AYEditor_Importer)
+
+TEST_CASE(session_reimport_refreshes_open_readonly_material_retains_bad_source_and_independent_unsaved_copy)
+{
+    EditorImportFixture fixture;fixture.triangle();std::filesystem::create_directories(fixture.project()/"Assets");
+    const auto materialSource=[&](float roughness){fixture.triangle();std::ifstream input(fixture.source(),std::ios::binary);
+        std::string text{std::istreambuf_iterator<char>(input),{}};input.close();
+        const auto meshes=text.find("\"meshes\":");text.insert(meshes,"\"materials\":[{\"name\":\"Surface\",\"pbrMetallicRoughness\":{\"roughnessFactor\":"+std::to_string(roughness)+"}}],");
+        const auto attributes=text.find("\"attributes\":");text.insert(attributes,"\"material\":0,");fixture.write(fixture.source(),text);};
+    materialSource(.2f);auto options=fixture.options();options.loadOption=ayt::resource::IConverter::LoadOption::Full;std::string error;
+    CHECK(detail::saveImportRecipe(fixture.project().string(),options,&error));const auto imported=Importer::importAssetFile(options);CHECK_MSG(imported.success,imported.errorMessage.c_str());
+    std::string materialPath;for(const auto& resource:imported.conversion.resources)if(resource.type=="Material"){materialPath=resource.path;break;}
+    CHECK_FALSE(materialPath.empty());if(materialPath.empty())return;
+    ayt::ui::MockRenderer backend;EditorSession session;EditorSessionDesc desc;desc.uiBackend=&backend;desc.projectRoot=fixture.project().string();
+    desc.layoutPath=std::string(AY_EDITOR_TEST_SOURCE_DIR)+"/ui/editor_shell.ui.json";CHECK(session.initialize(desc));session.setClientSize(1500,1000);CHECK(session.rescanAssetsNow());
+    const auto* record=session.assetDatabase().findByLogicalPath("Imported/"+materialPath);CHECK(record);if(!record){session.shutdown();return;}
+    CHECK(session.openAsset(record->id));auto material=std::dynamic_pointer_cast<EditorMaterialDocument>(session.workspace().documents().active()->document);
+    CHECK(material&&material->readOnly());if(!material){session.shutdown();return;}CHECK_FLOAT_EQ(material->settings().roughness,.2f,1e-5f);
+    auto* queue=session.assetImportQueue();const auto finishSession=[&](EditorAssetImportJobId id){
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(queue->busy()&&std::chrono::steady_clock::now()<deadline){session.update(.016f);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        session.update(.016f);return queue->find(id)&&queue->find(id)->finished();};
+    const auto revision=material->revision();materialSource(.8f);options.force=true;auto job=queue->enqueue(options);CHECK(finishSession(job));
+    CHECK_MSG(queue->find(job)->state==EditorAssetImportJobState::Succeeded,queue->find(job)->message.c_str());CHECK(material->revision()>revision);CHECK_FLOAT_EQ(material->settings().roughness,.8f,1e-5f);
+    CHECK(material->saveEditableCopy("materials/Protected.mat",&error));CHECK(session.rescanAssetsNow());record=session.assetDatabase().findByLogicalPath("Assets/materials/Protected.mat");
+    CHECK(record);if(!record){session.shutdown();return;}CHECK(session.openAsset(record->id));auto copy=std::dynamic_pointer_cast<EditorMaterialDocument>(session.workspace().documents().active()->document);
+    CHECK(copy&&!copy->readOnly());if(!copy){session.shutdown();return;}auto draft=copy->settings();draft.roughness=.42f;CHECK(copy->replaceSettings(draft,&error));const auto draftRevision=copy->revision();
+    materialSource(.6f);job=queue->enqueue(options);CHECK(finishSession(job));CHECK_MSG(queue->find(job)->state==EditorAssetImportJobState::Succeeded,queue->find(job)->message.c_str());
+    CHECK_FLOAT_EQ(material->settings().roughness,.6f,1e-5f);CHECK(copy->settings()==draft);CHECK(copy->isDirty()&&copy->revision()==draftRevision);
+    // Another authoring tool can update the published files and metadata while
+    // this Session still owns the previous CPU/GPU/document snapshots.
+    materialSource(.4f);
+    const auto external=Importer::importAssetFile(options);
+    CHECK_MSG(external.success,external.errorMessage.c_str());
+    CHECK_FLOAT_EQ(material->settings().roughness,.6f,1e-5f);
+    options.force=false;job=queue->enqueue(options);CHECK(finishSession(job));
+    CHECK_MSG(queue->find(job)->state==EditorAssetImportJobState::CacheHit,queue->find(job)->message.c_str());
+    CHECK_FLOAT_EQ(material->settings().roughness,.4f,1e-5f);
+    CHECK(copy->settings()==draft&&copy->isDirty()&&copy->revision()==draftRevision);
+    const auto retained=material->revision();fixture.write(fixture.source(),"broken glTF");job=queue->enqueue(options);CHECK(finishSession(job));CHECK(queue->find(job)->state==EditorAssetImportJobState::Failed);
+    CHECK(material->revision()==retained);CHECK_FLOAT_EQ(material->settings().roughness,.4f,1e-5f);CHECK(copy->settings()==draft&&copy->isDirty());session.shutdown();
+}
+
+TEST_CASE(project_directory_alias_preserves_source_and_output_import_associations_and_asset_ids)
+{
+    EditorImportFixture fixture;fixture.triangle();const auto model=fixture.project()/"Assets/Models/Triangle.gltf";
+    std::filesystem::create_directories(model.parent_path());std::filesystem::copy_file(fixture.source(),model);
+    std::filesystem::copy_file(fixture.source().parent_path()/"Triangle.bin",model.parent_path()/"Triangle.bin");
+    EditorAssetImportQueue queue;queue.configureProject(fixture.project().string(),(fixture.project()/"Assets").string());
+    auto options=fixture.options();options.sourcePath=model.string();const auto job=queue.enqueue(options);CHECK(fixture.finish(queue));
+    CHECK(queue.find(job)->state==EditorAssetImportJobState::Succeeded);
+    const auto alias=fixture.root/"LinkedProject";
+#if defined(_WIN32)
+    const auto command=L"cmd /d /c mklink /J \""+alias.wstring()+L"\" \""+fixture.project().wstring()+L"\" >nul 2>&1";
+    if(_wsystem(command.c_str())!=0){SKIP_TEST("Directory junction creation is unavailable");return;}
+#else
+    std::error_code linkError;std::filesystem::create_directory_symlink(fixture.project(),alias,linkError);
+    if(linkError){SKIP_TEST("Directory symlink creation is unavailable");return;}
+#endif
+    EditorAssetDatabase physical,linked;std::string error;CHECK(physical.open(fixture.project().string(),&error));CHECK(physical.scanNow(&error));
+    CHECK(linked.open(alias.string(),&error));CHECK(linked.scanNow(&error));
+    const auto* source=linked.findByLogicalPath("Assets/Models/Triangle.gltf");CHECK(source);CHECK(source&&linked.importForAsset(source->id));
+    for(const auto& output:queue.find(job)->outputPaths){const auto logical="Imported/"+output;
+        const auto* first=physical.findByLogicalPath(logical);const auto* second=linked.findByLogicalPath(logical);CHECK(first&&second);
+        if(first&&second){CHECK(first->id==second->id);CHECK(linked.importForAsset(second->id));}}
+    linked.close();CHECK(linked.open(alias.string(),&error));CHECK(linked.scanNow(&error));
+    source=linked.findByLogicalPath("Assets/Models/Triangle.gltf");CHECK(source&&linked.importForAsset(source->id));
+}
 
 TEST_CASE(EditorAssetImportQueueReportsFailureAndSupportsRetry)
 {
@@ -701,6 +771,69 @@ TEST_CASE(project_source_relink_preserves_recipe_outputs_and_rejects_another_own
     recipes=detail::loadImportRecipes(fixture.project().string());
     CHECK(recipes.size()==1u);
     CHECK(recipes[0].options.sourceId==options.sourceId);
+}
+
+TEST_CASE(import_settings_revision_refuses_changed_removed_and_newly_created_recipes)
+{
+    EditorImportFixture fixture;fixture.triangle();auto options=fixture.options();std::string error;
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    detail::ImportRecipeRevision empty;
+    CHECK(detail::readImportRecipeForEdit(fixture.project().string(),options,empty,&error));CHECK_FALSE(empty.existed);
+    CHECK(detail::verifyImportRecipeRevision(empty,&error));
+    CHECK(detail::saveImportRecipe(fixture.project().string(),options,&error));
+    CHECK_FALSE(detail::verifyImportRecipeRevision(empty,&error));CHECK_FALSE(error.empty());
+    detail::ImportRecipeRevision current;CHECK(detail::readImportRecipeForEdit(fixture.project().string(),options,current,&error));CHECK(current.existed);
+    CHECK(detail::verifyImportRecipeRevision(current,&error));
+    auto forceOnly=options;forceOnly.force=true;CHECK(detail::saveImportRecipe(fixture.project().string(),forceOnly,&error));
+    CHECK(detail::verifyImportRecipeRevision(current,&error));
+    auto changed=options;changed.sourceCoordinates.metersPerUnit=.5f;CHECK(detail::saveImportRecipe(fixture.project().string(),changed,&error));
+    CHECK_FALSE(detail::verifyImportRecipeRevision(current,&error));
+    auto stale=options;detail::ImportRecipeRevision reopened;
+    CHECK(detail::readImportRecipeForEdit(fixture.project().string(),stale,reopened,&error));CHECK_FLOAT_EQ(stale.sourceCoordinates.metersPerUnit,.5f,1e-6f);
+    CHECK(detail::verifyImportRecipeRevision(reopened,&error));
+    const auto recipes=detail::loadImportRecipes(fixture.project().string(),&error);CHECK(recipes.size()==1);
+    if(recipes.empty())return;
+    std::filesystem::remove(std::filesystem::u8path(recipes.front().path));CHECK_FALSE(detail::verifyImportRecipeRevision(reopened,&error));
+}
+
+TEST_CASE(import_settings_revision_ignores_other_sources_and_refuses_broken_project_recipes)
+{
+    EditorImportFixture fixture;fixture.triangle();auto options=fixture.options();std::string error;
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    CHECK(detail::saveImportRecipe(fixture.project().string(),options,&error));detail::ImportRecipeRevision original;
+    CHECK(detail::readImportRecipeForEdit(fixture.project().string(),options,original,&error));
+    auto other=fixture.options();other.sourcePath=(fixture.root/"Other.gltf").string();
+    CHECK(detail::saveImportRecipe(fixture.project().string(),other,&error));CHECK(detail::verifyImportRecipeRevision(original,&error));
+    fixture.write(fixture.project()/".ayeditor/imports/source-broken.json","broken JSON");
+    CHECK_FALSE(detail::verifyImportRecipeRevision(original,&error));CHECK_FALSE(error.empty());
+    detail::ImportRecipeRevision unused;CHECK_FALSE(detail::readImportRecipeForEdit(fixture.project().string(),options,unused,&error));
+}
+
+TEST_CASE(actual_import_settings_dialog_rejects_external_recipe_changes_then_reopens_current_values)
+{
+    EditorImportFixture fixture;fixture.triangle();auto options=fixture.options();std::string error;
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    CHECK(detail::saveImportRecipe(fixture.project().string(),options,&error));const auto imported=Importer::importAssetFile(options);CHECK(imported.success);
+    std::wstring meshName;for(const auto& resource:imported.conversion.resources)if(resource.type=="Mesh"){meshName=std::filesystem::path(resource.path).filename().wstring();break;}
+    ayt::ui::MockRenderer backend;EditorSession session;EditorSessionDesc desc;desc.uiBackend=&backend;desc.projectRoot=fixture.project().string();
+    desc.layoutPath=std::string(AY_EDITOR_TEST_SOURCE_DIR)+"/ui/editor_shell.ui.json";CHECK(session.initialize(desc));session.setClientSize(1500,1000);CHECK(session.rescanAssetsNow());
+    auto* mode=dynamic_cast<ayt::ui::ComboBox*>(session.ui().findById("cmb_assets_view"));auto* list=dynamic_cast<ayt::ui::TileView*>(session.ui().findById("list_assets"));CHECK(mode&&list);
+    if(!mode||!list){session.shutdown();return;}mode->setSelectedIndexAndNotify(1);session.update(0);bool selected=false;
+    for(size_t i=0;i<list->getItemCount();++i)if(!meshName.empty()&&list->getItem(i).find(meshName)!=std::wstring::npos){list->setSelectedIndex(int(i));selected=true;break;}
+    CHECK(selected);if(!selected){session.shutdown();return;}CHECK(session.editSelectedAssetImportSettings());
+    const auto find=[](auto&& self,ayt::ui::Widget* root,const char* id)->ayt::ui::Widget*{
+        if(!root)return nullptr;if(root->getId()==id)return root;for(auto* child:root->getChildren())if(auto* found=self(self,child,id))return found;return nullptr;};
+    auto* dialog=dynamic_cast<EditorImportSettingsDialog*>(find(find,session.ui().getOverlayRoot(),"asset_import_settings_dialog"));CHECK(dialog);
+    if(!dialog){session.shutdown();return;}auto* units=dynamic_cast<ayt::ui::TextInput*>(find(find,dialog,"import_settings_units_input"));CHECK(units);
+    auto* message=dynamic_cast<ayt::ui::TextLabel*>(find(find,dialog,"import_settings_error"));CHECK(message);if(!units||!message){session.shutdown();return;}
+    units->setText(L"0.25");auto external=options;external.sourceCoordinates.metersPerUnit=.5f;CHECK(detail::saveImportRecipe(fixture.project().string(),external,&error));
+    const auto jobs=session.assetImportQueue()->jobs().size();dialog->acceptDialog();CHECK(dialog->isOpen());CHECK_FALSE(message->getText().empty());
+    CHECK(session.assetImportQueue()->jobs().size()==jobs);auto recipes=detail::loadImportRecipes(fixture.project().string(),&error);CHECK(recipes.size()==1);
+    if(!recipes.empty())CHECK_FLOAT_EQ(recipes.front().options.sourceCoordinates.metersPerUnit,.5f,1e-6f);
+    dialog->rejectDialog();session.update(.25f);CHECK(session.editSelectedAssetImportSettings());
+    dialog=dynamic_cast<EditorImportSettingsDialog*>(find(find,session.ui().getOverlayRoot(),"asset_import_settings_dialog"));CHECK(dialog);
+    if(dialog){units=dynamic_cast<ayt::ui::TextInput*>(find(find,dialog,"import_settings_units_input"));CHECK(units);if(units)CHECK_FLOAT_EQ(std::stof(units->getText()),.5f,1e-6f);dialog->rejectDialog();}
+    session.shutdown();
 }
 
 TEST_SUITE_END

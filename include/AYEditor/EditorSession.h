@@ -50,6 +50,7 @@ namespace ayt::device { class DeviceManager; class WindowManager; }
 // 否则会嵌套在 `ayt::editor::ayt::scene::Scene`，导致
 // `std::unique_ptr<ayt::scene::Scene>` 类型校验失败。
 namespace ayt::scene { class Scene; }
+namespace ayt::entity { enum class SceneLightType : int32_t; }
 namespace ayt::localization { class Localization; }
 
 // v0.3+ PR-5 — forward decl TreeView（design §4.3.y）
@@ -256,6 +257,9 @@ public:
     // Host/test command surfaces used by the Content Browser actions.
     bool rescanAssetsNow();
     /// Edit a source or derived asset's persisted import recipe and reimport.
+    /// Open from current persisted settings. Apply refuses a known external
+    /// recipe change/deletion or project switch; reopening refreshes the draft.
+    /// This optimistic check is not a cross-process atomic compare-and-swap.
     bool editSelectedAssetImportSettings();
     bool placeAssetInViewport(EditorAssetId assetId,
                               float physicalX, float physicalY);
@@ -314,6 +318,11 @@ public:
     /// Duplicate the selected Edit Scene hierarchy in one command and select
     /// the copy. Refuses Play, an active drag, and non-document selections.
     bool duplicateSelectedEntity(std::string* error = nullptr);
+    /// Create a serialized Spatial light as one undoable Edit action. Scene
+    /// renderer integration owns extraction; no default asset is generated.
+    uint32_t createLightEntity(ayt::entity::SceneLightType type);
+    /// Open validated light settings for the current authoring selection.
+    bool openSelectedLightSettings();
 
     SceneViewMode sceneViewMode() const noexcept { return _sceneCamera.mode(); }
     const EditorSceneVisibility& sceneVisibility() const noexcept {
@@ -511,6 +520,9 @@ private:
     void syncTransformGizmoToRenderer();
     void syncPhysicsDebugToRenderer();
     void showPhysicsDebugDurationDialog();
+    void bindLightAuthoring();
+    void refreshLightAuthoring();
+    std::unique_ptr<ayt::ui::ModalDialog> _lightSettingsDialog;
     void showTransformSnapDialog();
     std::unique_ptr<ayt::ui::ModalDialog> _transformSnapDialog;
     std::unique_ptr<EditorDebugVisualization> _debugVisualization;

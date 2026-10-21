@@ -492,7 +492,7 @@ TEST_CASE(hierarchy_create_button_creates_all_types_and_undoes_scene_edits)
     CHECK_NOT_NULL(tree);
     if (!button || !menu || !tree) { session.shutdown(); return; }
     CHECK(button->isEnabled());
-    CHECK(menu->getItemCount() == 5u);
+    CHECK(menu->getItemCount() == 8u); // Five existing types and three authored light types.
     auto& world = session.document()->scene().world();
     const size_t before = world.getAllEntities().size();
 

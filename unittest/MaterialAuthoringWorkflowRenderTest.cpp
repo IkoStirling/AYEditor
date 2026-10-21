@@ -28,6 +28,21 @@ void click(Fixture& f,ui::Widget* widget){require(widget,"Widget exists for actu
     const auto b=widget->getWorldBounds();const auto p=f.session.ui().logicalToPhysical({(b.minX+b.maxX)*.5f,(b.minY+b.maxY)*.5f});
     f.session.onMouseMove(p.x,p.y);require(f.session.onMouseButtonDown(p.x,p.y,0),"Pointer down reaches actual widget");
     require(f.session.onMouseButtonUp(p.x,p.y,0),"Pointer up reaches actual widget");}
+void dragMeshFromBrowser(Fixture& f,const std::wstring& query,const math::FVector2& drop){
+    auto* mode=dynamic_cast<ui::ComboBox*>(f.session.ui().findById("cmb_assets_view"));
+    auto* list=dynamic_cast<ui::TileView*>(f.session.ui().findById("list_assets"));require(mode&&list,"Actual Assets browser exists for model placement");
+    mode->setSelectedIndexAndNotify(1);f.frame();int index=-1;
+    for(std::size_t i=0;i<list->getItemCount();++i)if(list->getItem(i).find(query)!=std::wstring::npos){index=int(i);break;}
+    require(index>=0,"Find the actual imported model in Assets");list->scrollToIndex(index);f.session.ui().layout();
+    auto* cell=list->cellForLogicalIndex(index);require(cell,"Imported model has an actual drag cell");
+    const auto thumb=cell->getThumbnailRect(),client=list->getClientRect();
+    const float top=std::max(thumb.minY,client.minY),bottom=std::min(thumb.maxY,client.maxY);
+    require(bottom>top,"The imported model thumbnail is actually visible");
+    const auto press=f.session.ui().logicalToPhysical({(thumb.minX+thumb.maxX)*.5f,(top+bottom)*.5f});
+    f.session.onMouseMove(press.x,press.y);require(f.session.onMouseButtonDown(press.x,press.y,0),"Press imported model tile");
+    require(f.session.onMouseMove(drop.x,drop.y),"Move imported model over Scene");require(f.session.ui().isDragging(),"Actual imported Mesh drag is active");
+    require(f.session.onMouseButtonUp(drop.x,drop.y,0),"Drop actual imported model into Scene");
+}
 ui::Button* accept(ui::ModalDialog* dialog){require(dialog,"Actual modal is open");for(auto* child:dialog->getChildren())
     if(auto* button=dynamic_cast<ui::Button*>(child);button&&button->getText()==dialog->getAcceptText())return button;return nullptr;}
 std::shared_ptr<editor::EditorMaterialDocument> active(Fixture& f){const auto* record=f.session.workspace().documents().active();
@@ -44,7 +59,7 @@ int main(int argc,char** argv){try{
     png(source.parent_path()/"Surface.png",true);
     write(source,R"({"asset":{"version":"2.0"},"buffers":[{"uri":"Triangle.bin","byteLength":36}],
 "bufferViews":[{"buffer":0,"byteLength":36}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,0]}],
-"images":[{"uri":"Surface.png"}],"textures":[{"source":0}],"materials":[{"name":"Imported author surface","pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0,"roughnessFactor":0.5}}],
+"images":[{"uri":"Surface.png"}],"textures":[{"source":0}],"materials":[{"name":"Imported author surface","doubleSided":true,"pbrMetallicRoughness":{"baseColorTexture":{"index":0},"metallicFactor":0,"roughnessFactor":0.5}}],
 "meshes":[{"name":"Triangle","primitives":[{"attributes":{"POSITION":0},"material":0}]}],"nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0})");
     resource::ImportOptions options;options.sourcePath=utf8(source);options.outputDir=f.session.assetDatabase().derivedRoot();options.requireCharacterAssets=false;
     auto* queue=f.session.assetImportQueue();require(queue,"Session owns an import queue");const auto job=queue->enqueue(options);
@@ -54,7 +69,21 @@ int main(int argc,char** argv){try{
     std::string meshPath;for(const auto& path:result->outputPaths)if(fs::u8path(path).extension()==".msh"){meshPath=path;break;}
     require(!meshPath.empty(),"Real model import produced a mesh");const auto mesh=resource::ResourceManager::instance().load<resource::IMesh>(utf8(fs::u8path(f.session.assetDatabase().derivedRoot())/fs::u8path(meshPath)));
     require(mesh&&mesh->getMaterialSlotCount()>0,"Actual mesh reports its material slot");const std::string importedPath=mesh->getMaterialSlot(0);
-    require(f.session.rescanAssetsNow(),"Index the actual imported material");const auto* importedRecord=f.session.assetDatabase().findByLogicalPath("Imported/"+importedPath);
+    require(f.session.rescanAssetsNow(),"Index the actual imported material");
+    const auto beforePlacement=f.capture("workflow-before-model-drag.png");const auto placementRect=f.sceneBounds();
+    const auto entityCountBefore=f.session.document()->scene().world().getAllEntities().size();
+    const auto modelDrop=f.session.ui().logicalToPhysical({placementRect.minX+placementRect.width()*.23f,placementRect.minY+placementRect.height()*.66f});
+    dragMeshFromBrowser(f,ui::decodeUtf8Text(utf8(fs::u8path(meshPath).filename())),modelDrop);
+    auto* placedObject=f.session.document()->scene().world().findEntity(f.session.selectedEntityId());
+    auto* placedMesh=placedObject?placedObject->getComponent<entity::MeshComponent>():nullptr;
+    require(placedMesh,"Actual model drop creates and selects a Mesh entity");
+    require(placedMesh->meshPath==meshPath,"Model drop retains the portable imported mesh reference");
+    require(placedMesh->materialPath==importedPath,"Model drop uses the actual imported mesh material slot");
+    require(f.session.document()->scene().world().getAllEntities().size()==entityCountBefore+1,"One model drop creates one entity");
+    f.expectedMeshCount=26;const auto placedModel=f.capture("workflow-model-placed.png");
+    const auto modelPixels=Fixture::difference(beforePlacement,placedModel,placementRect,8);
+    require(modelPixels>50,"Actual imported model with its own material is visible in the Scene");
+    const auto* importedRecord=f.session.assetDatabase().findByLogicalPath("Imported/"+importedPath);
     require(importedRecord,"The imported material is a browser asset");const auto importedAbsolute=importedRecord->absolutePath;const auto importedAssetId=importedRecord->id;const auto sourceBytes=read(fs::u8path(importedAbsolute));
     require(f.session.openAsset(importedAssetId),"Open imported material through the actual asset browser route");auto imported=active(f);require(imported->readOnly(),"Imported material remains read-only");
     const auto importedId=f.session.workspace().documents().activeDocumentId();const auto importedSettings=imported->settings();
@@ -101,5 +130,5 @@ int main(int argc,char** argv){try{
     require(bool(f.session.workspace().documents().close(copiedId,editor::EditorDocumentCloseAction::Discard)),"Close the copied preview");f.activateScene();
     const auto previewsClosed=f.capture("workflow-scene-previews-closed.png");require(Fixture::difference(reopened,previewsClosed,sceneRect,1)==0,"Closing shared-program previews retains the Scene material");
     require(imported->settings()==importedSettings&&read(fs::u8path(imported->path()))==sourceBytes,"Original imported material remains unchanged throughout authoring");
-    std::cout<<"PASS real import -> read-only preview -> editable copy -> catalog texture edit -> isolated preview -> Ctrl+S -> actual material drag -> undo/redo -> Scene save/reopen -> preview teardown; preview pixels="<<previewPixels<<"; Scene pixels="<<scenePixels<<'\n';return 0;
+    std::cout<<"PASS real import -> actual Mesh drag and imported material placement -> read-only preview -> editable copy -> catalog texture edit -> isolated preview -> Ctrl+S -> actual material drag -> undo/redo -> Scene save/reopen -> preview teardown; preview pixels="<<previewPixels<<"; model pixels="<<modelPixels<<"; Scene pixels="<<scenePixels<<'\n';return 0;
 }catch(const std::exception& error){std::cerr<<"FAIL: "<<error.what()<<'\n';return 1;}}

@@ -1,5 +1,35 @@
 # AYEditor Design
 
+## 2026-10-21 — 重导入与已打开材质同步
+
+Session 在主线程收到成功转换或有效输出缓存命中后刷新全部已发布资源，再匹配 Workspace 中同路径的干净只读
+EditorMaterialDocument。reload 自身先解码和提取，成功后更新 revision，驱动参数/预览重建；
+非活动 Dock 同样更新。失败导入、CPU 刷新失败、可写文档与 dirty 草稿不自动重载。
+真实 Assimp/Session CPU 与两后端 GPU 用例检查导入材质连续变更、非活动页和独立副本草稿。
+导入数据库将 sourceRoot/derivedRoot 和配方根各规范化一次再拼接相对键，避免项目目录联接
+造成配方与输出无法关联；不对每条资源查询文件系统，不改变资源的逻辑 ID。
+
+## 2026-10-21 — Actor复制身份
+
+层级复制为ActorInstanceComponent分配新的实例身份，避免与源Actor混用；实体内组件slot ID、
+classPath、assetsRoot、classDefaultsJson及覆盖保留。新身份在复制历史快照中固定，redo不再次生成。
+真实.act/Scene回归先重现重复instanceId，再验证undo/redo、字段差异、类默认值变更和重开。
+没有引入多实体Prefab资产或结构覆盖协议；旧.act仍是单Entity类默认值/实例差异机制。
+
+## 2026-10-21 — 灯光作者入口与编辑辅助
+
+Session 只提交 EditorSceneDocument 命令；LightComponent 的值校验属于 Entity 注册描述符。
+Modal 保留打开时 document/revision/persistentId/componentId，Apply 前全部复核；重建 Inspector
+延后到 UI 更新，不在按钮回调中销毁调用栈正在使用的控件。关闭 Session 先回收 Modal。
+
+LightOverlay 是非命中、Immediate 的全局覆盖层控件，绘制严格裁剪到活动Scene视口，
+避免原生合成临时隐藏panel_viewport时连带隐藏辅助线；不缓存 Entity 指针或绘制列表。
+每次从 Scene 生成临时图标与选中范围；UI路径在当帧释放，线段先裁齐次视锥再除w。
+拾取复用同一图标中心/8 DIP范围，近图标后绘先选；纯Light不再有隐形备用球。
+Spot终端取米制半径球与锥的交线，范围不误画成锥轴长度；灯光尺寸不生成Mesh资产。
+lightHelpers 是 workspace schema1 的可选显示键，旧文件缺键默认true，用户偏好schema9不变。
+实际光照像素比对关闭辅助线，辅助显示/点击另有独立CPU和GPU证据，避免混淆照明与UI变化。
+
 ## 2026-10-21 — 来源导入闭环
 
 Session 拥有来源数据库/队列与实际 Inspector 操作；Queue 的 enqueue/poll/retry 都在同一个
@@ -15,10 +45,17 @@ Editor 存储层负责先保存、分配 sourceId/outputNamespace，再排队。
 
 ImportSettingsDialog 复用 PropertyField/ModalDialog，读取尚未提交的输入并整体校验。
 Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc 没有导入副作用。
+弹窗从磁盘配方重新取值并保留规范化配方基线，Apply 前按sourceId/源路径和输出根复核，
+已知外部变更/删除/新建以及项目切换均拒绝排队。force和JSON空白不是作者设置变化；
+无关来源的配方不冲突。读取破损配方失败时拒绝编辑。检查与原子写入之间仍有竞争窗口，
+不宣称跨进程CAS或多编辑器写事务，导入输出根仍由调用方串行使用。
+AssetDatabase关联键以一次解析的source/derived根和相对逻辑路径构成，配方的输出根同样解析；
+解决目录联接别名与持久配方物理路径不一致的问题，不改逻辑路径哈希ID或索引格式。
 Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
-当前扩展 Host API 使用 Source ABI42，UI 验证接口为 ABI132。
+当前扩展 Host API 使用 Source ABI43，UI 验证接口为 ABI132。
 
-Session 只对成功完成的转换刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
+Session 对成功转换和有效输出缓存命中刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
+缓存命中也需要同步：另一作者工具可能已更新产物，而本 Session 仍持有先前 CPU/GPU/文档快照。
 导入事务与运行时刷新各有失败结果，不能把磁盘转换成功等同于画面已更新。
 AssetReimportRenderTest 使用真实 Session、模态窗口/按钮指针路由、资源桥和 D3D11/D3D12。
 共享 WorkshopSessionGpuFixture 只提取既有测试宿主，Scene 的提交仍为显式 Host；

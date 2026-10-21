@@ -30,6 +30,7 @@ set(AY_EDITOR_EMBEDDED_TEST_SOURCES
     Test_EditorTransformGizmo.cpp
     Test_EditorSceneEfficiency.cpp
     Test_EditorSceneDuplication.cpp
+    Test_EditorLightAuthoring.cpp
     Test_EditorCameraVisualization.cpp
     Test_EditorAssetBrowser.cpp
     Test_EditorAssetTilePresenter.cpp
@@ -237,6 +238,16 @@ endif()
 target_link_libraries(${MODULE_NAME} PRIVATE AYAudio)
 
 if(WIN32)
+    add_executable(AYEditor_LightAuthoringRenderTest EXCLUDE_FROM_ALL LightAuthoringRenderTest.cpp)
+    target_link_libraries(AYEditor_LightAuthoringRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
+    target_include_directories(AYEditor_LightAuthoringRenderTest PRIVATE ../../AYRenderer/src)
+    target_compile_definitions(AYEditor_LightAuthoringRenderTest PRIVATE
+        AY_MATERIAL_WORKSHOP_HINT="${CMAKE_CURRENT_SOURCE_DIR}/../../AYRenderer/demo/MaterialWorkshop"
+        AY_EDITOR_ENGINE_ASSETS_HINT="${AY_ENGINE_ASSETS_SOURCE_DIR}")
+    ay_stage_production_shaders(AYEditor_LightAuthoringRenderTest)
+    if(MSVC)
+        target_link_options(AYEditor_LightAuthoringRenderTest PRIVATE /DEBUG:NONE /INCREMENTAL:NO)
+    endif()
     add_executable(AYEditor_SceneDuplicationRenderTest EXCLUDE_FROM_ALL SceneDuplicationRenderTest.cpp)
     target_link_libraries(AYEditor_SceneDuplicationRenderTest PRIVATE AYEditor AYRenderer AYEntity AYScene)
     target_include_directories(AYEditor_SceneDuplicationRenderTest PRIVATE ../../AYRenderer/src)

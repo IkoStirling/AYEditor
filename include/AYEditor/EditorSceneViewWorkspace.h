@@ -14,6 +14,7 @@ struct EditorSceneVisibility {
     bool worldLit2D = true;
     bool cameraOverlay2D = true;
     bool ui = true;
+    bool lightHelpers = true;
 };
 
 // Project-local, user-owned Scene View state. The file lives at

@@ -3,6 +3,7 @@
 #include "AYEditor/EditorSession.h"
 #include "EditorPhysicsDebugGeometry.h"
 #include "EditorDebugVisualization.h"
+#include "EditorLightVisualization.h"
 #include <AYPhysics/PhysicsManager.h>
 #include <AYPhysics/PhysicsSubSystem.h>
 
@@ -33,6 +34,7 @@
 #include "AYEditor/EditorAssetDeleteAnalysis.h"
 #include "AYEditor/EditorAssetImportQueue.h"
 #include "EditorImportSettingsDialog.h"
+#include "EditorImportRecipeStore.h"
 #include "AYEditor/EditorAssetTrash.h"
 #include "AYEditor/EditorAssetOperations.h"
 #include "AYEditor/EditorProjectAssetFactory.h"
@@ -2631,6 +2633,7 @@ void EditorSession::shutdown() {
     _assetTrashList = nullptr;
     _assetHistoryDialog.reset();
     _assetImportSettingsDialog.reset();
+    _lightSettingsDialog.reset();
     _transformSnapDialog.reset();
     // The application logo borrows its uploaded texture from the shared
     // preview cache. Clear the widget before the cache releases that handle
@@ -2875,7 +2878,10 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                         + ayt::ui::decodeUtf8Text(completed->message), true);
                 } else {
                     std::string refreshError;
-                    if (completed->state == EditorAssetImportJobState::Succeeded) {
+                    // Cache hits may refer to outputs republished by another
+                    // authoring tool while this Session still holds old views.
+                    if (completed->state == EditorAssetImportJobState::Succeeded
+                        || completed->state == EditorAssetImportJobState::CacheHit) {
                         std::vector<std::string> published;
                         for (const auto& path : completed->outputPaths) {
                             const auto absolute = (std::filesystem::u8path(
@@ -2885,8 +2891,23 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                             published.push_back(text);
                             if (_assetPreviewCache != nullptr) _assetPreviewCache->erase(text);
                         }
-                        (void)ayt::resource::ResourceManager::instance()
+                        const bool runtimeRefreshed=ayt::resource::ResourceManager::instance()
                             .refreshPublishedResources(published, &refreshError);
+                        if(runtimeRefreshed&&_workspace){
+                            for(const auto& record:_workspace->documents().records()){
+                                auto* material=dynamic_cast<EditorMaterialDocument*>(record.document.get());
+                                if(!material||!material->readOnly()||material->isDirty())continue;
+                                const bool changed=std::any_of(published.begin(),published.end(),[&](const auto& path){
+                                    return detail::sameImportSource(material->path(),path);
+                                });
+                                if(!changed)continue;
+                                std::string documentError;
+                                if(!material->reload(&documentError)){
+                                    if(!refreshError.empty())refreshError+='\n';
+                                    refreshError+="Imported material view refresh failed: "+documentError;
+                                }
+                            }
+                        }
                         refreshVisibleAssetPreviews();
                         refreshAssetInspector();
                     }
@@ -3967,6 +3988,10 @@ void EditorSession::bindToolbar() {
         item->setOnActivate([this]() { toggleViewportShading(); });
     }
     viewportOptions->addSeparator();
+    if(auto* item=viewportOptions->addItem(localizedText("ui.editor.light.helpers","Light Helpers"))){
+        item->setId("menu_light_helpers");item->setLocalizationKey("text","ui.editor.light.helpers");
+        item->setOnActivate([this]{auto visibility=_sceneVisibility;visibility.lightHelpers=!visibility.lightHelpers;setSceneVisibility(visibility);});
+    }
     if (auto* item=viewportOptions->addItem(localizedText("ui.editor.viewport.frame_selection", "Frame Selection (F)"))) {
         item->setId("menu_frame_selection");
         item->setLocalizationKey("text","ui.editor.viewport.frame_selection");
@@ -4507,6 +4532,14 @@ void EditorSession::bindOutlinerPanel()
         });
     addCreate("outliner_create_data", "ui.editor.menu.edit.create_data_entity",
         L"Create Data Entity", [this]() { createDataEntity(); });
+    menu->addSeparator();
+    addCreate("outliner_create_directional_light","ui.editor.light.create_directional",L"Create Directional Light",
+        [this]{(void)createLightEntity(static_cast<ayt::entity::SceneLightType>(0));});
+    addCreate("outliner_create_point_light","ui.editor.light.create_point",L"Create Point Light",
+        [this]{(void)createLightEntity(static_cast<ayt::entity::SceneLightType>(1));});
+    addCreate("outliner_create_spot_light","ui.editor.light.create_spot",L"Create Spot Light",
+        [this]{(void)createLightEntity(static_cast<ayt::entity::SceneLightType>(2));});
+
     if (auto* button = dynamic_cast<ayt::ui::Button*>(
             _ui.findById("btn_outliner_create"))) {
         menu->detachFromParent();
@@ -5599,8 +5632,19 @@ bool EditorSession::editSelectedAssetImportSettings()
     const auto ext = Importer::extensionOf(options.sourcePath);
     if (ext != "fbx" && ext != "gltf" && ext != "glb" && ext != "png" && ext != "jpg"
         && ext != "jpeg" && ext != "bmp" && ext != "tga" && ext != "dds") return false;
+    detail::ImportRecipeRevision recipeRevision;
+    std::string recipeError;
+    if(!detail::readImportRecipeForEdit(_assetDatabase.projectRoot(),options,recipeRevision,&recipeError)){
+        setAssetBrowserStatus(L"Cannot open import settings: "+ui::decodeUtf8Text(recipeError),true);return false;
+    }
     _assetImportSettingsDialog = std::make_unique<EditorImportSettingsDialog>(options,
-        [this](const ayt::resource::ImportOptions& edited, std::string& error) {
+        [this,recipeRevision](const ayt::resource::ImportOptions& edited, std::string& error) {
+            if(!_assetImportQueue||_assetDatabase.projectRoot()!=recipeRevision.projectRoot){
+                error=ui::encodeUtf8Text(localizedText("ui.editor.import.project_changed","Project changed; reopen import settings."));return false;
+            }
+            if(!detail::verifyImportRecipeRevision(recipeRevision,&error)){
+                error=ui::encodeUtf8Text(localizedText("ui.editor.import.settings_stale","Import settings changed or cannot be read; reopen settings before applying."))+"\n"+error;return false;
+            }
             auto options = edited;
             options.force = true;
             const auto id = _assetImportQueue->enqueue(options);
@@ -8700,6 +8744,10 @@ void EditorSession::setSceneVisibility(
 
 void EditorSession::syncSceneVisibilityMenu()
 {
+    if(auto* item=dynamic_cast<ui::MenuItem*>(_ui.findById("menu_light_helpers"))){
+        setEditorMenuToggleIcon(item,_engineAssetsRoot,_sceneVisibility.lightHelpers);
+        item->setEnabled(_gameView.mode()==EditorMode::Edit&&!_sceneCamera.isTwoD());
+    }
     setCameraDisplayMode(_cameraDisplayMode);
     const bool editMode = _gameView.mode() == EditorMode::Edit;
     const ayt::math::FVector4 active = editorThemeColor(
@@ -11322,6 +11370,7 @@ EditorTransformState spatialWorldState(const ayt::entity::Entity& entity) {
 
 void EditorSession::refreshInspectorLabels()
 {
+    refreshLightAuthoring();
     refreshComponentBrowser();
     refreshEntityRelations();
     if (_selectedAssetId != 0) {
@@ -11354,6 +11403,7 @@ void EditorSession::refreshInspectorLabels()
 
 void EditorSession::bindComponentBrowser()
 {
+    bindLightAuthoring();
     _componentPicker = dynamic_cast<ayt::ui::ComboBox*>(
         _ui.findById("cmb_add_component"));
     _componentTree = dynamic_cast<ayt::ui::TreeView*>(
@@ -13082,6 +13132,10 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
     }
 
     ayt::entity::Entity* bestEntity = nullptr;
+    if(_gameView.mode()==EditorMode::Edit&&_sceneVisibility.lightHelpers){
+        const auto lights=buildEditorLightVisuals(*world,_sceneCamera.frame(),viewport,selectedEntityId());
+        if(auto* object=pickEditorLightVisual(lights,{x,y}))return object;
+    }
     float bestDistance = 1.0e30f;
     auto cameraVisuals = buildEditorCameraVisuals(*world, _sceneCamera.frame(), viewport.height(),
         viewport.width()/viewport.height(), selectedEntityId(), _cameraDisplayMode, _gameView.mode()==EditorMode::Edit && _sceneVisibility.meshes && _cameraVisualRenderer && _cameraVisualRenderer->ready(_cameraDisplayMode));
@@ -13098,6 +13152,7 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
             ? entity->getComponent<ayt::entity::MeshComponent>() : nullptr;
         // Camera-only entities are picked by their displayed lens icon, never by a phantom sphere.
         if (entity && entity->hasComponent<ayt::entity::PerspectiveCameraComponent>() && meshComponent==nullptr) continue;
+        if(entity&&entity->hasComponent<ayt::entity::LightComponent>()&&meshComponent==nullptr)continue;
         if (transform == nullptr || (meshComponent != nullptr
                                      && !meshComponent->visible)) {
             continue;

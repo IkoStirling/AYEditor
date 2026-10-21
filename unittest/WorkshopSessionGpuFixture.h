@@ -16,6 +16,7 @@
 #include <AYEntity.h>
 #include <AYEntity/EntityModule.h>
 #include <AYEntity/EntityRenderIntegrationModule.h>
+#include <AYEntity/SceneLighting.h>
 #include <AYEntity/PerspectiveCameraSelection.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYScene.h>
@@ -65,6 +66,7 @@ struct Fixture
     editor::EditorAssetId materialId{};
     bool renderSceneGeometry = true;
     bool useEditorCamera = false;
+    bool useSceneLighting = false;
     std::size_t expectedMeshCount = 25;
     explicit Fixture(fs::path destination, bool d3d12, bool assetPreviews = false) : output(fs::absolute(destination))
     {
@@ -160,6 +162,11 @@ struct Fixture
     render::RenderScene extract()
     {
         render::RenderScene result;
+        if (useSceneLighting) {
+            render::SceneLights sceneLights;
+            const auto lighting=entity::collectSceneLighting(session.document()->scene().world(),sceneLights);
+            if(lighting.authored) require(result.setSceneLights(sceneLights),"Publish actual ECS light snapshot");
+        }
         for (auto *object : session.document()->scene().world().getAllEntities())
         {
             const auto *mesh = object->getComponent<entity::MeshComponent>();

@@ -4,6 +4,9 @@
 #include <AYEntity/ComponentRegistry.h>
 #include <AYEntity/components/CameraControllerComponent.h>
 #include <AYEntity/components/MeshComponent.h>
+#include <AYEntity/ActorClassAsset.h>
+#include <AYEntity/components/ActorInstanceComponent.h>
+#include <AYEntity/components/HealthComponent.h>
 #include <AYScene.h>
 #include <filesystem>
 #include <set>
@@ -20,6 +23,39 @@ struct UnserializableDuplicateProbe:entity::IComponent {
 };
 }
 TEST_SUITE(AYEditor_SceneDuplication)
+TEST_CASE(actor_duplicate_gets_fresh_instance_identity_keeps_slots_overrides_and_future_class_defaults)
+{
+    const auto assets=test::testTmpDir()/"duplicate-actor/Assets";
+    std::filesystem::create_directories(assets/"actors");std::filesystem::create_directories(assets/"worlds");
+    entity::ActorClassAsset actor;actor.id="DuplicateProbe";
+    const std::string healthSlot="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    actor.components.push_back({"HealthComponent",R"({"currentHp":100,"maxHp":100})",healthSlot,"Vitals"});
+    std::string error;CHECK_MSG(entity::saveActorClassAsset((assets/"actors/Probe.act").string(),actor,&error),error.c_str());
+    EditorSceneDocument document;auto& world=document.scene().world();auto* source=world.createSpatialEntity();source->setName("Actor");
+    CHECK_MSG(entity::instantiateActorClass(*source,actor,"actors/Probe.act",assets.string(),&error),error.c_str());
+    auto* original=source->getComponent<entity::ActorInstanceComponent>();CHECK(original);
+    if(!original)return;const auto originalIdentity=original->instanceId,sourceEntityIdentity=source->persistentId();
+    source->getComponent<entity::HealthComponent>()->currentHp=37;
+    uint32_t id=0;CHECK_MSG(document.duplicateEntityHierarchy(source->getId(),&id,&error),error.c_str());
+    auto* clone=world.findEntity(id);CHECK(clone);if(!clone)return;
+    auto* instance=clone->getComponent<entity::ActorInstanceComponent>();CHECK(instance);if(!instance)return;
+    CHECK_FALSE(instance->instanceId.empty());CHECK(instance->instanceId!=originalIdentity);CHECK(original->instanceId==originalIdentity);
+    CHECK(instance->classPath==original->classPath);CHECK(instance->assetsRoot==original->assetsRoot);CHECK(instance->classDefaultsJson==original->classDefaultsJson);
+    auto* health=clone->getComponent<entity::HealthComponent>();CHECK(health&&health->currentHp==37);
+    CHECK(clone->componentInstance(health)->id==healthSlot);const auto cloneIdentity=clone->persistentId(),actorIdentity=instance->instanceId;
+    CHECK(document.undo());CHECK(world.findEntityByPersistentId(cloneIdentity)==nullptr);CHECK(document.redo());
+    clone=world.findEntityByPersistentId(cloneIdentity);CHECK(clone);if(!clone)return;
+    CHECK(clone->getComponent<entity::ActorInstanceComponent>()->instanceId==actorIdentity);
+    clone->getComponent<entity::HealthComponent>()->currentHp=25;
+    actor.components.front().payloadJson=R"({"currentHp":100,"maxHp":200})";
+    CHECK_MSG(entity::saveActorClassAsset((assets/"actors/Probe.act").string(),actor,&error),error.c_str());
+    const auto scene=(assets/"worlds/Probe.scn").string();CHECK_MSG(document.saveAs(scene,&error),error.c_str());CHECK_MSG(document.open(scene,&error),error.c_str());
+    clone=world.findEntityByPersistentId(cloneIdentity);source=world.findEntityByPersistentId(sourceEntityIdentity);CHECK(clone&&source);if(!clone||!source)return;
+    CHECK(clone->getComponent<entity::ActorInstanceComponent>()->instanceId==actorIdentity);CHECK(source->getComponent<entity::ActorInstanceComponent>()->instanceId==originalIdentity);
+    CHECK(clone->getComponent<entity::HealthComponent>()->currentHp==25);CHECK(source->getComponent<entity::HealthComponent>()->currentHp==37);
+    CHECK(clone->getComponent<entity::HealthComponent>()->maxHp==200);CHECK(source->getComponent<entity::HealthComponent>()->maxHp==200);
+    CHECK(clone->componentInstance(clone->getComponent<entity::HealthComponent>())->id==healthSlot);
+}
 TEST_CASE(duplicate_closes_spatial_and_owner_graph_preserves_components_and_remaps_camera_targets)
 {
     EditorSceneDocument document;auto& world=document.scene().world();

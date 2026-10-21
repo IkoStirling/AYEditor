@@ -839,6 +839,9 @@ bool EditorSceneDocument::duplicateEntityHierarchy(uint32_t entityId, uint32_t* 
     }
     for (std::size_t i=0;i<snapshots.size();++i) {
         auto* entity=world.findEntity(created[i]);
+        // Actor slots are Entity-local, but this identity names a new instance.
+        if(auto* actor=entity->getComponent<ayt::entity::ActorInstanceComponent>())
+            actor->instanceId=ayt::entity::makeComponentInstanceId();
         for (auto* component:entity->getComponents())
             if (auto* camera=dynamic_cast<ayt::entity::CameraControllerComponent*>(component))
                 if (const auto target=identities.find(camera->targetPersistentId);target!=identities.end())

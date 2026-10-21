@@ -122,6 +122,7 @@ bool EditorSceneViewWorkspace::open(const std::string& projectRoot,
                 visibility.cameraOverlay2D = value->value(
                     "cameraOverlay2D", true);
                 visibility.ui = value->value("ui", true);
+                visibility.lightHelpers = value->value("lightHelpers", true);
             }
             _visibility.emplace(it.key(), visibility);
         }
@@ -171,6 +172,7 @@ bool EditorSceneViewWorkspace::save(std::string* error) const
                     {"worldLit2D", visibility.worldLit2D},
                     {"cameraOverlay2D", visibility.cameraOverlay2D},
                     {"ui", visibility.ui},
+                    {"lightHelpers", visibility.lightHelpers},
                 }},
             };
             scenes[key] = std::move(entry);

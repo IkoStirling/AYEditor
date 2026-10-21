@@ -50,6 +50,52 @@ std::vector<StoredImportRecipe> loadImportRecipes(const std::string& projectRoot
     return ayt::resource::readProjectImportRecipes(projectRoot, error);
 }
 
+namespace {
+auto findRecipe(const std::vector<StoredImportRecipe>& recipes,
+                const ayt::resource::ImportOptions& options)
+{
+    return std::find_if(recipes.begin(),recipes.end(),[&](const auto& recipe){
+        return (options.sourceId.empty()
+            ? sameImportSource(recipe.options.sourcePath,options.sourcePath)
+            : recipe.options.sourceId==options.sourceId)
+            &&sameImportSource(recipe.options.outputDir,options.outputDir);
+    });
+}
+}
+
+bool readImportRecipeForEdit(const std::string& projectRoot,
+                            ayt::resource::ImportOptions& options,
+                            ImportRecipeRevision& revision,std::string* error)
+{
+    ImportRecipeRevision next;next.projectRoot=projectRoot;next.lookup=options;
+    std::string failure;
+    if(!projectRoot.empty()){
+        const auto recipes=loadImportRecipes(projectRoot,&failure);
+        if(!failure.empty()){if(error)*error=failure;return false;}
+        const auto found=findRecipe(recipes,options);
+        if(found!=recipes.end()){
+            options=found->options;next.lookup=options;next.existed=true;
+            next.baseline=ayt::resource::serializeImportRecipe(options);
+        }
+    }
+    revision=std::move(next);if(error)error->clear();return true;
+}
+
+bool verifyImportRecipeRevision(const ImportRecipeRevision& revision,std::string* error)
+{
+    std::string failure;
+    if(!revision.projectRoot.empty()){
+        const auto recipes=loadImportRecipes(revision.projectRoot,&failure);
+        if(failure.empty()){
+            const auto found=findRecipe(recipes,revision.lookup);
+            const bool exists=found!=recipes.end();
+            if(exists!=revision.existed||(exists&&ayt::resource::serializeImportRecipe(found->options)!=revision.baseline))
+                failure="Import settings changed outside this dialog; reopen settings before applying.";
+        }
+    }
+    if(error)*error=failure;return failure.empty();
+}
+
 bool saveImportRecipe(const std::string& projectRoot, ayt::resource::ImportOptions& options,
                       std::string* error)
 {
