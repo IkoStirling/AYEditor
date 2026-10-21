@@ -29,6 +29,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -817,6 +818,8 @@ private:
     std::unique_ptr<EditorAssetImportQueue> _assetImportQueue;
     ayt::ui::authoring::JobProgressPresentation _assetImportProgress;
     ayt::ui::authoring::JobPresentation _assetImportPresentation;
+    std::wstring _assetImportRefreshWarning;
+    std::map<std::string,std::wstring> _assetImportRefreshWarnings;
     std::unique_ptr<EditorAssetTrash> _assetTrash;
     std::unique_ptr<EditorAssetOperations> _assetOperations;
     std::unique_ptr<EditorRecoveryStore> _recoveryStore;

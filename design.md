@@ -1,5 +1,19 @@
 # AYEditor Design
 
+## 2026-10-22 — 导入消费者确认
+
+Session消费ResourceRefreshReport：CPU成功与GPU各变体成功分开，Retained和Failed产生不同的本地化提示。
+提示按sourceId存于Session的有序map；没有sourceId时使用长度前缀的来源/输出组合键，避免分隔符碰撞。
+每项标注来源文件名，自动扫描/显式rescan重新呈现第一项。其他来源的成功不清除未解决项；
+同来源有Updated/NotResident且无新失败才清除，只有未知确认时保留待确认提示。
+这是当前Session的未解决项，不是持久化审计日志，也不宣称每个资源路径的完整历史。
+初始化/关闭清空该状态。新增私有成员仍影响公开Session对象布局，Source ABI统一升至45。
+Resource/Renderer报告的opaque句柄与诊断不进入普通用户表单；没有引入第二个Renderer查找或刷新总线。
+只读导入文档刷新取决于CPU成功，GPU拒绝不阻止CPU文档同步，也不回滚已导入文件；可写草稿不被覆盖。
+原导入成功状态仍代表文件发布，重试复用现有重导入操作。
+完整465例/12380断言及实际D3D11/12验证通过；来源A失败、B成功不清除A、A未知保留待确认、
+A确认后清除已覆盖。两后端实际Scene/预览均保留旧图、修复后保存重开一致，独立草稿保持。
+
 ## 2026-10-22 — 纹理采样作者设置
 
 ImportOptions追加sampler覆盖和层级保留字段，跨Editor公开结构值传递，Source ABI升至44。
@@ -65,7 +79,7 @@ Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc
 AssetDatabase关联键以一次解析的source/derived根和相对逻辑路径构成，配方的输出根同样解析；
 解决目录联接别名与持久配方物理路径不一致的问题，不改逻辑路径哈希ID或索引格式。
 Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
-当前扩展 Host API 使用 Source ABI44，UI 验证接口为 ABI132。
+当前扩展 Host API 使用 Source ABI45，UI 验证接口为 ABI132。
 
 Session 对成功转换和有效输出缓存命中刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
 缓存命中也需要同步：另一作者工具可能已更新产物，而本 Session 仍持有先前 CPU/GPU/文档快照。

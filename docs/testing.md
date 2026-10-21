@@ -1,5 +1,19 @@
 # Editor 测试运行与报告
 
+## 分层刷新结果与来源隔离（2026-10-22）
+
+ABI45完整`refresh-editor-source-final.json`465例12380断言，导入定向
+`refresh-editor-source-isolation-first.json`28例380断言，均无失败/跳过。
+覆盖文件导入成功与消费者Retained/Failed分别显示、NR/未知不误报、扫描不覆盖提示、
+其他来源成功不清除未解决项、同来源未知保留待确认、确认后清除；提示包含来源文件名。
+
+`refresh-source-isolation-native-{d3d11,d3d12}`两项实际Editor验收通过：
+16385×1合法CPU纹理已发布，GPU两个变体拒绝保留，实际Scene和材质预览均与旧参考一致；
+状态跨扫描保留；修复DDS后稳定id下更新、Scene保存重开及预览恢复，独立未保存草稿保持。
+对应`gpu-refresh-preview-{before,retained,repaired}.png`及`gpu-refresh-scene-reopened.png`。
+`refresh-source-final-{MaterialWorkshop,MaterialPreview}-{d3d11,d3d12}`四项回归也通过。
+全Renderer/Resource/Entity与ASan阶段报告见根刷新设计；不同冻结阶段不重复累计为用例总数。
+
 ## 纹理采样作者流程（2026-10-22）
 
 Source ABI44 的完整主入口463例/12308断言通过，无跳过；

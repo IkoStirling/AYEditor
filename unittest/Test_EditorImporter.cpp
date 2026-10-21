@@ -25,6 +25,7 @@
 #include <AYUI/ScrollView.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
+#include <AYResource/ResourceManager.h>
 #include "AYIO/File.h"
 #include <AYIO/Path.h>
 
@@ -93,6 +94,101 @@ struct EditorImportFixture {
 } // namespace
 
 TEST_SUITE(AYEditor_Importer)
+
+TEST_CASE(session_reports_consumer_retention_and_failure_without_claiming_the_file_import_failed)
+{
+    EditorImportFixture fixture; fixture.triangle();
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    ayt::ui::MockRenderer backend; EditorSession session; EditorSessionDesc desc;
+    desc.uiBackend=&backend; desc.projectRoot=fixture.project().string();
+    desc.layoutPath=std::string(AY_EDITOR_TEST_SOURCE_DIR)+"/ui/editor_shell.ui.json";
+    CHECK(session.initialize(desc)); CHECK(session.setLanguage("en-US"));
+    session.setClientSize(1500,1000);
+    auto& manager=ayt::resource::ResourceManager::instance();
+    auto* queue=session.assetImportQueue(); CHECK(queue);
+    if(!queue){session.shutdown();return;}
+    using ayt::resource::ResourceRefreshState;
+    const ResourceRefreshState states[]={ResourceRefreshState::Retained,ResourceRefreshState::Failed,
+        ResourceRefreshState::NotResident,ResourceRefreshState::Unconfirmed,ResourceRefreshState::Updated};
+    for(size_t index=0;index<std::size(states);++index){
+        const auto state=states[index];
+        const auto token=manager.setRefreshObserver("test consumer",[state](const std::string&){
+            return std::vector<ayt::resource::ResourceConsumerRefresh>{{state,"linear",17,31,"fixture acknowledgement"}};
+        });
+        fixture.triangle(float(index+2)); auto options=fixture.options(); options.force=true;
+        const auto id=queue->enqueue(options);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(queue->busy()&&std::chrono::steady_clock::now()<deadline){
+            session.update(.016f);std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        session.update(.016f);
+        const auto* job=queue->find(id);CHECK(job&&job->state==EditorAssetImportJobState::Succeeded);
+        // Let the ordinary asset scan complete after the import notification;
+        // it must not hide a retained/failed consumer acknowledgement.
+        CHECK(session.rescanAssetsNow());
+        for(int frame=0;frame<8;++frame){session.update(.016f);std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        auto* status=dynamic_cast<ayt::ui::TextLabel*>(session.ui().findById("assets_status"));
+        auto* console=dynamic_cast<ayt::ui::TextLabel*>(session.ui().findById("console_output"));
+        CHECK(status);CHECK(console);
+        if(status&&console){
+            const bool previous=status->getText().find(L"previous version")!=std::wstring::npos;
+            const bool failed=status->getText().find(L"could not be refreshed")!=std::wstring::npos;
+            CHECK(previous==(state==ResourceRefreshState::Retained));
+            CHECK(failed==(state==ResourceRefreshState::Failed));
+            if(previous||failed) CHECK(console->getText()==status->getText());
+            CHECK(console->getText().find(L"Import failed:")==std::wstring::npos);
+        }
+        CHECK(manager.clearRefreshObserver(token));
+    }
+    session.shutdown();
+}
+
+TEST_CASE(session_unrelated_import_cannot_clear_another_sources_unresolved_refresh)
+{
+    EditorImportFixture fixture;fixture.triangle();
+    std::filesystem::create_directories(fixture.project()/"Assets");
+    const auto other=fixture.source().parent_path()/"Other.gltf";
+    CHECK(std::filesystem::copy_file(fixture.source(),other));
+    ayt::ui::MockRenderer backend;EditorSession session;EditorSessionDesc desc;
+    desc.uiBackend=&backend;desc.projectRoot=fixture.project().string();
+    desc.layoutPath=std::string(AY_EDITOR_TEST_SOURCE_DIR)+"/ui/editor_shell.ui.json";
+    CHECK(session.initialize(desc));CHECK(session.setLanguage("en-US"));session.setClientSize(1500,1000);
+    auto& manager=ayt::resource::ResourceManager::instance();
+    using ayt::resource::ResourceRefreshState;
+    auto state=ResourceRefreshState::Retained;
+    const auto token=manager.setRefreshObserver("test consumer",[&](const std::string&){
+        return std::vector<ayt::resource::ResourceConsumerRefresh>{{state,"linear",17,31,{}}};
+    });
+    struct Reset {ayt::resource::ResourceManager& manager;uint64_t token;
+        ~Reset(){manager.clearRefreshObserver(token);}} reset{manager,token};
+    auto* queue=session.assetImportQueue();CHECK(queue);if(!queue){session.shutdown();return;}
+    const auto runImport=[&](const std::filesystem::path& source,ResourceRefreshState result){
+        state=result;auto options=fixture.options();options.sourcePath=source.string();options.force=true;
+        const auto id=queue->enqueue(options);
+        const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while(queue->busy()&&std::chrono::steady_clock::now()<deadline){session.update(.016f);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));}
+        session.update(.016f);const auto* job=queue->find(id);
+        CHECK(job&&job->state==EditorAssetImportJobState::Succeeded);
+        CHECK(session.rescanAssetsNow());session.update(.016f);
+        auto* status=dynamic_cast<ayt::ui::TextLabel*>(session.ui().findById("assets_status"));
+        CHECK(status);return status?status->getText():std::wstring{};
+    };
+    auto status=runImport(fixture.source(),ResourceRefreshState::Retained);
+    CHECK(status.find(L"Triangle.gltf")!=std::wstring::npos);
+    CHECK(status.find(L"previous version")!=std::wstring::npos);
+    status=runImport(other,ResourceRefreshState::Updated);
+    CHECK(status.find(L"Triangle.gltf")!=std::wstring::npos);
+    CHECK(status.find(L"previous version")!=std::wstring::npos);
+    status=runImport(fixture.source(),ResourceRefreshState::Unconfirmed);
+    CHECK(status.find(L"unconfirmed")!=std::wstring::npos);
+    status=runImport(other,ResourceRefreshState::Updated);
+    CHECK(status.find(L"unconfirmed")!=std::wstring::npos);
+    status=runImport(fixture.source(),ResourceRefreshState::Updated);
+    CHECK(status.find(L"previous version")==std::wstring::npos);
+    CHECK(status.find(L"unconfirmed")==std::wstring::npos);
+    session.shutdown();
+}
 
 TEST_CASE(session_reimport_refreshes_open_readonly_material_retains_bad_source_and_independent_unsaved_copy)
 {

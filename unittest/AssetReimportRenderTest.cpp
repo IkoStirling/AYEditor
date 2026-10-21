@@ -1,3 +1,4 @@
+#include <bgfx/bgfx.h>
 #include "WorkshopSessionGpuFixture.h"
 #include <AYEditor/EditorAssetImportQueue.h>
 #include <AYResource/assetsDefs/IMesh.h>
@@ -9,6 +10,7 @@
 #include <AYUI/TileView.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/ModalDialog.h>
+#include <AYUI/TextLabel.h>
 #include <chrono>
 #include <fstream>
 
@@ -50,6 +52,18 @@ void writeTexture(const fs::path& source, bool red)
     std::string bytes;
     for(std::size_t i=0;i<hex.size();i+=2)bytes.push_back(char(std::stoi(hex.substr(i,2),nullptr,16)));
     writeFile(source,bytes);
+}
+void writeWideDds(const fs::path& path,uint32_t width)
+{
+    const uint32_t payload=((width+3u)/4u)*8u;
+    std::string bytes(size_t(128)+payload,'\0');
+    const auto put=[&](size_t offset,uint32_t value){
+        for(unsigned byte=0;byte<4;++byte)bytes[offset+byte]=char((value>>(byte*8))&255);
+    };
+    put(0,0x20534444);put(4,124);put(8,0x81007);put(12,1);put(16,width);
+    put(20,payload);put(28,1);put(76,32);put(80,4);put(84,0x31545844);put(108,0x1000);
+    for(uint32_t block=0;block<payload;block+=8){bytes[128+block]=0;bytes[129+block]=char(0xf8);}
+    writeFile(path,bytes);
 }
 void writeDds(const fs::path& path, int channels = 0)
 {
@@ -576,6 +590,77 @@ int main(int argc, char** argv)
         const auto repairedSampling=fixture.capture("sampling-source-repaired.png");
         require(Fixture::difference(samplingReopened,repairedSampling,bounds,1)==0,"Sampling source repair restores identical valid output");
         require(copyDocument->isDirty() && copyDocument->revision()==copyRevision,"Sampling reimports preserve the unrelated unsaved draft");
+        require(fixture.session.setLanguage("en-US"),"Use a fixed language for refresh status acceptance");
+        fs::path publishedTexture;
+        for(const auto& entry:linearResult.outputPaths)
+            if(fs::u8path(entry).extension()==".txr"){
+                publishedTexture=fs::u8path(linearResult.options.outputDir)/fs::u8path(entry);break;
+            }
+        require(!publishedTexture.empty(),"Locate the actual published typed texture");
+        const auto linearTexture=fixture.renderer.loadTexture(utf8(publishedTexture),false);
+        const auto srgbTexture=fixture.renderer.loadTexture(utf8(publishedTexture),true);
+        require(linearTexture.isValid()&&srgbTexture.isValid(),"Keep both actual color variants resident");
+        require(fixture.session.openAsset(importedMaterialId),"Open material preview before GPU-only refusal");
+        const auto previewBeforeGpuRejection=fixture.capture("gpu-refresh-preview-before.png");
+        fixture.activateScene();const auto beforeGpuRejection=fixture.capture("gpu-refresh-before.png");
+        const uint32_t maximum=bgfx::getCaps()->limits.maxTextureSize;
+        require(maximum<UINT16_MAX,"Fixture can encode a CPU-valid texture exceeding the device limit");
+        writeWideDds(renamedSource.parent_path()/"Surface.dds",maximum+1u);
+        const auto refusedGpuJob=queue->enqueue(linearResult.options);
+        require(finish(fixture,refusedGpuJob).state==editor::EditorAssetImportJobState::Succeeded,
+            "File import succeeds independently of GPU replacement rejection");
+        const auto cpuWide=resource::ResourceManager::instance().load<resource::Texture>(utf8(publishedTexture));
+        require(cpuWide&&cpuWide->getWidth()==maximum+1u,"Published CPU texture really exceeds device size");
+        fixture.activateScene();const auto gpuRetained=fixture.capture("gpu-refresh-retained.png");
+        require(Fixture::difference(beforeGpuRejection,gpuRetained,bounds,1)==0,
+            "Device rejection preserves the last visible Scene texture");
+        require(fixture.session.openAsset(importedMaterialId),"Open material preview while GPU retains the old texture");
+        const auto previewGpuRetained=fixture.capture("gpu-refresh-preview-retained.png");
+        require(Fixture::difference(previewBeforeGpuRejection,previewGpuRetained,samplingPreviewBounds,1)==0,
+            "Device rejection also preserves the actual material preview image");
+        fixture.activateScene();
+        require(fixture.session.rescanAssetsNow(),"Run a later asset scan without losing acknowledgement");
+        for(int frame=0;frame<8;++frame)fixture.frame();
+        const auto* status=dynamic_cast<ui::TextLabel*>(fixture.session.ui().findById("assets_status"));
+        require(status&&status->getText().find(L"previous version")!=std::wstring::npos,
+            "Actual status area explains that imported files are not yet visible");
+        fixture.capture("gpu-refresh-status.png");
+        const auto refusedReport=resource::ResourceManager::instance().refreshPublishedResourcesWithReport({utf8(publishedTexture)});
+        require(refusedReport.cpuRefreshed&&refusedReport.needsAttention()&&refusedReport.paths.size()==1,
+            "Real Renderer reports device rejection after successful CPU publication");
+        const auto& outcomes=refusedReport.paths[0].outcomes;
+        require(outcomes.size()==2,"Report both actual resident color variants");
+        for(const auto& outcome:outcomes)
+            require(outcome.state==resource::ResourceRefreshState::Retained
+                &&outcome.contextId==fixture.renderer.resourceContextId(),"Retained outcomes belong to the active Renderer");
+        require(outcomes[0].resourceId==linearTexture.id&&outcomes[1].resourceId==srgbTexture.id,
+            "Device refusal retains stable ids for both variants");
+        writeSamplingDds(renamedSource.parent_path()/"Surface.dds");
+        const auto repairedGpuJob=queue->enqueue(linearResult.options);
+        require(finish(fixture,repairedGpuJob).state==editor::EditorAssetImportJobState::Succeeded,
+            "Repair source and reimport after a GPU-only refusal");
+        fixture.activateScene();const auto gpuRepaired=fixture.capture("gpu-refresh-repaired.png");
+        require(Fixture::difference(beforeGpuRejection,gpuRepaired,bounds,1)==0,
+            "Repair restores the valid image without changing stable resource ids");
+        require(fixture.session.openAsset(importedMaterialId),"Open repaired material preview");
+        const auto previewGpuRepaired=fixture.capture("gpu-refresh-preview-repaired.png");
+        require(Fixture::difference(previewBeforeGpuRejection,previewGpuRepaired,samplingPreviewBounds,1)==0,
+            "Repair restores the same valid material preview");
+        fixture.activateScene();require(fixture.session.document()->save(&error),error);
+        require(fixture.session.document()->open(scenePath,&error),error);
+        const auto gpuReopened=fixture.capture("gpu-refresh-scene-reopened.png");
+        require(Fixture::difference(beforeGpuRejection,gpuReopened,bounds,1)==0,
+            "Scene save/reopen preserves the recovered valid content");
+        status=dynamic_cast<ui::TextLabel*>(fixture.session.ui().findById("assets_status"));
+        require(status&&status->getText().find(L"previous version")==std::wstring::npos,
+            "Successful retry clears the retained-version warning");
+        require(fixture.renderer.loadTexture(utf8(publishedTexture),false).id==linearTexture.id
+            &&fixture.renderer.loadTexture(utf8(publishedTexture),true).id==srgbTexture.id,
+            "Repair publishes both variants under their original handles");
+        require(copyDocument->isDirty()&&copyDocument->revision()==copyRevision,
+            "GPU refusal and repair preserve the independent unsaved material draft");
+        std::cout<<"PASS real device refusal: CPU width="<<maximum+1u
+            <<" retained both variants, old Scene pixels, persistent status, repair and stable handles\n";
         std::cout << "PASS sampling Scene pixels=" << samplingScenePixels << "; sampling preview pixels=" << samplingPreviewPixels << '\n';
         std::cout << "PASS source import, source relocation/relink, actual browser reimport, GPU refresh, stable handle, "
             "failed import retention, retry, open imported material refresh, unsaved draft preservation, Scene save/reopen; changed pixels=" << changedPixels

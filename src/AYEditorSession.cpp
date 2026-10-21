@@ -2167,6 +2167,8 @@ bool EditorSession::initialize(const EditorSessionDesc& desc) {
     }
     _assetImportProgress.reset();
     _assetImportPresentation.reset();
+    _assetImportRefreshWarning.clear();
+    _assetImportRefreshWarnings.clear();
     _recoveryStore = std::make_unique<EditorRecoveryStore>(desc.projectRoot);
     std::string recoveryError;
     if (!_recoveryStore->beginSession(&recoveryError)) {
@@ -2646,6 +2648,8 @@ void EditorSession::shutdown() {
     _assetImportQueue.reset();
     _assetImportPresentation.reset();
     _assetImportProgress.reset();
+    _assetImportRefreshWarning.clear();
+    _assetImportRefreshWarnings.clear();
 
     // v0.3+ PR-5 — Landmine E: 清 Outliner 状态**早于** _ui.shutdown()
     // 避免 _ui.shutdown 期间 _outliner 指向已 free widget（UIManager 析构
@@ -2878,6 +2882,8 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                         + ayt::ui::decodeUtf8Text(completed->message), true);
                 } else {
                     std::string refreshError;
+                    std::wstring refreshWarning;
+                    bool consumerAcknowledged=false;
                     // Cache hits may refer to outputs republished by another
                     // authoring tool while this Session still holds old views.
                     if (completed->state == EditorAssetImportJobState::Succeeded
@@ -2891,9 +2897,24 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                             published.push_back(text);
                             if (_assetPreviewCache != nullptr) _assetPreviewCache->erase(text);
                         }
-                        const bool runtimeRefreshed=ayt::resource::ResourceManager::instance()
-                            .refreshPublishedResources(published, &refreshError);
-                        if(runtimeRefreshed&&_workspace){
+                        const auto runtimeReport=ayt::resource::ResourceManager::instance()
+                            .refreshPublishedResourcesWithReport(published);
+                        refreshError=runtimeReport.error;
+                        bool retained=false,failed=false;
+                        for(const auto& path:runtimeReport.paths)
+                            for(const auto& outcome:path.outcomes){
+                                retained|=outcome.state==ayt::resource::ResourceRefreshState::Retained;
+                                failed|=outcome.state==ayt::resource::ResourceRefreshState::Failed;
+                                consumerAcknowledged|=outcome.state==ayt::resource::ResourceRefreshState::Updated
+                                    ||outcome.state==ayt::resource::ResourceRefreshState::NotResident;
+                            }
+                        if(failed) refreshWarning=localizedText(
+                            "ui.editor.import.refresh_failed",
+                            L"Files imported. Some views could not be refreshed. Reimport to retry.");
+                        else if(retained) refreshWarning=localizedText(
+                            "ui.editor.import.refresh_retained",
+                            L"Files imported. Some views still use the previous version. Fix the source and reimport.");
+                        if(runtimeReport.cpuRefreshed&&_workspace){
                             for(const auto& record:_workspace->documents().records()){
                                 auto* material=dynamic_cast<EditorMaterialDocument*>(record.document.get());
                                 if(!material||!material->readOnly()||material->isDirty())continue;
@@ -2923,9 +2944,27 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                         == EditorAssetImportJobState::CacheHit
                         ? L"Import cache reused; refreshing assets."
                         : L"Import complete; refreshing assets.", true);
-                    if (!refreshError.empty()) setAssetBrowserStatus(
-                        L"Files imported; runtime refresh failed: "
-                            + ayt::ui::decodeUtf8Text(refreshError), true);
+                    if (!refreshError.empty()) refreshWarning=
+                        localizedText("ui.editor.import.refresh_error",
+                            L"Files imported; unable to refresh assets: ")
+                            +ayt::ui::decodeUtf8Text(refreshError);
+                    const std::string warningKey=!completed->options.sourceId.empty()
+                        ?"id:"+completed->options.sourceId
+                        :"path:"+std::to_string(completed->sourcePath.size())+":"
+                            +completed->sourcePath+completed->destinationDirectory;
+                    if(refreshWarning.empty()&&!consumerAcknowledged
+                        &&_assetImportRefreshWarnings.contains(warningKey))
+                        refreshWarning=localizedText("ui.editor.import.refresh_unconfirmed",
+                            L"Files imported. An earlier view update is still unconfirmed. Reimport to retry.");
+                    if(!refreshWarning.empty()){
+                        const auto name=std::filesystem::u8path(completed->sourcePath).filename().generic_u8string();
+                        const std::string nameUtf8(reinterpret_cast<const char*>(name.data()),name.size());
+                        _assetImportRefreshWarnings[warningKey]=ayt::ui::decodeUtf8Text(nameUtf8)+L": "+refreshWarning;
+                    }else if(consumerAcknowledged) _assetImportRefreshWarnings.erase(warningKey);
+                    _assetImportRefreshWarning=_assetImportRefreshWarnings.empty()
+                        ?std::wstring{}:_assetImportRefreshWarnings.begin()->second;
+                    if(!_assetImportRefreshWarning.empty())
+                        setAssetBrowserStatus(_assetImportRefreshWarning,true);
                 }
             }
         }
@@ -2947,7 +2986,9 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
     if (_assetBrowserRefreshPending) {
         _assetBrowserRefreshPending = false;
         refreshAssetBrowser();
-        if (_assetDatabase.lastError().empty()) {
+        if (!_assetImportRefreshWarning.empty()) {
+            setAssetBrowserStatus(_assetImportRefreshWarning);
+        } else if (_assetDatabase.lastError().empty()) {
             setAssetBrowserStatus(
                 L"Indexed " + std::to_wstring(_assetDatabase.records().size())
                 + L" assets");
@@ -5606,9 +5647,10 @@ bool EditorSession::rescanAssetsNow()
     const bool ok = _assetDatabase.scanNow(&error);
     refreshAssetBrowser();
     if (ok) {
-        setAssetBrowserStatus(
-            L"Indexed " + std::to_wstring(_assetDatabase.records().size())
-            + L" assets");
+        if (!_assetImportRefreshWarning.empty()) setAssetBrowserStatus(_assetImportRefreshWarning);
+        else setAssetBrowserStatus(
+                L"Indexed " + std::to_wstring(_assetDatabase.records().size())
+                + L" assets");
     } else {
         setAssetBrowserStatus(
             L"Asset scan failed: " + ayt::ui::decodeUtf8Text(error), true);
