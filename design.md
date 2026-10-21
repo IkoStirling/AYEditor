@@ -1,5 +1,18 @@
 # AYEditor Design
 
+## 2026-10-22 — 纹理采样作者设置
+
+ImportOptions追加sampler覆盖和层级保留字段，跨Editor公开结构值传递，Source ABI升至44。
+EditorImportSettingsDialog仍从当前作者配方复制候选值；控件变化不修改驻留资源，Apply校验后才保存/排队。
+源图片raw输出不承诺保存sampler，需选择cooked；模型统一覆盖不改变各纹理的来源sRGB。
+“使用资源设置”禁用覆盖字段，各向异性模式固定线性放大，避免展示设备无法独立实现的组合。
+导入调用原有AYResource staging/指纹/事务，不在UI线程执行转换；成功和cache-hit沿用显式驻留刷新。
+
+表单内容由ScrollView拥有，固定错误区在外层VBox中，Modal原按钮区保持独立。
+长模型表单可滚动，错误、Apply/Cancel始终可见；Owned widget树与tooltip分别按原生命周期回收。
+AYEditor_Importer验证候选值、raw拒绝和字段映射；AssetReimportRenderTest真实两后端验证
+三层DDS、实际Apply/Cancel指针路由、Scene/预览变化、保存重开、坏源保留与修复重试、独立未保存材质草稿保留。
+
 ## 2026-10-21 — 重导入与已打开材质同步
 
 Session 在主线程收到成功转换或有效输出缓存命中后刷新全部已发布资源，再匹配 Workspace 中同路径的干净只读
@@ -52,7 +65,7 @@ Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc
 AssetDatabase关联键以一次解析的source/derived根和相对逻辑路径构成，配方的输出根同样解析；
 解决目录联接别名与持久配方物理路径不一致的问题，不改逻辑路径哈希ID或索引格式。
 Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
-当前扩展 Host API 使用 Source ABI43，UI 验证接口为 ABI132。
+当前扩展 Host API 使用 Source ABI44，UI 验证接口为 ABI132。
 
 Session 对成功转换和有效输出缓存命中刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
 缓存命中也需要同步：另一作者工具可能已更新产物，而本 Session 仍持有先前 CPU/GPU/文档快照。

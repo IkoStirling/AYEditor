@@ -68,6 +68,25 @@ void writeDds(const fs::path& path, int channels = 0)
     }
     writeFile(path,bytes);
 }
+void writeSamplingDds(const fs::path& path)
+{
+    std::string bytes(152,'\0');
+    const auto put=[&](size_t offset,uint32_t value){
+        for(int i=0;i<4;++i)bytes[offset+size_t(i)]=char(value>>(8*i));
+    };
+    put(0,0x20534444);put(4,124);put(8,0xa1007);put(12,4);put(16,4);
+    put(20,8);put(28,3);put(76,32);put(80,4);put(84,0x31545844);put(108,0x401008);
+    bytes[128]=0;bytes[129]=char(0xf8); // BC1 red endpoint.
+    bytes[130]=char(0xe0);bytes[131]=7; // BC1 green endpoint.
+    for(int y=0;y<4;++y){
+        uint8_t indices=0;
+        for(int x=0;x<4;++x)indices|=uint8_t(((x+y)&1)<<(x*2));
+        bytes[132+size_t(y)]=char(indices);
+    }
+    // Independent authored coarser colors, all pixel indices zero.
+    bytes[136]=bytes[144]=char(0x10);bytes[137]=bytes[145]=char(0x84);
+    writeFile(path,bytes);
+}
 const editor::EditorAssetImportJob& finish(Fixture& fixture, editor::EditorAssetImportJobId id)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
@@ -465,6 +484,99 @@ int main(int argc, char** argv)
             "CPU eviction and cache-hit synchronization preserve the Scene GPU mesh handle");
         require(fixture.session.document()->open(scenePath,&error),error);const auto factorReopened=fixture.capture("import-material-factor-reopened.png");
         require(Fixture::difference(factorCached,factorReopened,bounds,1)==0,"Scene reopen retains material reimport while preserving the independent draft");
+        writeSamplingDds(renamedSource.parent_path()/"Surface.dds");
+        auto samplingOptions=materialOptions;samplingOptions.force=false;samplingOptions.cookTextures=true;
+        samplingOptions.overrideTextureSampler=true;
+        samplingOptions.textureSampler.minFilter=resource::TextureFilter::Point;
+        samplingOptions.textureSampler.magFilter=resource::TextureFilter::Point;
+        const auto nearestId=queue->enqueue(samplingOptions);
+        const auto nearestResult=finish(fixture,nearestId);
+        require(nearestResult.state==editor::EditorAssetImportJobState::Succeeded,nearestResult.message);
+        fixture.activateScene();const auto nearestScene=fixture.capture("sampling-nearest-scene.png");
+        require(fixture.session.openAsset(importedMaterialId),"Open imported material with nearest filtering");
+        const auto nearestPreview=fixture.capture("sampling-nearest-preview.png");
+        auto* samplingPreview=fixture.session.ui().findById("material_preview");
+        require(samplingPreview,"Sampling workflow has an actual material preview");
+        const auto samplingPreviewBounds=samplingPreview->getWorldBounds();
+        fixture.activateScene();
+        require(fixture.session.rescanAssetsNow(),"Discover current sampling recipe");
+        list=dynamic_cast<ui::TileView*>(fixture.session.ui().findById("list_assets"));require(list,"Asset browser remains available");
+        selected=false;
+        for(size_t index=0;index<list->getItemCount();++index){
+            if(list->getItem(index).find(ui::decodeUtf8Text(meshPath))==std::wstring::npos)continue;
+            list->setSelectedIndex(static_cast<int>(index));selected=fixture.session.selectedAssetId()==stableId;
+            if(selected)break;
+        }
+        require(selected && fixture.session.editSelectedAssetImportSettings(),"Open actual persisted sampling settings from imported mesh");
+        fixture.frame();
+        auto* samplingDialog=dynamic_cast<ui::ModalDialog*>(overlayWidget("asset_import_settings_dialog"));
+        auto* filtering=dynamic_cast<ui::ComboBox*>(overlayWidget("import_settings_sampling"));
+        auto* magnification=dynamic_cast<ui::ComboBox*>(overlayWidget("import_settings_sampling_mag"));
+        require(samplingDialog && filtering && magnification,"Actual sampling settings fields exist");
+        require(filtering->getSelectedIndex()==1 && magnification->getSelectedIndex()==0,
+            "Reopened settings recover the persisted nearest sampler");
+        filtering->setSelectedIndexAndNotify(3);magnification->setSelectedIndexAndNotify(1);
+        (void)fixture.capture("sampling-settings-form.png");
+        ui::Button* samplingCancel=nullptr;
+        for(auto* child:samplingDialog->getChildren())
+            if(auto* button=dynamic_cast<ui::Button*>(child);button && button->getText()==samplingDialog->getRejectText())samplingCancel=button;
+        require(samplingCancel,"Sampling Cancel button is present");
+        const auto jobsBeforeCancel=queue->jobs().size();click(fixture,*samplingCancel);
+        require(queue->jobs().size()==jobsBeforeCancel,"Cancel does not enqueue or publish pending sampler changes");
+        fixture.activateScene();const auto cancelledSampling=fixture.capture("sampling-cancel-scene.png");
+        require(Fixture::difference(nearestScene,cancelledSampling,bounds,1)==0,"Cancelled sampler edits leave actual Scene pixels unchanged");
+        require(fixture.session.editSelectedAssetImportSettings(),"Reopen sampling settings after Cancel");fixture.frame();
+        samplingDialog=dynamic_cast<ui::ModalDialog*>(overlayWidget("asset_import_settings_dialog"));
+        filtering=dynamic_cast<ui::ComboBox*>(overlayWidget("import_settings_sampling"));
+        magnification=dynamic_cast<ui::ComboBox*>(overlayWidget("import_settings_sampling_mag"));
+        require(samplingDialog && filtering && magnification && filtering->getSelectedIndex()==1,
+            "Reopened dialog retains the persisted sampler after Cancel");
+        filtering->setSelectedIndexAndNotify(3);magnification->setSelectedIndexAndNotify(1);
+        ui::Button* samplingApply=nullptr;
+        for(auto* child:samplingDialog->getChildren())
+            if(auto* button=dynamic_cast<ui::Button*>(child);button && button->getText()==samplingDialog->getAcceptText())samplingApply=button;
+        require(samplingApply,"Sampling Apply button is present");
+        const auto samplingJobs=queue->jobs().size();click(fixture,*samplingApply);
+        require(queue->jobs().size()==samplingJobs+1,"Actual Apply pointer routing enqueues sampler changes");
+        const auto linearId=queue->jobs().back().id;
+        const auto linearResult=finish(fixture,linearId);
+        require(linearResult.state==editor::EditorAssetImportJobState::Succeeded,linearResult.message);
+        require(linearResult.options.textureSampler.minFilter==resource::TextureFilter::Trilinear
+            && linearResult.options.textureSampler.magFilter==resource::TextureFilter::Bilinear,
+            "Actual Apply publishes new min/mag sampler settings");
+        fixture.activateScene();const auto linearScene=fixture.capture("sampling-trilinear-scene.png");
+        const auto samplingScenePixels=Fixture::difference(nearestScene,linearScene,bounds,3);
+        require(samplingScenePixels>500,"Sampler-only reimport visibly changes actual Scene geometry");
+        require(fixture.session.openAsset(importedMaterialId),"Reopen imported preview after sampler change");
+        const auto linearPreview=fixture.capture("sampling-trilinear-preview.png");
+        const auto samplingPreviewPixels=Fixture::difference(nearestPreview,linearPreview,samplingPreviewBounds,3);
+        require(samplingPreviewPixels>1000,"Sampler-only reimport visibly changes actual material preview");
+        bool checkedMips=false;
+        for(const auto& entry:linearResult.outputPaths){
+            if(fs::u8path(entry).extension()!=".txr")continue;
+            resource::Texture texture;
+            if(!texture.load((fs::u8path(linearResult.options.outputDir)/fs::u8path(entry)).string()))continue;
+            require(texture.getMipmapCount()==3,"DDS complete chain survives the actual authoring publication");
+            require(texture.getSampler().minFilter==resource::TextureFilter::Trilinear,"Sampler is persisted in typed texture output");
+            checkedMips=true;
+        }
+        require(checkedMips,"Read at least one actual published texture");
+        fixture.activateScene();require(fixture.session.document()->save(&error),error);
+        require(fixture.session.document()->open(scenePath,&error),error);
+        const auto samplingReopened=fixture.capture("sampling-scene-reopened.png");
+        require(Fixture::difference(linearScene,samplingReopened,bounds,1)==0,"Scene save/reopen keeps the reimported sampler");
+        writeFile(renamedSource.parent_path()/"Surface.dds","broken sampling DDS");
+        const auto brokenSamplingId=queue->enqueue(linearResult.options);
+        require(finish(fixture,brokenSamplingId).state==editor::EditorAssetImportJobState::Failed,"Reject broken sampler source reimport");
+        const auto retainedSampling=fixture.capture("sampling-failed-source-retained.png");
+        require(Fixture::difference(samplingReopened,retainedSampling,bounds,1)==0,"Failed sampler reimport preserves the last visible GPU scene");
+        writeSamplingDds(renamedSource.parent_path()/"Surface.dds");
+        const auto retrySampling=queue->retry(brokenSamplingId);
+        require(finish(fixture,retrySampling).state==editor::EditorAssetImportJobState::Succeeded,"Repair and retry sampling source");
+        const auto repairedSampling=fixture.capture("sampling-source-repaired.png");
+        require(Fixture::difference(samplingReopened,repairedSampling,bounds,1)==0,"Sampling source repair restores identical valid output");
+        require(copyDocument->isDirty() && copyDocument->revision()==copyRevision,"Sampling reimports preserve the unrelated unsaved draft");
+        std::cout << "PASS sampling Scene pixels=" << samplingScenePixels << "; sampling preview pixels=" << samplingPreviewPixels << '\n';
         std::cout << "PASS source import, source relocation/relink, actual browser reimport, GPU refresh, stable handle, "
             "failed import retention, retry, open imported material refresh, unsaved draft preservation, Scene save/reopen; changed pixels=" << changedPixels
             << "; preview pixels=" << previewChanges << "; texture pixels=" << texturePixels << "; settings pixels=" << settingsPixels << "; DDS pixels=" << ddsPixels << "; open material pixels=" << openMaterialPixels << "; cache-hit pixels=" << cacheHitPixels << '\n';

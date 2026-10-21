@@ -8,6 +8,8 @@
 #include <AYUI/UnicodeText.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/Tooltip.h>
+#include <AYUI/ScrollView.h>
+#include <algorithm>
 #include <filesystem>
 
 namespace ayt::editor {
@@ -78,6 +80,35 @@ EditorImportSettingsDialog::EditorImportSettingsDialog(ImportOptions options, Ap
     }
     choice("textures", "ui.editor.import.textures", L"Texture output", _original.cookTextures ? 1 : 0,
         {_localize("ui.editor.import.raw", L"Original images"), _localize("ui.editor.import.cooked", L"Cooked textures")});
+    choice("sampling", "ui.editor.import.sampling", L"Texture filtering",
+        _original.overrideTextureSampler ? std::max(1,int(_original.textureSampler.minFilter)) : 0,
+        {_localize("ui.editor.import.sampling_source", L"From asset"),
+         _localize("ui.editor.import.sampling_point", L"Nearest"),
+         _localize("ui.editor.import.sampling_bilinear", L"Bilinear"),
+         _localize("ui.editor.import.sampling_trilinear", L"Trilinear"),
+         _localize("ui.editor.import.sampling_anisotropic", L"Anisotropic")});
+    choice("sampling_mag", "ui.editor.import.sampling_mag", L"Magnification",
+        _original.textureSampler.magFilter == TextureFilter::Point || _original.textureSampler.magFilter == TextureFilter::None ? 0 : 1,
+        {_localize("ui.editor.import.sampling_point", L"Nearest"), _localize("ui.editor.import.sampling_linear", L"Linear")});
+    const std::vector<std::wstring> wraps{
+        _localize("ui.editor.import.wrap_repeat", L"Repeat"), _localize("ui.editor.import.wrap_clamp", L"Clamp"),
+        _localize("ui.editor.import.wrap_mirror", L"Mirror"), _localize("ui.editor.import.wrap_border", L"Border")};
+    choice("sampling_u", "ui.editor.import.sampling_u", L"Texture wrap U", int(_original.textureSampler.wrapU), wraps);
+    choice("sampling_v", "ui.editor.import.sampling_v", L"Texture wrap V", int(_original.textureSampler.wrapV), wraps);
+    choice("texture_mips", "ui.editor.import.texture_mips", L"Mipmaps", _original.keepTextureMipmaps ? 0 : 1,
+        {_localize("ui.editor.import.mips_preserve", L"Keep available levels"),
+         _localize("ui.editor.import.mips_base", L"Base level only")});
+    const auto refreshSamplingFields = [this] {
+        const int mode = _fields.at("sampling")->choice()->getSelectedIndex();
+        const bool enabled = mode > 0;
+        for (const auto* id : {"sampling_mag","sampling_u","sampling_v"}) _fields.at(id)->choice()->setEnabled(enabled);
+        if (mode == int(TextureFilter::Anisotropic)) {
+            _fields.at("sampling_mag")->choice()->setSelectedIndex(1);
+            _fields.at("sampling_mag")->choice()->setEnabled(false);
+        }
+    };
+    _fields.at("sampling")->setOnEdited(refreshSamplingFields);
+    refreshSamplingFields();
     if (model) {
         field("opaque")->setTextValue(_localize("ui.editor.import.opaque", L"Opaque material names"), decodeUtf8Text(_original.materialPolicy.opaqueNames));
         field("mask")->setTextValue(_localize("ui.editor.import.mask", L"Cutout material names"), decodeUtf8Text(_original.materialPolicy.maskNames));
@@ -90,12 +121,25 @@ EditorImportSettingsDialog::EditorImportSettingsDialog(ImportOptions options, Ap
         ? _localize("ui.editor.import.model_hint", L"Manual axes apply in Manual mode. Separate material names with ;. Settings stay with the project when its cache is cleared.")
         : _localize("ui.editor.import.image_hint", L"Changing texture output format creates a new imported asset path. Settings stay with the project when its cache is cleared."));
     body->addWidget(hint, 36);
+    auto* samplingHint = new TextLabel();
+    samplingHint->setWordWrap(true);
+    samplingHint->setText(_localize("ui.editor.import.sampling_hint",
+        L"Filtering and wrap overrides need cooked textures. Anisotropic uses the device maximum. Border uses edge clamping. Missing mip levels are not generated for DDS."));
+    body->addWidget(samplingHint, 48);
     _error = new TextLabel();
     _error->setId("import_settings_error");
     _error->setTextColor({1, .4f, .3f, 1});
     _error->setWordWrap(true);
-    body->addWidget(_error, 32);
-    setBodyContentOwned(body);
+    auto* scroll = new ScrollView();
+    scroll->setId("import_settings_scroll");
+    scroll->setHorizontalScrollBarEnabled(false);
+    scroll->setContentOwned(body);
+    auto* outer = new VBox();
+    outer->setSize({688, _pickSource ? 600.0f : 568.0f});
+    outer->setSpacing(4);
+    outer->addWidget(scroll); // Flex: leave validation errors visible below the scroll area.
+    outer->addWidget(_error,32);
+    setBodyContentOwned(outer);
     _sourceTooltip = Tooltip::attachTo(sourceField->input());
     if (_sourceTooltip) _sourceTooltip->setText(decodeUtf8Text(_original.sourcePath));
     setAcceptValidator([this] { return applyChanges(); });
@@ -155,6 +199,24 @@ bool EditorImportSettingsDialog::applyChanges()
         }
     }
     candidate.cookTextures = _fields.at("textures")->choice()->getSelectedIndex() == 1;
+    const int sampling = _fields.at("sampling")->choice()->getSelectedIndex();
+    candidate.overrideTextureSampler = sampling > 0;
+    candidate.keepTextureMipmaps = _fields.at("texture_mips")->choice()->getSelectedIndex() == 0;
+    if (candidate.overrideTextureSampler) {
+        candidate.textureSampler.minFilter = static_cast<TextureFilter>(sampling);
+        candidate.textureSampler.magFilter = _fields.at("sampling_mag")->choice()->getSelectedIndex() == 0
+            ? TextureFilter::Point : TextureFilter::Bilinear;
+        candidate.textureSampler.wrapU = static_cast<TextureWrap>(_fields.at("sampling_u")->choice()->getSelectedIndex());
+        candidate.textureSampler.wrapV = static_cast<TextureWrap>(_fields.at("sampling_v")->choice()->getSelectedIndex());
+        if (candidate.textureSampler.minFilter == TextureFilter::Anisotropic) candidate.textureSampler.anisotropy = 16;
+    }
+    const auto extension = importExtensionOf(candidate.sourcePath);
+    if (!candidate.cookTextures && extension != "dds"
+        && (candidate.overrideTextureSampler || !candidate.keepTextureMipmaps)) {
+        _error->setText(_localize("ui.editor.import.sampling_needs_cooked",
+            L"Choose Cooked textures to save texture filtering, wrap or mipmap overrides."));
+        return false;
+    }
     if (_fields.contains("content")) {
         candidate.loadOption = static_cast<IConverter::LoadOption>(_fields.at("content")->choice()->getSelectedIndex());
         candidate.requireAnimationAssets = candidate.loadOption == IConverter::LoadOption::AnimationOnly;

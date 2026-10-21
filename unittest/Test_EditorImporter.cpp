@@ -22,6 +22,7 @@
 #include <AYUI/TileView.h>
 #include "../src/EditorImportRecipeStore.h"
 #include "../src/EditorImportSettingsDialog.h"
+#include <AYUI/ScrollView.h>
 #include <AYUI/TextInput.h>
 #include <AYUI/TextLabel.h>
 #include "AYIO/File.h"
@@ -834,6 +835,54 @@ TEST_CASE(actual_import_settings_dialog_rejects_external_recipe_changes_then_reo
     dialog=dynamic_cast<EditorImportSettingsDialog*>(find(find,session.ui().getOverlayRoot(),"asset_import_settings_dialog"));CHECK(dialog);
     if(dialog){units=dynamic_cast<ayt::ui::TextInput*>(find(find,dialog,"import_settings_units_input"));CHECK(units);if(units)CHECK_FLOAT_EQ(std::stof(units->getText()),.5f,1e-6f);dialog->rejectDialog();}
     session.shutdown();
+}
+
+TEST_CASE(texture_sampling_form_requires_cooked_output_and_keeps_validation_visible)
+{
+    ayt::ui::MockRenderer backend; ayt::ui::UIManager manager;
+    manager.initialize(&backend); manager.setClientSize(1280,720);
+    ayt::resource::ImportOptions original;
+    original.sourcePath="Source/Surface.png";original.outputDir="Imported";
+    int applications=0;ayt::resource::ImportOptions applied;
+    EditorImportSettingsDialog dialog(original,
+        [&](const auto& options,std::string&){++applications;applied=options;return true;},
+        [](const char*,const wchar_t* fallback){return std::wstring(fallback);});
+    manager.root()->addChildExternal(&dialog);
+    dialog.fitAndCenterInViewport({1280,720},12);dialog.openModal();manager.layout();
+    const auto find=[](auto&& self,ayt::ui::Widget* widget,const char* id)->ayt::ui::Widget* {
+        if(widget->getId()==id)return widget;
+        for(auto* child:widget->getChildren())if(auto* found=self(self,child,id))return found;
+        return nullptr;
+    };
+    const auto choice=[&](const char* id){return dynamic_cast<ayt::ui::ComboBox*>(find(find,&dialog,id));};
+    auto* filter=choice("import_settings_sampling");
+    auto* mag=choice("import_settings_sampling_mag");
+    auto* wrapU=choice("import_settings_sampling_u");auto* wrapV=choice("import_settings_sampling_v");
+    auto* mips=choice("import_settings_texture_mips");auto* output=choice("import_settings_textures");
+    auto* message=dynamic_cast<ayt::ui::TextLabel*>(find(find,&dialog,"import_settings_error"));
+    auto* scroll=dynamic_cast<ayt::ui::ScrollView*>(find(find,&dialog,"import_settings_scroll"));
+    CHECK(filter && mag && wrapU && wrapV && mips && output && message && scroll);
+    if(filter && mag && wrapU && wrapV && mips && output && message && scroll){
+        filter->setSelectedIndexAndNotify(4);
+        CHECK(mag->getSelectedIndex()==1);CHECK_FALSE(mag->isEnabled());
+        filter->setSelectedIndexAndNotify(3);mag->setSelectedIndexAndNotify(0);
+        CHECK(mag->isEnabled());
+        wrapU->setSelectedIndexAndNotify(2);wrapV->setSelectedIndexAndNotify(1);mips->setSelectedIndexAndNotify(1);
+        dialog.acceptDialog();CHECK(dialog.isOpen());CHECK(applications==0);CHECK_FALSE(message->getText().empty());
+        manager.layout();
+        const auto errorBounds=message->getWorldBounds();const auto dialogBounds=dialog.getWorldBounds();
+        CHECK(errorBounds.minY>=dialogBounds.minY && errorBounds.maxY<=dialogBounds.maxY);
+        CHECK(message->getParent()!=scroll->getContent());
+        output->setSelectedIndexAndNotify(1);dialog.acceptDialog();
+        CHECK_FALSE(dialog.isOpen());CHECK(applications==1);
+        CHECK(applied.overrideTextureSampler && applied.cookTextures && !applied.keepTextureMipmaps);
+        CHECK(applied.textureSampler.minFilter==ayt::resource::TextureFilter::Trilinear);
+        CHECK(applied.textureSampler.magFilter==ayt::resource::TextureFilter::Point);
+        CHECK(applied.textureSampler.wrapU==ayt::resource::TextureWrap::Mirror);
+        CHECK(applied.textureSampler.wrapV==ayt::resource::TextureWrap::Clamp);
+        CHECK_FALSE(applied.textureSampler.sRGB);
+    }
+    dialog.closeModal();manager.root()->removeChild(&dialog);manager.shutdown();
 }
 
 TEST_SUITE_END

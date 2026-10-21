@@ -1,5 +1,22 @@
 # Editor 测试运行与报告
 
+## 纹理采样作者流程（2026-10-22）
+
+Source ABI44 的完整主入口463例/12308断言通过，无跳过；
+报告在根仓库 `out/render-sampling-20261021/editor-reviewed-full.json`。
+首轮只因版本检查仍要求43而失败，修正检查后复验；保留首轮报告，不计为最终通过。
+`AYEditor_Importer` 检查采样表单候选值、raw输出拒绝、各向异性固定线性放大、Apply后入队与配方恢复。
+
+`AYEditor_AssetReimportRenderTest <新目录> d3d11|d3d12` 的当前两后端验收包括：
+三层DDS最近邻导入；打开Scene和预览；在实际表单选择三线性；真实Cancel指针保持原画面；
+重开仍为最近邻；真实Apply指针保存/排队并改变Scene和预览；typed纹理保留三层与新设置；
+Scene保存重开；坏源保留旧图；修复重试；无关可写材质草稿始终保留。
+证据目录 `native-current-AssetReimport-{d3d11,d3d12}` 中Scene变化89349像素、预览67058像素。
+
+同轮 MaterialWorkshop 与 MaterialPreview 实际两后端回归均通过；Workshop未保存编辑的Scene变化为0，
+保存并显式重载后变化20995像素。这里只验收显式Scene Host夹具与真实Session/UI路由，
+没有新增完整默认GameLoop或原生Computer Use验收。
+
 启用 Avatar Engine/UI 后，聚合库存包括 `Test_EditorAvatar.cpp`；专项
 `AYEditor_AvatarTests` 覆盖资源注册、只读 bundle、预设保存/重开/历史、失败保留和
 真实输入桥的视口导航及 pending 数值保存。未启用 Avatar 时该源不注册套件。
