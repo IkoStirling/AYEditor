@@ -7,6 +7,7 @@
 #include <set>
 namespace ayt::entity { class World; }
 namespace ayt::ui { class UIManager; }
+namespace ayt::render { class Renderer; }
 namespace ayt::editor {
 class EditorDebugVisualization {
 public:
@@ -37,6 +38,8 @@ std::vector<ayt::physics::PhysicsDebugRecord> editorRuntimeDebugRecords(
     ayt::entity::World& world,uint32_t categories);
 std::vector<ayt::physics::PhysicsDebugRecord> editorSimulationDebugRecords(ayt::entity::World& world,uint32_t categories);
 std::vector<ayt::physics::PhysicsDebugRecord> editorServiceDebugRecords(ayt::entity::World& world,ayt::ui::UIManager& ui,uint32_t categories);
+std::vector<ayt::physics::PhysicsDebugRecord> editorRendererResourceDebugRecords(
+    const ayt::render::Renderer& renderer,uint32_t categories);
 void clearServiceDebugHistory(ayt::entity::World* world,int category=-1);
 void resolveDebugEntities(std::vector<ayt::physics::PhysicsDebugRecord>& records,
                           const ayt::entity::World& world);

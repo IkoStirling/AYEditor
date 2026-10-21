@@ -1,4 +1,6 @@
 #include <bgfx/bgfx.h>
+#include <AYRenderer/ResourceResidency.h>
+#include <AYPhysics/PhysicsDebugDraw.h>
 #include "WorkshopSessionGpuFixture.h"
 #include <AYEditor/EditorAssetImportQueue.h>
 #include <AYResource/assetsDefs/IMesh.h>
@@ -11,6 +13,7 @@
 #include <AYUI/TextInput.h>
 #include <AYUI/ModalDialog.h>
 #include <AYUI/TextLabel.h>
+#include <AYUI/ScrollView.h>
 #include <chrono>
 #include <fstream>
 
@@ -600,6 +603,25 @@ int main(int argc, char** argv)
         const auto linearTexture=fixture.renderer.loadTexture(utf8(publishedTexture),false);
         const auto srgbTexture=fixture.renderer.loadTexture(utf8(publishedTexture),true);
         require(linearTexture.isValid()&&srgbTexture.isValid(),"Keep both actual color variants resident");
+        const auto textureRow=[](const render::ResourceResidencySnapshot& snapshot,uint64_t id)
+            ->const render::TextureResidencyRow&{
+            for(const auto& row:snapshot.textures)if(row.textureId==id)return row;
+            throw std::runtime_error("Find the resident texture in an owned observation");
+        };
+        const auto residencyBefore=fixture.renderer.resourceResidencySnapshot(512);
+        require(residencyBefore.available&&residencyBefore.contextId==fixture.renderer.resourceContextId(),
+            "Residency observation identifies the actual renderer context");
+        require(residencyBefore.unknownOwnedStorageTextures==0&&residencyBefore.unknownOwnedUploadTextures==0,
+            "All owned textures from actual creation routes have known accounting");
+        const auto observedLinearBefore=textureRow(residencyBefore,linearTexture.id);
+        require(observedLinearBefore.storageFormat=="BC1"&&observedLinearBefore.mipCount==3
+            &&observedLinearBefore.logicalStorageBytesKnown&&observedLinearBefore.logicalStorageBytes==24
+            &&observedLinearBefore.sourcePayloadKnown&&observedLinearBefore.sourcePayloadBytes==24,
+            "Native BC1 chain exposes independent 8+8+8-byte storage and source payload");
+        const auto residencyAgain=fixture.renderer.resourceResidencySnapshot(0);
+        require(residencyAgain.textureEntries==residencyBefore.textureEntries
+            &&residencyAgain.knownOwnedLogicalTextureBytes==residencyBefore.knownOwnedLogicalTextureBytes,
+            "Summary-only observation creates no renderer resources");
         require(fixture.session.openAsset(importedMaterialId),"Open material preview before GPU-only refusal");
         const auto previewBeforeGpuRejection=fixture.capture("gpu-refresh-preview-before.png");
         fixture.activateScene();const auto beforeGpuRejection=fixture.capture("gpu-refresh-before.png");
@@ -635,6 +657,13 @@ int main(int argc, char** argv)
                 &&outcome.contextId==fixture.renderer.resourceContextId(),"Retained outcomes belong to the active Renderer");
         require(outcomes[0].resourceId==linearTexture.id&&outcomes[1].resourceId==srgbTexture.id,
             "Device refusal retains stable ids for both variants");
+        const auto rejectedResidency=fixture.renderer.resourceResidencySnapshot(512);
+        for(const auto id:{linearTexture.id,srgbTexture.id}){
+            const auto& row=textureRow(rejectedResidency,id);
+            require(row.width==4&&row.height==4&&row.mipCount==3&&row.storageFormat=="BC1"
+                &&row.logicalStorageBytesKnown&&row.logicalStorageBytes==24&&row.sourcePayloadBytes==24,
+                "Device rejection retains the old GPU description instead of publishing new CPU dimensions");
+        }
         writeSamplingDds(renamedSource.parent_path()/"Surface.dds");
         const auto repairedGpuJob=queue->enqueue(linearResult.options);
         require(finish(fixture,repairedGpuJob).state==editor::EditorAssetImportJobState::Succeeded,
@@ -657,8 +686,54 @@ int main(int argc, char** argv)
         require(fixture.renderer.loadTexture(utf8(publishedTexture),false).id==linearTexture.id
             &&fixture.renderer.loadTexture(utf8(publishedTexture),true).id==srgbTexture.id,
             "Repair publishes both variants under their original handles");
+        const auto repairedResidency=fixture.renderer.resourceResidencySnapshot(512);
+        require(textureRow(repairedResidency,linearTexture.id).logicalStorageBytes==24
+            &&textureRow(repairedResidency,srgbTexture.id).mipCount==3,
+            "Repaired GPU versions expose correct native chain accounting");
+        uint8_t cubeFaces[96]={};
+        auto observedCube=fixture.renderer.createCubeTextureFromRgba8(2,cubeFaces,"diagnostic cube faces");
+        require(observedCube.isValid(),"Create actual six-face texture for independent accounting");
+        const auto cubeResidency=fixture.renderer.resourceResidencySnapshot(512);
+        const auto& cubeRow=textureRow(cubeResidency,observedCube.id);
+        require(cubeRow.kind==render::ObservedTextureKind::Cube&&cubeRow.storageFormat=="RGBA8"
+            &&cubeRow.mipCount==1&&cubeRow.logicalStorageBytes==96&&cubeRow.creationUploadBytes==96
+            &&cubeRow.retainedCpuImageBytes==96,
+            "Six 2x2 RGBA8 faces have96 logical, upload and independently retained CPU bytes");
+        require(cubeResidency.knownOwnedLogicalTextureBytes==repairedResidency.knownOwnedLogicalTextureBytes+96
+            &&cubeResidency.retainedCpuImageBytes==repairedResidency.retainedCpuImageBytes+96,
+            "CPU face copies are separate from owned logical storage totals");
+        fixture.renderer.destroyTexture(observedCube);
+        require(fixture.renderer.resourceResidencySnapshot(0).retainedCpuImageBytes==repairedResidency.retainedCpuImageBytes,
+            "Destroy removes the actual retained face copy from current observations");
         require(copyDocument->isDirty()&&copyDocument->revision()==copyRevision,
             "GPU refusal and repair preserve the independent unsaved material draft");
+        editor::EditorDebugVisualizationOptions diagnosticOptions;
+        diagnosticOptions.categories=1u<<uint32_t(physics::PhysicsDebugCategory::Resource);
+        require(fixture.session.setDebugVisualization(diagnosticOptions),"Enable only the existing Resource diagnostic category");
+        fixture.session.showDebugVisualizationPanel();for(int frame=0;frame<4;++frame)fixture.frame();
+        auto* recordBrowser=dynamic_cast<ui::ComboBox*>(fixture.session.ui().findById("debug_record_browser"));
+        require(recordBrowser,"Actual diagnostic record browser is present");
+        const auto* firstDiagnosticControl=fixture.session.ui().findById("debug_category_0");
+        require(firstDiagnosticControl&&firstDiagnosticControl->getSize().x>300
+            &&recordBrowser->getSize().x>300,"Actual host lays out floating diagnostic controls at readable widths");
+        int residencyRecord=-1;
+        for(size_t index=0;index<recordBrowser->getItemCount();++index)
+            if(recordBrowser->getItem(index).find(L"Renderer texture residency")!=std::wstring::npos)residencyRecord=int(index);
+        require(residencyRecord>=0,"Standalone Editor host receives actual Renderer resource observations");
+        recordBrowser->setSelectedIndexAndNotify(residencyRecord);fixture.frame();
+        const auto* diagnosticText=dynamic_cast<ui::TextLabel*>(fixture.session.ui().findById("debug_visualization_statistics"));
+        require(diagnosticText&&diagnosticText->getText().find(L"Known owned logical texture bytes")!=std::wstring::npos,
+            "Actual details widget distinguishes logical texture accounting");
+        auto* diagnosticScroll=dynamic_cast<ui::ScrollView*>(fixture.session.ui().findById("debug_visualization_scroll"));
+        require(diagnosticScroll,"Actual diagnostic panel has a scrolling control area");
+        diagnosticScroll->setScrollOffset({0,100000});fixture.frame();
+        require(diagnosticText->getSize().x>300&&diagnosticText->getSize().y>=400,
+            "Renderer statistics have readable geometry, not merely populated text");
+        require(diagnosticText->getWorldBounds().minY<diagnosticScroll->getClientRect().maxY
+            &&diagnosticText->getWorldBounds().maxY>diagnosticScroll->getClientRect().minY,
+            "Scrolling makes the actual resource details visible in the panel");
+        fixture.capture("renderer-residency-panel.png");
+        require(fixture.session.setDebugVisualization({}),"Disable diagnostic collection after inspection");
         std::cout<<"PASS real device refusal: CPU width="<<maximum+1u
             <<" retained both variants, old Scene pixels, persistent status, repair and stable handles\n";
         std::cout << "PASS sampling Scene pixels=" << samplingScenePixels << "; sampling preview pixels=" << samplingPreviewPixels << '\n';

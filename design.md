@@ -1,5 +1,27 @@
 # AYEditor Design
 
+## 2026-10-22 — Renderer资源观察适配
+
+`EditorRendererResourceDebug.cpp`将显式RRM值快照转成现有Resource分类的无几何记录。
+默认关闭；启用时最多24行和摘要，CPU适配份额为64加载/16缓存/12重载加摘要，
+合计118行，仍在已有每分类127行预算内。分类冻结且没有step时跳过新的RRM全表扫描。
+此操作只读当前成功GPU版本，不解析资源文件，也不生成GPU租约/Scene引用计数。
+
+Session优先RendererSubSystem，独立宿主回退到UIRenderBackend已有的previewRenderer借用指针。
+从未启用诊断的独立Host不改外部Renderer调试设置；显式从启用切换全关闭时清理先前的捕获/线条。
+Resource分类从开到关同时停止CPU资源日志。默认不安装或替换刷新观察回调。
+
+旧诊断卡给ScrollView设置了显式extent却没有给VBox尺寸，导致控件零宽；
+改用纵向ScrollView的自动测量契约。详情采用有实际尺寸的TextLabel，显式内容范围与该尺寸同步。
+测试覆盖布局和滚动后的可见几何，不能仅凭Widget存在或文本已赋值声称界面通过。
+没有改变公开Session布局或持久化格式，Source ABI仍45。
+
+关闭Session时先通过`setDebugVisualization({})`结束显式采集，再释放借用Renderer/服务和UI。
+仅在末尾清空model/options不会停止ResourceManager的监测日志。真实文件监测测试以显式mtime递进
+触发通知、无墙钟sleep；先确认启用有日志/显式关闭无日志，再重开采集并关闭Session。
+同一World分支安全复现旧实现关闭后仍写日志，修复后5例130断言通过。
+显式作者刷新报告本来不写自动watch日志；首个夹具误用该入口而未建立前置观察，失败保留但不当生产缺陷。
+
 ## 2026-10-22 — 导入消费者确认
 
 Session消费ResourceRefreshReport：CPU成功与GPU各变体成功分开，Retained和Failed产生不同的本地化提示。

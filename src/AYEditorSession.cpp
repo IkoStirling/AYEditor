@@ -2544,6 +2544,9 @@ void EditorSession::shutdown() {
         return;
     }
     _shutdown = true;
+    // End explicit diagnostic capture while borrowed renderer/services are
+    // still alive. Clearing the model later does not stop service journals.
+    (void)setDebugVisualization({});
     (void)setPhysicsDebugDraw(false, false);
     _physicsDebugDialog.reset();
 

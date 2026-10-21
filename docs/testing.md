@@ -1,5 +1,36 @@
 # Editor 测试运行与报告
 
+## 最终资源观察与停止采集（2026-10-22）
+
+Renderer文本修复联动的Editor完整主入口470例12510断言，资源观察专项5例130断言，均无失败/跳过。
+真实watch前置事件有效时，旧Session在同一World关闭后仍产生日志，安全复现1个失败断言；
+`residency-shutdown-watch-before.json`。关闭早期显式停用诊断后`residency-shutdown-fixed.json`通过。
+先前误用作者显式报告的夹具未写watch日志，导致2个前置断言失败，保留该报告但不计为生产缺陷复现。
+
+最终RendererCPU1018例18562断言、两后端Gpu各54例44665断言，以及
+`ui-paragraph-native-final-{MaterialWorkshop,AssetReimport,MaterialPreview}-{d3d11,d3d12}`六项通过。
+实际AssetReimport面板已在两后端逐图检查，控件/滚动/换行均正常，旧Scene/材质预览保持、
+超设备尺寸拒绝、来源提示、修复/稳定句柄及保存重开均通过。
+源码和完整串行结束记录为`ui-paragraph-frozen-source-hashes.json`、`ui-paragraph-regression-final-run.log`；
+SDK128/53/102/576零错误零警告。下文较早冻结阶段不验证后补退出修复，不能重复累计为新增用例。
+
+## 渲染资源观察与真实浮动布局（2026-10-22）
+
+新增资源观察4例115断言、完整Editor469例12495断言通过，无失败/跳过。
+原控件测试仅证明Widget存在；新增真实宽度/顺序/滚动可见检查先失败4项。
+局部调用panel.performLayout后通过，但实机截图仍不可读；改用UIManager完整布局再次失败4项，
+暴露root Box浮动child和unchanged-client快速路径没有布局新卡的问题。
+修复VBox自动尺寸、详情实际尺寸和创建/重开时布局后，完整Host定向测试通过。
+报告`residency-layout-before.json`、`residency-host-layout-before.json`、`residency-floating-fixed.json`均保留。
+
+`residency-floating-native-{d3d11,d3d12}`通过，直接读取actualSession控件几何并滚动到摘要；
+两后端截图均已查看，记录列表及逻辑存储说明可见。它们仍使用旧文本后端，会显示LF控制字形；
+后续Renderer段落修复另行编译/验收，不能将该已知问题写成已修复。
+原重导入、CPU超设备尺寸/GPU拒绝、旧Scene与预览、恢复/保存重开和独立草稿保护继续通过。
+冻结Renderer两后端完整Gpu各53例44644断言和Entity实际场景通过，
+`residency-native-final-{MaterialWorkshop,MaterialPreview}-{d3d11,d3d12}`四项关联回归亦通过。
+所有证据位于根`out/render-sampling-20261021/`，当前冻结源码见`residency-frozen-source-hashes.json`。
+
 ## 分层刷新结果与来源隔离（2026-10-22）
 
 ABI45完整`refresh-editor-source-final.json`465例12380断言，导入定向

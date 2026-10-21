@@ -68,6 +68,7 @@ endif()
 
 set(SRC_FILES
     src/AYEditorServicesDebug.cpp
+    src/EditorRendererResourceDebug.cpp
     src/AYEditorSimulationDebug.cpp
     src/AYEditorRuntimeDebug.cpp
     src/AYEditorDebugVisualization.cpp

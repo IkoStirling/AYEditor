@@ -3,6 +3,9 @@
 #include <AYPhysics/PhysicsSubSystem.h>
 #include <AYPhysics/PhysicsManager.h>
 #include <AYRenderer/RendererSubSystem.h>
+#include <AYRenderer/UIRenderBackend.h>
+#include <AYApplication/IEngineHost.h>
+#include <AYResource/ResourceManager.h>
 #include <AYUI/CheckBox.h>
 #include <AYUI/TextLabel.h>
 #include <AYUI/TextInput.h>
@@ -42,6 +45,14 @@ protected:
 
 bool EditorSession::setDebugVisualization(const EditorDebugVisualizationOptions& options) {
     if((options.categories&~ayt::physics::kPhysicsDebugAllCategories) || options.trailFrames<2 || options.trailFrames>600) return false;
+    const auto resourceBit=1u<<uint32_t(ayt::physics::PhysicsDebugCategory::Resource);
+    if((_debugVisualization->options.categories&resourceBit)&&!(options.categories&resourceBit))
+        if(auto* host=ayt::app::currentEngineHost())if(auto* resources=host->resources())resources->setDebugCaptureEnabled(false);
+    if(_debugVisualization->options.categories&&!options.categories&&!ayt::render::RendererSubSystem::findRegistered())
+        if(auto* backend=dynamic_cast<ayt::render::UIRenderBackend*>(_ui.backend()))if(auto* renderer=backend->previewRenderer()){
+            renderer->setDebugCaptureEnabled(false);(void)renderer->setEditorDebugLines({});
+            if(auto* overlay=dynamic_cast<DebugScreenOverlay*>(_ui.findById("debug_screen_overlay"))){overlay->lines.clear();overlay->setVisible(false);}
+        }
     _debugVisualization->options=options;
     _physicsDebugColliders=(options.categories&1)!=0;_physicsDebugQueries=(options.categories&2)!=0;
     if(auto* physics=ayt::physics::PhysicsSubSystem::findRegistered()) if(auto* manager=physics->manager()) {
@@ -70,6 +81,7 @@ void EditorSession::showDebugVisualizationPanel() {
     if(_debugVisualizationPanel) {
         _debugVisualizationPanel->setVisible(true);
         for(uint32_t i=0;i<ayt::physics::kPhysicsDebugCategoryCount;++i) if(auto* c=dynamic_cast<ayt::ui::CheckBox*>(_ui.findById("debug_category_"+std::to_string(i)))) c->setChecked((_debugVisualization->options.categories&(1u<<i))!=0);
+        _debugVisualizationPanel->performLayout();
         return;
     }
     if(!_ui.root()) return;
@@ -109,16 +121,25 @@ void EditorSession::showDebugVisualizationPanel() {
             if(label==text){_debugVisualization->inspectedKey=key;break;}
         }
     });body->addWidget(browser,28);
-    _debugVisualizationStats=new ayt::ui::TextLabel();_debugVisualizationStats->setId("debug_visualization_statistics");_debugVisualizationStats->setWordWrap(true);_debugVisualizationStats->setWrapWidth(360);
+    _debugVisualizationStats=new ayt::ui::TextLabel();_debugVisualizationStats->setId("debug_visualization_statistics");_debugVisualizationStats->setWordWrap(true);_debugVisualizationStats->setWrapWidth(360);_debugVisualizationStats->setSize({376,400});
     auto* detailsScroll=new ayt::ui::ScrollView();detailsScroll->setId("debug_record_details_scroll");detailsScroll->setContentOwned(_debugVisualizationStats);detailsScroll->setContentSize({376,400});detailsScroll->setHorizontalScrollBarEnabled(false);body->addWidget(detailsScroll,400);
-    auto* scroll=new ayt::ui::ScrollView();scroll->setId("debug_visualization_scroll");scroll->setContentOwned(body);scroll->setContentSize({396,1500});
+    // Let the vertical ScrollView measure/size its VBox. An explicit extent
+    // disables that sizing contract and leaves a new body's width at zero.
+    auto* scroll=new ayt::ui::ScrollView();scroll->setId("debug_visualization_scroll");scroll->setContentOwned(body);
     scroll->setHorizontalScrollBarEnabled(false);panel->setContent(scroll);_ui.root()->addChild(panel);
+    // This floating card is a raw root child rather than a root Box slot.
+    // UIManager's unchanged-client fast path does not lay it out on insertion.
+    panel->performLayout();
 }
 void EditorSession::syncPhysicsDebugToRenderer() {
     auto* world=hierarchyWorldMutable();if(_physicsDebugWorld!=world) clearPhysicsDebugDraw();
-    auto* subsystem=ayt::render::RendererSubSystem::findRegistered();if(!subsystem) return;
     auto& model=*_debugVisualization;
-    subsystem->renderer().setDebugCaptureEnabled((model.options.categories&(1u<<11))!=0);
+    auto* subsystem=ayt::render::RendererSubSystem::findRegistered();
+    if(!subsystem&&!model.options.categories)return;
+    auto* renderer=subsystem?&subsystem->renderer():nullptr;
+    if(!renderer)if(auto* backend=dynamic_cast<ayt::render::UIRenderBackend*>(_ui.backend()))renderer=backend->previewRenderer();
+    if(!renderer)return;
+    renderer->setDebugCaptureEnabled((model.options.categories&(1u<<11))!=0);
     auto contentOptions=model.contentHistory.options();contentOptions.enabled=true;
     contentOptions.lifetime=static_cast<ayt::physics::DebugDrawLifetime>(_physicsDebugLifetime);
     contentOptions.duration=ayt::time::Duration::fromUs(int64_t(_physicsDebugSeconds*1000000));
@@ -142,6 +163,8 @@ void EditorSession::syncPhysicsDebugToRenderer() {
         for(auto& r:editorSceneDebugRecords(*world,aspect,model.options.categories,native)) records.push_back(std::move(r));
         for(auto& r:editorRuntimeDebugRecords(*world,model.options.categories)) records.push_back(std::move(r));
         for(auto& r:editorSimulationDebugRecords(*world,model.options.categories))records.push_back(std::move(r));
+        if(!model.options.frozen||model.stepRequested)
+            for(auto& r:editorRendererResourceDebugRecords(*renderer,model.options.categories))records.push_back(std::move(r));
         for(auto& r:editorServiceDebugRecords(*world,_ui,model.options.categories))records.push_back(std::move(r));
         resolveDebugEntities(records,*world);
     }
@@ -159,7 +182,7 @@ void EditorSession::syncPhysicsDebugToRenderer() {
         for(const auto& record:model.records)if(model.visible(record,_selection.entityId()))overlay->lines.insert(overlay->lines.end(),record.screenLines.begin(),record.screenLines.end());
         overlay->setVisible(!overlay->lines.empty());overlay->bringToFront();overlay->markDirty();
     }
-    subsystem->renderer().setEditorDebugDepthTest(model.options.depthTest);(void)subsystem->renderer().setEditorDebugLines(lines);
+    renderer->setEditorDebugDepthTest(model.options.depthTest);(void)renderer->setEditorDebugLines(lines);
     if(auto* browser=dynamic_cast<ayt::ui::ComboBox*>(_ui.findById("debug_record_browser"))) {
         std::vector<std::wstring> labels;int selected=-1;
         for(const auto& r:model.records) if(model.visible(r,_selection.entityId())) {
@@ -178,7 +201,8 @@ void EditorSession::syncPhysicsDebugToRenderer() {
         _debugVisualizationStats->setText(text);
         if(auto* scroll=dynamic_cast<ayt::ui::ScrollView*>(_ui.findById("debug_record_details_scroll"))) {
             const auto breaks=std::count(text.begin(),text.end(),L'\n');
-            scroll->setContentSize({376,std::max(400.f,24.f*float(text.size()/36+breaks+3))});
+            const ayt::math::FVector2 extent{376,std::max(400.f,24.f*float(text.size()/36+breaks+3))};
+            _debugVisualizationStats->setSize(extent);scroll->setContentSize(extent);
         }
     }
 }
