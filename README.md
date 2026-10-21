@@ -30,6 +30,15 @@ Viewport Options → 选中物体取景或 F 按所选 3D Spatial 及空间子�
 局部轴和比例缩放测试。俯仰镜头拾取射线现与实际 lookAt 正交基一致；3D 分数 Dock 尺寸归一到
 相机像素范围，避免投影和鼠标偏移。证据 Test_EditorSceneEfficiency.cpp / Test_EditorTransformGizmo.cpp。
 
+Ctrl+D / Edit → 创建选中对象副本将空间子树与生命周期归属闭包复制为一次命令，最多4096个实体。
+根节点自动分配可区分名称，所有实体获得新 persistentId；父子、owner 和内部相机 target 随副本重映射，
+外部引用及实体内部 component slot ID 保留。Mesh/材质等资源路径共享，不新增模型或深拷贝资源。
+任一组件不可序列化时拒绝整体复制。未知游戏字符串引用不推断重写；复制不是自动同步 Prefab。
+撤销前若有人绕过历史添加外部结构依赖，会拒绝而不删除这些对象。
+
+3D 拾取、取景、模型拖放读取 Mesh 元数据前按已挂载资源根解析虚拟路径；备用球体只应用一次
+世界缩放，避免大地板抢走点击。真实两后端用实际物体选择/Ctrl+D/移动/undo/redo/Scene重开验证。
+
 ## 原生 PBR 材质创作（2026-10-20）
 
 Assets 双击 `.mat/.aymat` 打开独立材质 Dock，支持颜色、PBR/发光/opacity 因子、

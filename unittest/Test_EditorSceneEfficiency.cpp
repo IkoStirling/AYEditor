@@ -9,6 +9,11 @@
 #include <AYEntity/World.h>
 #include <AYEntity/CameraFrame.h>
 #include <AYEntity/components/TransformComponent.h>
+#include <AYEntity/components/MeshComponent.h>
+#include <AYResource/assetsImpl/Mesh.h>
+#include <AYResource/ResourceBootstrap.h>
+#include <AYResource/AssetPath.h>
+#include <AYIO/File.h>
 #include <stdexcept>
 #include <AYScene.h>
 #include <AYUI/MockRenderer.h>
@@ -167,5 +172,40 @@ TEST_CASE(pitched_scene_camera_rays_match_actual_perspective_and_orthographic_pr
             CHECK((point-origin).dot(direction)>0);
         }
     }
+}
+TEST_CASE(actual_ctrl_d_duplicates_selection_as_one_edit_and_text_focus_keeps_its_shortcut)
+{
+    SessionFixture fixture;auto& session=fixture.session;auto* root=fixture.selectOrigin();root->setName("Assembly");
+    auto& world=session.document()->scene().world();auto* child=world.createSpatialEntity();child->setName("Child");
+    child->transform()->setPosition(3,0,0);CHECK(child->setSpatialParent(root));
+    const auto originalIdentity=root->persistentId();const auto count=world.getAllEntities().size();
+    session.onKeyDown(ui::UIKey_Control);CHECK(session.onKeyDown('D'));session.onKeyUp('D');session.onKeyUp(ui::UIKey_Control);
+    auto* copied=world.findEntity(session.selectedEntityId());CHECK(copied&&copied!=root);if(!copied||copied==root)return;
+    CHECK(world.getAllEntities().size()==count+2);CHECK(copied->spatialChildren().size()==1);
+    const auto identity=copied->persistentId();CHECK(session.document()->canUndo());CHECK(session.document()->undo());
+    CHECK(world.getAllEntities().size()==count);CHECK_FALSE(session.document()->canUndo());CHECK(session.document()->redo());
+    CHECK(world.findEntityByPersistentId(identity));CHECK(world.findEntityByPersistentId(originalIdentity)==root);
+    auto* field=dynamic_cast<ui::TextInput*>(session.ui().findById("inspector_entity_name"));
+    CHECK(field);if(field){session.ui().setFocus(field);const auto before=world.getAllEntities().size();
+        session.onKeyDown(ui::UIKey_Control);(void)session.onKeyDown('D');session.onKeyUp('D');session.onKeyUp(ui::UIKey_Control);
+        CHECK(world.getAllEntities().size()==before);session.ui().setFocus(nullptr);}
+}
+TEST_CASE(virtual_mesh_bounds_drive_picking_and_framing_without_a_scaled_floor_stealing_selection)
+{
+    SessionFixture fixture;auto& session=fixture.session;const auto previous=resource::assetRoots();
+    struct RestoreRoots {std::vector<std::string> roots;~RestoreRoots(){resource::setAssetRoots(roots);}} restore{previous};
+    CHECK(resource::initializeLoaders());const auto assets=test::testTmpDir()/"scene-bound-assets";
+    std::filesystem::create_directories(assets/"meshes");resource::Mesh unitMesh,largeMesh;
+    unitMesh.createCube(1);largeMesh.createCube(20);std::vector<UInt8> bytes;
+    CHECK(unitMesh.saveToBinary(bytes));CHECK(io::File::atomicWriteUtf8((assets/"meshes/unit.msh").string(),bytes.data(),bytes.size()));
+    CHECK(largeMesh.saveToBinary(bytes));CHECK(io::File::atomicWriteUtf8((assets/"meshes/large.msh").string(),bytes.data(),bytes.size()));
+    resource::setAssetRoots({assets.string()});auto& world=session.document()->scene().world();
+    auto* target=world.createSpatialEntity();target->createComponent<entity::MeshComponent>()->meshPath="meshes/unit.msh";
+    auto* floor=world.createSpatialEntity();floor->createComponent<entity::MeshComponent>()->meshPath="meshes/unit.msh";
+    floor->transform()->setPosition(0,-3,0);floor->transform()->setScale(20,.1f,20);
+    CHECK(click(session,session.ui().findById("panel_viewport")));CHECK(session.selectedEntityId()==target->getId());
+    target->getComponent<entity::MeshComponent>()->meshPath="meshes/large.msh";
+    const auto revision=session.document()->revision();CHECK(session.frameSelectedEntity());
+    CHECK(session.freecam().eye().length()>30.f);CHECK(session.document()->revision()==revision);
 }
 TEST_SUITE_END

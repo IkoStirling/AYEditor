@@ -4,6 +4,7 @@
 #include <AYEntity/World.h>
 #include <AYEntity/components/MeshComponent.h>
 #include <AYResource/ResourceManager.h>
+#include <AYResource/AssetPath.h>
 #include <AYResource/assetsDefs/IMesh.h>
 #include <AYScene.h>
 #include <AYUI/Authoring/PropertyField.h>
@@ -107,7 +108,7 @@ bool EditorSession::frameSelectedEntity()
         if(!object->transform())continue;
         math::FVector3 a{-.5f,-.5f,-.5f},b{.5f,.5f,.5f};
         if(const auto* component=object->getComponent<entity::MeshComponent>();component && !component->meshPath.empty()){
-            const auto mesh=resource::ResourceManager::instance().load<resource::IMesh>(component->meshPath);
+            const auto mesh=resource::ResourceManager::instance().load<resource::IMesh>(resource::resolveAssetPath({},component->meshPath));
             if(mesh && mesh->hasBounds()){a=mesh->getBounds().getMin();b=mesh->getBounds().getMax();}
         }
         if(!finite(a)||!finite(b)||a.x>b.x||a.y>b.y||a.z>b.z)return false;

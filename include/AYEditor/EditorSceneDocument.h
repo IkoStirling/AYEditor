@@ -74,6 +74,13 @@ public:
     /// Undoable stable camera target binding; zero explicitly clears it.
     bool setCameraTarget(uint32_t entityId, const std::string& componentId, uint32_t targetId);
     bool deleteEntity(uint32_t entityId, std::string label = "Delete Entity");
+    /// Clone the union of spatial descendants and owned entities (at most 4096)
+    /// as one undoable edit, with fresh persistent identities. Internal parent,
+    /// owner and explicit CameraController persistent targets follow the copies; external
+    /// references and Entity-local component identities remain unchanged.
+    /// Unknown string-valued gameplay references are not inferred or rewritten.
+    bool duplicateEntityHierarchy(uint32_t entityId, uint32_t* duplicateId = nullptr,
+                                  std::string* error = nullptr);
     bool addComponent(uint32_t entityId, const std::string& componentType,
                       std::vector<std::string>* added = nullptr,
                       std::string* error = nullptr);
@@ -121,6 +128,7 @@ private:
     class EntityRenameCommand;
     class EntityCreateCommand;
     class EntityDeleteCommand;
+    class EntityDuplicateCommand;
     class EntityKindCommand;
     class EntityRelationCommand;
     class AddComponentCommand;
@@ -150,9 +158,13 @@ private:
                            ComponentSnapshot& snapshot) const;
     bool restoreComponent(ayt::entity::Entity& entity,
                           const ComponentSnapshot& snapshot) const;
+    bool snapshotEntityOwn(ayt::entity::Entity& entity, EntitySnapshot& snapshot) const;
     bool snapshotEntity(ayt::entity::Entity& entity,
                         EntitySnapshot& snapshot) const;
     ayt::entity::Entity* restoreEntity(const EntitySnapshot& snapshot);
+    ayt::entity::Entity* restoreEntityGraph(const std::vector<EntitySnapshot>& snapshots);
+    bool eraseEntityGraph(const std::vector<EntitySnapshot>& snapshots);
+    void eraseCreatedEntities(const std::vector<uint32_t>& ids);
     uint32_t logicalEntityId(uint32_t currentId) const noexcept;
     ayt::entity::Entity* findCommandEntity(uint32_t logicalId);
     void remapEntity(uint32_t logicalId, uint32_t currentId);

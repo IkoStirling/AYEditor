@@ -3786,6 +3786,8 @@ bool EditorSession::onKeyDown(int keyCode)
     }
     if (!textEditing && modifiers == 0u && keyCode == 'F'
         && commandTarget == _document.get() && frameSelectedEntity()) return true;
+    if (!textEditing && command == "edit.duplicate" && commandTarget == _document.get())
+        return executeDocumentCommand(command);
     if (!textEditing && (command == "edit.copy" || command == "edit.cut"
         || command == "edit.paste" || command == "edit.duplicate")
         && commandTarget && commandTarget->handlesCommand(command)) {
@@ -7133,7 +7135,7 @@ bool EditorSession::placeAssetInViewport(EditorAssetId assetId,
         std::shared_ptr<ayt::resource::IMesh> meshResource;
         try {
             meshResource = ayt::resource::ResourceManager::instance()
-                .load<ayt::resource::IMesh>(record->runtimePath);
+                .load<ayt::resource::IMesh>(ayt::resource::resolveAssetPath({},record->runtimePath));
         } catch (...) {
             // Preserve the reference so Reload can retry after replacement.
         }
@@ -9192,6 +9194,9 @@ bool EditorSession::canExecuteDocumentCommand(
     if (target != _document.get() || _document == nullptr) return false;
     if (commandId == "file.save") return _document->isDirty();
     if (commandId == "file.save_as") return _document->canSaveAs();
+    if (commandId == "edit.duplicate") return !_transformGizmo.active() && !_ui.isDragging()
+        && _selectionWorld == &_document->scene().world()
+        && _selection.resolve(_selectionWorld) != nullptr;
     return false;
 }
 
@@ -9205,6 +9210,7 @@ bool EditorSession::executeDocumentCommand(const std::string& commandId)
         return _workspace->commands().execute(commandId);
     }
     if (target != _document.get()) return false;
+    if (commandId == "edit.duplicate") return duplicateSelectedEntity();
     if (commandId == "file.save") {
         saveSceneDocument();
         return true;
@@ -9419,6 +9425,23 @@ uint32_t EditorSession::createTwoDEntity(Editor2DEntityKind kind)
     refreshUnsavedIndicator();
     if (_repaintCallback) _repaintCallback();
     return entityId;
+}
+
+bool EditorSession::duplicateSelectedEntity(std::string* error)
+{
+    const auto refuse=[&](const std::string& message) {if(error)*error=message;return false;};
+    if (!_document || _gameView.mode()!=EditorMode::Edit || _transformGizmo.active() || _ui.isDragging())
+        return refuse("Duplicate requires an idle Edit Scene");
+    auto* world=hierarchyWorldMutable();auto* selected=_selection.resolve(world);
+    if (world!=&_document->scene().world() || !selected)
+        return refuse("Select an entity in the authoring Scene");
+    uint32_t copied=0;std::string reason;
+    if (!_document->duplicateEntityHierarchy(selected->getId(),&copied,&reason)) {
+        setInspectorHint(ayt::ui::decodeUtf8Text(reason));return refuse(reason);
+    }
+    setSelectedEntity(world,world->findEntity(copied));_outlinerRefreshPending=true;
+    refreshInspectorLabels();refreshTransformInspector();refreshUnsavedIndicator();
+    if (_repaintCallback) _repaintCallback();if(error)error->clear();return true;
 }
 
 void EditorSession::deleteSelectedEntity()
@@ -9686,7 +9709,9 @@ void EditorSession::bindMenuBar() {
         for (const auto& binding : std::array<std::pair<const char*, const wchar_t*>, 4>{{
                 {"edit.copy", L"Copy Keys"}, {"edit.cut", L"Cut Keys"},
                 {"edit.paste", L"Paste Keys"}, {"edit.duplicate", L"Duplicate Keys"}}}) {
-            auto* item = editMenu->addItem(binding.second);
+            auto* item = std::strcmp(binding.first,"edit.duplicate")==0
+                ? addLocalizedItem(editMenu,"ui.editor.menu.edit.duplicate",L"Duplicate Selection")
+                : editMenu->addItem(binding.second);
             if (!item) continue;
             const std::string id = binding.first;
             _authoringCommandMenuItems.emplace_back(id, item);
@@ -13083,7 +13108,7 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         bool hasMeshBounds = false;
         if (meshComponent != nullptr && !meshComponent->meshPath.empty()) {
             const auto mesh = ayt::resource::ResourceManager::instance()
-                .load<ayt::resource::IMesh>(meshComponent->meshPath);
+                .load<ayt::resource::IMesh>(ayt::resource::resolveAssetPath({},meshComponent->meshPath));
             if (mesh != nullptr && mesh->hasBounds()) {
                 hasMeshBounds = true;
                 const ayt::math::Float4x4 worldMatrix =
@@ -13115,12 +13140,10 @@ ayt::entity::Entity* EditorSession::pickEntityFromViewport(float x, float y)
         // selectable. Do not use the fallback after an AABB miss: that would
         // make large sparse meshes steal clicks outside their visible bounds.
         if (!hasMeshBounds) {
-            const float radius = 0.75f * std::max({
-                std::fabs(transform->scale.x), std::fabs(transform->scale.y),
-                std::fabs(transform->scale.z), 0.1f});
             const auto worldState = spatialWorldState(*entity);
-            hit = intersectRaySphere(origin, direction, worldState.position,
-                                     radius * std::max({std::fabs(worldState.scale.x),std::fabs(worldState.scale.y),std::fabs(worldState.scale.z),1.f}), distance);
+            const float radius = 0.75f * std::max({std::fabs(worldState.scale.x),
+                std::fabs(worldState.scale.y), std::fabs(worldState.scale.z), 0.1f});
+            hit = intersectRaySphere(origin, direction, worldState.position, radius, distance);
         }
         if (hit && distance < bestDistance) {
             bestDistance = distance;

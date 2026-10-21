@@ -311,6 +311,9 @@ public:
     /// transformed mesh bounds (unit bounds for entities without a mesh).
     /// Changes only the editor camera; refuses Play/2D/out-of-range bounds.
     bool frameSelectedEntity();
+    /// Duplicate the selected Edit Scene hierarchy in one command and select
+    /// the copy. Refuses Play, an active drag, and non-document selections.
+    bool duplicateSelectedEntity(std::string* error = nullptr);
 
     SceneViewMode sceneViewMode() const noexcept { return _sceneCamera.mode(); }
     const EditorSceneVisibility& sceneVisibility() const noexcept {

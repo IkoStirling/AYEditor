@@ -359,6 +359,35 @@ private:
     std::string _label;
 };
 
+class EditorSceneDocument::EntityDuplicateCommand final : public IEditorCommand {
+public:
+    EntityDuplicateCommand(EditorSceneDocument& document, std::vector<EntitySnapshot> snapshots,
+                           std::vector<uint32_t> logicalIds)
+        : _document(document), _generation(document._contentGeneration),
+          _snapshots(std::move(snapshots)), _logicalIds(std::move(logicalIds)) {}
+    const std::string& label() const noexcept override { return _label; }
+    bool isAlive() const noexcept override { return _document._contentGeneration == _generation; }
+    bool execute() override {
+        if (!isAlive()) return false;
+        if (_initiallyApplied) _initiallyApplied=false;
+        else if (!_document.restoreEntityGraph(_snapshots)) return false;
+        for (std::size_t i=0;i<_snapshots.size();++i) {
+            auto* entity=_document._scene->world().findEntityByPersistentId(_snapshots[i].persistentId);
+            if (!entity) return false;
+            _document.remapEntity(_logicalIds[i],entity->getId());
+        }
+        return true;
+    }
+    bool undo() override { return isAlive() && _document.eraseEntityGraph(_snapshots); }
+private:
+    EditorSceneDocument& _document;
+    uint64_t _generation;
+    std::vector<EntitySnapshot> _snapshots;
+    std::vector<uint32_t> _logicalIds;
+    std::string _label="Duplicate Entity Hierarchy";
+    bool _initiallyApplied=true;
+};
+
 class EditorSceneDocument::AddComponentCommand final : public IEditorCommand {
 public:
     AddComponentCommand(EditorSceneDocument& document, uint64_t generation,
@@ -757,6 +786,72 @@ bool EditorSceneDocument::deleteEntity(uint32_t entityId, std::string label)
         std::move(label)));
 }
 
+bool EditorSceneDocument::duplicateEntityHierarchy(uint32_t entityId, uint32_t* duplicateId,
+                                                     std::string* error)
+{
+    auto& world=_scene->world();auto* source=world.findEntity(entityId);
+    if (!source) {setError(error,"Choose an existing Scene entity");return false;}
+    std::vector<ayt::entity::Entity*> sources{source};std::unordered_set<uint32_t> visited{entityId};
+    for (std::size_t i=0;i<sources.size();++i) {
+        const auto append=[&](ayt::entity::Entity* entity) {
+            if (entity && visited.insert(entity->getId()).second) sources.push_back(entity);
+        };
+        for (auto* child:sources[i]->spatialChildren()) append(child);
+        for (auto* child:sources[i]->ownedEntities()) append(child);
+        if (sources.size()>4096) {setError(error,"Duplicate selection exceeds 4096 entities");return false;}
+    }
+    std::vector<EntitySnapshot> snapshots(sources.size());
+    for (std::size_t i=0;i<sources.size();++i)
+        if (!snapshotEntityOwn(*sources[i],snapshots[i])) {
+            setError(error,"An entity contains a component without Scene serialization");return false;
+        }
+    const auto base=(snapshots.front().name.empty()?std::string("Entity"):snapshots.front().name)+" Copy";
+    snapshots.front().name=base;
+    for (std::size_t suffix=2;world.findEntity(snapshots.front().name.c_str());++suffix)
+        snapshots.front().name=base+" "+std::to_string(suffix);
+    std::vector<uint32_t> created;created.reserve(sources.size());
+    std::unordered_map<std::string,std::string> identities;
+    const auto abort=[&](const std::string& message) {
+        eraseCreatedEntities(created);setError(error,message);return false;
+    };
+    for (auto& item:snapshots) {
+        auto* entity=world.createEntity(item.kind);
+        if (!entity) return abort("Cannot allocate the duplicate hierarchy");
+        created.push_back(entity->getId());identities.emplace(item.persistentId,entity->persistentId());
+        item.persistentId=entity->persistentId();
+    }
+    const auto remap=[&](std::string& identity) {
+        if (const auto found=identities.find(identity);found!=identities.end()) identity=found->second;
+    };
+    for (std::size_t i=0;i<snapshots.size();++i) {
+        auto& item=snapshots[i];remap(item.parentId);remap(item.ownerId);
+        auto* entity=world.findEntity(created[i]);entity->setName(item.name.c_str());
+        for (const auto& component:item.components)
+            if (!restoreComponent(*entity,component)) return abort("Cannot restore a duplicate component");
+    }
+    for (std::size_t i=0;i<snapshots.size();++i) {
+        const auto& item=snapshots[i];auto* entity=world.findEntity(created[i]);
+        auto* parent=item.parentId.empty()?nullptr:world.findEntityByPersistentId(item.parentId);
+        auto* owner=item.ownerId.empty()?nullptr:world.findEntityByPersistentId(item.ownerId);
+        if ((!item.parentId.empty()&&!parent)||(!item.ownerId.empty()&&!owner)
+            ||(parent&&!entity->setSpatialParent(parent,ayt::entity::ReparentMode::KeepLocal))||!entity->setOwner(owner))
+            return abort("Cannot restore duplicate hierarchy relationships");
+    }
+    for (std::size_t i=0;i<snapshots.size();++i) {
+        auto* entity=world.findEntity(created[i]);
+        for (auto* component:entity->getComponents())
+            if (auto* camera=dynamic_cast<ayt::entity::CameraControllerComponent*>(component))
+                if (const auto target=identities.find(camera->targetPersistentId);target!=identities.end())
+                    if (!camera->setTarget(world.findEntityByPersistentId(target->second)))
+                        return abort("Cannot remap the duplicate camera target");
+        if (!snapshotEntityOwn(*entity,snapshots[i])) return abort("Cannot retain duplicate redo state");
+    }
+    const auto rootId=created.front();
+    if (!_history.execute(std::make_unique<EntityDuplicateCommand>(*this,snapshots,created)))
+        return abort("Cannot record duplicate history");
+    if (duplicateId) *duplicateId=rootId;if (error) error->clear();return true;
+}
+
 bool EditorSceneDocument::addComponent(
     uint32_t entityId, const std::string& componentType,
     std::vector<std::string>* added, std::string* error)
@@ -1143,22 +1238,14 @@ bool EditorSceneDocument::restoreComponent(
     return true;
 }
 
-bool EditorSceneDocument::snapshotEntity(
+bool EditorSceneDocument::snapshotEntityOwn(
     ayt::entity::Entity& entity, EntitySnapshot& snapshot) const
 {
     snapshot.name = entity.getName() != nullptr ? entity.getName() : "";
     snapshot.kind = entity.kind(); snapshot.persistentId = entity.persistentId();
     snapshot.parentId = entity.spatialParent() ? entity.spatialParent()->persistentId() : "";
     snapshot.ownerId = entity.owner() ? entity.owner()->persistentId() : "";
-    snapshot.attachments.clear();
-    for (auto* child : entity.spatialChildren())
-        if (child->owner() != &entity) snapshot.attachments.push_back({child->persistentId(),readTransform(*child->transform())});
-    snapshot.owned.clear();
-    for (auto* child : entity.ownedEntities()) {
-        EntitySnapshot childSnapshot;
-        if (!snapshotEntity(*child, childSnapshot)) return false;
-        snapshot.owned.push_back(std::move(childSnapshot));
-    }
+    snapshot.attachments.clear();snapshot.owned.clear();
     snapshot.components.clear();
     for (ayt::entity::IComponent* component : entity.getComponents()) {
         if (component == nullptr) continue;
@@ -1175,46 +1262,88 @@ bool EditorSceneDocument::snapshotEntity(
     return true;
 }
 
-ayt::entity::Entity* EditorSceneDocument::restoreEntity(
-    const EntitySnapshot& snapshot)
+bool EditorSceneDocument::snapshotEntity(
+    ayt::entity::Entity& entity, EntitySnapshot& snapshot) const
 {
-    std::vector<const EntitySnapshot*> items;
-    const auto collect = [&](const auto& self, const EntitySnapshot& item) -> void {
-        items.push_back(&item); for (const auto& child : item.owned) self(self,child);
-    };
-    collect(collect,snapshot);
-    std::vector<ayt::entity::Entity*> created;
-    const auto rollback = [&]() -> ayt::entity::Entity* {
-        for (auto* entity : created) _scene->world().destroyEntity(entity);
-        return nullptr;
-    };
-    for (const auto* item : items) {
-        auto* entity = _scene->world().createEntity(item->kind);
-        if (!entity) return rollback();
-        created.push_back(entity);
-        if (!entity->restorePersistentId(item->persistentId)) return rollback();
-        entity->setName(item->name.c_str());
-        for (const auto& component : item->components)
-            if (!restoreComponent(*entity,component)) return rollback();
+    if (!snapshotEntityOwn(entity,snapshot)) return false;
+    for (auto* child:entity.spatialChildren())
+        if (child->owner()!=&entity) snapshot.attachments.push_back({child->persistentId(),readTransform(*child->transform())});
+    for (auto* child:entity.ownedEntities()) {
+        EntitySnapshot nested;if (!snapshotEntity(*child,nested)) return false;
+        snapshot.owned.push_back(std::move(nested));
     }
-    for (const auto* item : items) {
-        auto* entity = _scene->world().findEntityByPersistentId(item->persistentId);
-        auto* parent = item->parentId.empty() ? nullptr : _scene->world().findEntityByPersistentId(item->parentId);
-        auto* owner = item->ownerId.empty() ? nullptr : _scene->world().findEntityByPersistentId(item->ownerId);
-        if ((!item->parentId.empty() && !parent) || (!item->ownerId.empty() && !owner)
-            || (parent && !entity->setSpatialParent(parent)) || !entity->setOwner(owner)) return rollback();
+    return true;
+}
+
+void EditorSceneDocument::eraseCreatedEntities(const std::vector<uint32_t>& ids)
+{
+    auto& world=_scene->world();
+    // Detach by KeepLocal before destruction: intermediate cloned ancestry may
+    // contain affine shear, while no outside child belongs to this rollback.
+    for (auto id:ids) if (auto* entity=world.findEntity(id)) {
+        if (entity->isSpatial()) (void)entity->setSpatialParent(nullptr,ayt::entity::ReparentMode::KeepLocal);
+        (void)entity->setOwner(nullptr);
     }
-    for (const auto* item : items) {
-        auto* parent = _scene->world().findEntityByPersistentId(item->persistentId);
-        for (const auto& attachment : item->attachments) {
-            auto* child = _scene->world().findEntityByPersistentId(attachment.childId);
-            if (!child || !child->setSpatialParent(parent)) continue;
-            auto* transform = child->transform();
-            transform->position = attachment.local.position; transform->rotation = attachment.local.rotation;
-            transform->scale = attachment.local.scale; transform->hasPreviousSimulationPose = false; ++transform->revision;
+    // Owner destruction can cascade. Resolve each ID afresh instead of using
+    // raw pointers saved before relationships were restored.
+    for (auto id:ids) if (auto* entity=world.findEntity(id)) world.destroyEntity(entity);
+}
+
+bool EditorSceneDocument::eraseEntityGraph(const std::vector<EntitySnapshot>& snapshots)
+{
+    auto& world=_scene->world();std::vector<uint32_t> ids;std::unordered_set<uint32_t> included;
+    for (const auto& item:snapshots) {
+        auto* entity=world.findEntityByPersistentId(item.persistentId);if (!entity) return false;
+        ids.push_back(entity->getId());included.insert(entity->getId());
+    }
+    // Refuse an out-of-history structural attachment before changing anything.
+    for (auto id:ids) {auto* entity=world.findEntity(id);
+        for (auto* child:entity->spatialChildren()) if (!included.count(child->getId())) return false;
+        for (auto* child:entity->ownedEntities()) if (!included.count(child->getId())) return false;
+    }
+    eraseCreatedEntities(ids);return true;
+}
+
+ayt::entity::Entity* EditorSceneDocument::restoreEntity(const EntitySnapshot& snapshot)
+{
+    std::vector<EntitySnapshot> items;
+    const auto collect=[&](const auto& self,const EntitySnapshot& item) -> void {
+        auto own=item;own.owned.clear();items.push_back(std::move(own));
+        for (const auto& child:item.owned) self(self,child);
+    };
+    collect(collect,snapshot);return restoreEntityGraph(items);
+}
+
+ayt::entity::Entity* EditorSceneDocument::restoreEntityGraph(const std::vector<EntitySnapshot>& items)
+{
+    if (items.empty()) return nullptr;
+    std::vector<uint32_t> created;
+    const auto rollback=[&]() -> ayt::entity::Entity* {eraseCreatedEntities(created);return nullptr;};
+    for (const auto& item:items) {
+        auto* entity=_scene->world().createEntity(item.kind);if (!entity) return rollback();
+        created.push_back(entity->getId());
+        if (!entity->restorePersistentId(item.persistentId)) return rollback();
+        entity->setName(item.name.c_str());
+        for (const auto& component:item.components) if (!restoreComponent(*entity,component)) return rollback();
+    }
+    for (const auto& item:items) {
+        auto* entity=_scene->world().findEntityByPersistentId(item.persistentId);
+        auto* parent=item.parentId.empty()?nullptr:_scene->world().findEntityByPersistentId(item.parentId);
+        auto* owner=item.ownerId.empty()?nullptr:_scene->world().findEntityByPersistentId(item.ownerId);
+        if ((!item.parentId.empty()&&!parent)||(!item.ownerId.empty()&&!owner)
+            ||(parent&&!entity->setSpatialParent(parent))||!entity->setOwner(owner)) return rollback();
+    }
+    for (const auto& item:items) {
+        auto* parent=_scene->world().findEntityByPersistentId(item.persistentId);
+        for (const auto& attachment:item.attachments) {
+            auto* child=_scene->world().findEntityByPersistentId(attachment.childId);
+            if (!child||!child->setSpatialParent(parent)) continue;
+            auto* transform=child->transform();
+            transform->position=attachment.local.position;transform->rotation=attachment.local.rotation;
+            transform->scale=attachment.local.scale;transform->hasPreviousSimulationPose=false;++transform->revision;
         }
     }
-    return created.front();
+    return _scene->world().findEntity(created.front());
 }
 
 uint32_t EditorSceneDocument::logicalEntityId(uint32_t currentId) const noexcept

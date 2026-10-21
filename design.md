@@ -42,6 +42,25 @@ frameSelectedEntity 在 3D Edit 收集所选实体的空间子树，变换 Mesh 
 3D 鼠标局部坐标归一至相机整数像素范围。独立透视/正交投影回归在修复前均失败，保留证据；
 修复后同组17例/189断言通过，包括真实拖动/撤销/Ctrl/保存重开，不放宽原位置精度断言。
 
+## 2026-10-21 — 场景层级复制与 Mesh 寻址
+
+EditorSceneDocument::duplicateEntityHierarchy 收集空间子节点和 owned 对象的并集，先快照并检查
+全部组件可序列化，再创建副本；限制4096。先建立完整新身份映射，再恢复组件和关系，最后重映射
+CameraController 的显式 persistent target。未知 gameplay 字符串不会猜测修复。资源路径及实体内组件
+slot ID 保留；新实体身份稳定写入 redo 快照，子对象的后续命令也更新逻辑ID映射。
+
+复制整体是一条命令，不复用多个 create 命令形成可见的部分历史。undo 先检查完整集合与外部结构
+依赖，然后用 KeepLocal 解开待销毁集合的空间/owner 关系再销毁，避免中间 affine shear 或 owner级联
+造成错误。失败回滚按运行时ID重新查询，修复旧 restoreEntity 在 owner 级联后继续解引用已释放指针。
+Scene 原有 delete/create restore 复用平坦恢复 helper，保留原外部空间附件恢复行为。
+
+Session 仅在 Edit、空闲拖动、真实文档选择时提供 Ctrl+D/菜单；文本焦点与其他作者文档保留自己的
+快捷键路由。复制后选择新根；底层图支持 Spatial 和 Data，未新增 Prefab 文件格式或热同步语义。
+
+真实 GPU 物体选择回归揭示 Mesh 元数据曾用未解析的虚拟路径加载，失败后又按 local×world 两次缩放
+扩大 fallback sphere，大地板因而抢走所有球体点击。拾取、Frame 和模型拖放材质槽现共用 AssetPath
+寻址，fallback 只用 world scale。CPU 实际 Mesh 文件/大地板/Frame 与 GPU 原夹具失败证据保留。
+
 ## 2026-10-21 — 材质副本、贴图目录与赋值
 
 MaterialView 只通过 IEditorHostServices::textureAssets 取得目录快照，持有过滤后的索引；不自行
@@ -2052,3 +2071,7 @@ migration; Source ABI35 covers changed public object layouts.
 Project look IO weakly canonicalizes the root and requested path before containment/suffix checks.
 It does not mutate Scene/history. Saving requires an existing parent; failures leave the selected
 look unchanged. The renderer owns GPU behavior; Editor never assembles an independent effect pipeline.
+
+2026-10-21 层级复制验证：文档/Session六套回归通过，包含真实Mesh文件包围盒和Ctrl+D。
+SceneDuplicationRenderTest在D3D11/D3D12通过，变化5256像素；保存重开/undo/redo画面一致。
+SDK125能力/544符号零错误零警告。Legacy targetName保留原名称解析，不推断重写。

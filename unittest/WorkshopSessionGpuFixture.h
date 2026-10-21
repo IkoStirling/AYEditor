@@ -65,6 +65,7 @@ struct Fixture
     editor::EditorAssetId materialId{};
     bool renderSceneGeometry = true;
     bool useEditorCamera = false;
+    std::size_t expectedMeshCount = 25;
     explicit Fixture(fs::path destination, bool d3d12, bool assetPreviews = false) : output(fs::absolute(destination))
     {
         require(!fs::exists(output), "Use a fresh output directory");
@@ -174,7 +175,7 @@ struct Fixture
                     "Native Scene assets load");
             result.add(meshes.at(meshPath), materials.at(materialPath), object->worldMatrix());
         }
-        require(result.items().size() == 25, "Complete native Scene extraction");
+        require(result.items().size() == expectedMeshCount, "Complete native Scene extraction");
         return result;
     }
     void frame(const char *screenshot = nullptr)
