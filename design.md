@@ -2207,6 +2207,15 @@ both cooked atlas texture references must resolve in the project. This
 validates main-editor source portability and Cook for real content. It does
 not assert that a running Scene hot-refreshes its cached meshes or animation.
 
+### Main Tilemap pointer boundary (2026-10-22)
+
+The shared viewport model rejects non-finite coordinate conversion, and the
+main canvas now also rejects non-finite pointer-down and pointer-move events
+before changing hover or gesture state. A rectangle gesture keeps its last
+valid cell when an invalid move arrives; release commits that bounded region.
+The 2D host test checks no gesture starts from NaN and no unrelated corner
+cell is modified by an invalid move.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in

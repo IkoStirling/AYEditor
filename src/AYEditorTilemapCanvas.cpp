@@ -300,6 +300,8 @@ bool EditorTilemapCanvas::tileTextureVisual(
 bool EditorTilemapCanvas::onMouseButtonDown(
     const ayt::ui::UIMouseEvent& event)
 {
+    if (!std::isfinite(event.mousePos.x)
+        || !std::isfinite(event.mousePos.y)) return false;
     _lastPointer = event.mousePos;
     updateHover(event.mousePos);
     if (event.mouseButton == 2
@@ -366,6 +368,8 @@ bool EditorTilemapCanvas::onMouseButtonDown(
 
 bool EditorTilemapCanvas::onMouseMove(const ayt::ui::UIMouseEvent& event)
 {
+    if (!std::isfinite(event.mousePos.x)
+        || !std::isfinite(event.mousePos.y)) return false;
     if (_panning) {
         _viewport.panPixels(event.mousePos.x - _lastPointer.x,
                             event.mousePos.y - _lastPointer.y);

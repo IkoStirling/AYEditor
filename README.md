@@ -610,3 +610,6 @@ editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/�
 
 仓库内 Harbor 样本还会在主编辑器的项目工作流用例中，从双图集作者文件
 保存并 Cook 到正式 Tilemap 资源，检查图层、动画、碰撞与阴影数据。
+
+主 Tilemap 画布会忽略非有限鼠标坐标；拖拽期间出现无效移动时，仍以最后一个
+有效格结束手势。
