@@ -2169,6 +2169,15 @@ test checks both toolbar entries. The actual canvas already uses
 `AY2DEditorCore::Viewport2DModel`; the older standalone
 `Editor2DViewportModel` is not its picking path.
 
+### Shared Tilemap preview clock (2026-10-22)
+
+The main `EditorTilemapCanvas` now uses the same `AY2DEditor/TilemapPreviewClock.h`
+as the standalone AY2D authoring canvas. Each UI frame contributes its full
+fractional millisecond duration, so preview playback no longer loses the
+remainder every frame. Paused preview does not advance the clock; only elapsed
+whole milliseconds request a redraw. The canvas remains a UI adapter and does
+not change authored animation durations or Scene playback.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in

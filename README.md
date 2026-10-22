@@ -598,3 +598,6 @@ editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/�
 
 显示模拟补充：Arcade/Broadcast与独立display开关/参数，面板按所选效果显示相关控制，隐藏时保留值。
 偏好仍为schema8，内嵌look升为v2并可读v1；Editor source ABI36与完整重编匹配新增值布局。
+
+主 Tilemap 画布的动画预览现在复用 AY2D 的 `TilemapPreviewClock`，保留每帧不足
+1 毫秒的时间并在暂停期间保持计时；作者数据与 Scene 播放不受影响。

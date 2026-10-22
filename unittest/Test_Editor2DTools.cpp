@@ -42,6 +42,29 @@ using ayt::editor::testfixtures::resolveEditorShellLayoutPath;
 
 TEST_SUITE(Editor2DToolsTests)
 
+TEST_CASE(TilemapCanvasAccumulatesFractionalPreviewTimeAndPauses)
+{
+    ayt::ay2d::editor::TilemapEditorModel model;
+    CHECK_TRUE(model.newDocument(1u, 1u, 16u, 16u, 1u));
+    CHECK_TRUE(model.document().setAnimation(
+        1u, {{2u, 100u}, {3u, 100u}}));
+    EditorTilemapCanvas canvas(model);
+
+    canvas.tick(0.0006f);
+    CHECK_INT_EQ(canvas.animationPreviewElapsedMs(), 0u);
+    canvas.tick(0.0006f);
+    CHECK_INT_EQ(canvas.animationPreviewElapsedMs(), 1u);
+
+    canvas.setAnimationPreviewEnabled(false);
+    canvas.tick(0.0006f);
+    CHECK_INT_EQ(canvas.animationPreviewElapsedMs(), 1u);
+    canvas.setAnimationPreviewEnabled(true);
+    canvas.tick(0.0006f);
+    CHECK_INT_EQ(canvas.animationPreviewElapsedMs(), 1u);
+    canvas.tick(0.0006f);
+    CHECK_INT_EQ(canvas.animationPreviewElapsedMs(), 2u);
+}
+
 TEST_CASE(TilemapCanvasConnectsShadowFillAndRectangleToAuthorModel)
 {
     ayt::ay2d::editor::TilemapEditorModel model;

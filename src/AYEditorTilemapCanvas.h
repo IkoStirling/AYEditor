@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AY2DEditor/TilemapEditorModel.h>
+#include <AY2DEditor/TilemapPreviewClock.h>
 #include <AY2DEditor/Viewport2DModel.h>
 #include <AYUI/Widget.h>
 #include <AYUI/ImageTexture.h>
@@ -38,6 +39,9 @@ public:
     }
     [[nodiscard]] bool animationPreviewEnabled() const noexcept {
         return _animationPreviewEnabled;
+    }
+    [[nodiscard]] uint64_t animationPreviewElapsedMs() const noexcept {
+        return _animationClock.elapsedMs();
     }
     void setSpacePan(bool enabled);
     [[nodiscard]] bool spacePan() const noexcept { return _spacePan; }
@@ -93,7 +97,7 @@ private:
     bool _showCollision = true;
     bool _showShadows = true;
     bool _animationPreviewEnabled = true;
-    uint64_t _animationElapsedMs = 0u;
+    ayt::ay2d::editor::TilemapPreviewClock _animationClock;
     bool _drawing = false;
     bool _panning = false;
     bool _spacePan = false;

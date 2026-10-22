@@ -483,8 +483,7 @@ void EditorTilemapCanvas::tick(float dt)
 {
     Widget::tick(dt);
     if (_animationPreviewEnabled && !_model.document().animations().empty()
-        && dt > 0.0f) {
-        _animationElapsedMs += static_cast<uint64_t>(dt * 1000.0f);
+        && _animationClock.advance(dt)) {
         markDirty();
     }
     if (getParent() == nullptr) return;
@@ -648,7 +647,7 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
                 if (candidate == document.defaultTileId()) continue;
                 tileId = _animationPreviewEnabled
                     ? _model.animationPreviewTileId(
-                        candidate, _animationElapsedMs)
+                        candidate, _animationClock.elapsedMs())
                     : candidate;
                 ayt::ui::ImageTextureHandle texture;
                 ayt::math::FRectangle uv;
