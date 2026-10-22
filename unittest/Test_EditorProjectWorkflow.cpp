@@ -34,6 +34,7 @@
 #include <AYUI/UIKeyCode.h>
 #include <AYUI/UIManager.h>
 #include <AYUI/Widget.h>
+#include "../src/AYEditorTilemapCanvas.h"
 
 #include <array>
 #include <filesystem>
@@ -1126,13 +1127,69 @@ TEST_CASE(tilemap_harbor_author_save_cooks_real_content_in_project)
     auto document = descriptor->createDocument(request, error);
     CHECK(document != nullptr);
     if (document == nullptr) return;
+    CHECK_FALSE(document->isDirty());
+    EditorWorkspace workspace;
+    TilemapTestHostServices host(workspace);
+    auto view = descriptor->createView(document, host);
+    CHECK(view != nullptr);
+    if (view == nullptr) return;
+    auto* terrainFill = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_terrain_fill"));
+    auto* canvas = dynamic_cast<EditorTilemapCanvas*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_canvas"));
+    CHECK(terrainFill != nullptr);
+    CHECK(canvas != nullptr);
+    if (terrainFill == nullptr || canvas == nullptr) return;
+    terrainFill->setSize({24.0f, 24.0f});
+    const auto buttonBounds = terrainFill->getWorldBounds();
+    const ayt::math::FVector2 buttonPoint{
+        buttonBounds.minX + 12.0f, buttonBounds.minY + 12.0f};
+    CHECK(terrainFill->onMouseButtonDown({buttonPoint, 0}));
+    CHECK(terrainFill->onMouseButtonUp({buttonPoint, 0}));
+    CHECK(terrainFill->getAccessibilityLabel().find(L"active")
+          != std::wstring::npos);
+    auto* canvasPanel = findWorkflowWidget(
+        view->rootWidget(), "tilemap_workspace_canvas_panel");
+    CHECK(canvasPanel != nullptr);
+    if (canvasPanel == nullptr) return;
+    canvasPanel->setSize({320.0f, 240.0f});
+    canvas->tick(0.0f);
+    canvas->frameDocument();
+    const auto canvasBounds = canvas->getWorldBounds();
+    CHECK(canvas->onMouseButtonDown({
+        {canvasBounds.minX + 30.0f,
+         canvasBounds.minY + 210.0f}, 0}));
+    auto* shadowFill = dynamic_cast<ayt::ui::Button*>(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_fill"));
+    CHECK(shadowFill != nullptr);
+    if (shadowFill == nullptr) return;
+    shadowFill->setSize({24.0f, 24.0f});
+    const auto shadowButtonBounds = shadowFill->getWorldBounds();
+    const ayt::math::FVector2 shadowButtonPoint{
+        shadowButtonBounds.minX + 12.0f,
+        shadowButtonBounds.minY + 12.0f};
+    CHECK(shadowFill->onMouseButtonDown({shadowButtonPoint, 0}));
+    CHECK(shadowFill->onMouseButtonUp({shadowButtonPoint, 0}));
+    CHECK(canvas->onMouseButtonDown({
+        {canvasBounds.minX + 30.0f,
+         canvasBounds.minY + 210.0f}, 0}));
+    CHECK(document->isDirty());
     CHECK(document->save(&error));
     CHECK(error.empty());
+    CHECK_FALSE(document->isDirty());
+    view->prepareForUiShutdown();
+    view.reset();
+    CHECK(std::filesystem::path(document->path()).filename()
+          == "harbor.tls");
 
     ayt::ay2d::editor::TilemapDocument saved;
-    CHECK(saved.load(source.string(), &error));
+    CHECK(saved.load((sourceDir / "harbor.tls").string(), &error));
     CHECK_INT_EQ(saved.layerCount(), 2u);
     CHECK_INT_EQ(saved.terrains().size(), 1u);
+    CHECK_INT_EQ(saved.terrainAt(0u, 0u), 7u);
+    CHECK_INT_EQ(saved.tileAt(0u, 0u), 2u);
+    CHECK_INT_EQ(saved.shadowMaskAt(0u, 0u),
+                 ayt::ay2d::editor::ShadowMask_All);
     CHECK_INT_EQ(saved.animations().size(), 1u);
     CHECK(saved.tileAtlas(1u) != nullptr);
     CHECK(saved.tileAtlas(2u) != nullptr);
@@ -1146,6 +1203,20 @@ TEST_CASE(tilemap_harbor_author_save_cooks_real_content_in_project)
     CHECK_INT_EQ(runtime.getAnimationCount(), 1u);
     CHECK_INT_EQ(runtime.getTileCollisionFlagCount(), 3u);
     CHECK_INT_EQ(runtime.getShadowMaskCount(), 48u);
+    CHECK(runtime.getShadowMasks() != nullptr);
+    if (runtime.getShadowMasks() != nullptr) {
+        CHECK_INT_EQ(runtime.getShadowMasks()[0],
+                     ayt::ay2d::editor::ShadowMask_All);
+    }
+    if (runtime.getPackMode() == ayt::resource::TilemapPackMode::Narrow16) {
+        CHECK(runtime.getTileIds16() != nullptr);
+        if (runtime.getTileIds16() != nullptr)
+            CHECK_INT_EQ(runtime.getTileIds16()[0], 2u);
+    } else {
+        CHECK(runtime.getTileIds32() != nullptr);
+        if (runtime.getTileIds32() != nullptr)
+            CHECK_INT_EQ(runtime.getTileIds32()[0], 2u);
+    }
     const auto* atlasEntries = runtime.getAtlasEntries();
     CHECK(atlasEntries != nullptr);
     if (atlasEntries == nullptr) return;

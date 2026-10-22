@@ -2199,10 +2199,14 @@ terrain IDs and resolved preview tiles remain in the same document format.
 
 When the engine-root Harbor sample is present, `AYEditor_ProjectWorkflow`
 copies its author JSON and both PNG atlases into a temporary project `Assets`
-folder. The built-in Tilemap document opens and saves that file through the
-normal editor descriptor, then the test reopens the author document and loads
-the cooked runtime tilemap. It checks two layers and atlases, one animation,
-three collision entries, terrain authoring metadata and all 48 shadow masks;
+folder. The built-in Tilemap view selects Terrain Fill and Shadow Fill through
+its toolbar and paints Harbor cells through the canvas. Saving canonicalizes
+the legacy
+`.aytilemap.json` input to `harbor.tls`; the test reopens that saved author
+document and loads the cooked runtime tilemap. It checks the edited terrain
+source, resolved runtime tile and shadow mask, two layers and atlases,
+one animation,
+three collision entries and all 48 shadow masks;
 both cooked atlas texture references must resolve in the project. This
 validates main-editor source portability and Cook for real content. It does
 not assert that a running Scene hot-refreshes its cached meshes or animation.
