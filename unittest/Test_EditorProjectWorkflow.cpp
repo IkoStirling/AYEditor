@@ -1146,6 +1146,10 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_tool_shadow_advanced") != nullptr);
     CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_fill") != nullptr);
+    CHECK(findWorkflowWidget(
+        view->rootWidget(), "tilemap_tool_shadow_rectangle") != nullptr);
+    CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_shadow_color") != nullptr);
     CHECK(findWorkflowWidget(
         view->rootWidget(), "tilemap_workspace_shadow_color_apply") != nullptr);
@@ -1189,6 +1193,7 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
         "tilemap_tool_fill", "tilemap_tool_rectangle",
         "tilemap_tool_stamp", "tilemap_tool_shadow",
         "tilemap_tool_shadow_clear", "tilemap_tool_shadow_advanced",
+        "tilemap_tool_shadow_fill", "tilemap_tool_shadow_rectangle",
         "tilemap_tool_grid", "tilemap_tool_collision",
         "tilemap_tool_shadow_visibility", "tilemap_tool_frame",
         "tilemap_layer_add", "tilemap_layer_remove",

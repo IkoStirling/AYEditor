@@ -329,7 +329,8 @@ bool EditorTilemapCanvas::onMouseButtonDown(
         markDirty();
         return true;
     }
-    if (_model.tool() == PaintTool::FloodFill) {
+    if (_model.tool() == PaintTool::FloodFill
+        || _model.tool() == PaintTool::ShadowFill) {
         _model.applyAt(static_cast<uint32_t>(_hover.x),
                        static_cast<uint32_t>(_hover.y));
         if (_onEdited) _onEdited();
@@ -337,7 +338,8 @@ bool EditorTilemapCanvas::onMouseButtonDown(
         return true;
     }
     _model.beginGesture();
-    if (_model.tool() == PaintTool::Rectangle) {
+    if (_model.tool() == PaintTool::Rectangle
+        || _model.tool() == PaintTool::ShadowRectangle) {
         _rectangleDrawing = true;
         _rectangleStart = _hover;
         _rectangleCurrent = _hover;
@@ -397,11 +399,19 @@ bool EditorTilemapCanvas::onMouseButtonUp(
     if (_rectangleDrawing && event.mouseButton == 0) {
         _rectangleDrawing = false;
         const TileCell end = clampToDocument(_rectangleCurrent);
-        _model.applyRectangle(
-            static_cast<uint32_t>(_rectangleStart.x),
-            static_cast<uint32_t>(_rectangleStart.y),
-            static_cast<uint32_t>(end.x),
-            static_cast<uint32_t>(end.y));
+        if (_model.tool() == PaintTool::ShadowRectangle) {
+            _model.applyShadowRectangle(
+                static_cast<uint32_t>(_rectangleStart.x),
+                static_cast<uint32_t>(_rectangleStart.y),
+                static_cast<uint32_t>(end.x),
+                static_cast<uint32_t>(end.y));
+        } else {
+            _model.applyRectangle(
+                static_cast<uint32_t>(_rectangleStart.x),
+                static_cast<uint32_t>(_rectangleStart.y),
+                static_cast<uint32_t>(end.x),
+                static_cast<uint32_t>(end.y));
+        }
         const bool changed = _model.endGesture();
         _rectangleStart = {-1, -1};
         _rectangleCurrent = {-1, -1};
@@ -544,6 +554,14 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             } else {
                 label = L"SHADOW  ·  CUSTOM";
             }
+            accent = {0.70f, 0.48f, 0.94f, 1.0f};
+            break;
+        case PaintTool::ShadowFill:
+            label = L"SHADOW FILL  ·  connected mask";
+            accent = {0.70f, 0.48f, 0.94f, 1.0f};
+            break;
+        case PaintTool::ShadowRectangle:
+            label = L"SHADOW RECT  ·  drag a region";
             accent = {0.70f, 0.48f, 0.94f, 1.0f};
             break;
         }
@@ -735,17 +753,26 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             {static_cast<float>(maxX + 1) * tileWidth,
              static_cast<float>(minY) * tileHeight});
         const ayt::math::FRectangle preview = normalizedRect(a, b, offset);
-        renderer.drawRect(preview, withAlpha(
-            previewColor(document, _model.selectedTileId()), 0.24f));
-        renderer.drawBorderRect(preview, {0.48f, 0.76f, 1.0f, 1.0f},
-                                2.0f);
+        const bool shadowRectangle =
+            _model.tool() == PaintTool::ShadowRectangle;
+        const auto color = shadowRectangle
+            ? (_model.selectedShadowMask() == 0u
+                ? ayt::math::FVector4{0.92f, 0.27f, 0.30f, 1.0f}
+                : unpackRgba(document.shadowColor()))
+            : previewColor(document, _model.selectedTileId());
+        renderer.drawRect(preview, withAlpha(color, 0.24f));
+        renderer.drawBorderRect(preview, shadowRectangle
+            ? ayt::math::FVector4{0.78f, 0.59f, 1.0f, 1.0f}
+            : ayt::math::FVector4{0.48f, 0.76f, 1.0f, 1.0f}, 2.0f);
     } else if (isInDocument(_hover)) {
         if (_model.tool() == PaintTool::Selection) {
             drawToolBadge();
             renderer.popClip();
             return;
         }
-        if (_model.tool() == PaintTool::Shadow) {
+        if (_model.tool() == PaintTool::Shadow
+            || _model.tool() == PaintTool::ShadowFill
+            || _model.tool() == PaintTool::ShadowRectangle) {
             const auto a = _viewport.worldToScreen(
                 {static_cast<float>(_hover.x) * tileWidth,
                  static_cast<float>(_hover.y + 1) * tileHeight});

@@ -869,6 +869,20 @@ public:
             L"Advanced shadow quadrants…", [this]() {
                 openShadowBrushDialog();
             });
+        _shadowFill = addIconButton(
+            toolbar, "tilemap_tool_shadow_fill",
+            "ui.editor.tilemap.shadow_fill_tooltip",
+            "bucket.svg", L"F",
+            L"Fill connected shadow mask", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::ShadowFill);
+            });
+        _shadowRectangle = addIconButton(
+            toolbar, "tilemap_tool_shadow_rectangle",
+            "ui.editor.tilemap.shadow_rectangle_tooltip",
+            "rectangle.svg", L"R",
+            L"Paint shadow rectangle", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::ShadowRectangle);
+            });
         _grid = addIconButton(
             toolbar, "tilemap_tool_grid", "ui.editor.tilemap.grid_tooltip",
             "grid.svg", L"G",
@@ -1601,6 +1615,8 @@ public:
         _shadow = nullptr;
         _shadowClear = nullptr;
         _shadowAdvanced = nullptr;
+        _shadowFill = nullptr;
+        _shadowRectangle = nullptr;
         _shadowQuadrantButtons.fill(nullptr);
         _shadowDialogStatus = nullptr;
         _shadowDialogCancel = nullptr;
@@ -3376,7 +3392,9 @@ private:
                 L"Create or select an auto-tile terrain first.");
             return;
         }
-        if (tool == ayt::ay2d::editor::PaintTool::Shadow
+        if ((tool == ayt::ay2d::editor::PaintTool::Shadow
+             || tool == ayt::ay2d::editor::PaintTool::ShadowFill
+             || tool == ayt::ay2d::editor::PaintTool::ShadowRectangle)
             && _canvas != nullptr) {
             _canvas->setShowShadows(true);
         }
@@ -3595,6 +3613,10 @@ private:
             == ayt::ay2d::editor::PaintTool::Stamp;
         const bool shadow = model.tool()
             == ayt::ay2d::editor::PaintTool::Shadow;
+        const bool shadowFill = model.tool()
+            == ayt::ay2d::editor::PaintTool::ShadowFill;
+        const bool shadowRectangle = model.tool()
+            == ayt::ay2d::editor::PaintTool::ShadowRectangle;
         setIconState(_selection, selection,
             "ui.editor.tilemap.selection_tooltip", L"Selection (M)");
         setIconState(_pencil, pencil,
@@ -3624,6 +3646,12 @@ private:
                 && shadowMask != ayt::ay2d::editor::ShadowMask_None,
             "ui.editor.tilemap.shadow_advanced_tooltip",
             L"Advanced shadow quadrants");
+        setIconState(_shadowFill, shadowFill,
+            "ui.editor.tilemap.shadow_fill_tooltip",
+            L"Fill connected shadow mask");
+        setIconState(_shadowRectangle, shadowRectangle,
+            "ui.editor.tilemap.shadow_rectangle_tooltip",
+            L"Paint shadow rectangle");
         setIconState(_grid, _canvas->showGrid(),
             "ui.editor.tilemap.grid_overlay", L"Grid overlay");
         setIconState(_collision, _canvas->showCollision(),
@@ -3744,6 +3772,8 @@ private:
     ayt::ui::Button* _shadow = nullptr;
     ayt::ui::Button* _shadowClear = nullptr;
     ayt::ui::Button* _shadowAdvanced = nullptr;
+    ayt::ui::Button* _shadowFill = nullptr;
+    ayt::ui::Button* _shadowRectangle = nullptr;
     ayt::ui::Button* _stampSelect = nullptr;
     ayt::ui::Button* _stampDelete = nullptr;
     ayt::ui::Button* _grid = nullptr;

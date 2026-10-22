@@ -232,6 +232,9 @@ Inspector 组件标题的展开/折叠只改变界面状态；面板在点击派
 导入支持 Tiled/TexturePacker 伴随元数据识别、手工自由矩形，以及可保存和撤销的
 多格 Stamp 笔刷。Tilemap 也提供独立 Shadow 模式、16 种四象限遮罩、显隐和地图级
 RGBA 阴影颜色；该数据保存在作者源中，不借用 3D Shadow Map。
+主编辑器的工具栏还提供 Shadow Fill 和 Shadow Rectangle：前者一次替换四向连通、
+原遮罩相同的区域，后者拖拽矩形并预览范围；两者复用 AY2DEditorCore 的作者模型，
+保留四象限遮罩，均为单步撤销，不修改图块或地形来源。
 主界面可通过 `Tools -> 2D Tilemap Editor...` 或第二行网格图标直接打开同一套
 独立非模态 Tilemap 工具窗口；窗口复用 AYEditor 的文档/命令体系，内部提供可拖动
 三栏、可滚动侧栏和可横向溢出的工具栏，不再要求先在 Content Browser 中找到并

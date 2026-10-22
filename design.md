@@ -2156,6 +2156,19 @@ Editor.Render.ColorStylization.* 通过现有用户配置保存，不改变场�
 此处增加结构大小，source ABI 从33升到34，跨 demo/library 的宿主须同步重新编译。单测见 Test_EditorShell.cpp 的
 editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/再初始化覆盖自定义值。
 
+### Tilemap semantic-shadow tools in the main editor (2026-10-22)
+
+The main Tilemap workspace now routes Shadow Fill and Shadow Rectangle through
+the shared `TilemapEditorModel` operations. Fill is a single click over cells
+with the same prior quadrant mask; rectangle is a drag with a colored preview
+and one gesture commit on release. The buttons retain the selected quadrant
+mask from the existing shadow brush controls. The main canvas remains a UI
+adapter and does not implement a second flood algorithm. A host-canvas test
+checks both interactions, their edited cells and one-step undo; the workspace
+test checks both toolbar entries. The actual canvas already uses
+`AY2DEditorCore::Viewport2DModel`; the older standalone
+`Editor2DViewportModel` is not its picking path.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in

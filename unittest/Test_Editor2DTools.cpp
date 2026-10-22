@@ -25,10 +25,12 @@
 #include <AYApplication/IEngineHost.h>
 #include <AYUI/MockRenderer.h>
 #include <AYUI/Image.h>
+#include <AYUI/Panel.h>
 #include <AYEntity/World.h>
 #include <AYEntity.h>
 #include <AYEntity/components/MeshComponent.h>
 #include "fixtures/EditorShellLayout.h"
+#include "AYEditorTilemapCanvas.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -39,6 +41,45 @@ using namespace ayt::ui;
 using ayt::editor::testfixtures::resolveEditorShellLayoutPath;
 
 TEST_SUITE(Editor2DToolsTests)
+
+TEST_CASE(TilemapCanvasConnectsShadowFillAndRectangleToAuthorModel)
+{
+    ayt::ay2d::editor::TilemapEditorModel model;
+    CHECK_TRUE(model.newDocument(4u, 4u, 16u, 16u, 0u));
+    ayt::ui::Panel parent;
+    parent.setSize({320.0f, 240.0f});
+    EditorTilemapCanvas canvas(model);
+    parent.addChildExternal(&canvas);
+    canvas.tick(0.0f);
+    canvas.frameDocument();
+
+    CHECK_TRUE(model.setSelectedShadowMask(
+        ayt::ay2d::editor::ShadowMask_TopLeft));
+    model.setTool(ayt::ay2d::editor::PaintTool::ShadowFill);
+    CHECK_TRUE(canvas.onMouseButtonDown({{160.0f, 120.0f}, 0}));
+    CHECK_INT_EQ(model.document().shadowMaskAt(0u, 0u),
+                 ayt::ay2d::editor::ShadowMask_TopLeft);
+    CHECK_INT_EQ(model.document().shadowMaskAt(3u, 3u),
+                 ayt::ay2d::editor::ShadowMask_TopLeft);
+    CHECK_TRUE(model.undo());
+    CHECK_INT_EQ(model.document().shadowMaskAt(0u, 0u), 0u);
+
+    CHECK_TRUE(model.setSelectedShadowMask(
+        ayt::ay2d::editor::ShadowMask_BottomRight));
+    model.setTool(ayt::ay2d::editor::PaintTool::ShadowRectangle);
+    CHECK_TRUE(canvas.onMouseButtonDown({{120.0f, 160.0f}, 0}));
+    CHECK_TRUE(canvas.onMouseMove({{200.0f, 80.0f}, 0}));
+    CHECK_TRUE(canvas.onMouseButtonUp({{200.0f, 80.0f}, 0}));
+    CHECK_INT_EQ(model.document().shadowMaskAt(1u, 1u),
+                 ayt::ay2d::editor::ShadowMask_BottomRight);
+    CHECK_INT_EQ(model.document().shadowMaskAt(2u, 2u),
+                 ayt::ay2d::editor::ShadowMask_BottomRight);
+    CHECK_INT_EQ(model.document().shadowMaskAt(0u, 0u), 0u);
+    CHECK_INT_EQ(model.document().shadowMaskAt(3u, 3u), 0u);
+    CHECK_TRUE(model.undo());
+    CHECK_INT_EQ(model.document().shadowMaskAt(1u, 1u), 0u);
+    canvas.detachFromParent();
+}
 
 TEST_CASE(ViewportRoundTripGridPanAndAnchoredZoom)
 {
