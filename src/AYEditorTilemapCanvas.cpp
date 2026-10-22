@@ -558,6 +558,14 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             label = L"TERRAIN  ·  Rule "
                 + std::to_wstring(_model.selectedTerrainId());
             break;
+        case PaintTool::TerrainFill:
+            label = L"TERRAIN FILL  ·  Rule "
+                + std::to_wstring(_model.selectedTerrainId());
+            break;
+        case PaintTool::TerrainRectangle:
+            label = L"TERRAIN RECT  ·  Rule "
+                + std::to_wstring(_model.selectedTerrainId());
+            break;
         case PaintTool::Stamp:
             label = L"STAMP  ·  Pattern "
                 + std::to_wstring(_model.selectedStampId());
