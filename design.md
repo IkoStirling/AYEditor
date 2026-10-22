@@ -1,5 +1,14 @@
 # AYEditor Design
 
+## 2026-10-22 — 来源内混合确认不覆盖未知变体
+
+导入完成后逐路径/变体汇总结果。原逻辑只要有一个Updated/NotResident就视为该来源获得确认，
+若另一个变体仍Unconfirmed，会把此前该来源的刷新问题清掉；真实队列探针在旧库28断言中5失败。
+现在独立累积consumerUnconfirmed：明确Retained/Failed仍优先，存在旧问题且任何变体未知时
+保留待确认提示，即使其他项Updated或NotResident。全部确认后才移除该来源记录。
+首次未知但没有旧问题时仍不新增设备失败提示；不改CPU文件发布、队列成功状态、注册所有权或GPU事务。
+局部bool不改变EditorSession布局或Source ABI45；修复门禁见测试维护记录。
+
 ## 2026-10-22 — Renderer资源观察适配
 
 `EditorRendererResourceDebug.cpp`将显式RRM值快照转成现有Resource分类的无几何记录。

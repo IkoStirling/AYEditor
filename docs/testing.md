@@ -1,5 +1,23 @@
 # Editor 测试运行与报告
 
+## 来源内混合确认（2026-10-22）
+
+`timing-ack-before-ack.json`在原Editor库下1例28断言中5失败：两次错误清除后的Console/状态不一致，
+Updated+Unconfirmed和NotResident+Unconfirmed未保留待确认提示，且来源名丢失。
+测试走真实glTF converter、队列、recipe和Session更新，只有消费者确认状态由fixture提供，
+不把它当作GPU像素证明。`timing-ack-baseline-valid-proof.json`核对加入测试前后两个实现库hash均未变。
+同一来源先Retained，再混合确认两种组合，最后两变体Updated，覆盖提示保留、扫描后仍在及最终解除。
+修复后定向1例28断言通过，`timing-ack-first-ack.json`。
+最终172步消费方构建及`render-final-*`冻结回归通过：主入口471例12538断言，
+独立默认模块装配1例13断言，无失败/跳过；清单472项/两分区无遗漏重复。
+Renderer九组CPU1020例18581断言、两后端完整Gpu各58例45072断言，
+两后端Entity实际静态/蒙皮及六项实际Editor流程通过，冻结CPP/H摘要未变。
+Workshop两后端未保存Scene差异均为0、预览变化136457像素，保存并显式重载后Scene变化20995像素；
+实际重导入仍覆盖CPU合法/GPU超限保留、提示持续、修复重试与Scene保存重开。
+总日志`render-final-regression-run.log`，源码`render-final-frozen-source-hashes.json`；
+SDK128/53/102/576零错零警告，`sdk-render-final.json`。
+本例没有新增GPU设备功能或改变文件导入成功状态。
+
 ## 最终资源观察与停止采集（2026-10-22）
 
 Renderer文本修复联动的Editor完整主入口470例12510断言，资源观察专项5例130断言，均无失败/跳过。

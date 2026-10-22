@@ -2887,6 +2887,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                     std::string refreshError;
                     std::wstring refreshWarning;
                     bool consumerAcknowledged=false;
+                    bool consumerUnconfirmed=false;
                     // Cache hits may refer to outputs republished by another
                     // authoring tool while this Session still holds old views.
                     if (completed->state == EditorAssetImportJobState::Succeeded
@@ -2910,6 +2911,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                                 failed|=outcome.state==ayt::resource::ResourceRefreshState::Failed;
                                 consumerAcknowledged|=outcome.state==ayt::resource::ResourceRefreshState::Updated
                                     ||outcome.state==ayt::resource::ResourceRefreshState::NotResident;
+                                consumerUnconfirmed|=outcome.state==ayt::resource::ResourceRefreshState::Unconfirmed;
                             }
                         if(failed) refreshWarning=localizedText(
                             "ui.editor.import.refresh_failed",
@@ -2955,7 +2957,7 @@ void EditorSession::update(const ayt::game::HostedFrameContext& hostFrame) {
                         ?"id:"+completed->options.sourceId
                         :"path:"+std::to_string(completed->sourcePath.size())+":"
                             +completed->sourcePath+completed->destinationDirectory;
-                    if(refreshWarning.empty()&&!consumerAcknowledged
+                    if(refreshWarning.empty()&&(!consumerAcknowledged||consumerUnconfirmed)
                         &&_assetImportRefreshWarnings.contains(warningKey))
                         refreshWarning=localizedText("ui.editor.import.refresh_unconfirmed",
                             L"Files imported. An earlier view update is still unconfirmed. Reimport to retry.");

@@ -1,5 +1,12 @@
 # AYEditor
 
+## 重导入的混合确认（2026-10-22）
+
+已有某来源的视图刷新问题时，该来源的一项Updated/NotResident不能替另一项Unconfirmed清除提示。
+先显示本次明确失败/保留结果；没有明确失败但仍有未知结果时保留该来源的待确认提示，
+全部相关结果确认后再解除。首次没有旧问题的未知结果仍按原策略处理，不新增设备失败判断。
+这只完善当前Session内的来源提示，不改变导入文件成功状态或建立跨消费者GPU事务。
+
 ## 渲染资源观察（2026-10-22）
 
 Scene视口打开Debug Visualization，启用Resource分类，在记录列表选择Renderer texture residency，
