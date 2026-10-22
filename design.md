@@ -2186,6 +2186,15 @@ model's selected mask and asks the workspace to refresh the brush controls;
 ordinary tile picking remains available under the other tools. Sampling does
 not mutate document cells or add an undo step.
 
+### Terrain fill and rectangle in the main editor (2026-10-22)
+
+The Tilemap workspace exposes connected Terrain Fill and Terrain Rectangle
+alongside its existing terrain brush. Both require a selected terrain
+definition, use the shared `TilemapEditorModel` rules, and produce one undo
+step per click or rectangle drag. The main canvas previews the selected
+terrain's fallback tile color while the rectangle is dragged. The author
+terrain IDs and resolved preview tiles remain in the same document format.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in

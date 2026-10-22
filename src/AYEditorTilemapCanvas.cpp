@@ -341,6 +341,7 @@ bool EditorTilemapCanvas::onMouseButtonDown(
         return true;
     }
     if (_model.tool() == PaintTool::FloodFill
+        || _model.tool() == PaintTool::TerrainFill
         || _model.tool() == PaintTool::ShadowFill) {
         _model.applyAt(static_cast<uint32_t>(_hover.x),
                        static_cast<uint32_t>(_hover.y));
@@ -350,6 +351,7 @@ bool EditorTilemapCanvas::onMouseButtonDown(
     }
     _model.beginGesture();
     if (_model.tool() == PaintTool::Rectangle
+        || _model.tool() == PaintTool::TerrainRectangle
         || _model.tool() == PaintTool::ShadowRectangle) {
         _rectangleDrawing = true;
         _rectangleStart = _hover;
@@ -412,6 +414,12 @@ bool EditorTilemapCanvas::onMouseButtonUp(
         const TileCell end = clampToDocument(_rectangleCurrent);
         if (_model.tool() == PaintTool::ShadowRectangle) {
             _model.applyShadowRectangle(
+                static_cast<uint32_t>(_rectangleStart.x),
+                static_cast<uint32_t>(_rectangleStart.y),
+                static_cast<uint32_t>(end.x),
+                static_cast<uint32_t>(end.y));
+        } else if (_model.tool() == PaintTool::TerrainRectangle) {
+            _model.applyTerrainRectangle(
                 static_cast<uint32_t>(_rectangleStart.x),
                 static_cast<uint32_t>(_rectangleStart.y),
                 static_cast<uint32_t>(end.x),
@@ -769,7 +777,12 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             ? (_model.selectedShadowMask() == 0u
                 ? ayt::math::FVector4{0.92f, 0.27f, 0.30f, 1.0f}
                 : unpackRgba(document.shadowColor()))
-            : previewColor(document, _model.selectedTileId());
+            : previewColor(document,
+                _model.tool() == PaintTool::TerrainRectangle
+                    && document.terrainDefinition(_model.selectedTerrainId())
+                    ? document.terrainDefinition(
+                        _model.selectedTerrainId())->fallbackTileId
+                    : _model.selectedTileId());
         renderer.drawRect(preview, withAlpha(color, 0.24f));
         renderer.drawBorderRect(preview, shadowRectangle
             ? ayt::math::FVector4{0.78f, 0.59f, 1.0f, 1.0f}
@@ -842,10 +855,19 @@ void EditorTilemapCanvas::onRender(ayt::ui::IRenderBackend& renderer)
             {static_cast<float>(_hover.x + 1) * tileWidth,
              static_cast<float>(_hover.y) * tileHeight});
         const ayt::math::FRectangle hover = normalizedRect(a, b, offset);
+        const auto* selectedTerrain = document.terrainDefinition(
+            _model.selectedTerrainId());
         ayt::math::FVector4 color = _model.tool() == PaintTool::Eraser
             ? ayt::math::FVector4{0.92f, 0.33f, 0.30f, 1.0f}
-            : previewColor(document, _model.selectedTileId());
-        if (_model.tool() != PaintTool::FloodFill) {
+            : previewColor(document,
+                (_model.tool() == PaintTool::Terrain
+                 || _model.tool() == PaintTool::TerrainFill
+                 || _model.tool() == PaintTool::TerrainRectangle)
+                    && selectedTerrain != nullptr
+                    ? selectedTerrain->fallbackTileId
+                    : _model.selectedTileId());
+        if (_model.tool() != PaintTool::FloodFill
+            && _model.tool() != PaintTool::TerrainFill) {
             renderer.drawRect(hover, withAlpha(color, 0.18f));
         }
         renderer.drawBorderRect(hover, {0.56f, 0.80f, 1.0f, 1.0f}, 2.0f);

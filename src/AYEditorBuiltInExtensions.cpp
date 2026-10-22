@@ -839,6 +839,20 @@ public:
                 }
                 setTool(ayt::ay2d::editor::PaintTool::Terrain);
             });
+        _terrainFill = addIconButton(
+            toolbar, "tilemap_tool_terrain_fill",
+            "ui.editor.tilemap.terrain_fill_tooltip",
+            "bucket.svg", L"TF",
+            L"Fill connected terrain", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::TerrainFill);
+            });
+        _terrainRectangle = addIconButton(
+            toolbar, "tilemap_tool_terrain_rectangle",
+            "ui.editor.tilemap.terrain_rectangle_tooltip",
+            "rectangle.svg", L"TR",
+            L"Paint terrain rectangle", [this]() {
+                setTool(ayt::ay2d::editor::PaintTool::TerrainRectangle);
+            });
         _stamp = addIconButton(
             toolbar, "tilemap_tool_stamp", "ui.editor.tilemap.stamp_tooltip",
             "rubber-stamp.svg", L"S",
@@ -1616,6 +1630,8 @@ public:
         _fill = nullptr;
         _rectangle = nullptr;
         _terrain = nullptr;
+        _terrainFill = nullptr;
+        _terrainRectangle = nullptr;
         _stamp = nullptr;
         _shadow = nullptr;
         _shadowClear = nullptr;
@@ -3390,7 +3406,9 @@ private:
 
     void setTool(ayt::ay2d::editor::PaintTool tool) {
         if (_canvas != nullptr && _canvas->editingGestureActive()) return;
-        if (tool == ayt::ay2d::editor::PaintTool::Terrain
+        if ((tool == ayt::ay2d::editor::PaintTool::Terrain
+             || tool == ayt::ay2d::editor::PaintTool::TerrainFill
+             || tool == ayt::ay2d::editor::PaintTool::TerrainRectangle)
             && _document->model().document().terrainDefinition(
                 _document->model().selectedTerrainId()) == nullptr) {
             _host.setStatusText(
@@ -3614,6 +3632,10 @@ private:
             == ayt::ay2d::editor::PaintTool::Rectangle;
         const bool terrain = model.tool()
             == ayt::ay2d::editor::PaintTool::Terrain;
+        const bool terrainFill = model.tool()
+            == ayt::ay2d::editor::PaintTool::TerrainFill;
+        const bool terrainRectangle = model.tool()
+            == ayt::ay2d::editor::PaintTool::TerrainRectangle;
         const bool stamp = model.tool()
             == ayt::ay2d::editor::PaintTool::Stamp;
         const bool shadow = model.tool()
@@ -3634,6 +3656,12 @@ private:
             "ui.editor.tilemap.rectangle_tooltip", L"Rectangle (R)");
         setIconState(_terrain, terrain,
             "ui.editor.tilemap.terrain_tooltip", L"Auto terrain brush (T)");
+        setIconState(_terrainFill, terrainFill,
+            "ui.editor.tilemap.terrain_fill_tooltip",
+            L"Fill connected terrain");
+        setIconState(_terrainRectangle, terrainRectangle,
+            "ui.editor.tilemap.terrain_rectangle_tooltip",
+            L"Paint terrain rectangle");
         setIconState(_stamp, stamp,
             "ui.editor.tilemap.stamp_tooltip", L"Stamp (S)");
         const uint8_t shadowMask = model.selectedShadowMask();
@@ -3773,6 +3801,8 @@ private:
     ayt::ui::Button* _fill = nullptr;
     ayt::ui::Button* _rectangle = nullptr;
     ayt::ui::Button* _terrain = nullptr;
+    ayt::ui::Button* _terrainFill = nullptr;
+    ayt::ui::Button* _terrainRectangle = nullptr;
     ayt::ui::Button* _stamp = nullptr;
     ayt::ui::Button* _shadow = nullptr;
     ayt::ui::Button* _shadowClear = nullptr;

@@ -1191,6 +1191,7 @@ TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
         "tilemap_file_save", "tilemap_file_save_as",
         "tilemap_tool_pencil", "tilemap_tool_eraser",
         "tilemap_tool_fill", "tilemap_tool_rectangle",
+        "tilemap_tool_terrain_fill", "tilemap_tool_terrain_rectangle",
         "tilemap_tool_stamp", "tilemap_tool_shadow",
         "tilemap_tool_shadow_clear", "tilemap_tool_shadow_advanced",
         "tilemap_tool_shadow_fill", "tilemap_tool_shadow_rectangle",
