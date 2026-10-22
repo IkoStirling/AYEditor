@@ -1098,6 +1098,67 @@ TEST_CASE(tilemap_author_source_save_cooks_runtime_v3_visuals)
             / std::filesystem::u8path(portableAtlas->sourcePath)));
 }
 
+#ifdef AY_EDITOR_HARBOR_SAMPLE_DIR
+TEST_CASE(tilemap_harbor_author_save_cooks_real_content_in_project)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("harbor_tilemap_save")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const std::filesystem::path original(AY_EDITOR_HARBOR_SAMPLE_DIR);
+    const auto sourceDir = cleanup.root / "Assets/maps";
+    std::filesystem::create_directories(sourceDir);
+    for (const char* name : {"harbor.aytilemap.json", "ground.png",
+                             "objects.png"}) {
+        CHECK(std::filesystem::copy_file(original / name,
+                                         sourceDir / name));
+    }
+    const auto source = sourceDir / "harbor.aytilemap.json";
+
+    EditorExtensionRegistry registry;
+    std::string error;
+    CHECK(registerEditorBuiltInExtensions(registry, {}, &error));
+    const EditorDescriptor* descriptor = registry.find(
+        kEditorTilemapExtensionId);
+    CHECK(descriptor != nullptr);
+    if (descriptor == nullptr) return;
+    EditorOpenRequest request;
+    request.resourcePath = source.string();
+    auto document = descriptor->createDocument(request, error);
+    CHECK(document != nullptr);
+    if (document == nullptr) return;
+    CHECK(document->save(&error));
+    CHECK(error.empty());
+
+    ayt::ay2d::editor::TilemapDocument saved;
+    CHECK(saved.load(source.string(), &error));
+    CHECK_INT_EQ(saved.layerCount(), 2u);
+    CHECK_INT_EQ(saved.terrains().size(), 1u);
+    CHECK_INT_EQ(saved.animations().size(), 1u);
+    CHECK(saved.tileAtlas(1u) != nullptr);
+    CHECK(saved.tileAtlas(2u) != nullptr);
+
+    const auto cookedPath = cleanup.root / "Assets/tilemaps/harbor.tlm";
+    CHECK(std::filesystem::is_regular_file(cookedPath));
+    ayt::resource::TilemapAsset runtime;
+    CHECK(runtime.load(cookedPath.string()));
+    CHECK_INT_EQ(runtime.getLayerCount(), 2u);
+    CHECK_INT_EQ(runtime.getAtlasCount(), 2u);
+    CHECK_INT_EQ(runtime.getAnimationCount(), 1u);
+    CHECK_INT_EQ(runtime.getTileCollisionFlagCount(), 3u);
+    CHECK_INT_EQ(runtime.getShadowMaskCount(), 48u);
+    const auto* atlasEntries = runtime.getAtlasEntries();
+    CHECK(atlasEntries != nullptr);
+    if (atlasEntries == nullptr) return;
+    for (uint32_t index = 0u; index < runtime.getAtlasCount(); ++index) {
+        CHECK(atlasEntries[index].sourcePath != nullptr);
+        if (atlasEntries[index].sourcePath == nullptr) continue;
+        CHECK(std::filesystem::is_regular_file(
+            cleanup.root / "Assets"
+            / std::filesystem::u8path(atlasEntries[index].sourcePath)));
+    }
+}
+#endif
+
 TEST_CASE(tilemap_built_in_view_exposes_functional_workspace_controls)
 {
     EditorExtensionRegistry registry;

@@ -607,3 +607,6 @@ editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/�
 
 已有地形定义选中后，主 Tilemap 工具栏还可用连通地形填充与地形矩形。
 两项操作复用 AY2D 作者模型的地形规则，并各作为一步撤销。
+
+仓库内 Harbor 样本还会在主编辑器的项目工作流用例中，从双图集作者文件
+保存并 Cook 到正式 Tilemap 资源，检查图层、动画、碰撞与阴影数据。

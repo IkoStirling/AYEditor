@@ -84,6 +84,10 @@ target_compile_definitions(${MODULE_NAME} PRIVATE
     AY_EDITOR_TEST_SOURCE_DIR="${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor"
     AY_EDITOR_GAMEFLOW_TEST_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/assets"
 )
+if(EXISTS "${CMAKE_SOURCE_DIR}/Samples/TilemapPipeline/Assets/harbor.aytilemap.json")
+    target_compile_definitions(${MODULE_NAME} PRIVATE
+        AY_EDITOR_HARBOR_SAMPLE_DIR="${CMAKE_SOURCE_DIR}/Samples/TilemapPipeline/Assets")
+endif()
 
 # Keep registration symbols in this test-only binary. Production binaries keep
 # their normal linker optimization settings.

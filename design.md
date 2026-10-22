@@ -2195,6 +2195,18 @@ step per click or rectangle drag. The main canvas previews the selected
 terrain's fallback tile color while the rectangle is dragged. The author
 terrain IDs and resolved preview tiles remain in the same document format.
 
+### Harbor content through the main save and Cook path (2026-10-22)
+
+When the engine-root Harbor sample is present, `AYEditor_ProjectWorkflow`
+copies its author JSON and both PNG atlases into a temporary project `Assets`
+folder. The built-in Tilemap document opens and saves that file through the
+normal editor descriptor, then the test reopens the author document and loads
+the cooked runtime tilemap. It checks two layers and atlases, one animation,
+three collision entries, terrain authoring metadata and all 48 shadow masks;
+both cooked atlas texture references must resolve in the project. This
+validates main-editor source portability and Cook for real content. It does
+not assert that a running Scene hot-refreshes its cached meshes or animation.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in
