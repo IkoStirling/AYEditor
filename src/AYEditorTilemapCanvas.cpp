@@ -309,6 +309,17 @@ bool EditorTilemapCanvas::onMouseButtonDown(
         return true;
     }
     if (event.mouseButton == 1 && isInDocument(_hover)) {
+        if (_model.tool() == PaintTool::Shadow
+            || _model.tool() == PaintTool::ShadowFill
+            || _model.tool() == PaintTool::ShadowRectangle) {
+            const uint8_t picked = _model.document().shadowMaskAt(
+                static_cast<uint32_t>(_hover.x),
+                static_cast<uint32_t>(_hover.y));
+            _model.setSelectedShadowMask(picked);
+            if (_onShadowMaskPicked) _onShadowMaskPicked(picked);
+            markDirty();
+            return true;
+        }
         const uint32_t picked = visibleTileAt(_hover);
         _model.setSelectedTileId(picked);
         if (_onTilePicked) _onTilePicked(picked);

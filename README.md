@@ -601,3 +601,6 @@ editor_color_stylization_presets_custom_values_and_preferences；启动/关闭/�
 
 主 Tilemap 画布的动画预览现在复用 AY2D 的 `TilemapPreviewClock`，保留每帧不足
 1 毫秒的时间并在暂停期间保持计时；作者数据与 Scene 播放不受影响。
+
+在阴影画笔、填充或矩形工具下，可用鼠标中键从地图格取样四象限阴影形状；
+其他工具的中键仍取样图块。取样只改变当前画笔，不写入地图。

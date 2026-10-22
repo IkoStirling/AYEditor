@@ -1150,6 +1150,10 @@ public:
             refresh();
             _host.requestRepaint();
         });
+        _canvas->setOnShadowMaskPicked([this](uint8_t) {
+            refresh();
+            _host.requestRepaint();
+        });
         _canvas->setOnViewChanged([this](float zoom) {
             _zoomPercent = zoom;
             updateSummary();
@@ -1551,6 +1555,7 @@ public:
         if (_canvas != nullptr) {
             _canvas->setOnEdited({});
             _canvas->setOnTilePicked({});
+            _canvas->setOnShadowMaskPicked({});
             _canvas->setOnViewChanged({});
         }
         if (_atlasPicker != nullptr) {

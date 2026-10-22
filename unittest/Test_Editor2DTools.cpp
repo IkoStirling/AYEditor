@@ -84,6 +84,19 @@ TEST_CASE(TilemapCanvasConnectsShadowFillAndRectangleToAuthorModel)
                  ayt::ay2d::editor::ShadowMask_TopLeft);
     CHECK_INT_EQ(model.document().shadowMaskAt(3u, 3u),
                  ayt::ay2d::editor::ShadowMask_TopLeft);
+    uint8_t sampledMask = 0u;
+    canvas.setOnShadowMaskPicked([&sampledMask](uint8_t mask) {
+        sampledMask = mask;
+    });
+    CHECK_TRUE(model.setSelectedShadowMask(
+        ayt::ay2d::editor::ShadowMask_None));
+    CHECK_TRUE(canvas.onMouseButtonDown({{160.0f, 120.0f}, 1}));
+    CHECK_INT_EQ(model.selectedShadowMask(),
+                 ayt::ay2d::editor::ShadowMask_TopLeft);
+    CHECK_INT_EQ(sampledMask,
+                 ayt::ay2d::editor::ShadowMask_TopLeft);
+    CHECK_INT_EQ(model.document().shadowMaskAt(0u, 0u),
+                 ayt::ay2d::editor::ShadowMask_TopLeft);
     CHECK_TRUE(model.undo());
     CHECK_INT_EQ(model.document().shadowMaskAt(0u, 0u), 0u);
 

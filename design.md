@@ -2178,6 +2178,14 @@ remainder every frame. Paused preview does not advance the clock; only elapsed
 whole milliseconds request a redraw. The canvas remains a UI adapter and does
 not change authored animation durations or Scene playback.
 
+### Tilemap shadow sampling in the main editor (2026-10-22)
+
+Middle-click while a shadow brush, fill, or rectangle tool is active samples
+the quadrant mask from the hovered author cell. The canvas updates the shared
+model's selected mask and asks the workspace to refresh the brush controls;
+ordinary tile picking remains available under the other tools. Sampling does
+not mutate document cells or add an undo step.
+
 ### Render Style authoring boundary (2026-10-19)
 
 EditorSession owns one copied ColorStylizationSettings snapshot. Render Style callbacks live in

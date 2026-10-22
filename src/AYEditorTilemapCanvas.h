@@ -53,6 +53,9 @@ public:
     void setOnTilePicked(std::function<void(uint32_t)> callback) {
         _onTilePicked = std::move(callback);
     }
+    void setOnShadowMaskPicked(std::function<void(uint8_t)> callback) {
+        _onShadowMaskPicked = std::move(callback);
+    }
     void setOnViewChanged(std::function<void(float)> callback) {
         _onViewChanged = std::move(callback);
     }
@@ -115,6 +118,7 @@ private:
     ayt::math::FVector2 _lastCanvasSize{0.0f, 0.0f};
     std::function<void()> _onEdited;
     std::function<void(uint32_t)> _onTilePicked;
+    std::function<void(uint8_t)> _onShadowMaskPicked;
     std::function<void(float)> _onViewChanged;
 };
 
