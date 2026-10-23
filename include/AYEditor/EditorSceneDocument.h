@@ -5,6 +5,7 @@
 #include "AYEditorCommand/EditorCommandHistory.h"
 #include "AYMath/MathTypes.h"
 #include <AYEntity/IEntity.h>
+#include <AYEntity/SpatialGravitySettings.h>
 
 #include <cstdint>
 #include <functional>
@@ -58,6 +59,10 @@ public:
                           const EditorTransformState& after,
                           std::string label = "Transform",
                           std::string mergeKey = {});
+    /// Undoable intrinsic Spatial physics/gravity edit.
+    bool setSpatialGravity(uint32_t entityId,
+        const ayt::entity::SpatialGravitySettings& settings,
+        std::string mergeKey = {});
     bool renameEntity(uint32_t entityId, std::string name,
                       std::string* error = nullptr);
     bool createEntity(
@@ -127,6 +132,7 @@ public:
 
 private:
     class TransformCommand;
+    class SpatialGravityCommand;
     class EntityRenameCommand;
     class EntityCreateCommand;
     class EntityDeleteCommand;
@@ -138,6 +144,7 @@ private:
     class RestoreComponentCommand;
     class ComponentMutationCommand;
     friend class TransformCommand;
+    friend class SpatialGravityCommand;
     friend class EntityRenameCommand;
     friend class EntityCreateCommand;
     friend class EntityDeleteCommand;

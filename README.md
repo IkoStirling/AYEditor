@@ -615,3 +615,10 @@ Cook 到正式 Tilemap 资源；重开检查地形来源、解析后的图块与
 
 主 Tilemap 画布会忽略非有限鼠标坐标；拖拽期间出现无效移动时，仍以最后一个
 有效格结束手势。
+
+## Spatial gravity authoring
+
+The Spatial Entity inspector includes an intrinsic **Physics / Gravity /
+Advanced** section. It edits receiver mode, multiplier, channels, custom
+acceleration and optional area source without adding a removable component.
+Edits use Scene history, including undo/redo and duplication.

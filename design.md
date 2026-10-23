@@ -2234,3 +2234,13 @@ look unchanged. The renderer owns GPU behavior; Editor never assembles an indepe
 2026-10-21 层级复制验证：文档/Session六套回归通过，包含真实Mesh文件包围盒和Ctrl+D。
 SceneDuplicationRenderTest在D3D11/D3D12通过，变化5256像素；保存重开/undo/redo画面一致。
 SDK125能力/544符号零错误零警告。Legacy targetName保留原名称解析，不推断重写。
+
+## Spatial gravity inspector (2026-10-23)
+
+The Spatial Entity inspector renders `Physics / Gravity / Advanced` as a
+required built-in section, separate from component reflection and Transform.
+`EditorSceneDocument::setSpatialGravity` records a value command with
+undo/redo and field-specific merge keys. Entity snapshots include the
+intrinsic value so duplicate/delete/recreate paths retain authored gravity.
+The section is read-only outside Edit mode. Invalid numbers and values fail
+the Entity setter without changing the prior configuration.

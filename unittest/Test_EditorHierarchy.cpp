@@ -749,4 +749,41 @@ TEST_CASE(camera_inspector_target_selector_commits_undo_and_reports_missing_iden
     session.shutdown();
 }
 
+TEST_CASE(spatial_gravity_inspector_is_intrinsic_and_keeps_selection_after_edit) {
+    ayt::app::EngineHostScope hostScope(ayt::app::defaultEngineHost());
+    MockRenderer backend; EditorSession session;
+    CHECK(session.initialize(&backend,resolveHierarchyLayoutPath()));
+    auto* document=session.document(); auto& world=document->scene().world();
+    auto* entity=world.createSpatialEntity(); entity->setName("Gravity Inspector");
+    EditorGameViewTestAccess::forceModeAndNotify(session.gameView(),EditorMode::Edit);
+    session.update(.016f);
+    auto* tree=dynamic_cast<TreeView*>(session.ui().findById("tree_outliner"));
+    CHECK(tree!=nullptr);
+    int row=-1;
+    for(size_t i=0;i<tree->getNodeCount();++i)
+        if(tree->getNodeData(i).label==L"Gravity Inspector") row=int(i);
+    CHECK(row>0); tree->setSelectedIndex(row); session.update(.016f);
+    auto* header=dynamic_cast<Button*>(session.ui().findById("inspector_spatial_gravity_header"));
+    CHECK(header!=nullptr);
+    if (!header) { session.shutdown(); return; }
+    const auto bounds=header->getWorldBounds();
+    UIMouseEvent click({bounds.minX+10,bounds.minY+10},0);
+    CHECK(header->onMouseButtonDown(click)); CHECK(header->onMouseButtonUp(click));
+    session.update(.016f);
+    auto* mode=dynamic_cast<ComboBox*>(session.ui().findById("gravity_mode"));
+    CHECK(mode!=nullptr);
+    if (!mode) { session.shutdown(); return; }
+    mode->setSelectedIndexAndNotify(3);
+    CHECK(entity->spatialGravity()->mode==ayt::entity::SpatialGravityMode::Custom);
+    session.update(.016f);
+    CHECK(session.ui().findById("gravity_custom_z")!=nullptr);
+    auto* source=dynamic_cast<ComboBox*>(session.ui().findById("gravity_source_enabled"));
+    CHECK(source!=nullptr);
+    if (source) source->setSelectedIndexAndNotify(1);
+    CHECK(entity->spatialGravity()->sourceEnabled);
+    CHECK(document->undo());
+    CHECK_FALSE(entity->spatialGravity()->sourceEnabled);
+    session.shutdown();
+}
+
 TEST_SUITE_END

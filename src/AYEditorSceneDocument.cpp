@@ -179,6 +179,38 @@ struct EditorSceneDocument::EntitySnapshot {
     struct Attachment { std::string childId; EditorTransformState local; };
     std::vector<Attachment> attachments;
     std::vector<ComponentSnapshot> components;
+    ayt::entity::SpatialGravitySettings gravity{};
+};
+
+class EditorSceneDocument::SpatialGravityCommand final : public IEditorCommand {
+public:
+    SpatialGravityCommand(EditorSceneDocument& document, uint64_t generation, uint32_t id,
+        ayt::entity::SpatialGravitySettings before,
+        ayt::entity::SpatialGravitySettings after, std::string mergeKey)
+        : _document(document), _id(id), _generation(generation),
+          _before(before), _after(after), _mergeKey(std::move(mergeKey)) {}
+    const std::string& label() const noexcept override { return _label; }
+    bool isAlive() const noexcept override { return _generation == _document._contentGeneration; }
+    bool execute() override { return apply(_after); }
+    bool undo() override { return apply(_before); }
+    std::string mergeKey() const override { return _mergeKey; }
+    bool mergeFrom(const IEditorCommand& newer) override {
+        const auto* next = dynamic_cast<const SpatialGravityCommand*>(&newer);
+        if (!next || next->_id != _id || next->_generation != _generation
+            || &next->_document != &_document) return false;
+        _after = next->_after;
+        return true;
+    }
+private:
+    bool apply(const ayt::entity::SpatialGravitySettings& settings) {
+        auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
+        return entity && entity->setSpatialGravity(settings);
+    }
+    EditorSceneDocument& _document;
+    uint32_t _id;
+    uint64_t _generation;
+    ayt::entity::SpatialGravitySettings _before, _after;
+    std::string _mergeKey, _label = "Edit Spatial Gravity";
 };
 
 class EditorSceneDocument::EntityKindCommand final : public IEditorCommand {
@@ -187,6 +219,7 @@ public:
         : _document(document), _id(id), _generation(document._contentGeneration), _after(after) {
         auto* entity = document.findCommandEntity(id); _before = entity->kind();
         if (entity->transform()) document.snapshotComponent(*entity,*entity->transform(),_beforePose);
+        if (entity->isSpatial()) _beforeGravity = *entity->spatialGravity();
     }
     const std::string& label() const noexcept override { return _label; }
     bool isAlive() const noexcept override { return _generation == _document._contentGeneration; }
@@ -194,20 +227,27 @@ public:
         auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
         if (!entity || !entity->convertKind(_after)) return false;
         if (_after == ayt::entity::EntityKind::Spatial) {
-            if (_afterPose.typeName.empty()) return _document.snapshotComponent(*entity,*entity->transform(),_afterPose);
-            return _document.restoreComponent(*entity,_afterPose);
+            if (_afterPose.typeName.empty()) {
+                _afterGravity = *entity->spatialGravity();
+                return _document.snapshotComponent(*entity,*entity->transform(),_afterPose);
+            }
+            return _document.restoreComponent(*entity,_afterPose)
+                && entity->setSpatialGravity(_afterGravity);
         }
         return true;
     }
     bool undo() override {
         auto* entity = isAlive() ? _document.findCommandEntity(_id) : nullptr;
         return entity && entity->convertKind(_before)
-            && (_before == ayt::entity::EntityKind::Data || _document.restoreComponent(*entity,_beforePose));
+            && (_before == ayt::entity::EntityKind::Data
+                || (_document.restoreComponent(*entity,_beforePose)
+                    && entity->setSpatialGravity(_beforeGravity)));
     }
 private:
     EditorSceneDocument& _document; uint32_t _id; uint64_t _generation;
     ayt::entity::EntityKind _before, _after;
     ComponentSnapshot _beforePose, _afterPose;
+    ayt::entity::SpatialGravitySettings _beforeGravity{}, _afterGravity{};
     std::string _label = "Convert Entity Type";
 };
 
@@ -710,6 +750,31 @@ bool EditorSceneDocument::executeTransform(
         std::move(label), std::move(mergeKey)));
 }
 
+bool EditorSceneDocument::setSpatialGravity(uint32_t entityId,
+    const ayt::entity::SpatialGravitySettings& settings, std::string mergeKey)
+{
+    auto* entity = _scene->world().findEntity(entityId);
+    if (!entity || !entity->isSpatial()
+        || !ayt::entity::validateSpatialGravitySettings(settings)) return false;
+    const auto before = *entity->spatialGravity();
+    // The authoring value has no padding-sensitive comparison contract.
+    if (before.mode == settings.mode && before.receiverChannels == settings.receiverChannels
+        && before.multiplier == settings.multiplier
+        && before.customAcceleration == settings.customAcceleration
+        && before.sourceEnabled == settings.sourceEnabled
+        && before.sourceShape == settings.sourceShape
+        && before.sourceChannels == settings.sourceChannels
+        && before.sourcePriority == settings.sourcePriority
+        && before.sourceDirection == settings.sourceDirection
+        && before.sourceHalfExtent == settings.sourceHalfExtent
+        && before.sourceRadius == settings.sourceRadius
+        && before.sourceAcceleration == settings.sourceAcceleration
+        && before.sourceLinearFalloff == settings.sourceLinearFalloff) return false;
+    return _history.execute(std::make_unique<SpatialGravityCommand>(
+        *this, _contentGeneration, logicalEntityId(entityId), before, settings,
+        std::move(mergeKey)));
+}
+
 bool EditorSceneDocument::renameEntity(uint32_t entityId, std::string name,
                                        std::string* error)
 {
@@ -826,6 +891,8 @@ bool EditorSceneDocument::duplicateEntityHierarchy(uint32_t entityId, uint32_t* 
     for (std::size_t i=0;i<snapshots.size();++i) {
         auto& item=snapshots[i];remap(item.parentId);remap(item.ownerId);
         auto* entity=world.findEntity(created[i]);entity->setName(item.name.c_str());
+        if (entity->isSpatial() && !entity->setSpatialGravity(item.gravity))
+            return abort("Cannot restore duplicate Spatial gravity");
         for (const auto& component:item.components)
             if (!restoreComponent(*entity,component)) return abort("Cannot restore a duplicate component");
     }
@@ -1246,6 +1313,8 @@ bool EditorSceneDocument::snapshotEntityOwn(
 {
     snapshot.name = entity.getName() != nullptr ? entity.getName() : "";
     snapshot.kind = entity.kind(); snapshot.persistentId = entity.persistentId();
+    snapshot.gravity = entity.isSpatial() ? *entity.spatialGravity()
+        : ayt::entity::SpatialGravitySettings{};
     snapshot.parentId = entity.spatialParent() ? entity.spatialParent()->persistentId() : "";
     snapshot.ownerId = entity.owner() ? entity.owner()->persistentId() : "";
     snapshot.attachments.clear();snapshot.owned.clear();
@@ -1327,6 +1396,7 @@ ayt::entity::Entity* EditorSceneDocument::restoreEntityGraph(const std::vector<E
         created.push_back(entity->getId());
         if (!entity->restorePersistentId(item.persistentId)) return rollback();
         entity->setName(item.name.c_str());
+        if (entity->isSpatial() && !entity->setSpatialGravity(item.gravity)) return rollback();
         for (const auto& component:item.components) if (!restoreComponent(*entity,component)) return rollback();
     }
     for (const auto& item:items) {

@@ -11590,6 +11590,8 @@ void EditorSession::refreshComponentBrowser()
     _attachedComponentTypeNames.reserve(attached.size());
     _attachedComponentIds.reserve(attached.size());
     int inspectedIndex = -1;
+    const bool inspectingSpatialGravity = entity != nullptr && entity->isSpatial()
+        && _inspectedComponentId == "intrinsic:spatial-gravity";
     for (std::size_t i = 0; i < attached.size(); ++i) {
         const auto* descriptor = attached[i].descriptor;
         _attachedComponentTypeNames.push_back(descriptor->name);
@@ -11601,7 +11603,7 @@ void EditorSession::refreshComponentBrowser()
     if (attached.empty()) {
         _inspectedComponentTypeName.clear();
         _inspectedComponentId.clear();
-    } else if (inspectedIndex < 0) {
+    } else if (inspectedIndex < 0 && !inspectingSpatialGravity) {
         inspectedIndex = 0;
         for (std::size_t i = 0; i < attached.size(); ++i) {
             if (attached[i].descriptor->name == _inspectedComponentTypeName) {
@@ -11908,6 +11910,32 @@ void EditorSession::rebuildComponentPropertyEditor()
             createdExpandedSection = true;
         }
     }
+    if (entity->isSpatial()) {
+        constexpr const char* gravityId = "intrinsic:spatial-gravity";
+        const bool expanded = _inspectedComponentId == gravityId;
+        auto* header = new ayt::ui::Button();
+        header->setId("inspector_spatial_gravity_header");
+        header->setStyleId("editor_property_button");
+        header->setText((expanded ? L"v  " : L">  ") +
+                        std::wstring(L"Physics / Gravity / Advanced  [required]"));
+        header->setSize({240.0f, 27.0f});
+        header->setOnClicked([this, expanded]() {
+            _inspectedComponentTypeName = expanded ? std::string{} : "SpatialGravity";
+            _inspectedComponentId = expanded ? std::string{} : "intrinsic:spatial-gravity";
+            _inspectorRefreshPending = true;
+            if (_repaintCallback) _repaintCallback();
+        });
+        _componentPropertyBody->addWidget(header, 27.0f);
+        if (expanded) {
+            auto* section = new ayt::ui::VBox();
+            section->setSpacing(4.0f);
+            section->setPadding(4.0f, 2.0f, 2.0f, 5.0f);
+            section->setSize({240.0f, 0.0f});
+            _componentPropertyBody->addWidget(section);
+            propertyTarget = section;
+            createdExpandedSection = true;
+        }
+    }
     if (_attachedComponentTypeNames.empty()) {
         addLabel(L"Entity has no components. It remains in Hierarchy.",
                  20.0f, "inspector_property_placeholder");
@@ -11915,6 +11943,120 @@ void EditorSession::rebuildComponentPropertyEditor()
         return;
     }
     if (!createdExpandedSection) {
+        propertyUi->invalidateLayout();
+        return;
+    }
+
+    if (_inspectedComponentTypeName == "SpatialGravity") {
+        const auto current = *entity->spatialGravity();
+        const bool editable = _gameView.mode() == EditorMode::Edit;
+        const uint32_t entityId = entity->getId();
+        auto apply = [this, entityId](const char* key,
+            const std::function<void(ayt::entity::SpatialGravitySettings&)>& change) {
+            if (!_document || _gameView.mode() != EditorMode::Edit) return;
+            auto* selected = _selection.resolve(hierarchyWorldMutable());
+            if (!selected || selected->getId() != entityId || !selected->spatialGravity()) return;
+            auto next = *selected->spatialGravity();
+            change(next);
+            if (_document->setSpatialGravity(entityId, next,
+                    "gravity:" + std::to_string(entityId) + ":" + key)) {
+                _inspectorRefreshPending = true;
+                refreshUnsavedIndicator();
+                if (_repaintCallback) _repaintCallback();
+            }
+        };
+        auto addChoice = [&](const char* id, const wchar_t* title,
+            const std::vector<std::wstring>& choices, int selected,
+            const std::function<void(ayt::entity::SpatialGravitySettings&, int)>& change) {
+            addLabel(title, 18.0f);
+            auto* combo = new ayt::ui::ComboBox();
+            combo->setId(id); combo->setItems(choices);
+            combo->setSelectedIndex(selected); combo->setEnabled(editable);
+            combo->setSize({240.0f, 26.0f});
+            combo->setOnSelectionChanged([apply, id, change](int index) {
+                if (index >= 0) apply(id, [change, index](auto& next) { change(next, index); });
+            });
+            propertyTarget->addWidget(combo, 26.0f);
+        };
+        auto addNumber = [&](const char* id, const wchar_t* title, double value,
+            const std::function<void(ayt::entity::SpatialGravitySettings&, double)>& change,
+            bool integer = false) {
+            addLabel(title, 18.0f);
+            auto* input = new ayt::ui::TextInput();
+            input->setId(id); input->setSize({240.0f, 25.0f});
+            input->setText(integer ? std::to_wstring(static_cast<int64_t>(value))
+                                   : formatPreciseFloat(static_cast<float>(value)));
+            input->setReadOnly(!editable);
+            auto commit = [apply, id, input, change]() {
+                try {
+                    const std::wstring text = input->getText();
+                    size_t read = 0;
+                    const double value = std::stod(text, &read);
+                    if (read != text.size() || !std::isfinite(value)) return;
+                    apply(id, [change, value](auto& next) { change(next, value); });
+                } catch (const std::exception&) {}
+            };
+            input->setOnSubmit([commit](const std::wstring&) { commit(); });
+            input->setOnFocusLostNotify(commit);
+            propertyTarget->addWidget(input, 25.0f);
+        };
+        using G = ayt::entity::SpatialGravitySettings;
+        addLabel(L"Receiver", 22.0f);
+        addChoice("gravity_mode", L"Response mode",
+            {L"World", L"Ignore", L"Spatial field", L"Custom"},
+            static_cast<int>(current.mode),
+            [](G& g, int value) { g.mode = static_cast<ayt::entity::SpatialGravityMode>(value); });
+        addNumber("gravity_multiplier", L"Gravity multiplier", current.multiplier,
+            [](G& g, double v) { g.multiplier = static_cast<float>(v); });
+        if (current.mode == ayt::entity::SpatialGravityMode::Field)
+            addNumber("gravity_receiver_channels", L"Receiver channel mask (decimal)", current.receiverChannels,
+                [](G& g, double v) { if (v >= 0 && v <= 4294967295.0 && std::floor(v) == v) g.receiverChannels = static_cast<uint32_t>(v); }, true);
+        if (current.mode == ayt::entity::SpatialGravityMode::Custom) {
+            addNumber("gravity_custom_x", L"Custom acceleration X", current.customAcceleration.x,
+                [](G& g, double v) { g.customAcceleration.x = static_cast<float>(v); });
+            addNumber("gravity_custom_y", L"Custom acceleration Y", current.customAcceleration.y,
+                [](G& g, double v) { g.customAcceleration.y = static_cast<float>(v); });
+            addNumber("gravity_custom_z", L"Custom acceleration Z", current.customAcceleration.z,
+                [](G& g, double v) { g.customAcceleration.z = static_cast<float>(v); });
+        }
+        addLabel(L"Source", 22.0f);
+        addChoice("gravity_source_enabled", L"Acts as gravity source", {L"Off", L"On"},
+            current.sourceEnabled ? 1 : 0,
+            [](G& g, int value) { g.sourceEnabled = value != 0; });
+        if (current.sourceEnabled) {
+        addChoice("gravity_source_shape", L"Source shape", {L"Uniform", L"Box", L"Radial"},
+            static_cast<int>(current.sourceShape),
+            [](G& g, int value) { g.sourceShape = static_cast<ayt::entity::SpatialGravityShape>(value); });
+        addNumber("gravity_source_channels", L"Source channel mask (decimal)", current.sourceChannels,
+            [](G& g, double v) { if (v >= 0 && v <= 4294967295.0 && std::floor(v) == v) g.sourceChannels = static_cast<uint32_t>(v); }, true);
+        addNumber("gravity_source_priority", L"Source priority", current.sourcePriority,
+            [](G& g, double v) { if (v >= -2147483648.0 && v <= 2147483647.0 && std::floor(v) == v) g.sourcePriority = static_cast<int32_t>(v); }, true);
+        addNumber("gravity_source_acceleration", L"Source acceleration", current.sourceAcceleration,
+            [](G& g, double v) { g.sourceAcceleration = static_cast<float>(v); });
+        if (current.sourceShape != ayt::entity::SpatialGravityShape::Radial) {
+            addNumber("gravity_source_direction_x", L"Direction X", current.sourceDirection.x,
+                [](G& g, double v) { g.sourceDirection.x = static_cast<float>(v); });
+            addNumber("gravity_source_direction_y", L"Direction Y", current.sourceDirection.y,
+                [](G& g, double v) { g.sourceDirection.y = static_cast<float>(v); });
+            addNumber("gravity_source_direction_z", L"Direction Z", current.sourceDirection.z,
+                [](G& g, double v) { g.sourceDirection.z = static_cast<float>(v); });
+        }
+        if (current.sourceShape == ayt::entity::SpatialGravityShape::Box) {
+            addNumber("gravity_source_extent_x", L"Box half extent X", current.sourceHalfExtent.x,
+                [](G& g, double v) { g.sourceHalfExtent.x = static_cast<float>(v); });
+            addNumber("gravity_source_extent_y", L"Box half extent Y", current.sourceHalfExtent.y,
+                [](G& g, double v) { g.sourceHalfExtent.y = static_cast<float>(v); });
+            addNumber("gravity_source_extent_z", L"Box half extent Z", current.sourceHalfExtent.z,
+                [](G& g, double v) { g.sourceHalfExtent.z = static_cast<float>(v); });
+        }
+        if (current.sourceShape == ayt::entity::SpatialGravityShape::Radial) {
+            addNumber("gravity_source_radius", L"Radial radius", current.sourceRadius,
+                [](G& g, double v) { g.sourceRadius = static_cast<float>(v); });
+            addChoice("gravity_source_falloff", L"Radial falloff", {L"Constant", L"Linear"},
+                current.sourceLinearFalloff ? 1 : 0,
+                [](G& g, int value) { g.sourceLinearFalloff = value != 0; });
+        }
+        }
         propertyUi->invalidateLayout();
         return;
     }

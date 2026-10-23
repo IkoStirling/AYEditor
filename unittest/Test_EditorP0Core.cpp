@@ -59,6 +59,30 @@ bool registerEditorMultiProbe() {
 
 TEST_SUITE(AYEditor_P0Core)
 
+TEST_CASE(spatial_gravity_authoring_undo_redo_and_duplicate)
+{
+    EditorSceneDocument document;
+    auto* entity = document.scene().world().createEntity(ayt::entity::EntityKind::Spatial);
+    entity->setName("Gravity actor");
+    auto next = *entity->spatialGravity();
+    next.mode = ayt::entity::SpatialGravityMode::Custom;
+    next.customAcceleration = {0, 0, 5};
+    next.sourceEnabled = true;
+    CHECK(document.setSpatialGravity(entity->getId(), next));
+    CHECK(entity->spatialGravity()->mode == ayt::entity::SpatialGravityMode::Custom);
+    CHECK(document.undo());
+    CHECK(entity->spatialGravity()->mode == ayt::entity::SpatialGravityMode::World);
+    CHECK(document.redo());
+    CHECK(entity->spatialGravity()->sourceEnabled);
+    uint32_t duplicateId = 0;
+    std::string error;
+    CHECK(document.duplicateEntityHierarchy(entity->getId(), &duplicateId, &error));
+    auto* duplicate = document.scene().world().findEntity(duplicateId);
+    CHECK_NOT_NULL(duplicate);
+    CHECK(duplicate->spatialGravity()->mode == ayt::entity::SpatialGravityMode::Custom);
+    CHECK_FLOAT_EQ(duplicate->spatialGravity()->customAcceleration.z, 5, 0.001f);
+}
+
 TEST_CASE(editor_multi_components_have_independent_history_and_labels)
 {
     CHECK(registerEditorMultiProbe());
