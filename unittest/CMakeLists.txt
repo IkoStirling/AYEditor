@@ -99,6 +99,8 @@ ay_add_test(${MODULE_NAME} CASE_REPORT LABELS "ayeditor;editor-full" TIMEOUT 600
 if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
     add_executable(AYEditor_SequenceTests main.cpp Test_EditorSequence.cpp)
     target_link_libraries(AYEditor_SequenceTests PRIVATE AYEditor AYTest AYEntity AYScene)
+    target_compile_definitions(AYEditor_SequenceTests PRIVATE
+        AY_EDITOR_TEST_SOURCE_DIR="${AY_ENGINE_ASSETS_SOURCE_DIR}/AYEditor")
     ay_add_test(AYEditor_SequenceTests CASE_REPORT LABELS "ayeditor;sequence;integration" TIMEOUT 60 RUN_SERIAL)
 endif()
 ay_add_test(${MODULE_NAME} CASE_REPORT NAME AYEditor_FastTests

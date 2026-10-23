@@ -1,5 +1,11 @@
 # AYEditor
 
+## main集成（2026-10-23）
+
+灯光演出文档与Render Look、来源重导入、区域/物理创作等现有功能共同保留。
+合并后的Source ABI为46，消费方须重编；LightShow资源类型追加在RenderStyle之后，
+不会重排main既有资源类型。新建.lshow沿用UTF-8原生路径保存。
+
 ## 重导入的混合确认（2026-10-22）
 
 已有某来源的视图刷新问题时，该来源的一项Updated/NotResident不能替另一项Unconfirmed清除提示。
@@ -36,7 +42,7 @@ Scene与预览旧图保持、持久提示、修复重试、保存重开和稳定
 各向异性采用设备最大值并使用线性放大；边框目前按边缘钳制，窗口会明确显示。
 Apply持久化项目配方并重导入，Cancel不改资源；完成后刷新Scene和只读导入材质预览。
 窗口使用可滚动内容和固定错误区，按钮与校验提示不随长表单滚走。
-采样阶段以Source ABI44完成两后端验收，包含采样修改、取消、保存重开和坏源恢复；当前源码ABI45需重编消费方。
+采样阶段以Source ABI44完成两后端验收，包含采样修改、取消、保存重开和坏源恢复；当前源码ABI46需重编消费方。
 
 ## 灯光创作（2026-10-21）
 
@@ -53,7 +59,7 @@ Viewport Options → 灯光辅助显示可关闭；关闭后纯灯光对象不�
 
 `Test_EditorLightAuthoring` 验证真实菜单、弹窗、一次undo/redo、无效值、冲突与Scene保存重开。
 `AYEditor_LightAuthoringRenderTest` 在D3D11/D3D12读回实际灯光、Spot阴影、禁用、删除、恢复和重开。
-当前 Source ABI45，消费方需要重编。本阶段提供功能，不新增模型资产包。
+当前 Source ABI46，消费方需要重编。本阶段提供功能，不新增模型资产包。
 
 ## 来源导入设置与重导入（2026-10-21）
 
@@ -76,7 +82,7 @@ outputBaseName/sourceId/namespace 固定原输出路径，支持主文件改名�
 完成队列逐项通知 Session，转换成功/有效缓存命中都刷新驻留资源及缩略图，失败保留旧渲染。
 真实隐藏窗口 D3D11/D3D12 夹具已检查导入网格与其自身材质、按钮重导入、失败保留、
 修复重试及 Scene 编辑保存重开；该夹具使用显式 Scene Host，不等于默认 GameLoop 全面验收。
-当前 Source ABI45，依赖者需重新编译。
+当前 Source ABI46，依赖者需重新编译。
 
 BC4/BC5 颜色贴图的真实两后端用例与独立 RGBA8 图像逐像素对照，并验证重导入恢复 BC1；
 实际上传由 Renderer 处理 sRGB 兼容，不改变导入文件编码/mip 链。数据贴图保留原生 R/RG，
@@ -169,6 +175,24 @@ Render面板提供十八套起点预设、像素/RGB/双色/自定义2..16色板
 旧schema7标量继续迁移。Source ABI37；完整重编消费方，避免结构偏移不一致。
 颜色与轮廓绑定实现移至`AYEditorRenderStyle.cpp`，不继续向主Session TU堆积参数转换。
 
+## 灯光演出资源（2026-10-20）
+
+启用 Sequence 与 RendererIntegration 后，`.lshow` 使用主 Deferred 三维预览，
+同屏显示灯组、灯具、编队和雾轨。右键拖动环绕、滚轮缩放；点击时间轴定位，
+拖动关键帧在松开时提交一次编辑，取消捕获保留原文。支持灯具新建/克隆/删除、灯组分配/重命名、
+灯具光学与扫动/频闪/IES/Gobo、雾物理参数、圆/球编队与连续间距绕行。
+这些操作与 JSON 切换页共用 TextArea 撤销历史，保存前仍严格校验 8 MiB 文档。
+无 RendererIntegration 时保留文本页；资源格式上限仍为 128 MiB。
+
+预览默认使用64表面/12体积/4阴影预算，可有界调整预算与曝光，HUD显示提交/跳过计数、CPU准备和延迟GPU计时；
+GPU点阵未知可见数显示 source/pending，回读带独立采样序号，不显示伪造的当前可见数。
+Froxel、镜头、快门、聚合光与GPU筛选/回读为会话选项。隐藏标签、切回JSON、
+切页或关闭时解绑 owner 并恢复宿主相机/灯包/雾密度场/曝光/后处理/管线/视口；
+关闭页面显式释放 Presenter 与舞台缓存。独立 Forward 离屏视口不用于灯光预览。
+
+New Light Show 使用当前 schema8 编解码器。Studio 继续提供音乐/波形、密度网格笔刷与节目包导出。
+测试见 `Test_EditorSequence.cpp`：作者事务、拖动取消、真实宿主布局及可选
+`AY_EDITOR_LIGHTSHOW_GPU=d3d11|d3d12` 隐藏原生验收；不连接实体演出设备。
 
 ## 空间与数据实体作者流程（2026-10-14）
 
@@ -622,3 +646,10 @@ The Spatial Entity inspector includes an intrinsic **Physics / Gravity /
 Advanced** section. It edits receiver mode, multiplier, channels, custom
 acceleration and optional area source without adding a removable component.
 Edits use Scene history, including undo/redo and duplication.
+## 2026-10-18 灯光关键帧编排栏
+
+启用Sequence的.lshow文本页新增结构化编排栏。目标字段支持all、group:组名、灯具数字ID
+或formation；随后填写源秒数与目标秒数，使用Move/Copy/Delete或Step/Linear/Smooth。
+操作解码当前未保存缓冲区，调用AYSequence::EditorCore的editLightShowKeys，严格编码成功
+且不超过8MiB后，以一次TextArea插入替换整个选区；一次Undo恢复原缓冲区，Redo重放。
+冲突、非法JSON和超限失败不改文本或磁盘，文件仍须显式保存。三维视口仍由独立Studio提供。

@@ -3150,10 +3150,28 @@ void EditorSession::populateFrame(bool skipViewportPanel) {
     // editor chrome until the next resize.
     _ui.layout();
     syncViewportIfChanged();
+    const auto* preview = _dockViewHost ? _dockViewHost->active() : nullptr;
+    ayt::math::FRectangle previewBounds;
+    const bool documentPreview = preview && preview->card && preview->card->isVisible()
+        && preview->view && preview->view->mainPreviewBounds(previewBounds);
+    if (documentPreview) {
+        if (auto* sub = ayt::render::RendererSubSystem::findRegistered()) {
+            const auto a=_ui.logicalToPhysical({previewBounds.minX,previewBounds.minY});
+            const auto b=_ui.logicalToPhysical({previewBounds.maxX,previewBounds.maxY});
+            const auto x=uint16_t(std::clamp(a.x,0.f,65535.f));
+            const auto y=uint16_t(std::clamp(a.y,0.f,65535.f));
+            sub->setViewportRect(x,y,uint16_t(std::clamp(b.x-a.x,0.f,65535.f)),
+                uint16_t(std::clamp(b.y-a.y,0.f,65535.f)));
+        }
+    }
 
     _panelViewportForFrame = nullptr;
     _cardViewportForFrame = nullptr;
-    if (skipViewportPanel) {
+    if (skipViewportPanel && documentPreview) {
+        _cardViewportForFrame=preview->card;
+        _cardViewportHadBackgroundForFrame=preview->card->isBackgroundEnabled();
+        preview->card->setBackgroundEnabled(false);
+    } else if (skipViewportPanel) {
         ayt::ui::Widget* viewport = _ui.findById("panel_viewport");
         if (viewport != nullptr) {
             _panelViewportWasVisibleForFrame = viewport->isVisible();
@@ -3190,6 +3208,12 @@ void EditorSession::flushFrame() {
 
 bool EditorSession::shouldCompositeViewport() const {
     if (!_playRuntime.isPresentationReady()) return false;
+    if (_dockViewHost) {
+        const auto* hosted=_dockViewHost->active();
+        ayt::math::FRectangle bounds;
+        if (hosted && hosted->card && hosted->card->isVisible() && hosted->view
+            && hosted->view->mainPreviewBounds(bounds)) return true;
+    }
 
     // The native scene composite is a deliberate hole in the AYUI frame.
     // A document editor can share the Center dock slot with Scene View, and
@@ -6655,6 +6679,7 @@ bool EditorSession::openAsset(EditorAssetId assetId)
 #endif
 #ifdef AYEDITOR_HAS_SEQUENCE
     case EditorAssetType::Sequence:
+    case EditorAssetType::LightShow:
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE
     case EditorAssetType::ParticleEffect:
@@ -6671,6 +6696,7 @@ bool EditorSession::openAsset(EditorAssetId assetId)
             : kEditorAudioTimelineExtensionId;
 #ifdef AYEDITOR_HAS_SEQUENCE
         if (record->type == EditorAssetType::Sequence) request.preferredEditorId = kEditorSequenceExtensionId;
+        if (record->type == EditorAssetType::LightShow) request.preferredEditorId = kEditorDslExtensionId;
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE
         if(record->type==EditorAssetType::ParticleEffect) request.preferredEditorId=kEditorParticleExtensionId;
@@ -9659,6 +9685,9 @@ void EditorSession::bindMenuBar() {
 #ifdef AYEDITOR_HAS_SEQUENCE
         if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_sequence", L"New Scene Sequence")) {
             item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::Sequence); });
+        }
+        if (auto* item = addLocalizedItem(fileMenu, "ui.editor.menu.file.new_light_show", L"New Light Show")) {
+            item->setOnActivate([this]() { (void)createProjectAsset(EditorAssetType::LightShow); });
         }
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE

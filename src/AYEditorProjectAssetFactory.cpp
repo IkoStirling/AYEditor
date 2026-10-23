@@ -23,6 +23,7 @@
 #endif
 #ifdef AYEDITOR_HAS_SEQUENCE
 #include <AYSequence/SequenceAssetIO.h>
+#include <AYSequence/LightShowAssetIO.h>
 #endif
 #ifdef AYEDITOR_HAS_STATS
 #include <AYStats/RecipeAsset.h>
@@ -61,6 +62,9 @@ bool templateFor(EditorAssetType type, AssetTemplate &value)
 #ifdef AYEDITOR_HAS_SEQUENCE
     case EditorAssetType::Sequence:
         value = {"sequences", "NewSequence", suffix(Id::SceneSequence)};
+        return true;
+    case EditorAssetType::LightShow:
+        value = {"shows", "NewLightShow", suffix(Id::LightShow)};
         return true;
 #endif
 #ifdef AYEDITOR_HAS_PARTICLE
@@ -285,9 +289,16 @@ EditorProjectAssetCreateResult createEditorProjectAsset(
         saved = ayt::sequence::saveSequence(pathUtf8(destination), sequence, &diagnostic);
         error = diagnostic.message;
 #endif
-    }
-    else if (type == EditorAssetType::ParticleEffect)
-    {
+    } else if (type == EditorAssetType::LightShow) {
+#ifdef AYEDITOR_HAS_SEQUENCE
+        ayt::sequence::LightShow show;
+        show.name="New Light Show";show.duration=10;
+        ayt::sequence::FixtureTrack fixture;fixture.id=1;fixture.group="stage";
+        ayt::sequence::FixtureState state;state.position={0,8,0};fixture.keys.push_back({0,state});
+        show.fixtures.push_back(std::move(fixture));
+        saved=ayt::sequence::saveLightShow(pathUtf8(destination),show,&error);
+#endif
+    } else if (type == EditorAssetType::ParticleEffect) {
 #ifdef AYEDITOR_HAS_PARTICLE
         saved=particle::saveEffectAsset(pathUtf8(destination),particle::combinedExplosion(),&error);
 #endif

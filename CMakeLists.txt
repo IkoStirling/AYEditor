@@ -275,10 +275,15 @@ if(TARGET AYSequenceAnimationIntegration AND TARGET AYSequenceAssetIO)
     target_link_libraries(${MODULE_NAME} PUBLIC AYSequenceEditorCore
         AYSequenceAssetIO AYSequenceAnimationIntegration)
     target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_SEQUENCE=1)
+    if(TARGET AYSequenceRendererIntegration)
+        target_sources(${MODULE_NAME} PRIVATE src/AYEditorLightShowView.cpp)
+        target_link_libraries(${MODULE_NAME} PUBLIC AYSequenceRendererIntegration)
+        target_compile_definitions(${MODULE_NAME} PUBLIC AYEDITOR_HAS_LIGHTSHOW_RENDERER=1)
+    endif()
 endif()
 
 target_compile_definitions(${MODULE_NAME} PUBLIC
-    AYEDITOR_SOURCE_ABI_VERSION=45)
+    AYEDITOR_SOURCE_ABI_VERSION=46)
 
 file(TO_CMAKE_PATH "${AY_ENGINE_ASSETS_SOURCE_DIR}"
     AY_ENGINE_ASSETS_SOURCE_HINT_PATH)

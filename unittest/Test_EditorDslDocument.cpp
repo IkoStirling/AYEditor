@@ -10,6 +10,11 @@
 #include "AYUI/DockArea.h"
 #include "AYUI/MockRenderer.h"
 #include "AYUI/TextArea.h"
+#include "AYUI/TextInput.h"
+#include "AYUI/UnicodeText.h"
+#ifdef AYEDITOR_HAS_SEQUENCE
+#include <AYSequence/LightShowAssetIO.h>
+#endif
 #include "AYUI/Widget.h"
 #include "AYUI/TileView.h"
 
@@ -589,4 +594,31 @@ TEST_CASE(logia_project_event_declarations_are_checked_without_a_bound_actor)
     CHECK(symbols.size()==1);if(!symbols.empty())CHECK(symbols[0].kind=="project-event");
     document.setSourceUtf8("script Main {project_event progress(value:int) on_start(){event.emit(\"progress\",true)}}");CHECK(!document.compile().success);
 }
+#ifdef AYEDITOR_HAS_SEQUENCE
+TEST_CASE(light_show_structured_key_commands_use_single_undo_and_preserve_unsaved_source) {
+    const auto root=dslEditorTempRoot("lightshow");std::filesystem::create_directories(root);
+    DslEditorTempCleanup cleanup{root};const auto file=root/"show.lshow";
+    auto data=ayt::sequence::makeLightShowExample(1,1);CHECK(ayt::sequence::saveLightShow(file.string(),data));
+    auto document=std::make_shared<EditorDslDocument>();CHECK(document->open(file.string(),file.string()));
+    EditorWorkspace workspace;DslTestHostServices host(workspace);auto descriptor=makeEditorDslDescriptor();
+    auto view=descriptor.createView(document,host);CHECK(view!=nullptr);if(!view)return;
+    auto* commands=view->commandTarget();auto areas=dslTextAreas(view->rootWidget());ayt::ui::TextArea* source=nullptr;
+    for(auto* area:areas)if(!area->isReadOnly())source=area;CHECK(source!=nullptr);if(!source)return;
+    // Operate on an unsaved edit, not the disk snapshot.
+    data.name="Unsaved show";std::string bytes;CHECK(ayt::sequence::encodeLightShow(data,bytes));
+    source->setText(ayt::ui::decodeUtf8Text(bytes));const auto before=document->sourceUtf8();
+    const auto history=source->getUndoStackSize();
+    CHECK(commands->executeCommand("lightshow.key.copy"));
+    CHECK(source->getUndoStackSize()==history+1);CHECK(document->isDirty());
+    ayt::sequence::LightShow edited;CHECK(ayt::sequence::decodeLightShow(document->sourceUtf8(),edited));
+    CHECK(edited.name=="Unsaved show");CHECK(edited.fixtures[0].keys.size()==2);CHECK(edited.fixtures[0].keys[1].time==1);
+    const auto after=document->sourceUtf8();CHECK(!commands->executeCommand("lightshow.key.copy"));
+    CHECK(document->sourceUtf8()==after);CHECK(source->getUndoStackSize()==history+1);
+    CHECK(commands->executeCommand("edit.undo"));CHECK(document->sourceUtf8()==before);
+    CHECK(commands->executeCommand("edit.redo"));CHECK(document->sourceUtf8()==after);
+    CHECK(ayt::io::File::readAllText(file.string()).find("Unsaved show")==std::string::npos);
+    source->setText(L"{}");CHECK(!commands->executeCommand("lightshow.key.move"));CHECK(document->sourceUtf8()=="{}");
+}
+#endif
+
 TEST_SUITE_END

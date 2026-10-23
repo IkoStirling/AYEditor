@@ -2,6 +2,7 @@
 
 #include "AYEditor/EditorVersion.h"
 #include <AYUI/ImageTexture.h>
+#include <AYMath/MathTypes.h>
 
 #include <cstdint>
 #include <functional>
@@ -231,6 +232,10 @@ public:
         return nullptr;
     }
 
+    /// Optional main-renderer document viewport, in logical UI coordinates.
+    /// The active Center card opens a transparent composite hole here. Views
+    /// attach/detach their owner-scoped RendererSubSystem presentation callback.
+    virtual bool mainPreviewBounds(ayt::math::FRectangle& /*bounds*/) const { return false; }
     virtual void onActivated() {}
     virtual void onDeactivated() {}
     // Dynamic/programmatic editor chrome cannot be retranslatable by the

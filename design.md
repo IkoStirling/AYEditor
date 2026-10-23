@@ -1,5 +1,12 @@
 # AYEditor Design
 
+## 2026-10-23 — main集成
+
+公共编辑器接口同时保留main的扩展与灯光可视文档/主Deferred孔，统一Source ABI46；
+头文件、CMake目标与ABI测试同步，旧消费者必须重编。RenderStyle的现有枚举位置保留，
+LightShow追加其后；工厂的新建保存使用与其他资源一致的UTF-8路径转换。文档/预览owner
+恢复与main的资源热刷新/后处理继续分别由原owner负责，不替换新导入/角色/物理创作逻辑。
+
 ## 2026-10-22 — 来源内混合确认不覆盖未知变体
 
 导入完成后逐路径/变体汇总结果。原逻辑只要有一个Updated/NotResident就视为该来源获得确认，
@@ -110,7 +117,7 @@ Apply 校验失败保留弹窗，持久化/排队失败显示错误；Cancel/Esc
 AssetDatabase关联键以一次解析的source/derived根和相对逻辑路径构成，配方的输出根同样解析；
 解决目录联接别名与持久配方物理路径不一致的问题，不改逻辑路径哈希ID或索引格式。
 Tooltip 先解除锚点再销毁，Session 在 UI shutdown 前回收模态窗口。
-当前扩展 Host API 使用 Source ABI45，UI 验证接口为 ABI132。
+当前扩展 Host API 使用 Source ABI46，UI 验证接口为 ABI132。
 
 Session 对成功转换和有效输出缓存命中刷新驻留 L2/GPU 与缩略图；失败不销毁旧资源。
 缓存命中也需要同步：另一作者工具可能已更新产物，而本 Session 仍持有先前 CPU/GPU/文档快照。
@@ -241,6 +248,32 @@ AYEditorRenderStyle集中绑定TemporalFeedback模式与参数，按模式显示
 回调中重套预设。history reset直接调用Renderer facade，不修改Scene或undo历史。
 schema8偏好字符串内嵌look v3，旧v1/v2通过Renderer唯一codec迁移；ABI37反映值布局扩展。
 Test_EditorShell覆盖TemporalFeedback/seed/offset恢复，ABI门禁同步更新。
+## 2026-10-20 主 Deferred 灯光文档
+
+保留 EditorDslDocument 的身份、恢复、严格保存与 8 MiB 上限；可选 LightShowView
+替换 LightShowJson 的 view 工厂。内容 revision 变化才 decode/compile，逐帧复用求值缓冲区。
+可视编辑编码/校验成功后一次替换 TextArea 选区，因此 JSON 与多轨/组操作共用历史。
+时间轴只画可见行；每个像素桶用 upper_bound 跳过重复键，单帧绘制量受屏幕宽度约束。
+拖动只保留 ghost，松开调用 Core 原子关键帧编辑，捕获取消不发布；属性采样禁用扫动/频闪，
+避免把程序化调制烘焙回键。组属性编辑只应用实际更改字段，保留各灯的独立位置/颜色与轨参数。雾/灯具插入保留原出段插值，编队保持稳定点 ID。
+
+IEditorView::mainPreviewBounds 给出逻辑视口孔；Session 在布局完成后转换物理像素，
+只临时去除活动 DockCard 的背景，Flush 恢复，窗口和 dock 仍参与布局。
+RendererSubSystem 的单 owner 主呈现替代 World/多相机 Forward 提取，只 render 一次。
+首次提交前捕获宿主呈现状态；matching clear/owner替换/shutdown 恢复并失效时域历史。
+页面隐藏的祖先可见性也会解绑，不能因旧 activeDocumentId 继续占用 Scene View。
+视图在 hosted tree 销毁前 prepareForUiShutdown；随后释放自身资产和 Presenter 缓存。
+GPU回读仍由 Renderer 的异步 host-packet 生命周期托管，不在 UI 等待。
+
+
+## 2026-10-16 灯光演出文档接入
+
+当 `AYEDITOR_HAS_SEQUENCE` 启用时，`.lshow` 在 AssetDatabase 中有独立类型，归入
+Motion 资源过滤器；ProjectAssetFactory 使用 AYSequence::AssetIO 创建有效 schema8 文件。
+双击资产走 `EditorDslExtension` 文本页，打开容量沿用 DSL 文档的 8 MiB 限制。
+保存前以 `decodeLightShow` 校验当前编辑缓冲区，失败时保留磁盘原件和脏状态；
+Compile 对未保存内容做格式检查，并以 0.5 世界单位阈值执行有界编队间距诊断。
+此处是主编辑器的资源管理与 JSON 编辑入口，独立 Studio 承担三维灯光预览和可视化参数调整。
 
 ## 空间与数据实体作者流程（2026-10-14）
 
@@ -2244,3 +2277,10 @@ undo/redo and field-specific merge keys. Entity snapshots include the
 intrinsic value so duplicate/delete/recreate paths retain authored gravity.
 The section is read-only outside Edit mode. Invalid numbers and values fail
 the Entity setter without changing the prior configuration.
+## 2026-10-18 灯光关键帧编排栏
+
+启用Sequence的.lshow文本页新增结构化编排栏。目标字段支持all、group:组名、灯具数字ID
+或formation；随后填写源秒数与目标秒数，使用Move/Copy/Delete或Step/Linear/Smooth。
+操作解码当前未保存缓冲区，调用AYSequence::EditorCore的editLightShowKeys，严格编码成功
+且不超过8MiB后，以一次TextArea插入替换整个选区；一次Undo恢复原缓冲区，Redo重放。
+冲突、非法JSON和超限失败不改文本或磁盘，文件仍须显式保存。三维视口仍由独立Studio提供。
