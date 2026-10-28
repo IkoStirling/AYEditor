@@ -666,7 +666,7 @@ TEST_CASE(project_asset_rename_rejects_unhandled_script_reference_before_move)
 
     EditorAssetOperations operations(cleanup.root.string());
     const auto renamed = operations.rename(database, *image, "aa.png");
-    CHECK_FALSE(renamed);
+    CHECK(!renamed);
     CHECK(std::filesystem::exists(source));
     CHECK_FALSE(std::filesystem::exists(cleanup.root / "Assets/aa.png"));
     std::ifstream input(script, std::ios::binary);
