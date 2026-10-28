@@ -2291,6 +2291,14 @@ copying does not rewrite. The lexer's output preserves surrounding bytes and
 formatting. This is a conservative interim boundary, not a typed reference
 enumeration protocol for every asset format. A future adapter must enumerate
 references and report unresolved identities before publication.
+
+## Document record address stability (2026-10-28)
+
+`EditorDocumentManager` stores records in `std::list` nodes. Erasing a middle
+document no longer invalidates borrowed pointers to other records. A pointer
+is still invalid after its own document closes or the manager is destroyed.
+The public `records()` range is a list rather than a deque; callers should
+iterate it rather than rely on indexed access.
 ## 2026-10-18 灯光关键帧编排栏
 
 启用Sequence的.lshow文本页新增结构化编排栏。目标字段支持all、group:组名、灯具数字ID

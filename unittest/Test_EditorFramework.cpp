@@ -312,6 +312,24 @@ TEST_CASE(editor_document_manager_deduplicates_and_centralizes_close_policy)
     CHECK(documents.size() == 0u);
 }
 
+TEST_CASE(editor_document_record_pointer_survives_middle_close)
+{
+    EditorExtensionRegistry registry;
+    CHECK(registry.registerEditor(makeFrameworkDescriptor(
+        "ui", {".ui.json"}, EditorOpenPolicy::PerResource)));
+    EditorDocumentManager documents(registry);
+    const auto first = documents.open(EditorOpenRequest{"Assets/first.ui.json"});
+    const auto middle = documents.open(EditorOpenRequest{"Assets/middle.ui.json"});
+    const auto last = documents.open(EditorOpenRequest{"Assets/last.ui.json"});
+    CHECK(first && middle && last);
+    const EditorDocumentRecord* retained = documents.find(last.documentId);
+    CHECK(retained != nullptr);
+    if (retained == nullptr) return;
+    CHECK(documents.close(middle.documentId, EditorDocumentCloseAction::Discard));
+    CHECK(documents.find(last.documentId) == retained);
+    CHECK(retained->documentId == last.documentId);
+}
+
 TEST_CASE(editor_dock_view_host_owns_view_activation_and_dirty_close)
 {
     EditorWorkspace workspace;

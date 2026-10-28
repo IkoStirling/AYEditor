@@ -3,8 +3,8 @@
 #include "AYEditor/EditorExtensionRegistry.h"
 
 #include <cstdint>
-#include <deque>
 #include <functional>
+#include <list>
 #include <memory>
 #include <string>
 #include <vector>
@@ -84,20 +84,15 @@ public:
     EditorCloseResult close(const std::string& documentId,
                             EditorDocumentCloseAction action);
 
-    // B-5 (ayeditor audit 2026-09-14): the returned pointer points into
-    // the internal _records deque. Pointers into a std::deque are stable
-    // across push_back/push_front (no reallocation) and remain valid when
-    // *other* elements are erased, so callers can safely hold a pointer
-    // returned by find() across other manager calls as long as the
-    // referenced document is not closed. The contract still requires the
-    // caller to stop using the pointer once they call close() on the
-    // same documentId.
+    /// Borrowed record pointers remain valid while that document is open,
+    /// including when another document opens or closes. Closing the named
+    /// document or destroying this manager invalidates its pointer.
     const EditorDocumentRecord* find(
         const std::string& documentId) const noexcept;
     EditorDocumentRecord* find(const std::string& documentId) noexcept;
     const EditorDocumentRecord* active() const noexcept;
     const std::string& activeDocumentId() const noexcept { return _activeId; }
-    const std::deque<EditorDocumentRecord>& records() const noexcept {
+    const std::list<EditorDocumentRecord>& records() const noexcept {
         return _records;
     }
     size_t size() const noexcept { return _records.size(); }
@@ -115,11 +110,8 @@ private:
               const EditorDocumentRecord& record);
 
     EditorExtensionRegistry& _registry;
-    // B-5 (ayeditor audit 2026-09-14): was std::vector. Pointers into a
-    // std::deque remain valid across push_back/push_front (no reallocation)
-    // and across erase of *other* elements, so callers can hold pointers
-    // returned by find() across other manager calls without a UAF trap.
-    std::deque<EditorDocumentRecord> _records;
+    // list nodes preserve record addresses when unrelated nodes are erased.
+    std::list<EditorDocumentRecord> _records;
     std::string _activeId;
     uint64_t _nextDocumentSerial = 1;
     ListenerId _nextListenerId = 1;
