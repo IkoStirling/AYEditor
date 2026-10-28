@@ -616,6 +616,64 @@ TEST_CASE(project_asset_move_and_rename_repair_portable_references)
         cleanup.root / "Assets/meshes/box.aymesh"));
 }
 
+TEST_CASE(project_asset_rename_does_not_cascade_or_rewrite_prose)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("asset_rename_overlap")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    writeWorkflowFile(cleanup.root / "Assets/a.png", "image");
+    const auto scene = cleanup.root / "Assets/worlds/demo.ayscene";
+    writeWorkflowFile(scene,
+        "{\"texture\":\"Assets/a.png\",\"otherTexture\":\"a.png\","
+        "\"note\":\"data.png\",\"noteExact\":\"a.png\"}\n");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const EditorAssetRecord* image = database.findByLogicalPath("Assets/a.png");
+    CHECK(image != nullptr);
+    if (image == nullptr) return;
+
+    EditorAssetOperations operations(cleanup.root.string());
+    const auto renamed = operations.rename(database, *image, "aa.png");
+    CHECK(renamed);
+    CHECK(renamed.updatedReferences == 2u);
+    std::ifstream input(scene, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    CHECK(text.find("\"texture\":\"Assets/aa.png\"") != std::string::npos);
+    CHECK(text.find("\"otherTexture\":\"aa.png\"") != std::string::npos);
+    CHECK(text.find("\"note\":\"data.png\"") != std::string::npos);
+    CHECK(text.find("\"noteExact\":\"a.png\"") != std::string::npos);
+    CHECK(text.find("aaa.png") == std::string::npos);
+}
+
+TEST_CASE(project_asset_rename_rejects_unhandled_script_reference_before_move)
+{
+    ProjectWorkflowCleanup cleanup{projectWorkflowRoot("asset_script_ref")};
+    std::error_code ignored;
+    std::filesystem::remove_all(cleanup.root, ignored);
+    const auto source = cleanup.root / "Assets/a.png";
+    const auto script = cleanup.root / "Assets/use.lua";
+    writeWorkflowFile(source, "image");
+    writeWorkflowFile(script, "load(\"a.png\")\n");
+    EditorAssetDatabase database;
+    std::string error;
+    CHECK(database.open(cleanup.root.string(), &error));
+    CHECK(database.scanNow(&error));
+    const EditorAssetRecord* image = database.findByLogicalPath("Assets/a.png");
+    CHECK(image != nullptr);
+    if (image == nullptr) return;
+
+    EditorAssetOperations operations(cleanup.root.string());
+    const auto renamed = operations.rename(database, *image, "aa.png");
+    CHECK_FALSE(renamed);
+    CHECK(std::filesystem::exists(source));
+    CHECK_FALSE(std::filesystem::exists(cleanup.root / "Assets/aa.png"));
+    std::ifstream input(script, std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    CHECK(text == "load(\"a.png\")\n");
+}
+
 TEST_CASE(project_asset_move_repairs_references_and_copy_keeps_source)
 {
     ProjectWorkflowCleanup cleanup{projectWorkflowRoot("asset_move_copy")};

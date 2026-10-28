@@ -1,4 +1,5 @@
 #include "AYEditor/EditorAssetOperations.h"
+#include "EditorAssetReferenceRewrite.h"
 #include <AYAssetFormat/AssetFormat.h>
 
 #include <algorithm>
@@ -46,9 +47,8 @@ bool validFileName(const std::string& name)
         && name.find_first_of("/\\:*?\"<>|") == std::string::npos;
 }
 
-bool isReferenceText(const fs::path& path, std::uintmax_t size)
+bool isReferenceText(const fs::path& path)
 {
-    if (size > 4u * 1024u * 1024u) return false;
     if (ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Scene)
         || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::Material)
         || ayt::asset_format::matchesPath(path.string(), ayt::asset_format::Id::ActorClass)
@@ -107,20 +107,6 @@ bool writeFile(const fs::path& path, const std::string& text,
     return true;
 }
 
-std::size_t replaceAll(std::string& text, const std::string& from,
-                       const std::string& to)
-{
-    if (from.empty() || from == to) return 0;
-    std::size_t count = 0;
-    for (std::size_t position = 0;
-         (position = text.find(from, position)) != std::string::npos;) {
-        text.replace(position, from.size(), to);
-        position += to.size();
-        ++count;
-    }
-    return count;
-}
-
 struct MoveEntry {
     fs::path from;
     fs::path to;
@@ -161,35 +147,72 @@ EditorAssetOperationResult relocate(
     struct Rewrite { fs::path path; std::string before; std::string after; };
     std::vector<Rewrite> rewrites;
     if (!copying) {
+        std::vector<detail::ReferencePathChange> changes;
+        changes.reserve(entries.size() * 3);
+        for (const MoveEntry& entry : entries) {
+            changes.push_back({entry.oldLogical, entry.newLogical});
+            changes.push_back({entry.oldPortable, entry.newPortable});
+            changes.push_back({slashes(entry.from.string()),
+                               slashes(entry.to.string())});
+        }
         std::error_code scanError;
         for (fs::recursive_directory_iterator it(root, scanError), end;
              !scanError && it != end; it.increment(scanError)) {
             if (!it->is_regular_file(scanError)) continue;
+            if (!isReferenceText(it->path())) continue;
             const auto size = it->file_size(scanError);
-            if (scanError || !isReferenceText(it->path(), size)) {
-                scanError.clear();
-                continue;
+            if (scanError) break;
+            if (size > 4u * 1024u * 1024u) {
+                result.error = "Authoring file exceeds safe reference scan size: "
+                    + it->path().string();
+                return result;
             }
             std::error_code ioError;
             std::string before = readFile(it->path(), ioError);
-            if (ioError) continue;
-            std::string after = before;
-            std::size_t replacements = 0;
-            for (const MoveEntry& entry : entries) {
-                replacements += replaceAll(after, entry.oldLogical,
-                                           entry.newLogical);
-                replacements += replaceAll(after, entry.oldPortable,
-                                           entry.newPortable);
-                replacements += replaceAll(after, slashes(entry.from.string()),
-                                           slashes(entry.to.string()));
+            if (ioError) {
+                result.error = "Could not read authoring file before asset move: "
+                    + it->path().string();
+                return result;
             }
-            if (after != before) {
+            auto content = std::string_view(before);
+            if (content.starts_with("\xEF\xBB\xBF")) content.remove_prefix(3);
+            const auto first = content.find_first_not_of(" \t\r\n");
+            const bool structured = first != std::string_view::npos &&
+                (content[first] == '{' || content[first] == '[');
+            auto extension = it->path().extension().string();
+            std::transform(extension.begin(), extension.end(),
+                extension.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            const bool scriptOrShader = extension == ".lua" ||
+                extension == ".js" || extension == ".ts" ||
+                extension == ".glsl" || extension == ".vert" ||
+                extension == ".frag" || extension == ".toml" ||
+                extension == ".yaml" || extension == ".yml";
+            if (!structured || scriptOrShader) {
+                for (const auto& change : changes) {
+                    if (detail::containsPathToken(before, change.from)) {
+                        result.error = "Asset reference format needs an explicit "
+                            "rewriter: " + it->path().string();
+                        return result;
+                    }
+                }
+                continue;
+            }
+            auto rewritten = detail::rewriteAssetReferences(before, changes);
+            if (!rewritten) {
+                result.error = "Could not safely rewrite " +
+                    it->path().string() + ": " + rewritten.error;
+                return result;
+            }
+            if (rewritten.text != before) {
                 fs::path target = it->path();
                 for (const MoveEntry& entry : entries) {
                     if (target == entry.from) { target = entry.to; break; }
                 }
-                rewrites.push_back({target, std::move(before), std::move(after)});
-                result.updatedReferences += replacements;
+                rewrites.push_back({target, std::move(before),
+                                    std::move(rewritten.text)});
+                result.updatedReferences += rewritten.replacements;
             }
         }
         if (scanError) {

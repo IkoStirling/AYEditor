@@ -38,8 +38,11 @@ bool appendEditorAssetOperationHistory(
 bool clearEditorAssetOperationHistory(const std::string& projectRoot);
 
 // Project-scoped file operations used by every AYEditor host. Move and rename
-// update portable/logical references in authored text assets as one
-// transaction; copy deliberately preserves references to the original data.
+// update whole path values in recognized structured reference fields without
+// cascading replacements or changing prose. An exact path in an unknown field
+// or an unsupported authoring format rejects the operation before moving files;
+// this is not a complete cross-format reference graph. Copy preserves references
+// to the original data.
 class EditorAssetOperations final {
 public:
     explicit EditorAssetOperations(std::string projectRoot = {});

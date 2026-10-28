@@ -103,6 +103,7 @@ set(SRC_FILES
     src/AYEditorAssetDeleteAnalysis.cpp
     src/AYEditorAssetTrash.cpp
     src/AYEditorAssetOperations.cpp
+    src/EditorAssetReferenceRewrite.cpp
     src/AYEditorProjectAssetFactory.cpp
     src/AYEditorProjectDescriptor.cpp
     src/AYEditorProjectUiFlow.cpp

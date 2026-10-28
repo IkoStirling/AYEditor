@@ -2277,6 +2277,20 @@ undo/redo and field-specific merge keys. Entity snapshots include the
 intrinsic value so duplicate/delete/recreate paths retain authored gravity.
 The section is read-only outside Edit mode. Invalid numbers and values fail
 the Entity setter without changing the prior configuration.
+
+## Asset path rewrite safety (2026-10-28)
+
+`EditorAssetOperations` plans all reference edits before any physical move. The
+rewriter compares complete JSON string values only in recognized reference
+fields against one immutable map of old-to-new logical, portable and absolute
+paths. It never scans replacement output, so overlapping names and batch moves
+cannot cascade. Prose fields remain unchanged. An exact old path in an unknown
+field or a non-JSON authoring format fails the operation before mutation;
+an unreadable or greater-than-4-MiB candidate authoring file also fails;
+copying does not rewrite. The lexer's output preserves surrounding bytes and
+formatting. This is a conservative interim boundary, not a typed reference
+enumeration protocol for every asset format. A future adapter must enumerate
+references and report unresolved identities before publication.
 ## 2026-10-18 灯光关键帧编排栏
 
 启用Sequence的.lshow文本页新增结构化编排栏。目标字段支持all、group:组名、灯具数字ID
